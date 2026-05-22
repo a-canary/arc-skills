@@ -40,8 +40,8 @@ Single-deep. No nesting, no plugins, no bundled binaries.
 - `install-to-trash` — writes PreToolUse hook replacing `rm` with reversible trash-move
 - `schedule-hygiene` — writes cron/systemd-timer entries that fire hygiene skills via `claude --bg`
 
-**Demo**
-- `demo` — maintains `~/web-demo/index.html` as a blog/reddit-style feed of recent commits with visual artifacts
+**Pre-PR**
+- `blog` — drafts an entry in `~/web-demo/index.html` from the staged diff so the demo artifact is reviewed alongside the code
 
 ## Install
 
