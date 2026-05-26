@@ -27,6 +27,7 @@ Single-deep. No nesting, no plugins, no bundled binaries.
 - `decompose-skill` — split SKILL.md files > 100 lines
 - `profiling-ladder` — pick the right optimization rung (session > memory > skill > pipeline | TS > C > ASM)
 - `task-priority` — UX > quality > security > scale > efficiency
+- `dependency-cooldown` — only adopt third-party releases ≥ 4 weeks old (supply-chain safety)
 
 **Engineering workflow** (matt-pocock)
 - `tdd`, `grill-with-docs`, `grill-me`, `zoom-out`
