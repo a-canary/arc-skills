@@ -1,13 +1,19 @@
 ---
 name: blog
-description: Pre-PR. Draft a blog/reddit-style entry for ~/web-demo/index.html from the staged diff (or current branch vs base) so the demo artifact gets reviewed alongside the code. Not a post-commit auto-poster.
+description: Pre-PR. Draft a blog entry and write it to the ledger blog table via arc-agents createBlogPost() API, so the post is browsable from the ledger and linked to the originating task. Runs against staged diff or branch-vs-base. Not a post-commit auto-poster.
 ---
 
 # blog
 
-Before opening a PR, draft an entry that shows what changed, why it matters, and one visual artifact. Land it in `~/web-demo/index.html` (or the configured demo root) on the same branch as the code so a reviewer sees the diff *and* the demo together.
+Before opening a PR, draft an entry that shows what changed, why it matters, and one visual artifact. The entry lands in the ledger `blog` table via the `createBlogPost()` API from arc-agents — not in `index.html`. A reviewer can browse it from the ledger, and the post is linked back to the originating task via `origin_task_id`.
 
 This is a **pre-PR** skill, not a setup or post-commit skill. It runs against staged changes or the branch's diff vs its base — not against `HEAD` after the fact.
+
+## Requirements
+
+- arc-agents installed (provides `createBlogPost()` API)
+- Bun runtime (required to execute the TypeScript API)
+- Write access to `ARC_LEDGER_DB` (default: `~/vault/ledger.db`)
 
 ## When to invoke
 
@@ -25,13 +31,22 @@ This is a **pre-PR** skill, not a setup or post-commit skill. It runs against st
 ## Invocation
 
 ```bash
-blog                    # draft from staged diff or branch-vs-base, into web-demo
+blog                    # draft from staged diff or branch-vs-base, write row to ledger
 blog --base main        # explicit base for branch diff
-blog --skip "reason"    # mark this branch as intentionally not-blogged
-blog --dry-run          # print the proposed entry, do not write
-blog --publish          # after the entry lands, push web-demo to public host
-blog --serve            # start the local server (idempotent)
+blog --skip "reason"   # skip blogging this branch (logs reason to stdout)
+blog --dry-run          # print proposed entry, do not write
+blog --serve            # serve the demo root (assets directory) on :8087
+blog --publish          # rsync demo root to $ARC_DEMO_HOST
 ```
+
+## Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ARC_AGENTS_ROOT` | auto-detect | Path to arc-agents install (worktree or `~/repos/arc-agents`) |
+| `ARC_LEDGER_DB` | `~/vault/ledger.db` | Ledger SQLite path |
+| `ARC_DEMO_ROOT` | `~/web-demo` | Local asset root (artifact files land here) |
+| `ARC_TASK_ID` | unset | Factory worker sets this; becomes `origin_task_id` on the row. Manual invocations leave it NULL. |
 
 ## Procedure
 
@@ -43,93 +58,114 @@ blog --serve            # start the local server (idempotent)
 
 2. Pick ONE visual artifact, in priority order:
    a. New/modified image files in the diff (*.png, *.jpg, *.svg, *.webp)
-   b. New/modified HTML → headless-browser screenshot
+   b. New/modified HTML → screenshot
    c. UI component diff (*.tsx, *.vue, *.svelte) → screenshot the dev server
    d. Diagram source (*.mmd, *.dot, *.puml) → render
-   e. CLI tool added/changed → capture `--help` output as <pre>
+   e. CLI tool added/changed → capture `--help` output as text file
    f. Benchmark/eval output in the diff → render as SVG chart
    g. None → ask the user: capture one, or --skip?
 
-3. Copy artifacts into <demo-root>/assets/<short-sha-or-branch>-<n>.<ext>
+3. Copy artifacts into <demo-root>/assets/<branch-or-sha>.<ext>
    Keep < 500KB. Resize if larger. Prefer WebP/compressed JPEG over PNG.
 
 4. Build the entry:
    - title: PR subject (or branch name humanized)
-   - meta: repo · short-sha-or-branch · YYYY-MM-DD
-   - why: 1-3 sentences from PR body / commit body / branch description
-   - artifact(s) inline
-   - footer: permalink + PR link placeholder (filled by gh pr create)
+   - project: repo name (from git rev-parse --show-toplevel)
+   - body_md: why + diff stat + first 120 lines of diff (markdown)
+   - artifact_path: absolute path to copied artifact (or null)
+   - origin_task_id: $ARC_TASK_ID if in factory worker, else null
 
-5. Insert <article> at the top of <main> in <demo-root>/index.html.
-   Idempotent: replace any existing entry with same data-commit / data-branch.
+5. INSERT a blog row via createBlogPost() from arc-agents src/ledger/blog.ts:
+   import { Database } from 'bun:sqlite';
+   import { createBlogPost } from '$ARC_AGENTS_ROOT/src/ledger/blog.ts';
+   import { migrate } from '$ARC_AGENTS_ROOT/src/ledger/migrate.ts';
+   // open with PRAGMA foreign_keys = ON, migrate, call createBlogPost(db, input)
 
-6. Print: "Drafted. Review at http://<demo-host>:<port>/#post-<id>.
-          Stage the artifact + index.html before `gh pr create`."
+   Idempotent: not strictly required (blog id is slug-based; re-running
+   on the same diff will produce a different id). But the row is always
+   written — re-runs produce new rows, not updates.
 
-7. If --publish: rsync <demo-root>/ to $ARC_DEMO_HOST after PR merges.
+   IMPORTANT: failed research, abandoned prototypes, and ruled-out experiments
+   STILL get a row. The body carries the 'what we ruled out / why it didn't
+   work' write-up. Artifact = whatever partial output exists (or null).
+   This is the 'knowledge recorded + reported' requirement.
+
+6. Print the blog id and a ledger query to view it.
+
+7. If --serve: start a local server on first free port from 8087.
+   If --publish: rsync <demo-root>/ to $ARC_DEMO_HOST.
 ```
 
-## Entry shape
+## origin_task_id wiring
 
-```html
-<article class="post" id="post-<id>" data-commit="<sha-or-branch>" data-repo="<repo>" data-ts="<iso>">
-  <header>
-    <h2><a href="#post-<id>"><title></a></h2>
-    <div class="meta"><repo> · <sha-or-branch> · <YYYY-MM-DD></div>
-  </header>
-  <div class="why"><1-3 sentences></div>
-  <div class="artifacts">
-    <object type="image/svg+xml" data="assets/<id>-<n>.svg"></object>
-    <pre class="diff-stat"><git diff --stat output, trimmed></pre>
-  </div>
-  <footer>
-    <a href="#post-<id>">permalink</a>
-    <a href="<PR-URL>">PR</a>
-  </footer>
-</article>
+The blog skill is designed to run inside an arc-agents factory worker. When it does, the factory sets `$ARC_TASK_ID` to the task's ledger row id (e.g. `slice-2-blog-skill-writes-blog-rows-inst`). The skill reads this variable and passes it as `origin_task_id` when writing the row.
+
+Manual invocations (running `blog` from a terminal without a factory worker) have no `$ARC_TASK_ID`, so `origin_task_id` is left NULL. Both are valid states.
+
+Detection chain:
+1. `$ARC_TASK_ID` (set by arc-agents factory worker)
+2. `$ARC_WORKTREE` (if it points to an arc-agents worktree, derive from branch name)
+3. NULL (manual post)
+
+## Ledger API
+
+```typescript
+import { Database } from "bun:sqlite";
+import { createBlogPost } from "{ARC_AGENTS_ROOT}/src/ledger/blog.ts";
+import { migrate } from "{ARC_AGENTS_ROOT}/src/ledger/migrate.ts";
+
+const db = new Database(process.env.ARC_LEDGER_DB ?? `${process.env.HOME}/vault/ledger.db`);
+db.exec("PRAGMA foreign_keys = ON");
+migrate(db);
+
+const post = createBlogPost(db, {
+  project: "arc-skills",
+  title: "Slice 2: blog skill writes blog rows",
+  body_md: "...markdown...",
+  artifact_path: "/home/user/web-demo/assets/branch-screenshot.png",
+  origin_task_id: "slice-2-blog-skill-writes-blog-rows-inst", // or null
+});
+// post.id, post.artifact_path, post.origin_task_id returned
 ```
 
-Density: reddit/HN — title, meta, one-paragraph why, artifact inline. No reading-room whitespace.
+## Entry shape (what lands in the ledger)
 
-## Bootstrapping the demo root
+A row in the `blog` table with:
+- `id`: slugified title, uniquified on collision
+- `project`: repo name
+- `title`: PR subject or branch name
+- `body_md`: markdown with why + diff stat + diff excerpt + metadata markers
+- `artifact_path`: absolute path to the visual artifact under `ARC_DEMO_ROOT/assets/` (or null for failed experiments)
+- `origin_task_id`: ledger row id of the originating task (from `$ARC_TASK_ID` inside a factory worker; null for manual posts)
+- `created_at`: unix timestamp
 
-First run writes:
+## Failed experiment handling
 
+Any research path that produced meaningful learnings — even if abandoned or ruled out — gets a blog row. The `body_md` carries the write-up:
+
+```markdown
+## What we tried
+
+We explored X because Y. The approach was to ...
+
+## Why it didn't work
+
+Z happened: the [specific failure mode]. This ruled out the following
+approaches:
+- approach A (conflicts with constraint C)
+- approach B (performance unacceptable above N items)
+
+## What we did instead
+
+Settled on alternative: ...
 ```
-<demo-root>/
-├── index.html       # shell with <main> + entry marker comment
-├── style.css        # density-first, dark-mode default
-├── script.js        # filter input + jump-to-permalink
-└── assets/          # per-entry artifacts
-```
 
-`<demo-root>` defaults to `~/web-demo`. Override with `$ARC_DEMO_ROOT`.
-
-## Hosting
-
-| Mode | Default | Notes |
-|---|---|---|
-| local | on demand | `python3 -m http.server <port> --bind 0.0.0.0` from demo root. Picks the first free port from 8087, 8088, 8089. Manages a PID file at `~/.cache/arc-skills/blog-server.pid`. |
-| public | off | `--publish` rsyncs to `$ARC_DEMO_HOST`. Per-PR opt-in. |
-
-Why not :8080: too commonly held by other dev servers. The skill scans and picks the next free port; it never stomps an existing listener.
-
-## What's a "visual artifact"
-
-Generous:
-- screenshots (UI, dashboards)
-- diagrams (architecture, sequence, flow)
-- terminal recordings (asciinema SVG)
-- before/after splits
-- charts (perf, leaderboards)
-- code diffs themselves when the change *is* the demo
-
-Anti-definition: walls of text, raw JSON dumps, unannotated logs. If it wouldn't make sense to someone scrolling the feed, it isn't an artifact.
+`artifact_path` may be null (no visual artifact) or point to whatever partial output exists (e.g. a crashed prototype screenshot, a benchmark CSV that showed the regression).
 
 ## Anti-patterns
 
 - Drafting an entry for every PR regardless of value — feed becomes noise. Use `--skip` liberally.
 - Auto-publishing without review — the whole point is to review the artifact alongside the code.
 - Running this *after* merge — too late to influence the PR.
-- Embedding artifacts as base64 in `index.html` — file bloats; always use the assets dir.
+- Skipping failed experiments — the 'knowledge recorded + reported' rule means even dead ends get a row.
 - Lossless PNG screenshots — use WebP/JPEG; feed loads faster.
