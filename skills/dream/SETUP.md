@@ -24,24 +24,30 @@ track the repo — edit once, installed everywhere.)
 
 ## 2. Configure a fast and a smart model
 
-The agent files name their models in frontmatter:
+Dream's two phases map directly onto the two model handles every arc-* system
+shares: **fast** (collector) and **smart** (adapter). Don't pick them per-skill —
+run the base-layer picker once and dream inherits the choice:
 
-- `collector.md` → `model: minimax` — the **fast** model. Bulk paging is the
-  expensive part by volume, so this should be a cheap, high-throughput model.
-- `adapter.md` → `model: opus` — the **smart** model. It makes exactly one
-  edit, so spend the capable model here.
+```
+/select-models
+```
 
-`opus` is a built-in Claude model and works as-is. `minimax` is a custom alias:
-Claude Code must be configured to route `model: minimax` to a provider model.
-If your setup has no such alias, either:
+That discovers reachable providers, asks you for a fast and a smart model,
+validates each by running it, and writes `~/.config/arc-skills.json`:
 
-- point `collector.md`'s `model:` at a built-in you consider "fast enough"
-  (e.g. `haiku`), or
-- configure a custom model alias named `minimax` in your Claude Code settings.
+- **fast** → `collector` — bulk paging, the expensive part by volume; pick a
+  cheap, high-throughput model.
+- **smart** → `adapter` — makes exactly one edit; spend the capable model here.
 
-Either way the rule holds: **fast model collects, smart model adapts.** If both
-phases run on one model the skill still works — it just costs more, since the
-high-volume paging no longer runs on the cheap model.
+The agent files (`collector.md`, `adapter.md`) name a model in frontmatter as a
+fallback. `adapter.md` uses `model: opus` (a built-in, works as-is). If you have
+run `/select-models` the shared config is authoritative; the frontmatter only
+matters when no config exists, in which case point `collector.md`'s `model:` at
+a built-in like `haiku`.
+
+The rule holds either way: **fast model collects, smart model adapts.** Running
+both phases on one model still works — it just costs more, since the high-volume
+paging no longer runs on the cheap model.
 
 ## 3. (Optional) Nightly cron
 
