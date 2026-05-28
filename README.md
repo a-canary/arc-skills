@@ -10,10 +10,13 @@ Every skill here earns its slot: clear purpose, distinct value, no overlap. Lift
 skills/
 ├── <skill-name>/
 │   ├── SKILL.md      # the skill itself
+│   ├── SETUP.md      # (only if the skill needs machine side-effects) opt-in hook/cron install + reversal
 │   └── SOURCE.md     # (lifted skills only) attribution + license
 ```
 
 Single-deep. No nesting, no plugins, no bundled binaries.
+
+Most skills are pure markdown — making them visible *is* the install. A few need a hook or cron entry to work by default; those carry a `SETUP.md` next to their `SKILL.md`. The skill stays fully usable without it — `SETUP.md` only makes its behavior apply *automatically*.
 
 ## Categories
 
@@ -32,7 +35,7 @@ Single-deep. No nesting, no plugins, no bundled binaries.
 - `tdd`, `grill-with-docs`, `grill-me`, `zoom-out`
 - `to-prd`, `to-issues`, `triage`, `prototype`, `diagnose`
 - `handoff`, `write-a-skill`
-- `improve-codebase-architecture`
+- `improve-codebase-architecture`, `counsel`
 - `git-guardrails-claude-code`, `setup-pre-commit`, `scaffold-exercises`, `migrate-to-shoehorn`
 
 **Env-setup installers** — write/install hooks instead of bundling runtime behavior
@@ -41,13 +44,25 @@ Single-deep. No nesting, no plugins, no bundled binaries.
 - `schedule-hygiene` — writes cron/systemd-timer entries that fire hygiene skills via `claude --bg`
 
 **Pre-PR**
-- `blog` — drafts an entry in `~/web-demo/index.html` from the staged diff so the demo artifact is reviewed alongside the code
+- `blog` — drafts an entry in the ledger blog table via arc-agents API from the staged diff so the post is reviewed alongside the code
+
+**Model discovery**
+- `select-models` — discovers reachable model providers, validates choices, writes `~/.config/arc-skills.json`
+
+**Meta / self-hosting**
+- `setup-arc-skills` — one-time install: makes skills visible, then runs each `SETUP.md` opt-in (hooks, cron) one at a time
+
+**Session reflection** (supply-chain / self-improvement)
+- `dream` — mine conversation history for failure modes, make one system improvement
+- `dream-insights` — show latest dream journal without re-running
+- `dream-status` — show dream processing state and today's journal entry counts
 
 ## Install
 
-Drop the `skills/` directory (or any subset) into wherever your harness reads skills from.
+1. Drop the `skills/` directory (or any subset) into wherever your harness reads skills from. For Claude Code: `~/.claude/skills/` or a project's `.claude/skills/`.
+2. Run `/setup-arc-skills` once. It makes every skill visible, then finds each `skills/*/SETUP.md` and walks you through the opt-in side-effects (hooks, cron) one at a time. Every SETUP backs up before writing and documents its own reversal.
 
-For Claude Code: copy to `~/.claude/skills/` or a project's `.claude/skills/`.
+Skills without a `SETUP.md` need nothing beyond step 1.
 
 ## Curation principles
 
