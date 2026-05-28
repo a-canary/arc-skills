@@ -33,17 +33,20 @@ run the base-layer picker once and dream inherits the choice:
 ```
 
 That discovers reachable providers, asks you for a fast and a smart model,
-validates each by running it, and writes `~/.config/arc-skills.json`:
+validates each by running it, and registers both inside
+`~/repos/arc-agents/config.json` — adding the two chosen entries to
+`exec_cli_alias` and setting top-level `fast_alias` / `smart_alias` pointers:
 
 - **fast** → `collector` — bulk paging, the expensive part by volume; pick a
   cheap, high-throughput model.
 - **smart** → `adapter` — makes exactly one edit; spend the capable model here.
 
-The agent files (`collector.md`, `adapter.md`) name a model in frontmatter as a
-fallback. `adapter.md` uses `model: opus` (a built-in, works as-is). If you have
-run `/select-models` the shared config is authoritative; the frontmatter only
-matters when no config exists, in which case point `collector.md`'s `model:` at
-a built-in like `haiku`.
+The agent files (`collector.md`, `adapter.md`) name a model in frontmatter so
+Claude Code can spawn them. `/select-models` rewrites that frontmatter to point
+at the chosen aliases, so the picker is the single place model selection lives.
+If you skip the picker, the shipped defaults (`model: minimax` for collector,
+`model: opus` for adapter) still work as long as those names resolve in your
+environment.
 
 The rule holds either way: **fast model collects, smart model adapts.** Running
 both phases on one model still works — it just costs more, since the high-volume
