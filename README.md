@@ -71,3 +71,17 @@ Skills without a `SETUP.md` need nothing beyond step 1.
 3. **Genericized.** No personal infra paths or private system refs in skill bodies.
 4. **Attribution.** Lifted skills carry `SOURCE.md` pointing to the original.
 5. **Light download, flexible install.** Behavior that must live in the harness ships as an installer skill, not bundled code.
+
+## Slice 2: blog skill writes to ledger blog table (ADR 0007)
+
+The blog skill now writes entries to the ledger blog table via arc-agents
+createBlogPost() instead of editing ~/web-demo/index.html. See skills/blog/
+for the skill definition and scripts/blog.sh for the implementation.
+
+Usage:
+  blog --dry-run    # preview without writing
+  blog              # write blog row from staged diff
+  ARC_TASK_ID=xxx blog  # in factory workers, origin_task_id is auto-set
+
+Requires: arc-agents (for createBlogPost API), Bun runtime.
+
