@@ -2,7 +2,7 @@
 name: collector
 description: Page through a conversation session and append mistakes, corrections, and hallucinations to the daily journal
 tools: Bash, Read, Glob, Task
-model: minimax
+model: haiku
 ---
 
 # Collector
@@ -63,8 +63,15 @@ Rules:
 - Always include a `ref:` so the adapter can trace the source.
 - If the window holds nothing notable, page on without writing.
 
-## Why minimax / system-role note
+## Why haiku / how you are invoked
 
-You run on minimax over cli-proxy, which rejects system-role messages as
-injected. Whoever invokes you must fold instructions into the user turn — do
-not expect a separate system prompt.
+You run on Claude **haiku** — the cheap tier of the self-healing loop's
+opus+haiku split (the high-volume paging half; the adapter that makes the one
+edit is the opus half). Do not route this agent through minimax or a
+`pi -p --provider` alias: you are spawned via the Task tool, whose subagent
+loader only honors `opus|sonnet|haiku|inherit`, so a provider value silently
+falls back to the inherited model and the cheap/smart split never takes effect.
+
+Whoever invokes you folds your instructions into the user turn rather than a
+separate system prompt — treat the user turn as your full brief and do not
+expect a system prompt.
