@@ -4,12 +4,13 @@
 
 ## What gets installed
 
-Nothing is written until you invoke `/select-models` interactively. This SETUP.md only makes the skill discoverable by `setup-arc-skills`. The actual side-effect (writing `~/.config/arc-skills.json`) happens only when you run the skill and complete the interactive flow.
+Nothing is written until you invoke `/select-models` interactively. The actual side-effect (writing `arc-agents/config.json`) happens only when you run the skill and complete the interactive flow.
 
 ## Reversal
 
 No files are written by SETUP.md itself. To undo the config written by the skill:
 
 ```bash
-rm ~/.config/arc-skills.json
+# remove the fast_alias/smart_alias entries from arc-agents/config.json
+# then re-run /select-models to pick fresh models
 ```

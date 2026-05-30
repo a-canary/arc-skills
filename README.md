@@ -49,9 +49,6 @@ Most skills are pure markdown — making them visible *is* the install. A few ne
 **Model discovery**
 - `select-models` — discovers reachable model providers, validates choices, writes `~/.config/arc-skills.json`
 
-**Meta / self-hosting**
-- `setup-arc-skills` — one-time install: makes skills visible, then runs each `SETUP.md` opt-in (hooks, cron) one at a time
-
 **Session reflection** (supply-chain / self-improvement)
 - `dream` — mine conversation history for failure modes, make one system improvement
 - `dream-insights` — show latest dream journal without re-running
@@ -60,7 +57,7 @@ Most skills are pure markdown — making them visible *is* the install. A few ne
 ## Install
 
 1. Drop the `skills/` directory (or any subset) into wherever your harness reads skills from. For Claude Code: `~/.claude/skills/` or a project's `.claude/skills/`.
-2. Run `/setup-arc-skills` once. It makes every skill visible, then finds each `skills/*/SETUP.md` and walks you through the opt-in side-effects (hooks, cron) one at a time. Every SETUP backs up before writing and documents its own reversal.
+2. Skills with a `SETUP.md` have opt-in side-effects (hooks, cron). Run each skill interactively to trigger those side-effects — or skip the SETUP.md entirely and use the skill as pure markdown.
 
 Skills without a `SETUP.md` need nothing beyond step 1.
 
