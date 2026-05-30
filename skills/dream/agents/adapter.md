@@ -30,10 +30,21 @@ The absolute path to today's journal (`~/.claude/dream/journal/YYYY-MM-DD.md`).
    - **tool** — edit a script/CLI the agents call
    - **pipeline** — edit a pipeliner module
    - **script** — edit a helper script
-4. Make the edit. Keep it surgical. Trace each journal `ref:` you rely on back
+4. **Recency-gate: compare error-time vs fix-time before fixing.** A journal
+   entry records when an error was *observed*, not whether it is still live.
+   Before editing, check the chosen issue against the current state of its
+   surface: read the live file and, when in doubt, run
+   `git log -1 --format=%cI -- <path>` (or `git log --since="<journal date>" -- <path>`)
+   to see whether a fix already landed *after* the error was logged. If the
+   surface already contains the fix, or the relevant file/dir was removed or
+   superseded after the error timestamp, the issue is **already resolved** — skip
+   it, record it as already-resolved in the adaptation block, and move to the next
+   group. Never re-fix something already fixed. (This is the journal-timer /
+   agenda-hallucination trap: real refs whose fix predated the run.)
+5. Make the edit. Keep it surgical. Trace each journal `ref:` you rely on back
    to its source before acting on it — a memory of a path is not proof it still
    exists.
-5. Append a `## adaptation` block to the journal recording: the issue group, the
+6. Append a `## adaptation` block to the journal recording: the issue group, the
    surface touched, the file path, and a one-line rationale. This is the audit
    trail for what changed and why.
 

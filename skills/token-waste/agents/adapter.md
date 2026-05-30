@@ -57,10 +57,20 @@ The absolute path to today's waste file
    - **rule** — append one standing rule to `~/AGENTS.md` (global behavioral
      rules live there, not in memory) — use this ONLY when no narrower surface
      fits, since a "remember not to" rule is the weakest fix
-4. Make the edit. Keep it surgical. Trace each example's `target`/`source` back
+4. **Recency-gate: compare waste-time vs fix-time before fixing.** A tally entry
+   records when the waste was *observed*, not whether the surface still invites
+   it. Before editing, confirm the live file still has the shape that caused the
+   waste, and when in doubt run `git log -1 --format=%cI -- <path>` (or
+   `git log --since="<tally date>" -- <path>`) to see whether a trim/refactor
+   already landed *after* the waste was logged. If the file was already trimmed,
+   split, removed, or superseded after the waste timestamp, the pattern is
+   **already resolved** — skip it, record it as already-resolved in the
+   adaptation block, and move to the next group. Never re-trim something already
+   trimmed.
+5. Make the edit. Keep it surgical. Trace each example's `target`/`source` back
    to the live file before acting — a path in the tally is not proof it still
    exists or still has the shape that caused the waste.
-5. Append a `## adaptation` block to today's dream journal
+6. Append a `## adaptation` block to today's dream journal
    (`~/.claude/dream/journal/YYYY-MM-DD.md`, create if absent) recording: the
    waste group, total tokens it cost, the surface touched, the file path, and a
    one-line rationale. Tag it `source: token-waste` so it's distinguishable from
