@@ -95,6 +95,6 @@ Default target is `~/repos/arc-agents/config.json`. Override with `ARC_AGENTS_CO
 
 ## Related
 
-- `dream` — its `collector` (fast) and `adapter` (smart) subagents map directly onto these two handles; see `skills/dream/SETUP.md`. After registering picks, this skill also rewrites those agents' frontmatter `model:` fields to name the chosen aliases (see task #13 in the wiring rollout).
+- `dream` — its `collector`/`adapter` subagents are spawned via the Task tool, whose subagent loader only honors `model: opus|sonnet|haiku|inherit`. They are therefore pinned to first-party Claude tiers (`collector: haiku`, `adapter: opus`) and this skill does **not** rewrite their `model:` fields — a `fast`/`smart` alias there would silently fall back to the inherited model, and self-healing must not depend on a provider being up. The fast/smart aliases registered here are for the alias-CLI exec path (worker-shell spawns, pipeliner's `fast`/`smart` named refs), a different execution layer than Task-spawned subagents. See `~/AGENTS.md` (diagnostics opus/haiku-only rule).
 - `arc-agents/src/config/load.ts` — `ConfigSchema`, `loadConfig`, `resolveAlias`, and (after task #11) `resolveFast`/`resolveSmart`.
 - `pipeliner` — reads `fast_alias`/`smart_alias` from arc-agents/config.json as named refs (after task #12); does NOT splice them into the Bayesian sampling pool.
