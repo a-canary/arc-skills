@@ -1,7 +1,7 @@
 ---
 name: collector
 description: Page through a conversation session and append mistakes, corrections, and hallucinations to the daily journal
-tools: Bash, Read, Glob, Task, Write
+tools: Bash, Read, Glob, Task
 model: minimax
 ---
 
@@ -34,12 +34,18 @@ file (`~/.claude/dream/journal/YYYY-MM-DD.md`).
    finding before annotating. Keep these targeted — one dig per genuinely
    ambiguous failure, not per observation.
 4. Append findings to the journal (see format). One entry per observation.
+   **Append with Bash only — never overwrite.** Use a `>>` redirect or a
+   `cat >> "$JOURNAL" <<'EOF' … EOF` here-doc. You have NO Write tool: that is
+   deliberate, because Write replaces the whole file and would clobber every
+   prior entry (the shared audit trail other runs depend on). If the journal
+   does not exist yet, `>>` creates it; if it does, `>>` adds to the end. Never
+   read-then-rewrite the file — append the new entry only.
 5. Read the `next_offset:` footer. If it is a number, set `--offset` to it and
    repeat from step 1. If it is `EOF`, stop.
 
 ## Journal entry format
 
-Append (never overwrite) to today's journal. Each entry:
+Append (never overwrite) to today's journal via a Bash `>>` redirect. Each entry:
 
 ```markdown
 ## [mistake|correction|hallucination|indirection] {one-line title}
