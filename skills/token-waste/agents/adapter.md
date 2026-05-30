@@ -66,7 +66,10 @@ The absolute path to today's waste file
    split, removed, or superseded after the waste timestamp, the pattern is
    **already resolved** — skip it, record it as already-resolved in the
    adaptation block, and move to the next group. Never re-trim something already
-   trimmed.
+   trimmed. The `git log` timestamp is only a *hint* — the live-file shape is
+   authoritative. A later no-op or unrelated commit on the same path can make a
+   trim look landed when it isn't, so only skip once you have confirmed in the
+   live file that the bloat is actually gone, not on the timestamp alone.
 5. Make the edit. Keep it surgical. Trace each example's `target`/`source` back
    to the live file before acting — a path in the tally is not proof it still
    exists or still has the shape that caused the waste.

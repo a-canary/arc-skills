@@ -40,7 +40,11 @@ The absolute path to today's journal (`~/.claude/dream/journal/YYYY-MM-DD.md`).
    superseded after the error timestamp, the issue is **already resolved** — skip
    it, record it as already-resolved in the adaptation block, and move to the next
    group. Never re-fix something already fixed. (This is the journal-timer /
-   agenda-hallucination trap: real refs whose fix predated the run.)
+   agenda-hallucination trap: real refs whose fix predated the run.) The
+   `git log` timestamp is only a *hint* — the live-file shape is authoritative.
+   A later no-op or unrelated commit on the same path can make a fix look landed
+   when it isn't, so only skip once you have confirmed in the live file that the
+   surface no longer has the shape that caused the issue, not on the timestamp alone.
 5. Make the edit. Keep it surgical. Trace each journal `ref:` you rely on back
    to its source before acting on it — a memory of a path is not proof it still
    exists.
