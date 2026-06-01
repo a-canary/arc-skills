@@ -24,6 +24,7 @@ Most skills are pure markdown — making them visible *is* the install. A few ne
 - `karpathy-guidelines` — surgical changes, no over-engineering
 - `caveman` — ultra-terse output mode
 - `anti-sycophancy` — strip validating/hedging language
+- `berzerk` — relentless autonomous goal-pursuit mode (decide via /counsel, TDD, one thin slice at a time)
 
 **Hygiene** — keep the codebase lean
 - `trash-retired-files` — reason-coded reversible GC
