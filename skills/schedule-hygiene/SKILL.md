@@ -1,6 +1,6 @@
 ---
 name: schedule-hygiene
-description: Write cron / systemd-timer entries that fire hygiene skills on a schedule via `claude --bg`. Detects scheduler, idempotent install.
+description: Write cron / systemd-timer entries that fire hygiene skills on a schedule via `claude -p`. Detects scheduler, idempotent install.
 ---
 
 # schedule-hygiene
@@ -32,10 +32,10 @@ The schedule is the **default**. Users override with `--schedule custom.yaml`.
 Each entry shells out to:
 
 ```bash
-claude --bg --skill <name> --project <repo-path> > ~/.cache/arc-hygiene/<name>.log 2>&1
+claude -p --skill <name> --project <repo-path> > ~/.cache/arc-hygiene/<name>.log 2>&1
 ```
 
-`--bg` = background job (no TTY required). The skill writes its report; a human reviews when convenient. Nothing auto-applies.
+`-p` = print mode (non-interactive; suitable for cron without a TTY). The skill writes its report; a human reviews when convenient. Nothing auto-applies.
 
 ## Idempotent install
 
@@ -43,11 +43,11 @@ All entries live inside a marker block so reruns are clean:
 
 ```cron
 # >>> arc-skills:schedule-hygiene >>>
-0 4 * * *  claude --bg --skill trash-retired-files ...
+0 4 * * *  claude -p --skill trash-retired-files ...
 0 * * * *  /usr/local/bin/arc-disk-guard.sh
-0 5 * * 0  claude --bg --skill decompose-skill ...
-30 5 * * 0 claude --bg --skill improve-codebase-architecture ...
-0 6 1 * *  claude --bg --skill profiling-ladder ...
+0 5 * * 0  claude -p --skill decompose-skill ...
+30 5 * * 0 claude -p --skill improve-codebase-architecture ...
+0 6 1 * *  claude -p --skill profiling-ladder ...
 # <<< arc-skills:schedule-hygiene <<<
 ```
 

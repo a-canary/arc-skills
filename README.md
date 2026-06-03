@@ -42,7 +42,7 @@ Most skills are pure markdown — making them visible *is* the install. A few ne
 **Env-setup installers** — write/install hooks instead of bundling runtime behavior
 - `install-anti-sycophancy` — writes Stop/UserPromptSubmit hook
 - `install-to-trash` — writes PreToolUse hook replacing `rm` with reversible trash-move
-- `schedule-hygiene` — writes cron/systemd-timer entries that fire hygiene skills via `claude --bg`
+- `schedule-hygiene` — writes cron/systemd-timer entries that fire hygiene skills via `claude -p`
 
 **Pre-PR**
 - `blog` — drafts an entry in the ledger blog table via arc-agents API from the staged diff so the post is reviewed alongside the code
@@ -69,3 +69,28 @@ Skills without a `SETUP.md` need nothing beyond step 1.
 3. **Genericized.** No personal infra paths or private system refs in skill bodies.
 4. **Attribution.** Lifted skills carry `SOURCE.md` pointing to the original.
 5. **Light download, flexible install.** Behavior that must live in the harness ships as an installer skill, not bundled code.
+
+## Doc-drift guard
+
+Skill markdown can drift from the code it documents (wiring claims naming a
+model that the agent file disagrees with, install commands that no longer
+match the live install, private infra refs in `Genericized` skill bodies). The
+self-heal loops (`/dream`, `/token-waste`, recency-gate) scope to the file
+they identified and have not caught this drift shape in practice.
+
+`bin/arc-skills-doc-drift.sh` is a grep test that fails on three known
+falsified-claim patterns in `skills/*/SKILL.md` and `skills/*/SETUP.md`:
+
+1. `model: minimax` in skill markdown where the matching `agents/*.md` says
+   `model: haiku` (the collector.md / SKILL.md wiring-claim drift).
+2. `claude --bg` in any SKILL.md (the live install is `claude -p`).
+3. `home-lab-1` in any SKILL.md (private infra; curation principle #3).
+
+Run it locally before opening a PR:
+
+```bash
+bin/arc-skills-doc-drift.sh
+```
+
+Add a new rule when a new drift shape appears — with a one-line comment
+naming the commit that introduced the pattern.
