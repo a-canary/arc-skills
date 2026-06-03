@@ -3,92 +3,47 @@ name: schedule-hygiene
 description: Write cron / systemd-timer entries that fire hygiene skills on a schedule via `claude --bg`. Detects scheduler, idempotent install.
 ---
 
-# schedule-hygiene
+# schedule-hygiene (pointer)
 
-Hygiene skills only help if they actually run. This skill installs the scheduler entries that fire them.
+> **Status (2026-06-03):** this skill originally described a from-scratch
+> `claude --bg --skill <name> --project <repo>` installer that was never the
+> actual path in this profile. The real hygiene rotation lives in two
+> consumer files; treat *those* as the source of truth and this file as
+> a pointer.
 
-## What it installs
+## Actual implementation
 
-| When | Skill | Why |
-|---|---|---|
-| Daily 04:00 | `trash-retired-files` (project-wide scan) | Catch dead code and stale artifacts before they accumulate |
-| Hourly | Disk-pressure guard | If `df ~` > 90%, purge `~/trash/` entries older than 30d and old `/tmp` files |
-| Weekly Sun 05:00 | `decompose-skill` (scan SKILL.md > 100 lines) | Keep skills focused as they evolve |
-| Weekly Sun 05:30 | `improve-codebase-architecture` per repo | Surface drift before it becomes debt |
-| Monthly 1st | `profiling-ladder` audit | Catch over-engineering and premature optimization |
+- **`~/repos/arc-agents/bin/hygiene-tick.ts`** — round-robin cron tick
+  (every 6h) that reads `~/.config/arc/hygiene.yaml` (skills + repos list)
+  and creates a `type=cron` task the factory dispatches. Skip-not-stack:
+  a repo with an OPEN hygiene task is skipped. Created 2026-05-28 per the
+  `0 10,16,22,4 * * *` crontab entry; rotation works through 13 repos
+  (arc-agents, arc-webui, arc-skills, ke, cli-proxy, pipeliner,
+  discord-bridge, expert-horde, conjecture, trading, llm-judge, dream,
+  starlight-slm) and 3 skills (improve-architecture, trash-retired-files,
+  analyse-recent-sessions).
+- **`~/.config/arc-hygiene/nightly-self-improve.sh`** — nightly dream +
+  token-waste + adaptation-review run via `claude -p "/$1"
+  --permission-mode acceptEdits --allowedTools Read Write Edit Glob Grep
+  Bash Task` (NOT `claude --bg`). Marker block in crontab:
+  `# >>> arc-skills:nightly-self-improve >>>`. Fires 03:00 local.
 
-The schedule is the **default**. Users override with `--schedule custom.yaml`.
+## What this skill used to describe
 
-## Detection
+The original SKILL.md (2026-Q2 draft) specified a `claude --bg` cron entry
+per skill, idempotent marker blocks, and a `--schedule custom.yaml` override.
+The implementation diverged because `bun .../hygiene-tick.ts` + a cron
+entry is simpler and lets the factory dispatch the work through the normal
+claim path. The original sections (Detection / Invocation pattern /
+Idempotent install / CLI / Disk-pressure guard / Guards on the installer)
+are preserved in `git log -p skills/schedule-hygiene/SKILL.md` for
+historical reference; they do not reflect the current install.
 
-```
-1. Check for systemd: `systemctl --user status` → if available, use systemd-timer
-2. Else check for cron: `crontab -l` → if available, use cron
-3. Else: print the entries and ask the user to install manually
-```
+## What this skill does NOT do
 
-## Invocation pattern
-
-Each entry shells out to:
-
-```bash
-claude --bg --skill <name> --project <repo-path> > ~/.cache/arc-hygiene/<name>.log 2>&1
-```
-
-`--bg` = background job (no TTY required). The skill writes its report; a human reviews when convenient. Nothing auto-applies.
-
-## Idempotent install
-
-All entries live inside a marker block so reruns are clean:
-
-```cron
-# >>> arc-skills:schedule-hygiene >>>
-0 4 * * *  claude --bg --skill trash-retired-files ...
-0 * * * *  /usr/local/bin/arc-disk-guard.sh
-0 5 * * 0  claude --bg --skill decompose-skill ...
-30 5 * * 0 claude --bg --skill improve-codebase-architecture ...
-0 6 1 * *  claude --bg --skill profiling-ladder ...
-# <<< arc-skills:schedule-hygiene <<<
-```
-
-systemd version uses a single `arc-hygiene.target` pulling in per-skill `.timer` units, all named `arc-hygiene-*.timer` for the same idempotency.
-
-## CLI
-
-```bash
-schedule-hygiene install              # detect scheduler + write entries (dry-run preview first)
-schedule-hygiene install --apply      # actually write
-schedule-hygiene install --apply --scheduler cron|systemd
-schedule-hygiene uninstall            # remove the marker block
-schedule-hygiene status               # show installed entries + last run + last exit code
-```
-
-## Disk-pressure guard (the hourly job)
-
-This one is small enough to inline. The hourly entry runs:
-
-```bash
-#!/usr/bin/env bash
-# /usr/local/bin/arc-disk-guard.sh
-set -euo pipefail
-usage=$(df ~ --output=pcent | tail -1 | tr -dc '0-9')
-[[ $usage -lt 90 ]] && exit 0
-# Over threshold: purge ~/trash entries > 30d, /tmp entries > 7d
-find ~/trash -mindepth 1 -maxdepth 1 -mtime +30 -exec rm -rf {} + 2>/dev/null
-find /tmp -mindepth 1 -maxdepth 1 -mtime +7 -uid "$(id -u)" -exec rm -rf {} + 2>/dev/null
-echo "{\"ts\":\"$(date -u +%FT%TZ)\",\"action\":\"disk-guard\",\"usage_pct\":$usage}" >> ~/.cache/arc-hygiene/disk-guard.log
-```
-
-The guard never touches `~/trash` entries newer than 30d — restores stay possible.
-
-## Guards on the installer itself
-
-- Refuse to install if marker block already exists with different contents (require `--force` or `uninstall` first)
-- Refuse to install systemd entries if `~/.config/systemd/user/` is read-only
-- Always show a dry-run preview before writing
-- Log the install action to `~/.cache/arc-hygiene/install.log` so an uninstall can be audited
-
-## What it does NOT do
-
-- It does not auto-apply hygiene skill *output*. Skills produce reports; humans (or a separate review skill) decide what to act on.
-- It does not run for repos that don't opt in. The `improve-codebase-architecture` and per-repo `decompose-skill` entries iterate a list at `~/.config/arc-hygiene/repos.txt` — empty by default.
+- Does not install anything. The two consumer files above are the install.
+- Does not run for repos that don't appear in `~/.config/arc/hygiene.yaml`'s
+  `repos:` list. Add a repo there to opt in.
+- Does not auto-apply skill *output*. The factory worker that claims the
+  `type=cron` task produces the PR; humans (or a follow-up review skill)
+  decide what to act on.

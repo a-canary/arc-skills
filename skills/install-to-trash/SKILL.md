@@ -5,6 +5,12 @@ description: Install a PreToolUse hook that intercepts `rm` calls and routes the
 
 # install-to-trash
 
+> **Status (2026-06-03):** the `intercept-rm.sh` hook described below is NOT
+> currently installed in this profile. The actual reversible-trash discipline
+> in use is the *stop-hook* `ke-learn` + the `to-trash` CLI symlink (separately
+> installed). The hook installer still works; the section below documents it
+> accurately, and the gap is an install-action item, not a doc fix.
+
 The `trash-retired-files` skill makes deletions reversible *when invoked*. This installer makes them reversible *by default*, by replacing direct `rm` with a trash-move at the harness layer.
 
 ## What gets installed
