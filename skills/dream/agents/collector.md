@@ -55,7 +55,15 @@ Append (never overwrite) to today's journal via a Bash `>>` redirect. Each entry
 - **what:** what happened, concretely
 - **root_cause:** the underlying cause (cite any Explore finding)
 - **cost:** rough impact — wasted turns, user friction, wrong output
+- **cost_calls:** {N tool calls, ~Kk context}   # OPTIONAL — gather entries only; omit otherwise
 ```
+
+When an **indirection** is caused by expensive info-gathering — Claude spent many
+tool calls and/or paged a large context just to surface something it then acted
+on — add a `cost_calls:` line with the rough call count and context size (e.g.
+`20 tool calls, ~40k context`). This is the one structured number the adapter
+ranks promotions by and the auditor watches for regressions. Leave it off for
+entries that aren't about gather cost.
 
 Rules:
 - Quote user corrections verbatim; do not paraphrase them.

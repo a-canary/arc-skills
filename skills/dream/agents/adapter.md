@@ -30,10 +30,26 @@ The absolute path to today's journal (`~/.claude/dream/journal/YYYY-MM-DD.md`).
    - **tool** — edit a script/CLI the agents call
    - **pipeline** — edit a pipeliner module
    - **script** — edit a helper script
+   - **promotion** — when the top group is a recurring *expensive-gather* pattern
+     (entries carrying `cost_calls:`, where an agent burned many tool calls and a
+     large context to surface info it then judged on), the fix is not a "remember
+     to" rule — it is to **collapse the gathering**. Delegate an investigation
+     (Task → Explore or a build subagent) to design and build the custom
+     tool/skill that returns the 2-3 calls of info the agent actually used, so a
+     future run makes a few targeted calls + the *same* high-level judgment on a
+     fraction of the context. This is a promotion down the `profiling-ladder`
+     (memory→skill→tool→pipeline). The promotion replaces the *gathering*, never
+     the *judgment*. See step 7 for the before/after gate that validates it.
 4. **Recency-gate: compare error-time vs fix-time before fixing.** A journal
    entry records when an error was *observed*, not whether it is still live.
    Before editing, check the chosen issue against the current state of its
-   surface: read the live file and, when in doubt, run
+   surface. **If the surface is a systemd unit, cron entry, or hook, settle
+   "is it actually wired into the running system?" in one call with**
+   `~/.claude/skills/dream/scripts/live-state.sh [unit|cron|hook] <name>`
+   (status: wired | dead | unregistered) — do NOT hand-investigate it by reading
+   the cron file, reading the hook script, and grepping the codebase; that is the
+   exact dozen-call expensive-gather this tool was promoted to collapse. For
+   ordinary source files, read the live file and, when in doubt, run
    `git log -1 --format=%cI -- <path>` (or `git log --since="<journal date>" -- <path>`)
    to see whether a fix already landed *after* the error was logged. If the
    surface already contains the fix, or the relevant file/dir was removed or
@@ -51,6 +67,17 @@ The absolute path to today's journal (`~/.claude/dream/journal/YYYY-MM-DD.md`).
 6. Append a `## adaptation` block to the journal recording: the issue group, the
    surface touched, the file path, and a one-line rationale. This is the audit
    trail for what changed and why.
+7. **Promotions are gated by measured before/after, not by approval.** When the
+   change is a `promotion` (step 3), the adaptation block must record the
+   **before** `cost_calls` from the source entries (e.g. `before: ~20 calls`).
+   The promotion is *not* validated by being built — it is validated only when a
+   later run logs the same task at a lower `cost_calls` (`after: 3 calls`). Until
+   then it is provisional. If a subsequent run shows the count did NOT drop (or
+   the new tool produced a wrong/empty surface), the promotion is itself the new
+   bottleneck: revert or re-investigate it rather than building further on top. A
+   promotion that doesn't move the number is a regression, and `adaptation-review`
+   will flag it. Never claim a promotion succeeded on the strength of having
+   built it — claim it only on the measured drop.
 
 ## Constraints
 
