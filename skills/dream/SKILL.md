@@ -18,7 +18,7 @@ edits one thing.
 sessions (~/.claude/projects/*/*.jsonl)
         │  page.py streams 80-message windows (in memory, no YAML on disk)
         ▼
-collector (minimax) ── Explore subagents on ambiguous failures
+collector (haiku) ── Explore subagents on ambiguous failures
         │  appends mistakes / corrections / hallucinations / indirections
         ▼
 ~/.claude/dream/journal/YYYY-MM-DD.md   (append-only, one file per day)
@@ -29,7 +29,7 @@ adapter (opus) ── picks ONE highest-impact issue (task-priority order)
 one edit to an agent | skill | tool | pipeline | script
 ```
 
-## Phase 1 — Collect (minimax)
+## Phase 1 — Collect (haiku)
 
 1. Today's journal is `~/.claude/dream/journal/$(date +%F).md`. Create the
    `journal/` and `state/` dirs under `~/.claude/dream/` if missing.
@@ -44,7 +44,7 @@ one edit to an agent | skill | tool | pipeline | script
    cron works the backlog down over successive runs. Omit `--limit` only for a
    deliberate full sweep.
 3. For each session, spawn a `collector` agent with the session path and the
-   journal path. Run up to 3 in parallel (minimax is cheap, but cli-proxy has
+   journal path. Run up to 3 in parallel (haiku is cheap, but cli-proxy has
    limited concurrency). The collector pages the session with `scripts/page.py`,
    digs into ambiguous failures with `Explore`, and appends findings.
 4. After a session is collected, mark it processed:

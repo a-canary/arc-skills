@@ -41,12 +41,12 @@ trailing window is unambiguous across the midnight boundary:
 ```cron
 # >>> arc-skills:adaptation-review >>>
 # 03:30 — after /dream and /token-waste have written the day's adaptations
-30 3 * * *  REVIEW_DAY=$(date -d yesterday +%F) claude --bg --skill adaptation-review \
+30 3 * * *  REVIEW_DAY=$(date -d yesterday +%F) claude -p /adaptation-review \
               > ~/.cache/arc-hygiene/adaptation-review.log 2>&1
 # <<< arc-skills:adaptation-review <<<
 ```
 
-`--bg` = background job (no TTY). `REVIEW_DAYS` overrides the window (default 10).
+`-p` = print (headless, no TTY). `REVIEW_DAYS` overrides the window (default 10).
 The skill writes its report to the log; nothing auto-applies — a human reviews
 when convenient, exactly like the other hygiene skills. If `/dream` and
 `/token-waste` run earlier in the night, just make sure this fires after them.
