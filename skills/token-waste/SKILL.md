@@ -1,6 +1,6 @@
 ---
 name: token-waste
-description: Analyze the day's conversations for token waste — context loaded but never used, or loaded badly — then make one system change that prevents the worst recurring pattern. Phase 1 detects whole-file Reads that should have been Grep + targeted read, re-reads of files already in context, Bash output dumped to context instead of piped to a file, large results never referenced, content loaded twice (repeated), and — over any large doc/output, not just instructions — content that was obvious/filler or confusing/contradictory at the size it was loaded; Phase 2 adapts one agent/skill/tool/rule/doc to stop the highest-impact pattern (one change per day, like /dream). Companion to /dream (which targets agent effectiveness); this one targets context-window economy. Use when the user wants to find token waste, audit context usage, or asks to "annotate/tally what was loaded but not used".
+description: Analyze the day's conversations for token waste — context loaded but never used, or loaded badly — then make one system change that prevents the worst recurring pattern. Phase 1 detects whole-file Reads that should have been Grep + targeted read, re-reads of files already in context, Bash output dumped to context instead of piped to a file, large results never referenced, content loaded twice (repeated), content that was obvious/filler or confusing/contradictory at the size it was loaded, and — over the re-injected instruction context (skill bodies, the catalog, memory, system-reminders) — instructions that are repeated (a skill body re-pasted every turn), extreme-obvious, or confusing/contradictory; Phase 2 adapts one agent/skill/tool/rule/doc/instruction-body to stop the highest-impact pattern (one change per day, like /dream). Companion to /dream (which targets agent effectiveness); this one targets context-window economy. Use when the user wants to find token waste, audit context usage, identify confusing/obvious/repeated instructions, or asks to "annotate/tally what was loaded but not used".
 allowed-tools: Read, Write, Glob, Task, Bash
 ---
 
@@ -20,20 +20,34 @@ Two phases, mirroring `/dream`:
   one** surgical change to an agent / skill / tool / rule so it stops recurring. One
   improvement per day — attributable and reversible.
 
-Phase 1 flags, per session. The first five are *how* context was loaded; the last
-two are *what* was loaded — content quality on ANY large result (doc, Read, Bash,
-agent reply), not just instructions:
+Phase 1 flags, per session, in three families.
+
+*How* result context was loaded:
 - **full_file_read** — read a whole large file when Grep + a targeted read would do
 - **reread** — read a file already in context (same file path)
 - **no_grep_first** — large Read with no Grep of that path beforehand
 - **bash_dump** — large Bash stdout dumped to context instead of piped to a file
 - **unreferenced** — a large tool result whose content never reappeared afterward
+
+*What* was loaded — content quality on ANY large result (doc, Read, Bash, agent reply):
 - **repeated** — content that substantially duplicates an earlier large result by
   *content overlap*, any tool/path (the same doc fetched twice, a re-dumped output)
 - **obvious** / **confusing** — the detector shortlists large results as
   `low_value_content` with a bounded excerpt; the analyst classifies each as
   **obvious** (filler / low-information at that size), **confusing** (contradictory
   or ambiguous), or drops it as load-bearing
+
+*Instruction context* — the directive text the harness *re-injects* every turn (skill
+bodies, the skill catalog, memory/CLAUDE.md, system-reminders), which never flows
+through tool results and is usually the heaviest, most repetitive context in a
+session — a 1k-token skill body re-injected 180× is ~180k tokens:
+- **repeated_instruction** — the same instruction block re-injected N+ times;
+  deterministic, charges the aggregate cost of every copy past the first
+- **obvious_instruction** / **confusing_instruction** — the detector shortlists a
+  large instruction block as `instruction_review` with a bounded excerpt; the analyst
+  classifies the directive *text itself* as **obvious_instruction** (extreme-obvious
+  filler the model already acts on), **confusing_instruction** (contradictory or
+  ambiguous), or drops it as load-bearing
 
 A cheap deterministic Python pass (`lib/detect_waste.py`) does the sizing and pattern
 matching; a haiku `waste-analyst` agent only scores the shortlist and prescribes the
@@ -56,7 +70,7 @@ Shape:
   "date": "20260528",
   "sessions_analyzed": 7,
   "total_candidate_wasted_tokens": 41000,
-  "by_pattern": { "full_file_read": 12, "reread": 5, "bash_dump": 3, ... },
+  "by_pattern": { "full_file_read": 12, "reread": 5, "bash_dump": 3, "repeated_instruction": 8, ... },
   "examples": [ { ...one confirmed waste example per entry... } ]
 }
 ```
@@ -180,8 +194,16 @@ If the day was clean (no examples), report that and note no edit was made.
   excerpt (700 + 400 chars) for the analyst; capped so the review itself stays cheap
 - `--chars-per-token` defaults to 4; lower it for code-heavy sessions
 
+Instruction context (re-injected directive text, grouped by content fingerprint):
+- `repeated_instruction`: a block re-injected ≥ 3 times whose aggregate avoidable
+  (post-first) cost is ≥ 2000 est. tokens
+- `instruction_review`: instruction blocks ≥ 800 est. tokens/copy, largest ≤ 8 per
+  session, each with the same bounded excerpt for the analyst to judge
+
 Adjust the thresholds in the script (`REPEAT_OVERLAP`, `MAX_QUALITY_REVIEW`,
-`EXCERPT_HEAD`/`EXCERPT_TAIL`, the `*_TOKENS` cutoffs) if a project's signal is too
+`EXCERPT_HEAD`/`EXCERPT_TAIL`, the result-side `*_TOKENS` cutoffs, and the
+instruction-side `REPEAT_INSTRUCTION_MIN` / `REPEAT_INSTRUCTION_MIN_WASTED` /
+`INSTRUCTION_REVIEW_TOKENS` / `MAX_INSTRUCTION_REVIEW`) if a project's signal is too
 noisy or too sparse.
 
 ## Relationship to /dream

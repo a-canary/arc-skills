@@ -34,11 +34,21 @@ A path to a candidate JSON file produced by `detect_waste.py`, shaped like:
 }
 ```
 
-Patterns the detector emits: `full_file_read`, `reread`, `no_grep_first`,
+Patterns the detector emits, in two families.
+
+**Result-side** (tool_use/tool_result): `full_file_read`, `reread`, `no_grep_first`,
 `bash_dump`, `unreferenced`, `repeated`, `low_value_content`.
 
-The last two are **content-quality** patterns and apply to ANY large tool result —
-a doc, a Read, Bash output, an agent reply — not just instructions:
+**Instruction-side** (`tool: "instruction"`): the directive text the harness
+*re-injects* as attachment messages — skill bodies re-pasted every turn, the skill
+catalog, memory/CLAUDE.md, system-reminders. This is usually the heaviest, most
+repetitive context in a session (a 1k-token skill body re-injected 180× is ~180k
+tokens) and the result-only passes are blind to it. Patterns: `repeated_instruction`,
+`instruction_review`. Each carries `kind` (skill_body / skill_listing / memory /
+system_reminder), `injections` (how many times it appeared), and `target` (the block
+label, e.g. `skill:prototype`).
+
+The content-quality patterns (`repeated`, `low_value_content`, `instruction_review`):
 
 - `repeated` — content that substantially duplicates an earlier large result this
   session (different from `reread`, which is the same *file path*; `repeated` is by
@@ -56,6 +66,29 @@ a doc, a Read, Bash output, an agent reply — not just instructions:
     - **fine** — genuinely load-bearing; DROP it (return nothing for this candidate).
   You see only the excerpt, never the full result — judge from it and say so if the
   excerpt is too thin to call (default to dropping when unsure).
+- `instruction_review` — the instruction-side twin of `low_value_content`: a REVIEW
+  REQUEST over one large re-injected directive block, with a bounded `excerpt`.
+  Classify the directive *text itself*:
+    - **obvious_instruction** — extreme-obvious / low-information directive filler the
+      model already acts on without being told (a paragraph of "ALWAYS be careful,
+      NEVER make mistakes", ceremony that restates a one-line rule at length, a banner
+      repeated inside one skill body). The fix trims the source skill/doc.
+    - **confusing_instruction** — contradictory, ambiguous, or self-undermining
+      directive text (a rule that says both "always X" and "never X", a step that
+      references a surface that isn't defined, instructions that force re-derivation
+      to follow). The fix disambiguates the source.
+    - **fine** — a genuinely load-bearing instruction; DROP it.
+  Judge from the excerpt only; default to dropping when it's too thin to call. Note:
+  `instruction_review` is about ONE copy's *content*; the cost of re-injecting it many
+  times is the separate `repeated_instruction` candidate — don't conflate them.
+
+`repeated_instruction` is **deterministic** (the detector already confirmed the block
+was re-injected N times) — you only score severity and prescribe the fix, you don't
+re-judge whether it's real. But weigh *avoidability*: a skill the user genuinely kept
+active all session (or a `system_reminder` the harness re-emits by design) is real
+cost but low-avoidability — the fix is to slim the body, not to stop invoking it.
+A skill body re-pasted long after its one use, or duplicated catalog text, is highly
+avoidable. Set severity accordingly.
 
 ## Your job
 
@@ -66,8 +99,13 @@ For each candidate, decide:
    was the right call. Be skeptical of `unreferenced` — content can inform a decision
    without its literal tokens reappearing; only keep it when the result was plainly
    ignored.
-   For `low_value_content`, "real waste" means the excerpt reads as **obvious** or
-   **confusing** (see above); a load-bearing result is `fine` → drop it.
+   For `low_value_content` / `instruction_review`, "real waste" means the excerpt
+   reads as **obvious(_instruction)** or **confusing(_instruction)** (see above); a
+   load-bearing result is `fine` → drop it. `repeated_instruction` is pre-confirmed —
+   keep it unless avoidability is essentially zero. The ONLY available fix for it is to
+   **shrink the re-injected body** (trim the source skill/doc) — you cannot cache,
+   memoize, or stop the harness re-injecting, so never prescribe that; prescribe what
+   to cut from which file.
 2. **Severity** = tokens wasted × how avoidable it was. high / medium / low.
 3. **Cheaper alternative** — the concrete tool call (or content fix) that loads less:
    - full_file_read → `Grep` for the symbol, then `Read` with `offset`/`limit`
@@ -80,6 +118,15 @@ For each candidate, decide:
    - obvious → trim the source doc/output, or load a pointer/summary instead of the
      whole thing (name the surface to trim, e.g. the file that should be shortened)
    - confusing → fix the source so it's unambiguous (which surface, what's contradictory)
+   - repeated_instruction → the body is re-injected each turn; trim the source skill/
+     doc body (name the file, e.g. `~/.claude/skills/<name>/SKILL.md`) so every
+     re-injection costs less, or split the rarely-needed bulk into a sub-file the
+     model loads on demand. (You cannot stop the harness re-injecting — only shrink
+     what it re-injects.)
+   - obvious_instruction → trim the extreme-obvious filler out of the source skill/
+     doc/memory (name the file and the kind of filler to cut)
+   - confusing_instruction → disambiguate the source directive (name the file and what
+     contradicts what)
 
 ## Output
 
@@ -104,9 +151,14 @@ Write **only** a JSON array to stdout (the orchestrator merges it). One object p
 ]
 ```
 
-For a `low_value_content` candidate you confirm, set `pattern` to the **resolved
-tag** — `"obvious"` or `"confusing"` — NOT `"low_value_content"` (that's only the
-detector's review request). Drop the candidate entirely if it's `fine`. Example:
+For a **review-request** candidate you confirm, set `pattern` to the **resolved tag**,
+NOT the detector's review-request name:
+- `low_value_content` → `"obvious"` or `"confusing"`
+- `instruction_review` → `"obvious_instruction"` or `"confusing_instruction"`
+
+Drop the candidate entirely if it's `fine`. For instruction candidates keep `tool`
+as `"instruction"`, `target` as the block label, and carry `injections` through so the
+adapter sees how often the block recurs. Examples:
 
 ```json
 {
@@ -116,6 +168,30 @@ detector's review request). Drop the candidate entirely if it's `fine`. Example:
   "what_happened": "Loaded a 14k-token dashboard that restates a one-line status.",
   "cheaper": "Trim DASHBOARD.md to the status line, or Read with limit on the header.",
   "estimated_tokens_saved": 13000
+}
+```
+
+```json
+{
+  "session_id": "...", "project": "...", "line": 12,
+  "pattern": "repeated_instruction", "tool": "instruction",
+  "target": "skill:prototype", "injections": 179,
+  "tokens_wasted": 184586, "severity": "high",
+  "what_happened": "The prototype skill body (~1k tok) was re-injected 179x = ~185k tok.",
+  "cheaper": "Trim ~/.claude/skills/prototype/SKILL.md; move its bulk to a sub-file loaded on demand.",
+  "estimated_tokens_saved": 120000
+}
+```
+
+```json
+{
+  "session_id": "...", "project": "...", "line": 12,
+  "pattern": "obvious_instruction", "tool": "instruction",
+  "target": "memory:CLAUDE.md", "injections": 5,
+  "tokens_wasted": 1553, "severity": "low",
+  "what_happened": "A CLAUDE.md block restates 'be concise / always careful' at paragraph length.",
+  "cheaper": "Cut the filler in ~/.claude/CLAUDE.md to the one operative line.",
+  "estimated_tokens_saved": 1200
 }
 ```
 

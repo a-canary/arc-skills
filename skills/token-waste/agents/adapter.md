@@ -22,7 +22,7 @@ The absolute path to today's waste file
   "date": "20260528",
   "sessions_analyzed": 7,
   "total_candidate_wasted_tokens": 41000,
-  "by_pattern": { "full_file_read": 12, "reread": 5, "repeated": 4, "obvious": 3, "confusing": 1 },
+  "by_pattern": { "full_file_read": 12, "reread": 5, "repeated": 4, "obvious": 3, "confusing": 1, "repeated_instruction": 8, "obvious_instruction": 2 },
   "examples": [
     {"session_id":"...","project":"...","line":482,"pattern":"full_file_read",
      "tool":"Read","target":"/path/file.ts","tokens_wasted":6100,
@@ -54,6 +54,20 @@ The absolute path to today's waste file
      doc loaded twice, a contradictory spec). Shorten it, split it, or replace the
      body with a pointer/summary — but only after confirming the live file still
      has the bloat the tally describes, and never delete load-bearing detail.
+   - **instruction body** — the right surface for `repeated_instruction` /
+     `obvious_instruction` / `confusing_instruction`: the re-injected directive text
+     (a skill body, the catalog, memory) that the harness re-pastes every turn, so
+     every wasted token is paid N times. You cannot stop the re-injection — only
+     shrink what gets re-injected. For a heavy `repeated_instruction` skill body,
+     trim its `SKILL.md` or move rarely-needed bulk into a sub-file the model loads
+     on demand (progressive disclosure); for `obvious_instruction`, cut the
+     extreme-obvious filler; for `confusing_instruction`, disambiguate the directive.
+     The tally's `target` names the block (e.g. `skill:prototype` →
+     `~/.claude/skills/prototype/SKILL.md`); `injections` shows the multiplier.
+     A 1k-token line cut from a body re-injected 180× saves ~180k tokens — usually
+     the highest-leverage fix available, so weight these by `tokens_wasted`, which
+     already reflects the multiplier. Do NOT cut load-bearing steps to save tokens;
+     trim only genuine filler/duplication, and never touch `~/.claude/CLAUDE.md`.
    - **rule** — append one standing rule to `~/AGENTS.md` (global behavioral
      rules live there, not in memory) — use this ONLY when no narrower surface
      fits, since a "remember not to" rule is the weakest fix

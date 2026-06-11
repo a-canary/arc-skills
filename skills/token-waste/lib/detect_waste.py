@@ -16,6 +16,22 @@ tool/usage would have loaded far less:
   - unreferenced      large tool_result whose distinctive tokens never reappear
                       in any later assistant message (loaded, never used)
 
+It ALSO walks the instruction context — the directive text the harness injects as
+`attachment` messages, NOT as tool results: skill bodies re-injected on every turn
+(`invoked_skills`), the skill catalog (`skill_listing`), memory/CLAUDE.md/AGENTS.md
+(`nested_memory`), and the recurring `<system-reminder>` blocks (`task_reminder`).
+These never flow through tool_use/tool_result, so the result-only passes above are
+blind to them — yet they are the heaviest, most repetitive context in a session (a
+4k-token skill body re-injected 250× is ~1M tokens). It flags instructions that are:
+
+  - repeated_instruction   the same instruction block injected N+ times (a skill body
+                           re-pasted every turn, the catalog re-listed) — deterministic;
+                           charges the aggregate cost of every copy past the first
+  - instruction_review     a large instruction block shortlisted with a bounded excerpt
+                           for the analyst to classify as `obvious_instruction`
+                           (extreme-obvious filler) or `confusing_instruction`
+                           (contradictory/ambiguous) — the analyst resolves the tag
+
 Output is JSON: a list of candidate events the LLM analyst then scores. The LLM
 never sees the raw transcript — only this shortlist — so the tool that hunts
 token waste does not itself waste tokens.
@@ -52,6 +68,25 @@ QUALITY_REVIEW_TOKENS = 1500
 # go to the LLM, so we only send the biggest few — reviewing the largest results
 # first is where the token-quality payoff is. Keeps the analyst's bill bounded.
 MAX_QUALITY_REVIEW = 12
+
+# --- Instruction-context thresholds -------------------------------------------
+# Instruction context is the directive text the harness *re-injects* as attachment
+# messages (skill bodies, the skill catalog, memory/CLAUDE.md, system-reminders) —
+# NOT tool results. A 4k-token skill body re-pasted 250× is ~1M tokens, so the unit
+# of waste here is the AGGREGATE re-injection cost, not one copy.
+#
+# A single instruction block this large is worth reviewing for content quality
+# (one copy — obvious filler or confusing/contradictory directive text).
+INSTRUCTION_REVIEW_TOKENS = 800
+# An instruction block re-injected at least this many times is a repeated_instruction
+# candidate — the second copy onward is the avoidable cost.
+REPEAT_INSTRUCTION_MIN = 3
+# Only the aggregate re-injection cost above this is worth flagging (small blocks
+# re-pasted a few times aren't worth an adaptation).
+REPEAT_INSTRUCTION_MIN_WASTED = 2000
+# Cap instruction content-quality review requests per session (they carry excerpts
+# to the LLM, same bounded-cost discipline as MAX_QUALITY_REVIEW).
+MAX_INSTRUCTION_REVIEW = 8
 
 
 def est_tokens(text: str, chars_per_token: float) -> int:
@@ -122,6 +157,52 @@ def jaccard(a: set, b: set) -> float:
     return inter / len(a | b)
 
 
+def fingerprint(text: str) -> str:
+    """Stable identity for an instruction block so re-injections of the *same* block
+    group together. Normalises whitespace so cosmetic reflow doesn't split a group;
+    keeps it a cheap hash rather than pairwise overlap because re-injected directive
+    text is byte-identical copy-paste, not paraphrase."""
+    import hashlib
+    norm = re.sub(r"\s+", " ", text.strip()).lower()
+    return hashlib.sha1(norm.encode("utf-8", "ignore")).hexdigest()[:16]
+
+
+def instruction_blocks_from_attachment(att: dict, line_num: int):
+    """Yield (kind, label, text) for each directive block in an attachment message.
+
+    These are re-injected context the harness pastes outside the tool_use/tool_result
+    channel — the heaviest, most repetitive context in a session and invisible to the
+    result-only passes. We only surface kinds that carry standing INSTRUCTIONS (skill
+    bodies, the skill catalog, memory, system-reminders); transient bookkeeping
+    attachments (hook_success, deferred_tools_delta, goal_status, …) are skipped."""
+    st = att.get("type", "")
+    if st == "invoked_skills":
+        # skill bodies re-injected every turn — one block per skill
+        for s in att.get("skills", []):
+            if isinstance(s, dict):
+                nm = s.get("name", "?")
+                txt = s.get("content", "") or ""
+                if txt:
+                    yield ("skill_body", f"skill:{nm}", txt)
+    elif st == "skill_listing":
+        txt = att.get("content", "") or ""
+        if txt:
+            yield ("skill_listing", "skill_catalog", txt)
+    elif st == "nested_memory":
+        c = att.get("content")
+        txt = text_of(c) if not isinstance(c, str) else c
+        if isinstance(c, dict):
+            # content dicts wrap the text under a "text"/"content" field
+            txt = c.get("text") or c.get("content") or json.dumps(c)
+        if txt:
+            yield ("memory", f"memory:{att.get('displayPath') or att.get('path','?')}", txt)
+    elif st == "task_reminder":
+        c = att.get("content", [])
+        txt = text_of(c) if isinstance(c, list) else (c if isinstance(c, str) else "")
+        if txt and txt.strip():
+            yield ("system_reminder", "system_reminder", txt)
+
+
 def parse(filepath: Path, chars_per_token: float):
     """Walk the JSONL once, building ordered events + tool_use/result linkage."""
     tool_uses = {}          # tool_use_id -> {tool, input, index, line}
@@ -129,6 +210,7 @@ def parse(filepath: Path, chars_per_token: float):
     assistant_texts = []    # (index, text) for later-reference checks
     grep_paths = []         # (index, path) of Grep/Glob targets
     read_order = []         # (index, file_path) in order
+    instructions = []       # {kind, label, text, fp (fingerprint), tokens, index, line}
     order_index = 0
 
     with open(filepath, "r", encoding="utf-8") as f:
@@ -139,6 +221,19 @@ def parse(filepath: Path, chars_per_token: float):
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
+                continue
+
+            # Instruction context arrives as top-level `attachment` messages, NOT as
+            # role-tagged tool results — so it is handled before the role dispatch.
+            if msg.get("type") == "attachment" and isinstance(msg.get("attachment"), dict):
+                for kind, label, txt in instruction_blocks_from_attachment(msg["attachment"], line_num):
+                    instructions.append({
+                        "kind": kind, "label": label, "text": txt,
+                        "fp": fingerprint(txt),
+                        "tokens": est_tokens(txt, chars_per_token),
+                        "index": order_index, "line": line_num,
+                    })
+                order_index += 1
                 continue
 
             inner = msg.get("message") if isinstance(msg.get("message"), dict) else msg
@@ -177,7 +272,7 @@ def parse(filepath: Path, chars_per_token: float):
                         }
                 order_index += 1
 
-    return tool_uses, results, assistant_texts, grep_paths, read_order
+    return tool_uses, results, assistant_texts, grep_paths, read_order, instructions
 
 
 def later_reference(sample: list[str], after_index: int, assistant_texts) -> bool:
@@ -188,8 +283,77 @@ def later_reference(sample: list[str], after_index: int, assistant_texts) -> boo
     return any(tok in later for tok in sample)
 
 
+def detect_instruction_waste(instructions, candidates):
+    """Emit waste candidates from the re-injected instruction context.
+
+    Two shapes, mirroring the result-side passes:
+      - repeated_instruction  the SAME block (same fingerprint) re-injected N+ times.
+        Deterministic — the second copy onward is avoidable. We charge the AGGREGATE
+        re-injection cost (every copy past the first), since that is what actually
+        sat in the window, not the size of one copy.
+      - instruction_review    one representative copy of a large block, with a bounded
+        excerpt, for the analyst to classify as obvious_instruction (extreme-obvious
+        filler the model already acts on) or confusing_instruction (contradictory /
+        ambiguous directive text). The analyst resolves the tag; the detector can't.
+
+    A block that is BOTH big and repeated yields both candidates — they target
+    different fixes (trim the body vs. stop re-injecting it)."""
+    groups = defaultdict(list)
+    for blk in instructions:
+        groups[blk["fp"]].append(blk)
+
+    reviewed = 0
+    for fp, blks in groups.items():
+        first = blks[0]
+        n = len(blks)
+        per_copy = first["tokens"]
+
+        # repeated_instruction: re-injected REPEAT_INSTRUCTION_MIN+ times and the
+        # avoidable (post-first) cost clears the floor. system_reminders re-appear
+        # by design every turn — they are still real cost, but flag them only when
+        # the aggregate is large enough to be worth an adaptation.
+        if n >= REPEAT_INSTRUCTION_MIN:
+            wasted = per_copy * (n - 1)
+            if wasted >= REPEAT_INSTRUCTION_MIN_WASTED:
+                candidates.append({
+                    "tool": "instruction",
+                    "kind": first["kind"],
+                    "tokens": wasted,
+                    "per_copy_tokens": per_copy,
+                    "injections": n,
+                    "index": first["index"],
+                    "line": first["line"],
+                    "target": first["label"],
+                    "pattern": "repeated_instruction",
+                    "note": f"{first['kind']} re-injected {n}x (~{per_copy} tok each); "
+                            f"{n - 1} avoidable copies = ~{wasted} tok",
+                })
+
+        # instruction_review: one big block → analyst judges obvious/confusing.
+        # Review the single representative copy (size of one copy, not the aggregate)
+        # because the content fix trims the body once; the aggregate is the repeated_
+        # instruction concern. Cap to the biggest few, same discipline as the result side.
+        if per_copy >= INSTRUCTION_REVIEW_TOKENS and reviewed < MAX_INSTRUCTION_REVIEW:
+            candidates.append({
+                "tool": "instruction",
+                "kind": first["kind"],
+                "tokens": per_copy,
+                "injections": n,
+                "index": first["index"],
+                "line": first["line"],
+                "target": first["label"],
+                "pattern": "instruction_review",
+                "note": "large instruction block — analyst to judge obvious/filler "
+                        "or confusing/contradictory directive text",
+                "excerpt": excerpt(first["text"]),
+            })
+            reviewed += 1
+
+
 def detect(filepath: Path, project: str, chars_per_token: float) -> dict:
-    tool_uses, results, assistant_texts, grep_paths, read_order = parse(filepath, chars_per_token)
+    tool_uses, results, assistant_texts, grep_paths, read_order, instructions = parse(
+        filepath, chars_per_token
+    )
 
     candidates = []
     read_counts = defaultdict(int)
@@ -312,6 +476,13 @@ def detect(filepath: Path, project: str, chars_per_token: float) -> dict:
                 candidates.append(e)
                 break  # one repeat-flag per result; earliest match is enough
 
+    # Instruction context: the re-injected directive text (skill bodies, catalog,
+    # memory, system-reminders) that never flows through tool_use/tool_result. The
+    # result-side passes above are blind to it, yet it is the heaviest, most
+    # repetitive context in a session. Emits repeated_instruction (deterministic)
+    # and instruction_review (analyst classifies obvious/confusing).
+    detect_instruction_waste(instructions, candidates)
+
     # Cap low_value_content review requests to the biggest few — they carry excerpts
     # to the LLM, so an unbounded shortlist would be the very waste this skill hunts.
     lvc = sorted(
@@ -327,19 +498,21 @@ def detect(filepath: Path, project: str, chars_per_token: float) -> dict:
 
     # headline waste counts each wasteful tool call's tokens ONCE, even when it
     # tripped several patterns (e.g. a reread that was also a full_file_read).
-    # `low_value_content` is only a REVIEW REQUEST (the analyst decides obvious vs
-    # confusing vs fine) — excluded here so the deterministic headline doesn't claim
-    # waste the LLM hasn't confirmed. If a result ALSO tripped a deterministic
-    # pattern, that pattern still counts its tokens.
-    wasted_tokens = sum(
-        toks for toks in (
-            {
-                c["index"]: c["tokens"]
-                for c in candidates
-                if c["pattern"] != "low_value_content"
-            }.values()  # index → tokens, dedup by call
-        )
-    )
+    # REVIEW-REQUEST patterns (`low_value_content`, `instruction_review`) are
+    # excluded — the analyst, not the detector, decides obvious vs confusing vs
+    # fine, so the deterministic headline must not claim waste the LLM hasn't
+    # confirmed. `repeated_instruction` IS deterministic and counts its aggregate
+    # re-injection cost. Dedup key is (source, index): tool calls dedup on their
+    # call index; instruction candidates dedup on the fingerprint group's first
+    # index, namespaced so the two index spaces can't collide.
+    REVIEW_ONLY = {"low_value_content", "instruction_review"}
+    dedup = {}
+    for c in candidates:
+        if c["pattern"] in REVIEW_ONLY:
+            continue
+        key = ("instr", c["target"]) if c["tool"] == "instruction" else ("call", c["index"])
+        dedup[key] = max(dedup.get(key, 0), c["tokens"])
+    wasted_tokens = sum(dedup.values())
     return {
         "session_id": filepath.stem,
         "project": project,
