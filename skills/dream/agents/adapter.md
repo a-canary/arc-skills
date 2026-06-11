@@ -39,7 +39,7 @@ The absolute path to today's journal (`~/.claude/dream/journal/YYYY-MM-DD.md`).
      future run makes a few targeted calls + the *same* high-level judgment on a
      fraction of the context. This is a promotion down the `profiling-ladder`
      (memory→skill→tool→pipeline). The promotion replaces the *gathering*, never
-     the *judgment*. See step 7 for the before/after gate that validates it.
+     the *judgment*. See step 8 for the before/after gate that validates it.
 4. **Recency-gate: compare error-time vs fix-time before fixing.** A journal
    entry records when an error was *observed*, not whether it is still live.
    Before editing, check the chosen issue against the current state of its
@@ -64,10 +64,19 @@ The absolute path to today's journal (`~/.claude/dream/journal/YYYY-MM-DD.md`).
 5. Make the edit. Keep it surgical. Trace each journal `ref:` you rely on back
    to its source before acting on it — a memory of a path is not proof it still
    exists.
-6. Append a `## adaptation` block to the journal recording: the issue group, the
+6. **Verify the edit landed on disk before journaling it as done.** After the
+   edit, `grep -n` the new content (or `Read` the changed region) in the live
+   file and confirm the exact added/changed text is present. An mtime/`ls`/touch
+   check is NOT verification — a no-op or a failed write can update mtime without
+   changing content; only matching the literal text proves the edit landed. If
+   the grep does not return the new content, the edit did not land — redo it; do
+   NOT proceed. Never write the adaptation block on the strength of having
+   *issued* an edit (this is the phantom-adaptation trap: `pipeline.py` /
+   `collector.md` edits recorded as done that were absent from disk).
+7. Append a `## adaptation` block to the journal recording: the issue group, the
    surface touched, the file path, and a one-line rationale. This is the audit
    trail for what changed and why.
-7. **Promotions are gated by measured before/after, not by approval.** When the
+8. **Promotions are gated by measured before/after, not by approval.** When the
    change is a `promotion` (step 3), the adaptation block must record the
    **before** `cost_calls` from the source entries (e.g. `before: ~20 calls`).
    The promotion is *not* validated by being built — it is validated only when a

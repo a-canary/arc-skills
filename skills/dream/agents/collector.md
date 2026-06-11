@@ -22,7 +22,13 @@ file (`~/.claude/dream/journal/YYYY-MM-DD.md`).
    ```bash
    python3 ~/.claude/skills/dream/scripts/page.py <session.jsonl> --offset <N> --window 80
    ```
-   Start at `--offset 0`.
+   Start at `--offset 0`. The window the Bash call prints **is already in your
+   context** — read it from there. **Never `Read` a `tool-results/<id>.txt`
+   file** (that file *is* the Bash output you just got, re-loading it costs ~10k
+   tokens for zero new information), and **never re-run `page.py` on an
+   `--offset`/`--window` you already emitted** — scroll back to the earlier
+   window instead. To re-find one value, `grep -n` that single line, don't
+   re-page or re-read the dump. Page each offset exactly once, forward only.
 2. Read the window. Look for:
    - **mistake** — Claude did something wrong (wrong file, wrong command, bad assumption).
    - **correction** — the user pushed back ("no", "not that", "actually", "should be"), or Claude redid an action.

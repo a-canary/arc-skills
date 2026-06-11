@@ -17,7 +17,17 @@
 #   live-state.sh unit <name>        # systemd unit (user + system)
 #   live-state.sh cron <pattern>     # crontab entry matching pattern
 #   live-state.sh hook <name>        # hook script: on disk AND registered in settings.json
+#   live-state.sh serve <url>        # what is ACTUALLY being served at url right now
 #   live-state.sh <name> --json      # machine-readable for the adapter
+#
+# The `serve` surface collapses the recurring "built a deploy workaround before
+# checking the live build" gather (proxy-sanitizer + tunnel, ~20 calls/~30k ctx,
+# journal 277b9d72): it curls the URL ONCE and reports HTTP status + a body
+# fingerprint, and reminds that a static/SPA bundle served from disk is FRESH
+# per-request (no restart needed) while a frozen process source (tsx/pm2 in
+# memory) is STALE until restart. Fingerprint a known marker with
+#   live-state.sh serve <url> --expect <substring>
+# to confirm the deployed build is the one on disk before building any workaround.
 #
 # Exit 0 = wired/live, 1 = dead/unregistered, 2 = ambiguous/not-found.
 # The point: the agent reads ONE result, then applies its OWN judgment.
@@ -30,12 +40,17 @@ HOOKS_DIR="${CLAUDE_HOOKS_DIR:-$HOME/.claude/hooks}"
 JSON=0
 KIND=""
 ARG=""
+EXPECT=""
 
 # --- arg parse ---------------------------------------------------------------
+EXPECT_NEXT=0
 for a in "$@"; do
+  if [ "$EXPECT_NEXT" -eq 1 ]; then EXPECT="$a"; EXPECT_NEXT=0; continue; fi
   case "$a" in
     --json) JSON=1 ;;
-    unit|cron|hook) [ -z "$KIND" ] && KIND="$a" || ARG="$a" ;;
+    --expect) EXPECT_NEXT=1 ;;
+    --expect=*) EXPECT="${a#--expect=}" ;;
+    unit|cron|hook|serve) [ -z "$KIND" ] && KIND="$a" || ARG="$a" ;;
     *) ARG="$a" ;;
   esac
 done
@@ -48,6 +63,7 @@ fi
 # auto-detect kind when not given
 if [ -z "$KIND" ]; then
   case "$ARG" in
+    http://*|https://*)         KIND="serve" ;;
     *.service|*.timer|*.socket) KIND="unit" ;;
     *.sh|*hook*)                KIND="hook" ;;
     *)                          KIND="cron" ;;  # default to the most-hit surface
@@ -153,9 +169,40 @@ PY
   fi
 }
 
+# --- serve -------------------------------------------------------------------
+# "What is ACTUALLY being served at this url right now?" One curl, no workaround.
+# The journal trap (277b9d72): an agent conflated a FROZEN process source (tsx/
+# pm2 loaded into memory at boot -> stale until restart) with a SPA/static
+# bundle (read from disk per-request -> already fresh). It built a ~20-call
+# proxy+tunnel workaround, THEN found the fixed build was already live. Check
+# the live body first; --expect <substring> confirms the deployed build marker.
+check_serve() {
+  local url="$1" body code
+  body="$(curl -fsS --max-time 8 "$url" 2>/dev/null)"
+  code="$(curl -s -o /dev/null -w "%{http_code}" --max-time 8 "$url" 2>/dev/null)"
+  [ -z "$code" ] && code="000"
+  if [ "$code" = "000" ]; then
+    emit "dead" "no HTTP response from $url (connection refused / timed out) — nothing is serving here" "http=$code"
+  fi
+  local fp
+  fp="$(printf '%s' "$body" | cksum | awk '{print $1}')"
+  local bytes; bytes="$(printf '%s' "$body" | wc -c | tr -d ' ')"
+  local served_note="STATIC/SPA bundles serve fresh-from-disk per-request (no restart); a frozen process source (tsx/pm2 in memory) is stale until restart — confirm which this is before any deploy workaround"
+  if [ -n "$EXPECT" ]; then
+    if printf '%s' "$body" | grep -qF -- "$EXPECT"; then
+      emit "wired" "serving HTTP $code; expected marker PRESENT in live body — the deployed build matches; $served_note" "http=$code" "fingerprint=$fp" "bytes=$bytes" "expect=present"
+    else
+      emit "wired" "serving HTTP $code but expected marker ABSENT from live body — live build is NOT the one you expect; restart/redeploy the FROZEN source, the disk-served layer needs no restart; $served_note" "http=$code" "fingerprint=$fp" "bytes=$bytes" "expect=absent"
+    fi
+  else
+    emit "wired" "serving HTTP $code; fingerprint live body and grep your build marker with --expect <substring>; $served_note" "http=$code" "fingerprint=$fp" "bytes=$bytes"
+  fi
+}
+
 case "$KIND" in
-  unit) check_unit "$ARG" ;;
-  cron) check_cron "$ARG" ;;
-  hook) check_hook "$ARG" ;;
-  *)    echo "unknown kind: $KIND" >&2; exit 2 ;;
+  unit)  check_unit "$ARG" ;;
+  cron)  check_cron "$ARG" ;;
+  hook)  check_hook "$ARG" ;;
+  serve) check_serve "$ARG" ;;
+  *)     echo "unknown kind: $KIND" >&2; exit 2 ;;
 esac
