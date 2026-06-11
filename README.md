@@ -55,6 +55,10 @@ Most skills are pure markdown — making them visible *is* the install. A few ne
 - `dream-insights` — show latest dream journal without re-running
 - `dream-status` — show dream processing state and today's journal entry counts
 
+**Domain workflows** — narrow vertical skills for specific external systems
+- `vast-cli` — drive the `vastai` CLI correctly: search/create/poll/ssh/stop, with the proxy-unset + PATH-shim + ssh-rotation traps that silently no-op the CLI
+- `vast-instance` — on-box best practices for vast.ai GPU jobs: bandwidth-gate, `*-runtime` images, the verified LFM2.5 pin stack, HF-token guard, stage-verify
+
 ## Install
 
 1. Drop the `skills/` directory (or any subset) into wherever your harness reads skills from. For Claude Code: `~/.claude/skills/` or a project's `.claude/skills/`.
