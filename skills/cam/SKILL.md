@@ -17,6 +17,16 @@ sources ──▶ collectors (N, read wide, cheap) ──append evidence rows─
                                           any tier may append a HALT row
 ```
 
+## When NOT to use
+
+CAM = **checklist + ledger + clock**. The pre-op checklist / post-op confirmation skeleton is the commodity core; CAM earns its complexity only via:
+
+1. **Memory** — ledger correlates evidence/decisions/outcomes *across* rounds (Thursday's drift ↔ Tuesday's deploy).
+2. **Cost discipline** — per-tier models + delta-gating, when checklist items are model calls.
+3. **Clock** — monitor catches delayed effects and triggers revert; confirmation fires once, monitor keeps measuring.
+
+Task needs zero of the three ⇒ write a 10-line checklist, not CAM. And mind the self-judge trap: a checklist re-asks the producer's own question — the monitor must grade measured outcomes, independent of the adaptor.
+
 ## Tiers and writer roles
 
 - **Collectors** (read wide): agent | tool | script. Distill at write time — append curated evidence rows, never raw dumps; downstream reads pre-filtered. Delta-gate first: cheap probe against a watermark; nothing changed ⇒ zero model calls this round.
