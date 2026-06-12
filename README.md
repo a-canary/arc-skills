@@ -66,6 +66,13 @@ Most skills are pure markdown — making them visible *is* the install. A few ne
 
 Skills without a `SETUP.md` need nothing beyond step 1.
 
+> **Setting up on a fresh or non-Linux host (Windows/macOS)?** Skills are pure
+> markdown, so step 1 is the whole install — verify it worked by confirming your
+> harness lists a skill from `skills/` (e.g. it appears in Claude Code's
+> `/<skill-name>` completion). If you run the doc-drift guard below, it's bash —
+> use git-bash or WSL on Windows. Hit an install snag whose fix belongs in these
+> steps? Open a PR so the next host doesn't hit it.
+
 ## Curation principles
 
 1. **Zero deps.** A skill is a markdown file + optional small references. No installs.
