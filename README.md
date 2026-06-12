@@ -50,6 +50,10 @@ Most skills are pure markdown — making them visible *is* the install. A few ne
 **Model discovery**
 - `select-models` — discovers reachable model providers, validates choices, writes `~/.config/arc-skills.json`
 
+**System design** — reusable architecture frameworks
+- `cam` — Collector/Adaptor/Monitor judgment-gate framework: read wide, write narrow, measure over time, one append-only ledger
+- `champion-challenger` — promote a challenger over the champion only past a pre-registered AND-gate
+
 **Session reflection** (supply-chain / self-improvement)
 - `dream` — mine conversation history for failure modes, make one system improvement
 - `dream-insights` — show latest dream journal without re-running
