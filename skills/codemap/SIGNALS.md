@@ -8,7 +8,7 @@ Every signal is a cheap static heuristic. Treat as a lead, not a verdict.
 
 1. **detect** — ecosystem from marker files (`package.json`, `tsconfig.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`).
 2. **inventory** — file list via `git ls-files --cached --others --exclude-standard` (respects `.gitignore`); fallback walk skips `node_modules`/`dist`/`coverage`/`__pycache__`/`.venv`/`target`/`.next`. Each file classified: source / test / config / doc / output / other. LOC counted; `.md` frontmatter parsed.
-3. **graph** — per source file, regex-extract `import`/`export…from`/`require`/dynamic `import()` specifiers; resolve relative ones to local files (tries `.ts .tsx .js .jsx .mjs .cjs .py .go .rs`, `index.*`, `__init__.py`, and `.js`→`.ts` rewrite). A bare specifier is first matched against **workspace package names** (each `package.json` `name` → its dir+entry) and **tsconfig `paths` aliases**; only specifiers that resolve to nothing local become external deps. Exported symbol names extracted best-effort — names that are *re-exported* (`export { X } from "./y"`) are attributed to the defining file, not the barrel, so re-exports don't inflate redundancy.
+3. **graph** — JS/TS edges come from **madge** (AST-based) when it's installed (`npm i -g madge`) — it reads the real syntax tree + tsconfig, so it never mistakes an import inside a comment or string for a real edge. When madge is absent, falls back to the built-in **regex** extractor (labelled `graph_source: regex (approximate)` in frontmatter, with a warning in the report): it greps `import`/`export…from`/`require`/dynamic `import()` specifiers and resolves relative ones to local files (tries `.ts .tsx .js .jsx .mjs .cjs .py .go .rs`, `index.*`, `__init__.py`, and `.js`→`.ts` rewrite). A bare specifier is first matched against **workspace package names** (each `package.json` `name` → its dir+entry) and **tsconfig `paths` aliases**; only specifiers that resolve to nothing local become external deps. Exported symbol names extracted best-effort — names that are *re-exported* (`export { X } from "./y"`) are attributed to the defining file, not the barrel, so re-exports don't inflate redundancy.
 4. **signals** — dead, untested, cycles, redundancy (below).
 5. **render** — PlantUML + Markdown + JSON IR.
 
@@ -46,13 +46,13 @@ Every signal is a cheap static heuristic. Treat as a lead, not a verdict.
 
 ## Extending to other languages
 
-Import resolution and export extraction are JS/TS-first. Python/Go/Rust currently get file inventory, LOC, config/doc/output classification, and module shapes, but the dependency graph (and therefore dead/cycle signals) is only fully wired for JS/TS.
+Import resolution and export extraction are JS/TS-first (madge for the graph, regex for exports). Python/Go/Rust currently get file inventory, LOC, config/doc/output classification, and module shapes, but the dependency graph (and therefore dead/cycle signals) is only fully wired for JS/TS. For other languages, see the aggregator (`aggregate.ts`), which shells out to per-language AST tools (vulture, pydeps, …).
 
 To add a language: extend `IMPORT_RE`/`EXPORT_RE` (or add a per-language extractor like `PY_IMPORT_RE`) and teach `resolveLocal` how that language maps a specifier to a file path. Everything downstream (signals, render) is language-agnostic once edges exist.
 
 ## Limitations (state these when reporting)
 
-- Regex import extraction, not a full parser — exotic syntax or macro-generated imports can be missed.
+- **Graph source:** madge (AST) when installed — accurate. Regex fallback otherwise — it reads import-like text in comments/strings as real edges (false-positive edges → false cycles/dead flags) and misses macro-generated imports. The report's `graph_source` field tells you which ran; trust regex edges as leads, not facts.
 - No type information; no call-graph (import-graph only). A file imported but whose exports are never *used* still counts as live.
 - Coverage not read yet — "untested" is a naming/import heuristic.
 - Monorepos: workspace package names (`@scope/pkg`) and tsconfig `paths` aliases **are** resolved to local files, so cross-package imports render as real seams instead of vanishing into "external deps". Resolution keys off each `package.json` `name`+entry and root `tsconfig.json`/`tsconfig.base.json` `paths` — exotic alias schemes (custom resolvers, per-package path overrides) can still fall through to external.

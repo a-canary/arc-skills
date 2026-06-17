@@ -39,6 +39,7 @@ interface Graph {
   ecosystems: string[];
   files: Record<string, FileRec>;
   entrypoints: string[];
+  graphSource: "madge" | "regex";
 }
 
 // ---------- args ----------
@@ -242,6 +243,68 @@ function buildAliases(allRel: string[], set: Set<string>): AliasResolver[] {
     }
   }
   return resolvers;
+}
+
+// ---------- graph source: prefer madge (AST) over regex when available ----------
+// The regex extractor reads import-like text inside comments and strings as real
+// edges (e.g. a JSDoc usage example `import { x } from 'pkg'`), which fabricates
+// edges and therefore phantom cycles. madge resolves the graph from the AST + the
+// tsconfig, so it never sees commented/quoted imports. Use it when installed.
+function madgeAvailable(): boolean {
+  try {
+    execFileSync("madge", ["--version"], { stdio: ["ignore", "ignore", "ignore"] });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** AST-accurate JS/TS import graph via madge. Returns rel→[rel] edges (root-relative,
+ *  git-tracked only), or null on any failure / no JS-TS files. madge reports paths
+ *  relative to the common ancestor of its args, so every path is re-resolved against
+ *  candidate prefixes back to a tracked root-relative file. */
+function madgeGraph(allRel: string[], set: Set<string>): Record<string, string[]> | null {
+  const jsts = allRel.filter(
+    (r) => /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(r) && !r.endsWith(".d.ts"),
+  );
+  if (!jsts.length) return null;
+  // entry args = distinct top-level dirs + any root-level files. Keeps madge off
+  // node_modules and forces the common-ancestor base to the repo root on multi-dir repos.
+  const entries = [...new Set(jsts.map((r) => (r.includes("/") ? r.split("/")[0] : r)))];
+  const tscfg = ["tsconfig.json", "tsconfig.base.json"].find((t) => fs.existsSync(path.join(root, t)));
+  const args = ["--json", "--extensions", "ts,tsx,js,jsx,mjs,cjs", ...(tscfg ? ["--ts-config", tscfg] : []), ...entries];
+  let raw = "";
+  try {
+    raw = execFileSync("madge", args, { cwd: root, encoding: "utf8", maxBuffer: 128 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
+  } catch (e: any) {
+    raw = e?.stdout?.toString() ?? "";
+  }
+  let graph: Record<string, string[]>;
+  try {
+    graph = JSON.parse(raw || "{}");
+  } catch {
+    return null;
+  }
+  const canon = (p: string): string | null => {
+    if (set.has(p)) return p;
+    for (const d of entries) {
+      const c = path.normalize(path.join(d, p)).replace(/\\/g, "/");
+      if (set.has(c)) return c;
+    }
+    return null;
+  };
+  const out: Record<string, string[]> = {};
+  for (const [k, deps] of Object.entries(graph)) {
+    const kk = canon(k);
+    if (!kk) continue;
+    const resolved: string[] = [];
+    for (const d of deps as string[]) {
+      const dd = canon(d);
+      if (dd && dd !== kk && !resolved.includes(dd)) resolved.push(dd);
+    }
+    out[kk] = resolved;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 function inventory(allRel: string[]): Record<string, FileRec> {
@@ -562,6 +625,7 @@ function renderMd(g: Graph, sig: ReturnType<typeof computeSignals>, ts: string):
   L.push(`ecosystems: [${g.ecosystems.join(", ")}]`);
   L.push(`source_files: ${sig.counts.source}`);
   L.push(`test_files: ${sig.counts.test}`);
+  L.push(`graph_source: ${g.graphSource}${g.graphSource === "regex" ? " (approximate)" : ""}`);
   L.push(`graph_analyzed: ${sig.analyzed}`);
   L.push(`dead_count: ${sig.analyzed ? sig.dead.length : "null"}`);
   L.push(`untested_count: ${sig.analyzed ? sig.untested.length : "null"}`);
@@ -573,6 +637,10 @@ function renderMd(g: Graph, sig: ReturnType<typeof computeSignals>, ts: string):
   L.push("");
   L.push("> Deterministic static snapshot (no LLM). Re-run after changes and diff `codemap.json` to see what moved.");
   L.push("");
+  if (g.graphSource === "regex" && sig.analyzed) {
+    L.push("> ⚠ **Import graph is regex-approximate** — `madge` not installed, so edges (hence dead/cycle signals) may include false positives from import-like text in comments or strings. Install for AST-accurate edges: `npm i -g madge`.");
+    L.push("");
+  }
   L.push("## Module shapes (LOC by module)");
   L.push("");
   for (const [m, loc] of [...moduleLoc].sort((a, b) => b[1] - a[1]).slice(0, 25)) L.push(`- \`${m}\` — ${loc} LOC`);
@@ -657,6 +725,7 @@ function renderMd(g: Graph, sig: ReturnType<typeof computeSignals>, ts: string):
 type IR = {
   root?: string;
   ecosystems?: string[];
+  graphSource?: "madge" | "regex";
   counts?: Record<string, number>;
   dead?: string[];
   untested?: string[];
@@ -774,7 +843,19 @@ function main() {
   const allRel = listFiles();
   log(`files: ${allRel.length}`);
   const files = inventory(allRel);
-  const g: Graph = { root, ecosystems, files, entrypoints: [] };
+  // Prefer madge's AST graph for JS/TS edges; regex stays as the fallback.
+  let graphSource: "madge" | "regex" = "regex";
+  const mg = madgeAvailable() ? madgeGraph(allRel, new Set(allRel)) : null;
+  if (mg) {
+    graphSource = "madge";
+    for (const rec of Object.values(files)) {
+      if ((rec.kind === "source" || rec.kind === "test") && (rec.lang === "ts" || rec.lang === "js")) rec.imports = mg[rec.rel] ?? [];
+    }
+    log(`graph: madge (AST-accurate) — ${Object.keys(mg).length} files`);
+  } else {
+    log("graph: regex (approximate — install madge for AST-accurate JS/TS edges: npm i -g madge)");
+  }
+  const g: Graph = { root, ecosystems, files, entrypoints: [], graphSource };
   g.entrypoints = findEntrypoints(files);
   log(`entrypoints: ${g.entrypoints.length}`);
   const sig = computeSignals(g);
@@ -802,6 +883,7 @@ function main() {
     generated: ts,
     root,
     ecosystems,
+    graphSource: g.graphSource,
     counts: sig.counts,
     entrypoints: g.entrypoints,
     dead: sig.dead,
