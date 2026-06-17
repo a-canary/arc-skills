@@ -21,7 +21,7 @@ npx tsx scripts/codemap.ts <project-dir>
 cat <project-dir>/codemap/codemap.md
 ```
 
-Flags: `--out DIR` (default `<project>/codemap`) · `--detail file|module` (default `module`) · `--include-external` (draw external deps as clouds) · `--vs <ref>` (also write `codemap.diff.md` comparing a git ref → working tree).
+Flags: `--out DIR` (default `<project>/codemap`) · `--group cluster|dir` (default `cluster` — group modules by import community via Louvain; `dir` groups by folder) · `--detail file|module` (default `module`) · `--include-external` (draw external deps as clouds) · `--vs <ref>` (also write `codemap.diff.md` comparing a git ref → working tree).
 
 Re-running preserves the previous `codemap.json` as `prev.json` and logs `Δ vs prev: dead … untested … cycles …` (the cheap last-run delta; for commit-to-commit use `--vs` or `git diff` on the committed `codemap.json`).
 

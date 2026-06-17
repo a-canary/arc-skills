@@ -53,6 +53,7 @@ const positional = args.filter((a, i) => !a.startsWith("--") && !args[i - 1]?.st
 const root = path.resolve(positional[0] || ".");
 const outDir = path.resolve(root, flag("out", path.join(root, "codemap"))!);
 const detail = flag("detail", "module") as "file" | "module";
+const group = flag("group", "cluster") as "cluster" | "dir";
 const includeExternal = has("include-external");
 
 const log = (m: string) => process.stderr.write(`[codemap] ${m}\n`);
@@ -489,11 +490,166 @@ function redundancy(g: Graph): { sameBasename: Record<string, string[]>; sameExp
 }
 
 // ---------- module aggregation ----------
-function moduleOf(rel: string): string {
+// Directory grouping: top-level dir, or src/<x> | lib/<x> | app/<x> | packages/<x>
+// one level deep. This is the fallback and the --group dir behaviour.
+function dirModuleOf(rel: string): string {
   const parts = rel.split("/");
   if (parts.length === 1) return ".";
   if (["src", "lib", "app", "apps", "packages"].includes(parts[0]) && parts.length > 2) return `${parts[0]}/${parts[1]}`;
   return parts[0];
+}
+
+// When clustering is active, MODULE_MAP holds rel→community-label for every source
+// file that has a graph edge; everything else falls back to its directory. moduleOf
+// is the single chokepoint all rendering/diff goes through, so flipping the grouping
+// mode only touches this map — no caller changes.
+let MODULE_MAP: Map<string, string> | null = null;
+function moduleOf(rel: string): string {
+  return MODULE_MAP?.get(rel) ?? dirModuleOf(rel);
+}
+
+/** Louvain community detection over an undirected weighted graph. Deterministic:
+ *  nodes processed in sorted order, ties broken by id, no randomness.
+ *  adj: symmetric Map<node, Map<neighbour, weight>>; returns Map<node, communityInt>. */
+function louvain(adj: Map<string, Map<string, number>>): Map<string, number> {
+  const nodes = [...adj.keys()].sort();
+  const idOf = new Map(nodes.map((n, i) => [n, i]));
+  let N = nodes.length;
+  let W = nodes.map((n) => {
+    const m = new Map<number, number>();
+    for (const [nb, w] of adj.get(n)!) if (nb !== n) m.set(idOf.get(nb)!, w);
+    return m;
+  });
+  let self = nodes.map((n) => adj.get(n)!.get(n) || 0);
+  let members: string[][] = nodes.map((n) => [n]);
+  const buildDeg = (W: Map<number, number>[], self: number[]) =>
+    W.map((m, i) => [...m.values()].reduce((a, b) => a + b, 0) + 2 * self[i]);
+  while (true) {
+    const deg = buildDeg(W, self);
+    const twoM = deg.reduce((a, b) => a + b, 0);
+    if (twoM === 0) break;
+    const comm = W.map((_, i) => i);
+    const commTot = deg.slice();
+    let improvedAny = false;
+    let moved = true;
+    let guard = 0;
+    while (moved && guard++ < 100) {
+      moved = false;
+      for (let i = 0; i < N; i++) {
+        const ci = comm[i];
+        const wTo = new Map<number, number>();
+        for (const [j, w] of W[i]) { const cj = comm[j]; wTo.set(cj, (wTo.get(cj) || 0) + w); }
+        commTot[ci] -= deg[i];
+        const wToCi = wTo.get(ci) || 0;
+        let best = ci;
+        let bestGain = wToCi - (commTot[ci] * deg[i]) / twoM;
+        for (const c of [...wTo.keys()].sort((a, b) => a - b)) {
+          if (c === ci) continue;
+          const gain = wTo.get(c)! - (commTot[c] * deg[i]) / twoM;
+          if (gain > bestGain + 1e-12) { bestGain = gain; best = c; }
+        }
+        commTot[best] += deg[i];
+        if (best !== ci) { comm[i] = best; moved = true; improvedAny = true; }
+      }
+    }
+    const uniq = [...new Set(comm)].sort((a, b) => a - b);
+    const reId = new Map(uniq.map((c, k) => [c, k]));
+    const newN = uniq.length;
+    if (newN === N) break;
+    const nW: Map<number, number>[] = Array.from({ length: newN }, () => new Map());
+    const nSelf = new Array(newN).fill(0);
+    const nMembers: string[][] = Array.from({ length: newN }, () => []);
+    for (let i = 0; i < N; i++) {
+      const ci = reId.get(comm[i])!;
+      nMembers[ci].push(...members[i]);
+      nSelf[ci] += self[i];
+    }
+    for (let i = 0; i < N; i++) {
+      const ci = reId.get(comm[i])!;
+      for (const [j, w] of W[i]) {
+        if (j < i) continue;
+        const cj = reId.get(comm[j])!;
+        if (ci === cj) nSelf[ci] += w;
+        else { nW[ci].set(cj, (nW[ci].get(cj) || 0) + w); nW[cj].set(ci, (nW[cj].get(ci) || 0) + w); }
+      }
+    }
+    W = nW; self = nSelf; members = nMembers; N = newN;
+    if (!improvedAny) break;
+  }
+  const out = new Map<string, number>();
+  for (let c = 0; c < members.length; c++) for (const orig of members[c]) out.set(orig, c);
+  return out;
+}
+
+/** Newman modularity Q of a partition over an undirected weighted graph (no self-loops). */
+function modularityOf(adj: Map<string, Map<string, number>>, comm: Map<string, number>): number {
+  let twoM = 0;
+  for (const nb of adj.values()) for (const w of nb.values()) twoM += w;
+  if (twoM === 0) return 0;
+  let intra = 0;
+  const kc = new Map<number, number>();
+  for (const [a, nb] of adj) {
+    const ca = comm.get(a)!;
+    let k = 0;
+    for (const [b, w] of nb) { k += w; if (comm.get(b) === ca) intra += w; }
+    kc.set(ca, (kc.get(ca) || 0) + k);
+  }
+  let sub = 0;
+  for (const k of kc.values()) sub += k * k;
+  return (intra - sub / twoM) / twoM;
+}
+
+/** Group source files into modules by import community instead of by directory.
+ *  Builds an undirected weighted graph over source files (directed imports folded,
+ *  weights summed), runs Louvain, then names each community by the plurality
+ *  directory among its members (collisions disambiguated by the hub file). Returns
+ *  rel→label for every clustered source file; edgeless files are omitted so the
+ *  caller's moduleOf falls back to their directory. Empty map = nothing to cluster. */
+function clusterModules(g: Graph): Map<string, string> {
+  const adj = new Map<string, Map<string, number>>();
+  const isSrc = (r: string) => g.files[r] && g.files[r].kind === "source";
+  const bump = (a: string, b: string) => {
+    if (!adj.has(a)) adj.set(a, new Map());
+    const m = adj.get(a)!;
+    m.set(b, (m.get(b) || 0) + 1);
+  };
+  for (const f of Object.values(g.files)) {
+    if (f.kind !== "source") continue;
+    for (const imp of f.imports) {
+      if (imp === f.rel || !isSrc(imp)) continue;
+      bump(f.rel, imp);
+      bump(imp, f.rel);
+    }
+  }
+  if (!adj.size) return new Map();
+  const comm = louvain(adj);
+  const byComm = new Map<number, string[]>();
+  for (const [rel, c] of comm) { if (!byComm.has(c)) byComm.set(c, []); byComm.get(c)!.push(rel); }
+  const deg = (r: string) => [...(adj.get(r)?.values() ?? [])].reduce((a, b) => a + b, 0);
+  const claimed = new Set<string>();
+  const nameOf = new Map<number, string>();
+  // name biggest communities first so the largest keeps the clean directory label
+  for (const [c, mem] of [...byComm].sort((a, b) => b[1].length - a[1].length || a[0] - b[0])) {
+    const hist = new Map<string, number>();
+    for (const r of mem) { const d = dirModuleOf(r); hist.set(d, (hist.get(d) || 0) + 1); }
+    const dom = [...hist].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
+    let label = dom;
+    if (claimed.has(dom)) {
+      const hub = mem.slice().sort((a, b) => deg(b) - deg(a) || a.localeCompare(b))[0];
+      const base = path.basename(hub).replace(/\.[^.]+$/, "");
+      label = `${dom}::${base}`;
+      let k = 2;
+      while (claimed.has(label)) label = `${dom}::${base}#${k++}`;
+    }
+    claimed.add(label);
+    claimed.add(dom);
+    nameOf.set(c, label);
+  }
+  const out = new Map<string, string>();
+  for (const [rel, c] of comm) out.set(rel, nameOf.get(c)!);
+  const q = modularityOf(adj, comm);
+  log(`modules: ${nameOf.size} clusters / ${out.size} source files — Louvain Q=${q.toFixed(3)} (--group dir for directory grouping)`);
+  return out;
 }
 
 // ---------- stage 5: render ----------
@@ -642,6 +798,7 @@ function renderMd(g: Graph, sig: ReturnType<typeof computeSignals>, ts: string):
     L.push("");
   }
   L.push("## Module shapes (LOC by module)");
+  L.push(MODULE_MAP ? "_Modules = import communities (Louvain). Use `--group dir` for directory grouping._" : "_Modules = directories._");
   L.push("");
   for (const [m, loc] of [...moduleLoc].sort((a, b) => b[1] - a[1]).slice(0, 25)) L.push(`- \`${m}\` — ${loc} LOC`);
   L.push("");
@@ -650,6 +807,38 @@ function renderMd(g: Graph, sig: ReturnType<typeof computeSignals>, ts: string):
   if (seams.size === 0) L.push("_none detected_");
   for (const [s, n] of [...seams].sort((a, b) => b[1] - a[1]).slice(0, 40)) L.push(`- ${s} — ${n}`);
   L.push("");
+  if (MODULE_MAP && sig.analyzed) {
+    const dirToCl = new Map<string, Set<string>>();
+    const clToDir = new Map<string, Set<string>>();
+    for (const f of Object.values(g.files)) {
+      if (f.kind !== "source") continue;
+      const cl = MODULE_MAP.get(f.rel);
+      if (!cl) continue;
+      const d = dirModuleOf(f.rel);
+      (dirToCl.get(d) ?? dirToCl.set(d, new Set()).get(d)!).add(cl);
+      (clToDir.get(cl) ?? clToDir.set(cl, new Set()).get(cl)!).add(d);
+    }
+    const splits = [...dirToCl].filter(([, v]) => v.size > 1).sort((a, b) => b[1].size - a[1].size);
+    const merges = [...clToDir].filter(([, v]) => v.size > 1).sort((a, b) => b[1].size - a[1].size);
+    L.push("## Layout vs clustering (dir ↔ community)");
+    L.push("");
+    L.push("_Modules grouped by import community, not folder. Disagreements are architecture leads._");
+    L.push("");
+    if (!splits.length && !merges.length) {
+      L.push("_Layout and clustering agree — folders match import communities._");
+    } else {
+      if (splits.length) {
+        L.push("**Directory split across communities** (leaky boundary / candidate split):");
+        for (const [d, v] of splits.slice(0, 15)) L.push(`- \`${d}/\` → ${v.size} communities: ${[...v].sort().join(", ")}`);
+        L.push("");
+      }
+      if (merges.length) {
+        L.push("**Community spanning directories** (cross-cutting / candidate merge):");
+        for (const [c, v] of merges.slice(0, 15)) L.push(`- \`${c}\` ← ${[...v].sort().join(", ")}`);
+        L.push("");
+      }
+    }
+  }
   if (!sig.analyzed) {
     L.push("## Signals — dead / untested / cycles");
     L.push("");
@@ -726,6 +915,7 @@ type IR = {
   root?: string;
   ecosystems?: string[];
   graphSource?: "madge" | "regex";
+  modules?: Record<string, string>;
   counts?: Record<string, number>;
   dead?: string[];
   untested?: string[];
@@ -735,11 +925,12 @@ type IR = {
 
 function seamEdges(ir: IR): Map<string, number> {
   const edges = new Map<string, number>();
+  const mod = (r: string) => ir.modules?.[r] ?? dirModuleOf(r);
   for (const [rel, f] of Object.entries(ir.files || {})) {
     if (f.kind !== "source" && f.kind !== "test") continue;
-    const m = moduleOf(rel);
+    const m = mod(rel);
     for (const imp of f.imports || []) {
-      const tm = moduleOf(imp);
+      const tm = mod(imp);
       if (tm !== m) edges.set(`${m} -> ${tm}`, (edges.get(`${m} -> ${tm}`) || 0) + 1);
     }
   }
@@ -818,7 +1009,7 @@ function runDiff(ref: string, currentIR: IR) {
       return;
     }
     const self = fileURLToPath(import.meta.url);
-    execFileSync("npx", ["tsx", self, tmp, "--out", tmpOut, "--detail", detail], { stdio: "ignore" });
+    execFileSync("npx", ["tsx", self, tmp, "--out", tmpOut, "--detail", detail, "--group", group], { stdio: "ignore" });
     const refIR: IR = JSON.parse(fs.readFileSync(path.join(tmpOut, "codemap.json"), "utf8"));
     const diff = renderDiff(ref, refIR, currentIR);
     fs.writeFileSync(path.join(outDir, "codemap.diff.md"), diff);
@@ -858,6 +1049,13 @@ function main() {
   const g: Graph = { root, ecosystems, files, entrypoints: [], graphSource };
   g.entrypoints = findEntrypoints(files);
   log(`entrypoints: ${g.entrypoints.length}`);
+  if (group === "cluster") {
+    const cm = clusterModules(g);
+    if (cm.size) MODULE_MAP = cm;
+    else log("modules: directory grouping (no JS/TS edges to cluster)");
+  } else {
+    log("modules: directory grouping (--group dir)");
+  }
   const sig = computeSignals(g);
   log(`dead=${sig.dead.length} untested=${sig.untested.length} cycles=${sig.cycles.length}`);
 
@@ -884,6 +1082,7 @@ function main() {
     root,
     ecosystems,
     graphSource: g.graphSource,
+    modules: MODULE_MAP ? Object.fromEntries([...MODULE_MAP].sort()) : undefined,
     counts: sig.counts,
     entrypoints: g.entrypoints,
     dead: sig.dead,

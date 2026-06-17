@@ -33,13 +33,21 @@ Every signal is a cheap static heuristic. Treat as a lead, not a verdict.
 
 ## Module shapes & seams
 
-- **Module** = top-level dir, or `src/<x>` / `lib/<x>` / `app/<x>` / `packages/<x>` one level deep.
+- **Module** — how source files are grouped into the nodes you see. Two modes:
+  - `--group cluster` (**default**) — group by **import community** (hand-rolled deterministic Louvain over the undirected source-import graph). A module is "files that import each other a lot", regardless of folder. Each community is named by the plurality directory among its members (collisions disambiguated by the community's hub file, e.g. `src/core::pipeline`). Reported with a modularity score `Q` (≳0.3 = real community structure). Needs ≥1 JS/TS edge; with none it silently falls back to directory grouping.
+  - `--group dir` — group by folder: top-level dir, or `src/<x>` / `lib/<x>` / `app/<x>` / `packages/<x>` one level deep. Also the automatic fallback when the graph has no edges. Test files and edgeless source files always use this directory rule even under `cluster`.
 - **Shape** = file count + LOC per module (in `codemap.md` and the diagram node label).
 - **Seam** = a cross-module import edge; edge weight = number of imports crossing it. High-weight seams are your real coupling points. In `--detail module` (default) edges are aggregated per module pair; in `--detail file` every file→file edge is drawn.
+
+**Layout vs clustering (dir ↔ community)** — only shown under `--group cluster`. Compares the detected import communities against the folder layout; the disagreement is itself an architecture signal:
+- *Directory split across communities* — one folder's files land in >1 community → a leaky boundary or a folder that should be split.
+- *Community spanning directories* — one community draws files from >1 folder → cross-cutting code, or folders that should merge.
+- These are leads, not verdicts: a tight utility imported everywhere, or a deliberate layered split, can show up here legitimately. Determinism: same graph → same communities (sorted node iteration, no randomness), so the section is stable to diff commit-to-commit.
 
 ## Tuning
 
 - Big repo → diagram noisy? Keep `--detail module` (default). Use `--detail file` only on a single module/subdir (`npx tsx codemap.ts ./src/foo`).
+- `--group cluster` (default) groups modules by import community; switch to `--group dir` for plain folder grouping (or when the community labels are noisier than the folder layout).
 - Add `--include-external` to see which third-party deps dominate.
 - Output goes to a git-tracked `codemap/` dir by default — commit it so `git diff codemap/codemap.json` between commits is a structural delta. Override with `--out DIR`.
 - Commit-to-commit diff: `--vs <ref>` writes `codemap.diff.md` (files +/-, newly-dead, cycles introduced/broken, seam weight changes) for `<ref> → working tree`. It builds the ref snapshot in a temp git worktree, so it works even if `codemap/` wasn't committed at that ref.
