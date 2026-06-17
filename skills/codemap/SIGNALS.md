@@ -23,6 +23,8 @@ Every signal is a cheap static heuristic. Treat as a lead, not a verdict.
 
 **Import cycle** — strongly-connected component (size > 1) over the local import graph, via Tarjan's algorithm. Cycles hurt testability and incremental builds.
 
+**Unmeasured vs zero.** Dead/untested/cycle all derive from resolved *local* import edges, which are JS/TS-only. When the graph has zero such edges (a Python/Go/Rust repo, or a JS/TS repo of standalone scripts that don't cross-import), these aren't `0` — they're *unmeasured*. The report then shows `graph_analyzed: false` in frontmatter, `dead_count`/`untested_count`/`cycle_count: null`, and a single "not computed" note in place of the three sections. Inventory, module shapes, configs and docs are still accurate. Don't read a missing graph as a clean bill of health.
+
 **Redundancy** — two cheap structural hints, not semantic dedup:
 - *Same exported symbol name* from multiple files (ranked first — higher signal).
 - *Same filename* in multiple dirs (`utils.ts` ×3) — ranked second, low signal.

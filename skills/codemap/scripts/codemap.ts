@@ -439,7 +439,9 @@ const sanitize = (s: string): string => s.replace(/[^A-Za-z0-9]/g, "_");
 function computeSignals(g: Graph) {
   const counts: Record<Kind, number> = { source: 0, test: 0, config: 0, doc: 0, output: 0, other: 0 };
   for (const f of Object.values(g.files)) counts[f.kind]++;
-  return { counts, dead: deadCode(g), untested: untested(g), cycles: cycles(g), redundancy: redundancy(g) };
+  const edges = Object.values(g.files).reduce((n, f) => n + f.imports.length, 0);
+  const analyzed = edges > 0; // import graph is JS/TS-only; 0 edges = nothing to measure
+  return { counts, analyzed, dead: deadCode(g), untested: untested(g), cycles: cycles(g), redundancy: redundancy(g) };
 }
 
 function renderPuml(g: Graph, sig: ReturnType<typeof computeSignals>): string {
@@ -560,9 +562,10 @@ function renderMd(g: Graph, sig: ReturnType<typeof computeSignals>, ts: string):
   L.push(`ecosystems: [${g.ecosystems.join(", ")}]`);
   L.push(`source_files: ${sig.counts.source}`);
   L.push(`test_files: ${sig.counts.test}`);
-  L.push(`dead_count: ${sig.dead.length}`);
-  L.push(`untested_count: ${sig.untested.length}`);
-  L.push(`cycle_count: ${sig.cycles.length}`);
+  L.push(`graph_analyzed: ${sig.analyzed}`);
+  L.push(`dead_count: ${sig.analyzed ? sig.dead.length : "null"}`);
+  L.push(`untested_count: ${sig.analyzed ? sig.untested.length : "null"}`);
+  L.push(`cycle_count: ${sig.analyzed ? sig.cycles.length : "null"}`);
   L.push("tool: codemap");
   L.push("---");
   L.push("");
@@ -579,6 +582,12 @@ function renderMd(g: Graph, sig: ReturnType<typeof computeSignals>, ts: string):
   if (seams.size === 0) L.push("_none detected_");
   for (const [s, n] of [...seams].sort((a, b) => b[1] - a[1]).slice(0, 40)) L.push(`- ${s} — ${n}`);
   L.push("");
+  if (!sig.analyzed) {
+    L.push("## Signals — dead / untested / cycles");
+    L.push("");
+    L.push("_Not computed: the import graph is JS/TS-only and this repo's source is another language (Python/Go/Rust/unknown). Inventory, module shapes, configs and docs above are still accurate; treat dead/untested/cycle as **unmeasured**, not zero._");
+    L.push("");
+  } else {
   L.push(`## Dead code candidates (${sig.dead.length})`);
   L.push("");
   L.push("_Source files with no inbound import and not an entrypoint. Verify before deleting — dynamic/CLI/plugin loads aren't seen._");
@@ -598,6 +607,7 @@ function renderMd(g: Graph, sig: ReturnType<typeof computeSignals>, ts: string):
   for (const c of sig.cycles.slice(0, 20)) L.push(`- ${c.map((x) => `\`${x}\``).join(" <-> ")}`);
   if (!sig.cycles.length) L.push("_none detected_");
   L.push("");
+  }
   L.push("## Possible redundancy");
   L.push("");
   const se = Object.entries(sig.redundancy.sameExport).sort((a, b) => b[1].length - a[1].length);
@@ -771,6 +781,8 @@ function main() {
   log(`dead=${sig.dead.length} untested=${sig.untested.length} cycles=${sig.cycles.length}`);
 
   fs.mkdirSync(outDir, { recursive: true });
+  // prev.json is a transient last-run cache for the Δ log — never commit it
+  fs.writeFileSync(path.join(outDir, ".gitignore"), "prev.json\n");
   // preserve prior run so `before vs after` is a plain JSON diff
   const jsonPath = path.join(outDir, "codemap.json");
   if (fs.existsSync(jsonPath)) {

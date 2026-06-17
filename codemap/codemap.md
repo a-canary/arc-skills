@@ -1,12 +1,13 @@
 ---
-generated: 2026-06-17T10:07:46.565Z @26d8996
+generated: 2026-06-17T10:19:01.937Z @4ecf806
 project: codemap-skill
 ecosystems: [unknown]
 source_files: 7
 test_files: 2
-dead_count: 0
-untested_count: 0
-cycle_count: 0
+graph_analyzed: false
+dead_count: null
+untested_count: null
+cycle_count: null
 tool: codemap
 ---
 
@@ -16,25 +17,15 @@ tool: codemap
 
 ## Module shapes (LOC by module)
 
-- `skills` — 2647 LOC
+- `skills` — 2659 LOC
 
 ## Seams (cross-module import edges)
 
 _none detected_
 
-## Dead code candidates (0)
+## Signals — dead / untested / cycles
 
-_Source files with no inbound import and not an entrypoint. Verify before deleting — dynamic/CLI/plugin loads aren't seen._
-
-
-## Untested source (0)
-
-_No test file imports it and no sibling test exists. Heuristic — wire up coverage for precision._
-
-
-## Import cycles (0)
-
-_none detected_
+_Not computed: the import graph is JS/TS-only and this repo's source is another language (Python/Go/Rust/unknown). Inventory, module shapes, configs and docs above are still accurate; treat dead/untested/cycle as **unmeasured**, not zero._
 
 ## Possible redundancy
 
@@ -71,8 +62,9 @@ _none detected_
 - `io` — 1 imports
 - `hashlib` — 1 imports
 
-## Docs with frontmatter (47)
+## Docs with frontmatter (48)
 
+- `codemap/codemap.md` — generated=2026-06-17T10:17:37.005Z @4ecf806, project=codemap-skill, ecosystems=[unknown], source_files=7
 - `skills/adaptation-review/SKILL.md` — name=adaptation-review, description=Review the last N days (default 10) of s, allowed-tools=Read, Write, Glob, Task, Bash
 - `skills/adaptation-review/agents/regression-reviewer.md` — name=regression-reviewer, description=Review the last N days of dream/token-wa, tools=Read, Glob, Grep, Bash, model=opus
 - `skills/anti-sycophancy/SKILL.md` — name=anti-sycophancy, description=Strip validating, hedging, and flatterin
@@ -112,4 +104,3 @@ _none detected_
 - `skills/to-issues/SKILL.md` — name=to-issues, description=Break a plan, spec, or PRD into independ
 - `skills/to-prd/SKILL.md` — name=to-prd, description=Turn the current conversation context in
 - `skills/token-waste/SKILL.md` — name=token-waste, description=Analyze the day's conversations for toke, allowed-tools=Read, Write, Glob, Task, Bash
-- `skills/token-waste/agents/adapter.md` — name=waste-adapter, description=Read the day's token-waste analysis and , tools=Read, Glob, Grep, Edit, Write, Bash, model=opus
