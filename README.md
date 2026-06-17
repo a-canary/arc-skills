@@ -31,6 +31,7 @@ Most skills are pure markdown — making them visible *is* the install. A few ne
 - `decompose-skill` — split SKILL.md files > 100 lines
 - `profiling-ladder` — pick the right optimization rung (session > memory > skill > pipeline | TS > C > ASM)
 - `task-priority` — UX > quality > security > scale > efficiency
+- `codemap` — deterministic (no-LLM) static-analysis snapshot → PlantUML + report: module shapes, seams, dead/untested/redundant code; diff before vs after a change
 
 **Engineering workflow** (matt-pocock)
 - `tdd`, `grill-with-docs`, `grill-me`, `zoom-out`
