@@ -46,7 +46,7 @@ Every signal is a cheap static heuristic. Treat as a lead, not a verdict.
 
 - No flags — one best-quality process. Point it at a subdir to scope the map (`npx tsx codemap.ts ./src/foo`).
 - Modules are grouped by import community (Louvain); directory grouping is the automatic fallback when there's no import graph.
-- Output goes to a git-tracked `codemap/` dir. Commit it — then every re-run auto-diffs the fresh snapshot against the version committed at `HEAD` and writes `codemap.diff.md` (files +/-, newly-dead, cycles introduced/broken, seam-weight changes). `git diff codemap/codemap.json` between commits is also a structural delta. The codemap dir is excluded from its own inventory, so it never shows up as churn.
+- Output goes to a git-tracked `codemap/` dir. Commit it — then `git diff -- codemap/codemap.json` between any two commits (or `git diff main -- codemap/codemap.json`) is a structural delta for free: files +/-, newly-dead, cycles introduced/broken, seam-weight changes. The codemap dir is excluded from its own inventory, so it never shows up as churn.
 
 ## Extending to other languages
 

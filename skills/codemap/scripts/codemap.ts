@@ -12,8 +12,6 @@
  *   codemap.puml      PlantUML component diagram (modules = import communities)
  *   codemap.md        Snapshot report with YAML frontmatter
  *   codemap.json      Raw graph IR
- *   codemap.diff.md   Auto-written when a codemap.json is committed at HEAD —
- *                     the structural delta of the working tree vs that snapshot.
  *
  * Progress tracking is built in: commit codemap.json, change code, re-run; the
  * delta vs the committed snapshot is written every run. No flags, no knobs.
@@ -874,109 +872,6 @@ function renderMd(g: Graph, sig: ReturnType<typeof computeSignals>, ts: string):
   return L.join("\n");
 }
 
-// ---------- diff (commit vs commit / ref vs working tree) ----------
-type IR = {
-  root?: string;
-  ecosystems?: string[];
-  graphSource?: "madge" | "regex";
-  modules?: Record<string, string>;
-  counts?: Record<string, number>;
-  dead?: string[];
-  untested?: string[];
-  cycles?: string[][];
-  files?: Record<string, { kind: string; loc: number; imports: string[] }>;
-};
-
-function seamEdges(ir: IR): Map<string, number> {
-  const edges = new Map<string, number>();
-  const mod = (r: string) => ir.modules?.[r] ?? dirModuleOf(r);
-  for (const [rel, f] of Object.entries(ir.files || {})) {
-    if (f.kind !== "source" && f.kind !== "test") continue;
-    const m = mod(rel);
-    for (const imp of f.imports || []) {
-      const tm = mod(imp);
-      if (tm !== m) edges.set(`${m} -> ${tm}`, (edges.get(`${m} -> ${tm}`) || 0) + 1);
-    }
-  }
-  return edges;
-}
-
-function setDiff<T>(before: T[], after: T[]): { added: T[]; removed: T[] } {
-  const b = new Set(before);
-  const a = new Set(after);
-  return { added: after.filter((x) => !b.has(x)), removed: before.filter((x) => !a.has(x)) };
-}
-
-function renderDiff(ref: string, before: IR, after: IR): string {
-  const L: string[] = [];
-  const fb = new Set(Object.keys(before.files || {}));
-  const fa = new Set(Object.keys(after.files || {}));
-  const filesAdded = [...fa].filter((x) => !fb.has(x)).sort();
-  const filesRemoved = [...fb].filter((x) => !fa.has(x)).sort();
-  const dead = setDiff(before.dead || [], after.dead || []);
-  const untested = setDiff(before.untested || [], after.untested || []);
-  const cyc = setDiff((before.cycles || []).map((c) => c.join(" <-> ")), (after.cycles || []).map((c) => c.join(" <-> ")));
-  const eb = seamEdges(before);
-  const ea = seamEdges(after);
-  const seamKeys = new Set([...eb.keys(), ...ea.keys()]);
-  const seamChanges: string[] = [];
-  for (const k of [...seamKeys].sort()) {
-    const x = eb.get(k) || 0;
-    const y = ea.get(k) || 0;
-    if (x !== y) seamChanges.push(`${k}: ${x} → ${y}${x === 0 ? " (new seam)" : y === 0 ? " (severed)" : ""}`);
-  }
-
-  L.push("---");
-  L.push(`comparison: ${ref} → working`);
-  L.push(`tool: codemap-diff`);
-  L.push("---");
-  L.push("");
-  L.push(`# Codemap diff — ${ref} → current`);
-  L.push("");
-  L.push("> Structural delta only (modules, seams, signals). Run `git diff` for line-level changes.");
-  L.push("");
-  const sec = (title: string, items: string[], fmt = (s: string) => `\`${s}\``) => {
-    L.push(`## ${title} (${items.length})`);
-    L.push("");
-    if (!items.length) L.push("_none_");
-    for (const i of items.slice(0, 60)) L.push(`- ${fmt(i)}`);
-    if (items.length > 60) L.push(`- … +${items.length - 60} more`);
-    L.push("");
-  };
-  L.push("## Headline");
-  L.push("");
-  const d = (a: number, b: number) => (b - a > 0 ? `+${b - a}` : `${b - a}`);
-  L.push(`- dead: ${(before.dead || []).length} → ${(after.dead || []).length} (${d((before.dead || []).length, (after.dead || []).length)})`);
-  L.push(`- untested: ${(before.untested || []).length} → ${(after.untested || []).length} (${d((before.untested || []).length, (after.untested || []).length)})`);
-  L.push(`- cycles: ${(before.cycles || []).length} → ${(after.cycles || []).length} (${d((before.cycles || []).length, (after.cycles || []).length)})`);
-  L.push(`- files: ${fb.size} → ${fa.size} (${d(fb.size, fa.size)})`);
-  L.push("");
-  sec("Files added", filesAdded);
-  sec("Files removed", filesRemoved);
-  sec("Newly dead (regressions)", dead.added);
-  sec("Dead resolved", dead.removed);
-  sec("Newly untested (regressions)", untested.added);
-  sec("Now tested / removed", untested.removed);
-  sec("Cycles introduced", cyc.added, (s) => s);
-  sec("Cycles broken", cyc.removed, (s) => s);
-  sec("Seam changes", seamChanges, (s) => s);
-  return L.join("\n");
-}
-
-/** The codemap.json committed at HEAD, or null if none / not a git repo.
- *  Read straight from git (HEAD:./codemap/codemap.json, cwd=root) — no worktree,
- *  no re-run. This is the baseline the working-tree snapshot is diffed against,
- *  so "progress" is just: commit the snapshot, change code, re-run. */
-function committedIR(): IR | null {
-  const raw = sh("git", ["show", "HEAD:./codemap/codemap.json"]);
-  if (raw === null) return null;
-  try {
-    return JSON.parse(raw) as IR;
-  } catch {
-    return null;
-  }
-}
-
 // ---------- main ----------
 function isoStamp(): string {
   const head = sh("git", ["rev-parse", "--short", "HEAD"]);
@@ -1034,18 +929,6 @@ function main() {
   fs.writeFileSync(path.join(outDir, "codemap.md"), renderMd(g, sig, ts));
   fs.writeFileSync(path.join(outDir, "codemap.json"), JSON.stringify(ir, null, 2));
   log(`wrote ${path.relative(root, outDir) || "."}/{codemap.puml,codemap.md,codemap.json}`);
-
-  // Built-in progress: diff this snapshot against the codemap.json committed at HEAD.
-  const committed = committedIR();
-  if (committed) {
-    fs.writeFileSync(path.join(outDir, "codemap.diff.md"), renderDiff("HEAD", committed, ir as IR));
-    const d = (a: number, b: number) => (b - a >= 0 ? `+${b - a}` : `${b - a}`);
-    log(
-      `Δ vs committed (HEAD): dead ${d((committed.dead || []).length, sig.dead.length)} | untested ${d((committed.untested || []).length, sig.untested.length)} | cycles ${d((committed.cycles || []).length, sig.cycles.length)} → codemap.diff.md`,
-    );
-  } else {
-    log("Δ vs committed: no codemap.json committed at HEAD yet — commit this snapshot to start tracking progress");
-  }
 
   process.stdout.write(`${path.join(outDir, "codemap.md")}\n`);
 }
