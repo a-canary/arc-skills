@@ -47,5 +47,5 @@ The signals are **heuristics with known false positives** — verify before acti
 ## Notes
 
 - Requires `node` + `npx tsx`. Uses `git ls-files` when available (respects `.gitignore`), else walks and skips `node_modules`/`dist`/etc.
-- Best on JS/TS (full import resolution + export extraction). Python/Go/Rust get coarse file inventory; import-graph resolution is JS/TS-only for now — see [SIGNALS.md](SIGNALS.md).
+- Best on JS/TS (full import resolution + export extraction). Resolves monorepo workspace package names (`@scope/pkg`) and tsconfig `paths` aliases, so cross-package imports show as real seams, not external deps. Python/Go/Rust get coarse file inventory; import-graph resolution is JS/TS-only for now — see [SIGNALS.md](SIGNALS.md).
 - Commit the `codemap/` dir — it's a tracked reflection of the code. Regenerate and re-commit as part of the change so the diff travels with the PR. `--vs` uses a throwaway git worktree under the system temp dir (auto-removed).

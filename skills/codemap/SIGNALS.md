@@ -8,7 +8,7 @@ Every signal is a cheap static heuristic. Treat as a lead, not a verdict.
 
 1. **detect** — ecosystem from marker files (`package.json`, `tsconfig.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`).
 2. **inventory** — file list via `git ls-files --cached --others --exclude-standard` (respects `.gitignore`); fallback walk skips `node_modules`/`dist`/`coverage`/`__pycache__`/`.venv`/`target`/`.next`. Each file classified: source / test / config / doc / output / other. LOC counted; `.md` frontmatter parsed.
-3. **graph** — per source file, regex-extract `import`/`export…from`/`require`/dynamic `import()` specifiers; resolve relative ones to local files (tries `.ts .tsx .js .jsx .mjs .cjs .py .go .rs`, `index.*`, `__init__.py`, and `.js`→`.ts` rewrite). Bare specifiers → external deps. Exported symbol names extracted best-effort.
+3. **graph** — per source file, regex-extract `import`/`export…from`/`require`/dynamic `import()` specifiers; resolve relative ones to local files (tries `.ts .tsx .js .jsx .mjs .cjs .py .go .rs`, `index.*`, `__init__.py`, and `.js`→`.ts` rewrite). A bare specifier is first matched against **workspace package names** (each `package.json` `name` → its dir+entry) and **tsconfig `paths` aliases**; only specifiers that resolve to nothing local become external deps. Exported symbol names extracted best-effort — names that are *re-exported* (`export { X } from "./y"`) are attributed to the defining file, not the barrel, so re-exports don't inflate redundancy.
 4. **signals** — dead, untested, cycles, redundancy (below).
 5. **render** — PlantUML + Markdown + JSON IR.
 
@@ -16,7 +16,7 @@ Every signal is a cheap static heuristic. Treat as a lead, not a verdict.
 
 **Dead code candidate** — a source file that (a) has ≥1 export, (b) nothing imports, (c) isn't an entrypoint. The export requirement is deliberate: a file with no exports and no inbound is a standalone *script*, not dead library code.
 - False positives: dynamic/`require(variable)` loads, plugin registries, CLI command auto-discovery, framework conventions (Next.js pages, route files), reflection. Fixtures that are loaded as data show up here — expected.
-- Entrypoints excluded: `package.json` `main`/`module`/`bin`/`exports`; files matching `index|main|cli|server|app|__main__`; anything under `benchmarks?|examples?|demos?|scripts?|bin`; files with a `#!` shebang; all test files.
+- Entrypoints excluded: `package.json` `main`/`module`/`bin`/`exports`; files matching `index|main|cli|server|app|__main__`; anything under `benchmarks?|examples?|demos?|prototypes?|fixtures?|mocks?|__mocks__|stories|e2e|scripts?|bin`; generated files (`*.generated.*`, `*.gen.*`, `generated/` dirs); files with a `#!` shebang; all test files. (Prototype/fixture/generated code isn't hand-maintained library code, so it's exempt from the dead/untested bars.)
 
 **Untested source** — an importable unit (has exports, not an entrypoint) that no test file imports *and* has no sibling test file (`foo.ts` ↔ `foo.test.ts`/`foo.spec.ts`/`foo_test.py`).
 - Heuristic only — one-hop import from tests + naming. For precision, wire up coverage (`coverage-final.json`/`lcov`) and cross-reference; not yet read automatically.
@@ -24,9 +24,10 @@ Every signal is a cheap static heuristic. Treat as a lead, not a verdict.
 **Import cycle** — strongly-connected component (size > 1) over the local import graph, via Tarjan's algorithm. Cycles hurt testability and incremental builds.
 
 **Redundancy** — two cheap structural hints, not semantic dedup:
-- *Same filename* in multiple dirs (`utils.ts` ×3).
-- *Same exported symbol name* from multiple files.
-- Noise names filtered (`index`, `default`, `handler`, `main`). A hit is a prompt to look, not proof of duplication.
+- *Same exported symbol name* from multiple files (ranked first — higher signal).
+- *Same filename* in multiple dirs (`utils.ts` ×3) — ranked second, low signal.
+- Noise filtered: structural filenames that recur once per package (`index/types/store/routes/schema/constants/config/main`) and generic symbol names whose collision is usually coincidence (`Props/Config/Options/State/Result/Type/Data/…`). Re-exports excluded (see graph stage).
+- **Known false positive: client/server pairs.** A symbol like `repairStreak` defined in both an API service (server DB logic) and a web store (thin fetch wrapper) shares a name by design — same name, different layer, *not* duplication. So is a shared type contract (`ProgressData`) intentionally declared on both sides. The signal can't tell these from real copy-paste; it flags the name, you read the bodies. The genuine hits look like a hand-synced constant array or a util copied verbatim across packages.
 
 ## Module shapes & seams
 
@@ -52,4 +53,4 @@ To add a language: extend `IMPORT_RE`/`EXPORT_RE` (or add a per-language extract
 - Regex import extraction, not a full parser — exotic syntax or macro-generated imports can be missed.
 - No type information; no call-graph (import-graph only). A file imported but whose exports are never *used* still counts as live.
 - Coverage not read yet — "untested" is a naming/import heuristic.
-- Single-repo; monorepo workspaces are mapped as their top-level package dirs, not resolved across `workspace:` links.
+- Monorepos: workspace package names (`@scope/pkg`) and tsconfig `paths` aliases **are** resolved to local files, so cross-package imports render as real seams instead of vanishing into "external deps". Resolution keys off each `package.json` `name`+entry and root `tsconfig.json`/`tsconfig.base.json` `paths` — exotic alias schemes (custom resolvers, per-package path overrides) can still fall through to external.

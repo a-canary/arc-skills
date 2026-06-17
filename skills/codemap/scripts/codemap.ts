@@ -141,23 +141,112 @@ const EXPORT_RE = [
   /\bexport\s*\{\s*([^}]+)\}/g,
 ];
 
-function resolveLocal(fromRel: string, spec: string, allFiles: Set<string>): string | null {
-  if (!spec.startsWith(".")) return null; // external / bare
-  const baseDir = path.dirname(fromRel);
-  const target = path.normalize(path.join(baseDir, spec)).replace(/\\/g, "/");
+function resolveFile(target: string, allFiles: Set<string>): string | null {
+  const t = target.replace(/\\/g, "/").replace(/\/+$/, "");
   const cands = [
-    target,
-    ...[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs"].map((e) => target + e),
+    t,
+    ...SRC_EXT.map((e) => t + e),
     // .js specifier in TS source → resolve to .ts
-    ...(target.endsWith(".js") ? [target.replace(/\.js$/, ".ts"), target.replace(/\.js$/, ".tsx")] : []),
-    ...["index.ts", "index.tsx", "index.js", "index.jsx", "__init__.py"].map((e) => `${target}/${e}`),
+    ...(t.endsWith(".js") ? [t.replace(/\.js$/, ".ts"), t.replace(/\.js$/, ".tsx")] : []),
+    ...["index.ts", "index.tsx", "index.js", "index.jsx", "__init__.py"].map((e) => `${t}/${e}`),
   ];
   for (const c of cands) if (allFiles.has(c)) return c;
   return null;
 }
 
+function resolveLocal(fromRel: string, spec: string, allFiles: Set<string>): string | null {
+  if (!spec.startsWith(".")) return null; // external / bare / alias
+  const baseDir = path.dirname(fromRel);
+  return resolveFile(path.normalize(path.join(baseDir, spec)).replace(/\\/g, "/"), allFiles);
+}
+
+// strip JSONC (comments + trailing commas) so tsconfig.json parses
+const stripJsonc = (s: string): string =>
+  s
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:"'])\/\/.*$/gm, "$1")
+    .replace(/,(\s*[}\]])/g, "$1");
+
+// Resolve bare specifiers that actually point inside this repo: workspace package
+// names (monorepo `@scope/pkg` → `packages/pkg`) and tsconfig `paths` aliases
+// (`@/x` → `src/x`). Without this, every cross-package import is mis-counted as an
+// external dep and inter-package seams vanish from the map.
+type AliasResolver = (spec: string) => string | null;
+function buildAliases(allRel: string[], set: Set<string>): AliasResolver[] {
+  const resolvers: AliasResolver[] = [];
+  // 1. workspace packages — name from each package.json → its dir + entry file
+  for (const rel of allRel) {
+    if (!/(^|\/)package\.json$/.test(rel)) continue;
+    let pkg: Record<string, unknown>;
+    try {
+      pkg = JSON.parse(fs.readFileSync(path.join(root, rel), "utf8"));
+    } catch {
+      continue;
+    }
+    const name = pkg.name;
+    if (typeof name !== "string" || !name) continue;
+    const d = path.dirname(rel);
+    const dir = d === "." ? "" : d;
+    const exp = pkg.exports;
+    const expMain =
+      typeof exp === "string" ? exp : exp && typeof exp === "object" ? JSON.stringify(exp).match(/\.\/[^"']+/)?.[0] : undefined;
+    const entryCands = [pkg.module, pkg.main, expMain].filter((x): x is string => typeof x === "string").map((x) => x.replace(/^\.\//, ""));
+    const pre = (p: string) => (dir ? `${dir}/${p}` : p);
+    let entry: string | null = null;
+    for (const e of [...entryCands, "src/index", "index", "src/main", "main"]) {
+      entry = resolveFile(pre(e), set);
+      if (entry) break;
+    }
+    resolvers.push((spec) => {
+      if (spec === name) return entry;
+      if (spec.startsWith(`${name}/`)) {
+        const sub = spec.slice(name.length + 1);
+        return resolveFile(pre(sub), set) ?? resolveFile(pre(`src/${sub}`), set);
+      }
+      return null;
+    });
+  }
+  // 2. tsconfig path aliases (root configs — covers the common `@/*` case)
+  for (const tc of ["tsconfig.json", "tsconfig.base.json"]) {
+    let cfg: { compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> } };
+    try {
+      cfg = JSON.parse(stripJsonc(fs.readFileSync(path.join(root, tc), "utf8")));
+    } catch {
+      continue;
+    }
+    const paths = cfg.compilerOptions?.paths;
+    if (!paths) continue;
+    const baseUrl = (cfg.compilerOptions?.baseUrl ?? ".").replace(/^\.\/?/, "");
+    const pre = (p: string) => (baseUrl ? `${baseUrl}/${p}` : p);
+    for (const [pat, tgts] of Object.entries(paths)) {
+      if (!Array.isArray(tgts)) continue;
+      const targets = tgts.map((t) => t.replace(/^\.\//, ""));
+      const star = pat.includes("*");
+      const prefix = pat.replace(/\*.*$/, "");
+      resolvers.push((spec) => {
+        if (star) {
+          if (!spec.startsWith(prefix)) return null;
+          const rest = spec.slice(prefix.length);
+          for (const t of targets) {
+            const r = resolveFile(pre(t.replace("*", rest)), set);
+            if (r) return r;
+          }
+        } else if (spec === pat) {
+          for (const t of targets) {
+            const r = resolveFile(pre(t), set);
+            if (r) return r;
+          }
+        }
+        return null;
+      });
+    }
+  }
+  return resolvers;
+}
+
 function inventory(allRel: string[]): Record<string, FileRec> {
   const set = new Set(allRel);
+  const aliases = buildAliases(allRel, set);
   const recs: Record<string, FileRec> = {};
   for (const rel of allRel) {
     const kind = kindOf(rel);
@@ -187,16 +276,29 @@ function inventory(allRel: string[]): Record<string, FileRec> {
       }
       for (const s of specs) {
         const local = lang === "py" ? null : resolveLocal(rel, s, set);
-        if (local) rec.imports.push(local);
-        else if (!s.startsWith(".")) rec.externals.push(s.split("/").slice(0, s.startsWith("@") ? 2 : 1).join("/"));
+        if (local) {
+          rec.imports.push(local);
+          continue;
+        }
+        if (s.startsWith(".")) continue;
+        let aliased: string | null = null;
+        if (lang !== "py") for (const a of aliases) if ((aliased = a(s))) break;
+        if (aliased) rec.imports.push(aliased);
+        else rec.externals.push(s.split("/").slice(0, s.startsWith("@") ? 2 : 1).join("/"));
       }
+      // names re-exported from elsewhere aren't *defined* here — exclude them so
+      // barrels/re-exports don't inflate the redundancy signal
+      const reExported = new Set<string>();
+      const REEXPORT_RE = /\bexport\s*\{\s*([^}]+)\}\s*from\s*["'][^"']+["']/g;
+      let rx: RegExpExecArray | null;
+      while ((rx = REEXPORT_RE.exec(text))) for (const nm of rx[1].split(",")) reExported.add(nm.trim().split(/\s+as\s+/)[0].trim());
       for (const re of EXPORT_RE) {
         re.lastIndex = 0;
         let mm: RegExpExecArray | null;
         while ((mm = re.exec(text))) {
           for (const nm of mm[1].split(",")) {
             const clean = nm.trim().split(/\s+as\s+/)[0].trim();
-            if (clean && /^[A-Za-z0-9_$]+$/.test(clean)) rec.exports.push(clean);
+            if (clean && /^[A-Za-z0-9_$]+$/.test(clean) && !reExported.has(clean)) rec.exports.push(clean);
           }
         }
       }
@@ -227,7 +329,9 @@ function findEntrypoints(files: Record<string, FileRec>): string[] {
   for (const rel of Object.keys(files)) {
     if (/(^|\/)(index|main|cli|server|app|__main__)\.[a-z]+$/i.test(rel)) eps.add(rel);
     // standalone runnable files are roots, not dead library code
-    if (/(^|\/)(benchmarks?|examples?|demos?|scripts?|bin)(\/|$)/i.test(rel)) eps.add(rel);
+    if (/(^|\/)(benchmarks?|examples?|demos?|prototypes?|fixtures?|__mocks__|mocks?|stories|e2e|scripts?|bin)(\/|$)/i.test(rel)) eps.add(rel);
+    // generated code isn't hand-maintained library code — exempt from dead/untested bars
+    if (/\.(generated|gen)\.[a-z]+$/i.test(rel) || /(^|\/)(generated|__generated__)\//i.test(rel)) eps.add(rel);
     if (files[rel].kind === "test") eps.add(rel);
     if (files[rel].shebang) eps.add(rel);
   }
@@ -309,12 +413,15 @@ function redundancy(g: Graph): { sameBasename: Record<string, string[]>; sameExp
     if (f.kind !== "source") continue;
     const b = path.basename(f.rel);
     (byBase[b] ||= []).push(f.rel);
-    for (const ex of f.exports) (byExport[ex] ||= []).push(f.rel);
+    for (const ex of new Set(f.exports)) (byExport[ex] ||= []).push(f.rel);
   }
-  const filt = (o: Record<string, string[]>) => Object.fromEntries(Object.entries(o).filter(([, v]) => v.length > 1));
-  const noisy = new Set(["index.ts", "index.js", "default", "handler", "main"]);
-  const sameBasename = Object.fromEntries(Object.entries(filt(byBase)).filter(([k]) => !noisy.has(k)));
-  const sameExport = Object.fromEntries(Object.entries(filt(byExport)).filter(([k]) => !noisy.has(k) && k.length > 2));
+  const filt = (o: Record<string, string[]>) => Object.fromEntries(Object.entries(o).filter(([, v]) => new Set(v).size > 1));
+  // structural filenames that legitimately recur once per module/package — low signal
+  const noisyBase = new Set(["index.ts", "index.tsx", "index.js", "types.ts", "types.tsx", "store.ts", "routes.ts", "schema.ts", "constants.ts", "config.ts", "main.ts"]);
+  // generic symbol names whose collision is usually coincidence, not duplication
+  const noisyExport = new Set(["index", "default", "handler", "main", "Props", "Config", "Options", "State", "Result", "Params", "Metadata", "Schema", "Type", "Data", "Context", "Provider"]);
+  const sameBasename = Object.fromEntries(Object.entries(filt(byBase)).filter(([k]) => !noisyBase.has(k)));
+  const sameExport = Object.fromEntries(Object.entries(filt(byExport)).filter(([k]) => !noisyExport.has(k) && k.length > 3));
   return { sameBasename, sameExport };
 }
 
@@ -322,7 +429,7 @@ function redundancy(g: Graph): { sameBasename: Record<string, string[]>; sameExp
 function moduleOf(rel: string): string {
   const parts = rel.split("/");
   if (parts.length === 1) return ".";
-  if (["src", "lib", "app", "packages"].includes(parts[0]) && parts.length > 2) return `${parts[0]}/${parts[1]}`;
+  if (["src", "lib", "app", "apps", "packages"].includes(parts[0]) && parts.length > 2) return `${parts[0]}/${parts[1]}`;
   return parts[0];
 }
 
@@ -493,16 +600,18 @@ function renderMd(g: Graph, sig: ReturnType<typeof computeSignals>, ts: string):
   L.push("");
   L.push("## Possible redundancy");
   L.push("");
-  const sb = Object.entries(sig.redundancy.sameBasename);
-  const se = Object.entries(sig.redundancy.sameExport);
-  if (sb.length) {
-    L.push("**Same filename in multiple dirs:**");
-    for (const [k, v] of sb.slice(0, 20)) L.push(`- \`${k}\` → ${v.map((x) => `\`${x}\``).join(", ")}`);
+  const se = Object.entries(sig.redundancy.sameExport).sort((a, b) => b[1].length - a[1].length);
+  const sb = Object.entries(sig.redundancy.sameBasename).sort((a, b) => b[1].length - a[1].length);
+  if (se.length) {
+    L.push("**Same exported symbol from multiple files** (higher signal — but verify: client/server pairs and shared type contracts legitimately share a name):");
+    for (const [k, v] of se.slice(0, 15)) L.push(`- \`${k}\` → ${v.map((x) => `\`${x}\``).join(", ")}`);
+    if (se.length > 15) L.push(`- … +${se.length - 15} more (see codemap.json)`);
     L.push("");
   }
-  if (se.length) {
-    L.push("**Same exported symbol from multiple files:**");
-    for (const [k, v] of se.slice(0, 20)) L.push(`- \`${k}\` → ${v.map((x) => `\`${x}\``).join(", ")}`);
+  if (sb.length) {
+    L.push("**Same filename in multiple dirs** (low signal — often normal per-package structure):");
+    for (const [k, v] of sb.slice(0, 12)) L.push(`- \`${k}\` ×${v.length}`);
+    if (sb.length > 12) L.push(`- … +${sb.length - 12} more (see codemap.json)`);
     L.push("");
   }
   if (!sb.length && !se.length) L.push("_none detected_");
