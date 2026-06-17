@@ -11,7 +11,7 @@ Emits three artifacts into `<project>/codemap/` — **git-tracked, commit them**
 
 - `codemap.puml` — PlantUML component diagram (modules → seams, colored by signal)
 - `codemap.md` — report with YAML frontmatter (totals, shapes, seams, dead, untested, redundancy, configs, docs)
-- `codemap.json` — raw graph IR; commit it, or diff any ref with `--vs`
+- `codemap.json` — raw graph IR; commit it so each re-run diffs against it
 
 ## Quick start
 
@@ -21,9 +21,9 @@ npx tsx scripts/codemap.ts <project-dir>
 cat <project-dir>/codemap/codemap.md
 ```
 
-Flags: `--out DIR` (default `<project>/codemap`) · `--group cluster|dir` (default `cluster` — group modules by import community via Louvain; `dir` groups by folder) · `--detail file|module` (default `module`) · `--include-external` (draw external deps as clouds) · `--vs <ref>` (also write `codemap.diff.md` comparing a git ref → working tree).
+No flags, no options — one fast best-quality process. Modules are grouped by import community (deterministic Louvain); output always lands in `<project>/codemap/`.
 
-Re-running preserves the previous `codemap.json` as `prev.json` and logs `Δ vs prev: dead … untested … cycles …` (the cheap last-run delta; for commit-to-commit use `--vs` or `git diff` on the committed `codemap.json`).
+**Built-in progress.** Commit `codemap/codemap.json` once. Every later run diffs the fresh snapshot against the version committed at `HEAD` (read directly via `git show`, no flags) and writes `codemap.diff.md` — files added/removed, newly-dead/resolved, cycles introduced/broken, seam-weight changes — plus a one-line `Δ vs committed (HEAD)` summary in the log. No baseline committed yet → it tells you to commit one.
 
 ## When to use this vs improve-codebase-architecture
 
@@ -42,10 +42,10 @@ The signals are **heuristics with known false positives** — verify before acti
 
 1. Before editing: `npx tsx scripts/codemap.ts .` — skim `codemap.md`, note dead/untested counts and the seams you'll touch. Commit `codemap/` so this is the baseline.
 2. Make the change.
-3. After: re-run, commit again. To see what moved, either `git diff codemap/codemap.json` (against the committed baseline) or run with `--vs <ref>` to get a written `codemap.diff.md` (files added/removed, newly-dead regressions, cycles introduced/broken, seam weight changes) comparing any ref to the working tree.
+3. After: re-run. It auto-writes `codemap.diff.md` comparing the committed `HEAD` snapshot → working tree (files added/removed, newly-dead regressions, cycles introduced/broken, seam-weight changes). Commit again so the next change diffs against this one.
 
 ## Notes
 
 - Requires `node` + `npx tsx`. Optional: `madge` for an AST-accurate JS/TS import graph (recommended — `npm i -g madge`). Uses `git ls-files` when available (respects `.gitignore`), else walks and skips `node_modules`/`dist`/etc.
 - Best on JS/TS. The import graph uses **madge** (AST-accurate) when installed (`npm i -g madge`) — it reads the syntax tree, so imports written inside comments or strings never leak in as fake edges/cycles. Without madge it falls back to a regex extractor, labelled `graph_source: regex (approximate)` with a warning, since regex can mis-read commented/quoted imports. Either way it resolves monorepo workspace package names (`@scope/pkg`) and tsconfig `paths` aliases, so cross-package imports show as real seams. Python/Go/Rust get coarse file inventory; the import graph is JS/TS-only — see [SIGNALS.md](SIGNALS.md).
-- Commit the `codemap/` dir — it's a tracked reflection of the code. Regenerate and re-commit as part of the change so the diff travels with the PR. `--vs` uses a throwaway git worktree under the system temp dir (auto-removed).
+- Commit the `codemap/` dir — it's a tracked reflection of the code. Regenerate and re-commit as part of the change so the diff travels with the PR. The progress diff reads the committed baseline via `git show HEAD:./codemap/codemap.json` — no worktree, no re-run.

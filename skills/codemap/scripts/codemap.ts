@@ -6,14 +6,17 @@
  * Stages: detect → inventory → graph → signals → render.
  *
  * Usage:
- *   npx tsx codemap.ts [projectDir] [--out DIR] [--detail file|module] [--include-external]
+ *   npx tsx codemap.ts [projectDir]      # no flags — one fast, opinionated pass
  *
- * Emits into <out> (default <projectDir>/codemap — git-tracked, commit it):
- *   codemap.puml   PlantUML component diagram (module-level by default)
- *   codemap.md     Snapshot report with YAML frontmatter
- *   codemap.json   Raw graph IR (commit it → `git diff codemap/codemap.json` is the structural delta)
+ * Emits into <projectDir>/codemap (git-tracked — commit it):
+ *   codemap.puml      PlantUML component diagram (modules = import communities)
+ *   codemap.md        Snapshot report with YAML frontmatter
+ *   codemap.json      Raw graph IR
+ *   codemap.diff.md   Auto-written when a codemap.json is committed at HEAD —
+ *                     the structural delta of the working tree vs that snapshot.
  *
- * --vs <ref> additionally writes codemap.diff.md comparing <ref> → working tree.
+ * Progress tracking is built in: commit codemap.json, change code, re-run; the
+ * delta vs the committed snapshot is written every run. No flags, no knobs.
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -43,18 +46,10 @@ interface Graph {
 }
 
 // ---------- args ----------
-const args = process.argv.slice(2);
-function flag(name: string, def?: string): string | undefined {
-  const i = args.indexOf(`--${name}`);
-  return i >= 0 ? args[i + 1] : def;
-}
-const has = (name: string) => args.includes(`--${name}`);
-const positional = args.filter((a, i) => !a.startsWith("--") && !args[i - 1]?.startsWith("--"));
-const root = path.resolve(positional[0] || ".");
-const outDir = path.resolve(root, flag("out", path.join(root, "codemap"))!);
-const detail = flag("detail", "module") as "file" | "module";
-const group = flag("group", "cluster") as "cluster" | "dir";
-const includeExternal = has("include-external");
+// No flags by design: one opinionated pass. The only argument is an optional
+// target directory (defaults to cwd); output always lands in <target>/codemap.
+const root = path.resolve(process.argv.slice(2).find((a) => !a.startsWith("--")) || ".");
+const outDir = path.join(root, "codemap");
 
 const log = (m: string) => process.stderr.write(`[codemap] ${m}\n`);
 
@@ -101,8 +96,11 @@ function detect(): string[] {
 
 // ---------- stage 2: inventory ----------
 function listFiles(): string[] {
+  // Exclude codemaps own output dir so the map never inventories itself (churn-on-every-run).
+  const outRel = path.relative(root, outDir);
+  const isOwn = (rel: string) => rel === outRel || rel.startsWith(outRel + "/");
   const tracked = sh("git", ["ls-files", "--cached", "--others", "--exclude-standard"]);
-  if (tracked) return tracked.split("\n").filter(Boolean);
+  if (tracked) return tracked.split("\n").filter(Boolean).filter((r) => !isOwn(r));
   // fallback walk
   const out: string[] = [];
   const skip = /(^|\/)(node_modules|\.git|dist|build|coverage|__pycache__|\.venv|venv|target|\.next)(\/|$)/;
@@ -116,7 +114,7 @@ function listFiles(): string[] {
     }
   };
   walk(root);
-  return out;
+  return out.filter((r) => !isOwn(r));
 }
 
 function parseFrontmatter(text: string): Record<string, unknown> | undefined {
@@ -491,7 +489,7 @@ function redundancy(g: Graph): { sameBasename: Record<string, string[]>; sameExp
 
 // ---------- module aggregation ----------
 // Directory grouping: top-level dir, or src/<x> | lib/<x> | app/<x> | packages/<x>
-// one level deep. This is the fallback and the --group dir behaviour.
+// one level deep. This is the fallback when there is no import graph to cluster.
 function dirModuleOf(rel: string): string {
   const parts = rel.split("/");
   if (parts.length === 1) return ".";
@@ -648,7 +646,7 @@ function clusterModules(g: Graph): Map<string, string> {
   const out = new Map<string, string>();
   for (const [rel, c] of comm) out.set(rel, nameOf.get(c)!);
   const q = modularityOf(adj, comm);
-  log(`modules: ${nameOf.size} clusters / ${out.size} source files — Louvain Q=${q.toFixed(3)} (--group dir for directory grouping)`);
+  log(`modules: ${nameOf.size} import-communities / ${out.size} source files — Louvain Q=${q.toFixed(3)}`);
   return out;
 }
 
@@ -674,67 +672,33 @@ function renderPuml(g: Graph, sig: ReturnType<typeof computeSignals>): string {
   L.push("");
   const deadSet = new Set(sig.dead);
   const untestedSet = new Set(sig.untested);
-  const cyclic = new Set(sig.cycles.flat());
 
-  if (detail === "module") {
-    const mods = new Map<string, { loc: number; files: number; dead: number; untested: number }>();
-    const edges = new Map<string, number>();
-    for (const f of Object.values(g.files)) {
-      if (f.kind !== "source" && f.kind !== "test") continue;
-      const m = moduleOf(f.rel);
-      const e = mods.get(m) || { loc: 0, files: 0, dead: 0, untested: 0 };
-      e.loc += f.loc;
-      e.files++;
-      if (deadSet.has(f.rel)) e.dead++;
-      if (untestedSet.has(f.rel)) e.untested++;
-      mods.set(m, e);
-      for (const imp of f.imports) {
-        const tm = moduleOf(imp);
-        if (tm !== m) edges.set(`${m} ${tm}`, (edges.get(`${m} ${tm}`) || 0) + 1);
-      }
+  const mods = new Map<string, { loc: number; files: number; dead: number; untested: number }>();
+  const edges = new Map<string, number>();
+  for (const f of Object.values(g.files)) {
+    if (f.kind !== "source" && f.kind !== "test") continue;
+    const m = moduleOf(f.rel);
+    const e = mods.get(m) || { loc: 0, files: 0, dead: 0, untested: 0 };
+    e.loc += f.loc;
+    e.files++;
+    if (deadSet.has(f.rel)) e.dead++;
+    if (untestedSet.has(f.rel)) e.untested++;
+    mods.set(m, e);
+    for (const imp of f.imports) {
+      const tm = moduleOf(imp);
+      if (tm !== m) edges.set(`${m} ${tm}`, (edges.get(`${m} ${tm}`) || 0) + 1);
     }
-    for (const [m, e] of [...mods].sort()) {
-      const id = sanitize(m);
-      const note = `${e.files}f ${e.loc}loc${e.dead ? ` !${e.dead}dead` : ""}${e.untested ? ` ~${e.untested}untested` : ""}`;
-      const color = e.dead ? "#FFD7D7" : e.untested ? "#FFE9CC" : "#E8F0FE";
-      L.push(`component "${m}\\n<size:10>${note}</size>" as ${id} ${color}`);
-    }
-    L.push("");
-    for (const [k, n] of [...edges].sort()) {
-      const [a, b] = k.split(" ");
-      L.push(`${sanitize(a)} --> ${sanitize(b)} : ${n}`);
-    }
-  } else {
-    const groups = new Map<string, FileRec[]>();
-    for (const f of Object.values(g.files)) {
-      if (f.kind !== "source" && f.kind !== "test") continue;
-      const m = moduleOf(f.rel);
-      if (!groups.has(m)) groups.set(m, []);
-      groups.get(m)!.push(f);
-    }
-    for (const [m, fl] of [...groups].sort()) {
-      L.push(`package "${m}" {`);
-      for (const f of fl.sort((a, b) => a.rel.localeCompare(b.rel))) {
-        const id = sanitize(f.rel);
-        let stereo = "";
-        let color = "";
-        if (deadSet.has(f.rel)) [stereo, color] = ["<<dead>>", "#FFD7D7"];
-        else if (cyclic.has(f.rel)) [stereo, color] = ["<<cycle>>", "#E7D7FF"];
-        else if (untestedSet.has(f.rel)) [stereo, color] = ["<<untested>>", "#FFE9CC"];
-        else if (f.kind === "test") [stereo, color] = ["<<test>>", "#D7FFD9"];
-        L.push(`  [${path.basename(f.rel)}] as ${id} ${stereo} ${color}`.trimEnd());
-      }
-      L.push("}");
-    }
-    L.push("");
-    for (const f of Object.values(g.files)) for (const imp of f.imports) if (g.files[imp]) L.push(`${sanitize(f.rel)} --> ${sanitize(imp)}`);
   }
-
-  if (includeExternal) {
-    const ext = new Map<string, number>();
-    for (const f of Object.values(g.files)) for (const e of f.externals) ext.set(e, (ext.get(e) || 0) + 1);
-    L.push("");
-    for (const [e, n] of [...ext].sort((a, b) => b[1] - a[1]).slice(0, 15)) L.push(`cloud "${e}\\n<size:9>${n}x</size>" as ext_${sanitize(e)}`);
+  for (const [m, e] of [...mods].sort()) {
+    const id = sanitize(m);
+    const note = `${e.files}f ${e.loc}loc${e.dead ? ` !${e.dead}dead` : ""}${e.untested ? ` ~${e.untested}untested` : ""}`;
+    const color = e.dead ? "#FFD7D7" : e.untested ? "#FFE9CC" : "#E8F0FE";
+    L.push(`component "${m}\\n<size:10>${note}</size>" as ${id} ${color}`);
+  }
+  L.push("");
+  for (const [k, n] of [...edges].sort()) {
+    const [a, b] = k.split(" ");
+    L.push(`${sanitize(a)} --> ${sanitize(b)} : ${n}`);
   }
 
   L.push("");
@@ -798,7 +762,7 @@ function renderMd(g: Graph, sig: ReturnType<typeof computeSignals>, ts: string):
     L.push("");
   }
   L.push("## Module shapes (LOC by module)");
-  L.push(MODULE_MAP ? "_Modules = import communities (Louvain). Use `--group dir` for directory grouping._" : "_Modules = directories._");
+  L.push(MODULE_MAP ? "_Modules = import communities (Louvain over the import graph)._" : "_Modules = directories (no import graph to cluster)._");
   L.push("");
   for (const [m, loc] of [...moduleLoc].sort((a, b) => b[1] - a[1]).slice(0, 25)) L.push(`- \`${m}\` — ${loc} LOC`);
   L.push("");
@@ -999,24 +963,17 @@ function renderDiff(ref: string, before: IR, after: IR): string {
   return L.join("\n");
 }
 
-function runDiff(ref: string, currentIR: IR) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "codemap-vs-"));
-  const tmpOut = path.join(tmp, "_out");
+/** The codemap.json committed at HEAD, or null if none / not a git repo.
+ *  Read straight from git (HEAD:./codemap/codemap.json, cwd=root) — no worktree,
+ *  no re-run. This is the baseline the working-tree snapshot is diffed against,
+ *  so "progress" is just: commit the snapshot, change code, re-run. */
+function committedIR(): IR | null {
+  const raw = sh("git", ["show", "HEAD:./codemap/codemap.json"]);
+  if (raw === null) return null;
   try {
-    const added = sh("git", ["worktree", "add", "--detach", "--force", tmp, ref]);
-    if (added === null) {
-      log(`--vs: could not create worktree at '${ref}' (not a git repo or bad ref); skipping diff`);
-      return;
-    }
-    const self = fileURLToPath(import.meta.url);
-    execFileSync("npx", ["tsx", self, tmp, "--out", tmpOut, "--detail", detail, "--group", group], { stdio: "ignore" });
-    const refIR: IR = JSON.parse(fs.readFileSync(path.join(tmpOut, "codemap.json"), "utf8"));
-    const diff = renderDiff(ref, refIR, currentIR);
-    fs.writeFileSync(path.join(outDir, "codemap.diff.md"), diff);
-    log(`wrote ${path.relative(root, outDir) || "."}/codemap.diff.md (${ref} → working)`);
-  } finally {
-    sh("git", ["worktree", "remove", "--force", tmp]);
-    fs.rmSync(tmp, { recursive: true, force: true });
+    return JSON.parse(raw) as IR;
+  } catch {
+    return null;
   }
 }
 
@@ -1049,33 +1006,13 @@ function main() {
   const g: Graph = { root, ecosystems, files, entrypoints: [], graphSource };
   g.entrypoints = findEntrypoints(files);
   log(`entrypoints: ${g.entrypoints.length}`);
-  if (group === "cluster") {
-    const cm = clusterModules(g);
-    if (cm.size) MODULE_MAP = cm;
-    else log("modules: directory grouping (no JS/TS edges to cluster)");
-  } else {
-    log("modules: directory grouping (--group dir)");
-  }
+  const cm = clusterModules(g);
+  if (cm.size) MODULE_MAP = cm;
+  else log("modules: directory grouping (no import graph to cluster)");
   const sig = computeSignals(g);
   log(`dead=${sig.dead.length} untested=${sig.untested.length} cycles=${sig.cycles.length}`);
 
   fs.mkdirSync(outDir, { recursive: true });
-  // prev.json is a transient last-run cache for the Δ log — never commit it
-  fs.writeFileSync(path.join(outDir, ".gitignore"), "prev.json\n");
-  // preserve prior run so `before vs after` is a plain JSON diff
-  const jsonPath = path.join(outDir, "codemap.json");
-  if (fs.existsSync(jsonPath)) {
-    try {
-      fs.copyFileSync(jsonPath, path.join(outDir, "prev.json"));
-      const prev = JSON.parse(fs.readFileSync(path.join(outDir, "prev.json"), "utf8"));
-      const d = (a: number, b: number) => (b - a >= 0 ? `+${b - a}` : `${b - a}`);
-      log(
-        `Δ vs prev: dead ${d(prev.dead?.length || 0, sig.dead.length)} | untested ${d(prev.untested?.length || 0, sig.untested.length)} | cycles ${d(prev.cycles?.length || 0, sig.cycles.length)}`,
-      );
-    } catch {
-      /* ignore */
-    }
-  }
   const ts = isoStamp();
   const ir = {
     generated: ts,
@@ -1098,8 +1035,17 @@ function main() {
   fs.writeFileSync(path.join(outDir, "codemap.json"), JSON.stringify(ir, null, 2));
   log(`wrote ${path.relative(root, outDir) || "."}/{codemap.puml,codemap.md,codemap.json}`);
 
-  const vs = flag("vs");
-  if (vs) runDiff(vs, ir as IR);
+  // Built-in progress: diff this snapshot against the codemap.json committed at HEAD.
+  const committed = committedIR();
+  if (committed) {
+    fs.writeFileSync(path.join(outDir, "codemap.diff.md"), renderDiff("HEAD", committed, ir as IR));
+    const d = (a: number, b: number) => (b - a >= 0 ? `+${b - a}` : `${b - a}`);
+    log(
+      `Δ vs committed (HEAD): dead ${d((committed.dead || []).length, sig.dead.length)} | untested ${d((committed.untested || []).length, sig.untested.length)} | cycles ${d((committed.cycles || []).length, sig.cycles.length)} → codemap.diff.md`,
+    );
+  } else {
+    log("Δ vs committed: no codemap.json committed at HEAD yet — commit this snapshot to start tracking progress");
+  }
 
   process.stdout.write(`${path.join(outDir, "codemap.md")}\n`);
 }

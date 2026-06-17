@@ -33,24 +33,20 @@ Every signal is a cheap static heuristic. Treat as a lead, not a verdict.
 
 ## Module shapes & seams
 
-- **Module** — how source files are grouped into the nodes you see. Two modes:
-  - `--group cluster` (**default**) — group by **import community** (hand-rolled deterministic Louvain over the undirected source-import graph). A module is "files that import each other a lot", regardless of folder. Each community is named by the plurality directory among its members (collisions disambiguated by the community's hub file, e.g. `src/core::pipeline`). Reported with a modularity score `Q` (≳0.3 = real community structure). Needs ≥1 JS/TS edge; with none it silently falls back to directory grouping.
-  - `--group dir` — group by folder: top-level dir, or `src/<x>` / `lib/<x>` / `app/<x>` / `packages/<x>` one level deep. Also the automatic fallback when the graph has no edges. Test files and edgeless source files always use this directory rule even under `cluster`.
+- **Module** — source files grouped into the nodes you see, by **import community** (hand-rolled deterministic Louvain over the undirected source-import graph). A module is "files that import each other a lot", regardless of folder. Each community is named by the plurality directory among its members (collisions disambiguated by the community's hub file, e.g. `src/core::pipeline`). Reported with a modularity score `Q` (≳0.3 = real community structure). When the graph has no JS/TS edges, modules fall back to directory grouping: top-level dir, or `src/<x>` / `lib/<x>` / `app/<x>` / `packages/<x>` one level deep. Test files and edgeless source files always use that directory rule.
 - **Shape** = file count + LOC per module (in `codemap.md` and the diagram node label).
-- **Seam** = a cross-module import edge; edge weight = number of imports crossing it. High-weight seams are your real coupling points. In `--detail module` (default) edges are aggregated per module pair; in `--detail file` every file→file edge is drawn.
+- **Seam** = a cross-module import edge; edge weight = number of imports crossing it. High-weight seams are your real coupling points. Edges are aggregated per module pair.
 
-**Layout vs clustering (dir ↔ community)** — only shown under `--group cluster`. Compares the detected import communities against the folder layout; the disagreement is itself an architecture signal:
+**Layout vs clustering (dir ↔ community)** — shown whenever an import graph exists. Compares the detected import communities against the folder layout; the disagreement is itself an architecture signal:
 - *Directory split across communities* — one folder's files land in >1 community → a leaky boundary or a folder that should be split.
 - *Community spanning directories* — one community draws files from >1 folder → cross-cutting code, or folders that should merge.
 - These are leads, not verdicts: a tight utility imported everywhere, or a deliberate layered split, can show up here legitimately. Determinism: same graph → same communities (sorted node iteration, no randomness), so the section is stable to diff commit-to-commit.
 
 ## Tuning
 
-- Big repo → diagram noisy? Keep `--detail module` (default). Use `--detail file` only on a single module/subdir (`npx tsx codemap.ts ./src/foo`).
-- `--group cluster` (default) groups modules by import community; switch to `--group dir` for plain folder grouping (or when the community labels are noisier than the folder layout).
-- Add `--include-external` to see which third-party deps dominate.
-- Output goes to a git-tracked `codemap/` dir by default — commit it so `git diff codemap/codemap.json` between commits is a structural delta. Override with `--out DIR`.
-- Commit-to-commit diff: `--vs <ref>` writes `codemap.diff.md` (files +/-, newly-dead, cycles introduced/broken, seam weight changes) for `<ref> → working tree`. It builds the ref snapshot in a temp git worktree, so it works even if `codemap/` wasn't committed at that ref.
+- No flags — one best-quality process. Point it at a subdir to scope the map (`npx tsx codemap.ts ./src/foo`).
+- Modules are grouped by import community (Louvain); directory grouping is the automatic fallback when there's no import graph.
+- Output goes to a git-tracked `codemap/` dir. Commit it — then every re-run auto-diffs the fresh snapshot against the version committed at `HEAD` and writes `codemap.diff.md` (files +/-, newly-dead, cycles introduced/broken, seam-weight changes). `git diff codemap/codemap.json` between commits is also a structural delta. The codemap dir is excluded from its own inventory, so it never shows up as churn.
 
 ## Extending to other languages
 
