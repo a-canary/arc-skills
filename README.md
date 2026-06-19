@@ -22,6 +22,7 @@ Most skills are pure markdown — making them visible *is* the install. A few ne
 
 **Behavioral guardrails** — keep model output honest and on-task
 - `karpathy-guidelines` — surgical changes, no over-engineering
+- `dart` — frame the system before acting: DART (Deconstruct/Analyze/Recognize/Test) + systems-thinking lens before debugging, designing, or reviewing
 - `caveman` — ultra-terse output mode
 - `anti-sycophancy` — strip validating/hedging language
 - `berzerk` — relentless autonomous goal-pursuit mode (decide via /counsel, TDD, one thin slice at a time)
