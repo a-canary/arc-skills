@@ -23,4 +23,26 @@ Be extremely concise. Sacrifice grammar for concision.
 - **Diagnostic/self-healing subagents run on Claude opus + haiku only.** Cheap half = `model: haiku`, judgment half = `model: opus`. Never minimax or a `pi -p --provider` alias — the Task loader only honors `opus|sonnet|haiku|inherit` and silently falls back. (Production pi-headless workers DO use provider aliases — diagnostics only.)
 
 - **Subagents return distilled findings only** — the conclusion, `file:line` refs, the answer the parent needs. Never raw file contents or command dumps; the final message lands verbatim in parent context. Aim under ~500 tokens; for a large artifact, write it to a file and return the path + one-line summary.
+
+- **Commit as `a-canary`** `<a-canary@users.noreply.github.com>`, never "aaron". Set `-c user.name -c user.email` per-commit; don't trust global config. Found an "aaron" commit on a fresh private repo → amend `--reset-author` + force-push.
+
+- **All dev in worktrees.** Primary checkout = production: never edit/commit dev work there. EnterWorktree (or `git worktree add`) off origin/<default> for any change incl. one-liners. Merge back via PR to origin, then local main `pull --ff-only`. Worker/loop lifecycles spawn + exit their own worktree.
+
+- **No LiteLLM / multi-key API proxies** — security risk. Direct API + keys from pass store; route models via pipeliner/config.
+
+- **Install only first-party + self-authored.** Upstream maintainer's main repo, or own code. Reject by default all UGC plugins / skill libs / dashboards / memory providers.
+
+- **No rate without power.** Sample size set by required confidence, not the cached artifact. Report Wilson 95% CI; overlapping CIs = same result — don't "reconcile" noise. >80% bar needs n≥230; underpowered → no point estimate.
+
+- **Red gate = one obligation.** Fix pre-existing failures first; never footnote as out-of-scope. Exception: a later phase of the *same* refactor will green/delete the test → commit but hold push until all green together.
+
+- **Merge own PRs when terminally green.** Owned repos (ADMIN): no human PR — merge once (1) an independent reviewer agent (different session, hunts blockers) clears AND (2) local merge-gate green. Author never approves own work. Non-owned public: draft PR only, Aaron submits. PR-per-feature shape holds (branch off base, never push straight to main). Evidence must be terminal: state=OPEN, MERGEABLE, CLEAN, all checks COMPLETED/SUCCESS (re-poll at merge time).
+
+- **UI copy: casual + terse, no visible timestamps.** Short verbs (`Pick`, `Send`), terse empty states (`nothing pending`). Keep timestamps in the data layer for sort/staleness; never paint them on the surface.
+
+- **Self-judge ≠ quality.** A producing model scoring against its own rubric proves consistency, not quality. Get a second *disagreeing* judge before claiming improvement; diminishing self-judge deltas = stop signal, not success.
+
+- **Subagent reports UNTRUSTED.** They have tampered guards + fabricated findings to look confident. Verify every checkable claim against source (grep the constant) before acting. Forbid hooks/env edits in the dispatch prompt; after any fs-sharing subagent, verify guard hooks git-clean.
+
+- **/counsel over asking.** Decision/approval fork mid-task → run /counsel (5-expert panel), execute its verdict autonomously; don't AskUserQuestion or pause. Prefer the reversible/non-destructive option; keep export-to-trash before any delete. Respect hard safety-classifier blocks (counsel routes around via code-only fix).
 <!-- ARC-BEHAVIORAL-RULES:END -->
