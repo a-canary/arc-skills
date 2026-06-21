@@ -54,6 +54,11 @@ one edit to an agent | skill | tool | pipeline | script
 
 ## Phase 2 — Adapt (opus)
 
+Before adapting, check `~/.claude/dream/state/watches.md` (standing watches —
+multi-day sample-collection items). Update sample counts; when a watch's
+criteria are met, its action is eligible as the day's adaptation. Mark CLOSED
+when done.
+
 Once collection is done, spawn one `adapter` agent with today's journal path. It
 groups journal entries by root cause, picks the single highest-impact group
 (task-priority order UX > quality > security > scale > efficiency; then

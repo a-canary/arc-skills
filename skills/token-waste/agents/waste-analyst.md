@@ -20,7 +20,10 @@ one line.
 
 ## Input
 
-A path to a candidate JSON file produced by `detect_waste.py`, shaped like:
+A path to a candidate JSON file produced by `detect_waste.py`. **Read it exactly
+once.** It is static — once loaded it is verbatim in your context. To re-find a
+value, scroll back or `grep -n` the one line; never re-Read the same waste JSON
+(re-reads of these files are this skill's single biggest token bleed). Shaped like:
 
 ```json
 {
