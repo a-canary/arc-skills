@@ -69,9 +69,9 @@ blog --publish          # rsync demo root to $ARC_DEMO_HOST
    Keep < 500KB. Resize if larger. Prefer WebP/compressed JPEG over PNG.
 
 4. Build the entry:
-   - title: PR subject (or branch name humanized)
+   - title: human headline, plain English — strip `type(scope):` prefixes (humanTitle() render-belt is defense, not the author)
    - project: repo name (from git rev-parse --show-toplevel)
-   - body_md: why + diff stat + first 120 lines of diff (markdown)
+   - body_md: 3-4 sentences prose — what changed + why it matters to a reader. NO `## headers`, NO `diff --git`/diff-stat dumps, NO commit lists, NO `<!-- -->` trailers
    - artifact_path: absolute path to copied artifact (or null)
    - origin_task_id: $ARC_TASK_ID if in factory worker, else null
 
@@ -133,8 +133,8 @@ const post = createBlogPost(db, {
 A row in the `blog` table with:
 - `id`: slugified title, uniquified on collision
 - `project`: repo name
-- `title`: PR subject or branch name
-- `body_md`: markdown with why + diff stat + diff excerpt + metadata markers
+- `title`: human headline (no commit-prefix syntax)
+- `body_md`: 3-4 sentence prose per content contract above
 - `artifact_path`: absolute path to the visual artifact under `ARC_DEMO_ROOT/assets/` (or null for failed experiments)
 - `origin_task_id`: ledger row id of the originating task (from `$ARC_TASK_ID` inside a factory worker; null for manual posts)
 - `created_at`: unix timestamp
