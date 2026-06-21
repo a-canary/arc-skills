@@ -26,6 +26,7 @@ Most skills are pure markdown — making them visible *is* the install. A few ne
 - `caveman` — ultra-terse output mode
 - `anti-sycophancy` — strip validating/hedging language
 - `berzerk` — relentless autonomous goal-pursuit mode (decide via /counsel, TDD, one thin slice at a time)
+- `craft-defaults` — quality/modularity/maintainability over effort; no agent co-author trailer; never edit generated files; one-sentence-per-line markdown; reproduce bugs E2E before fixing; pixel-perfect UI
 
 **Hygiene** — keep the codebase lean
 - `trash-retired-files` — reason-coded reversible GC
