@@ -48,6 +48,18 @@ if matches=$(grep -rln 'home-lab-1' skills/*/SKILL.md skills/*/SETUP.md 2>/dev/n
   fail=1
 fi
 
+# Rule 4 — embedded git worktree under .claude/worktrees/. The .gitignore rule
+# (added c36503a) keeps new ones untracked but does not catch one already on
+# disk. Pattern source: worker/000102-hygiene-arc-skills-improve-architecture
+# — axi-coding-standard worktree survived squash-merge of #16, was 1.2M / 139
+# files of pure dirt. A clean `git status` should never list anything under
+# .claude/worktrees/.
+if [[ -d .claude/worktrees ]] && compgen -G '.claude/worktrees/*/.git' >/dev/null; then
+  echo "FAIL: embedded git worktree(s) under .claude/worktrees/ — worker worktrees belong at ~/worktrees/<repo>-<slug>/:" >&2
+  compgen -G '.claude/worktrees/*/.git' | sed 's|^|  |' >&2
+  fail=1
+fi
+
 if [[ $fail -eq 0 ]]; then
   echo "ok: no doc-drift patterns found in skills/*/SKILL.md / SETUP.md"
 fi
