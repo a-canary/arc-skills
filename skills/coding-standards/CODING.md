@@ -38,6 +38,15 @@ Raw `rustc --error-format=json` embeds the full explanation essay per diagnostic
 ### U-5 — No Java / C# as a default
 Veracode 2025: Java 72% / C# 45% of AI-generated code carries an OWASP Top-10 vuln (vs JS ~43%, Python ~38%). Use only when a project explicitly requires them.
 
+### U-6 — AXI-shape agent-facing output
+When a CLI / tool / command emits output an **agent** consumes (search hits, status, query answers — the general case U-4 covers for compiler diagnostics only), shape the agent path for token economy + machine parsing per **AXI** ([axi.md](http://axi.md)):
+- **Minimal schema** — 3–4 load-bearing fields; drop anything the consumer restates or ignores (e.g. a title the summary already repeats).
+- **Bounded fields** — truncate long values to a gist with a size hint + an escape-hatch flag (`--full`); never dump unbounded bodies by default.
+- **Definitive empty states**, structured errors + non-zero exit codes, and no interactive prompts on the non-TTY path.
+- **Contextual disclosure** — a next-step command template in the footer (`next: ke query "…"`).
+
+Generalizes U-4 to every agent-consumed surface. Keep human-pretty output for TTY; AXI shaping is the default for the agent path. Proven on `ke search` (PR a-canary/ke#59): title↔summary dedup + gist truncation cut output ~10%.
+
 ---
 
 ## (F) Factory implementation
