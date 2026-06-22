@@ -1,46 +1,40 @@
 #!/usr/bin/env bash
-# Idempotent injector: sync the ARC-BEHAVIORAL-RULES block from behavioral-rules.md
-# into each harness's user-level config. Re-runnable — replaces the marked block in
-# place, never duplicates. Edit behavioral-rules.md, re-run this to re-sync.
+# Symlink each harness's user-level config to the canonical AGENTS.md at the
+# arc-skills repo root. Idempotent — re-running fixes drift. Any pre-existing
+# real file is moved to ~/trash first (never clobbered). Edit AGENTS.md, the
+# symlinks follow automatically — no re-sync needed.
 set -euo pipefail
 
-SRC="$(dirname "$(realpath "${BASH_SOURCE[0]}")")/behavioral-rules.md"
-BEGIN="<!-- ARC-BEHAVIORAL-RULES:BEGIN -->"
-END="<!-- ARC-BEHAVIORAL-RULES:END -->"
+# Canonical lives at the repo root, two levels up from this skill dir.
+SRC="$(realpath "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/../../AGENTS.md")"
+[ -f "$SRC" ] || { echo "ERROR: canonical not found: $SRC" >&2; exit 1; }
 
-# Targets: user-level config for each harness present on this machine.
+TRASH="$HOME/trash"
+mkdir -p "$TRASH"
+
+# Targets: user-level config for each harness.
 TARGETS=(
   "$HOME/.claude/CLAUDE.md"
   "$HOME/.pi/pi.md"
 )
 
-# Extract the block (inclusive of markers) from the source.
-block="$(awk -v b="$BEGIN" -v e="$END" '
-  $0 ~ b {p=1} p {print} $0 ~ e {p=0}
-' "$SRC")"
-
-if [ -z "$block" ]; then
-  echo "ERROR: no ARC-BEHAVIORAL-RULES block found in $SRC" >&2
-  exit 1
-fi
-
 for tgt in "${TARGETS[@]}"; do
   dir="$(dirname "$tgt")"
-  # Only inject where the harness actually lives (its dir exists).
   [ -d "$dir" ] || { echo "skip (no $dir): $tgt"; continue; }
-  touch "$tgt"
 
-  if grep -qF "$BEGIN" "$tgt"; then
-    # Replace existing block in place.
-    awk -v b="$BEGIN" -v e="$END" -v repl="$block" '
-      $0 ~ b {print repl; skip=1; next}
-      $0 ~ e {skip=0; next}
-      !skip {print}
-    ' "$tgt" > "$tgt.tmp" && mv "$tgt.tmp" "$tgt"
-    echo "updated: $tgt"
-  else
-    # Append fresh block.
-    { [ -s "$tgt" ] && echo ""; echo "$block"; } >> "$tgt"
-    echo "added:   $tgt"
+  # Already the right symlink? nothing to do.
+  if [ -L "$tgt" ] && [ "$(realpath "$tgt")" = "$SRC" ]; then
+    echo "ok:      $tgt"
+    continue
   fi
+
+  # Back up any existing real file (or wrong link) before replacing.
+  if [ -e "$tgt" ] || [ -L "$tgt" ]; then
+    bak="$TRASH/$(date +%s)_$(basename "$tgt").$(basename "$dir").bak"
+    mv "$tgt" "$bak"
+    echo "backed up old -> $bak"
+  fi
+
+  ln -s "$SRC" "$tgt"
+  echo "linked:  $tgt -> $SRC"
 done
