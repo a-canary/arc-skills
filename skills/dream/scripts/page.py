@@ -25,6 +25,7 @@ either `next_offset: N` (more remain) or `next_offset: EOF` (done).
 """
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -39,9 +40,49 @@ DEFAULT_WINDOW = 80
 DEFAULT_MAX_BYTES = 40000
 TRUNCATE_TAIL = 2000  # keep this many chars when truncating one oversized field
 
+# Content-level boilerplate: lines that recur verbatim across windows and carry
+# no signal for a dream/waste analyst. is_noise_message() in extract.py only
+# drops whole messages by *type*; these patterns live *inside* otherwise-kept
+# message bodies (session-limit banners, scheduler notifications, monitor
+# heartbeats), so they slip through and dominate page windows. Collapsing runs
+# of them at the single render chokepoint (_block) deterministically removes the
+# day's biggest subagent token bleed without relying on the model reading a rule.
+NOISE_LINE_PATTERNS = [
+    re.compile(r"hit your (session|usage) limit", re.IGNORECASE),
+    re.compile(r"task[- ]notification", re.IGNORECASE),
+    re.compile(r"\bMonitor event\b", re.IGNORECASE),
+    re.compile(r"Your limit will reset at", re.IGNORECASE),
+    re.compile(r"Approaching .* limit", re.IGNORECASE),
+]
+
+
+def _is_noise_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    return any(p.search(stripped) for p in NOISE_LINE_PATTERNS)
+
+
+def _strip_noise_lines(text: str) -> str:
+    """Collapse consecutive boilerplate lines into a single elision marker."""
+    out: list[str] = []
+    run = 0
+    for line in text.split("\n"):
+        if _is_noise_line(line):
+            run += 1
+            continue
+        if run:
+            out.append(f"[{run} boilerplate line{'s' if run > 1 else ''} elided]")
+            run = 0
+        out.append(line)
+    if run:
+        out.append(f"[{run} boilerplate line{'s' if run > 1 else ''} elided]")
+    return "\n".join(out)
+
 
 def _block(key: str, text: str, indent: str = "    ", max_chars: int = 0) -> list[str]:
     """Render a YAML block scalar, truncating one oversized field if max_chars > 0."""
+    text = _strip_noise_lines(text)
     if max_chars and len(text) > max_chars:
         dropped = len(text) - max_chars
         text = text[:max_chars] + f"\n[truncated {dropped} bytes]"
