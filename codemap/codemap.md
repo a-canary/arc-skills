@@ -1,9 +1,10 @@
 ---
-generated: 2026-06-17T10:19:01.937Z @4ecf806
-project: codemap-skill
+generated: 2026-06-24T22:10:45.324Z @5b9e6e7
+project: arc-skills
 ecosystems: [unknown]
-source_files: 7
+source_files: 8
 test_files: 2
+graph_source: madge
 graph_analyzed: false
 dead_count: null
 untested_count: null
@@ -11,13 +12,14 @@ cycle_count: null
 tool: codemap
 ---
 
-# Codemap — codemap-skill
+# Codemap — arc-skills
 
 > Deterministic static snapshot (no LLM). Re-run after changes and diff `codemap.json` to see what moved.
 
 ## Module shapes (LOC by module)
+_Modules = directories (no import graph to cluster)._
 
-- `skills` — 2659 LOC
+- `skills` — 3068 LOC
 
 ## Seams (cross-module import edges)
 
@@ -45,15 +47,16 @@ _none detected_
 - `datetime` — 3 imports
 - `re` — 3 imports
 - `subprocess` — 3 imports
+- `node:child_process` — 2 imports
+- `node:fs` — 2 imports
+- `node:path` — 2 imports
 - `collections` — 2 imports
 - `tempfile` — 2 imports
 - `pytest` — 2 imports
 - `os` — 1 imports
-- `node:child_process` — 1 imports
-- `node:fs` — 1 imports
 - `node:os` — 1 imports
-- `node:path` — 1 imports
 - `node:url` — 1 imports
+- `pkg` — 1 imports
 - `fs` — 1 imports
 - `typing` — 1 imports
 - `extract` — 1 imports
@@ -62,9 +65,8 @@ _none detected_
 - `io` — 1 imports
 - `hashlib` — 1 imports
 
-## Docs with frontmatter (48)
+## Docs with frontmatter (56)
 
-- `codemap/codemap.md` — generated=2026-06-17T10:17:37.005Z @4ecf806, project=codemap-skill, ecosystems=[unknown], source_files=7
 - `skills/adaptation-review/SKILL.md` — name=adaptation-review, description=Review the last N days (default 10) of s, allowed-tools=Read, Write, Glob, Task, Bash
 - `skills/adaptation-review/agents/regression-reviewer.md` — name=regression-reviewer, description=Review the last N days of dream/token-wa, tools=Read, Glob, Grep, Bash, model=opus
 - `skills/anti-sycophancy/SKILL.md` — name=anti-sycophancy, description=Strip validating, hedging, and flatterin
@@ -73,9 +75,12 @@ _none detected_
 - `skills/cam/SKILL.md` — name=cam, description=Design a Collector/Adaptor/Monitor (CAM)
 - `skills/caveman/SKILL.md` — name=caveman, description=>
 - `skills/champion-challenger/SKILL.md` — name=champion-challenger, description=Design and run a champion/challenger sel
+- `skills/cli-proxy/SKILL.md` — name=cli-proxy, description=Local OpenAI-compatible LLM endpoint htt
 - `skills/codemap/SKILL.md` — name=codemap, description=Generate a deterministic PlantUML map + 
 - `skills/coding-standards/SKILL.md` — name=coding-standards, description=Default language-routing, strictness, di, license=MIT
 - `skills/counsel/SKILL.md` — name=counsel, description=Run an adversarial counsel session with 
+- `skills/craft-defaults/SKILL.md` — name=craft-defaults, description=Default engineering posture for AI agent
+- `skills/dart/SKILL.md` — name=dart, description=Frame the system before you act. Run a D
 - `skills/decompose-skill/SKILL.md` — name=decompose-skill, description=Split a SKILL.md over 100 lines into foc
 - `skills/diagnose/SKILL.md` — name=diagnose, description=Disciplined diagnosis loop for hard bugs
 - `skills/dream-insights/SKILL.md` — name=dream-insights, description=Show the latest dream journal and adapta, allowed-tools=Read, Glob, Bash
@@ -90,17 +95,15 @@ _none detected_
 - `skills/handoff/SKILL.md` — name=handoff, description=Compact the current conversation into a , argument-hint=What will the next session be used for?
 - `skills/improve-codebase-architecture/SKILL.md` — name=improve-codebase-architecture, description=Find deepening opportunities in a codeba
 - `skills/install-anti-sycophancy/SKILL.md` — name=install-anti-sycophancy, description=Install a UserPromptSubmit + Stop hook p
+- `skills/install-behavioral-rules/SKILL.md` — name=install-behavioral-rules, description=Symlink every harness's user-level confi
 - `skills/install-to-trash/SKILL.md` — name=install-to-trash, description=Install a PreToolUse hook that intercept
 - `skills/karpathy-guidelines/SKILL.md` — name=karpathy-guidelines, description=Behavioral guidelines to reduce common L, license=MIT
+- `skills/ke-memory/SKILL.md` — name=ke-memory, description=Use the knowledge engine for durable cro
+- `skills/ke/SKILL.md` — name=ke, description=Knowledge Engine — one CLI for semantic 
 - `skills/migrate-to-shoehorn/SKILL.md` — name=migrate-to-shoehorn, description=Migrate test files from `as` type assert
+- `skills/pipeliner/SKILL.md` — name=pipeliner, description=Build/run pipeliner modules (npm pi-pipe
 - `skills/profiling-ladder/SKILL.md` — name=profiling-ladder, description=Pick the right optimization rung. Move d
 - `skills/prototype/SKILL.md` — name=prototype, description=Build a throwaway prototype to flesh out
 - `skills/scaffold-exercises/SKILL.md` — name=scaffold-exercises, description=Create exercise directory structures wit
 - `skills/schedule-hygiene/SKILL.md` — name=schedule-hygiene, description=Write cron / systemd-timer entries that 
 - `skills/select-models/SKILL.md` — name=select-models, description=One-time setup that discovers reachable 
-- `skills/setup-pre-commit/SKILL.md` — name=setup-pre-commit, description=Set up Husky pre-commit hooks with lint-
-- `skills/task-priority/SKILL.md` — name=task-priority, description=When two concerns conflict, sort by UX >
-- `skills/tdd/SKILL.md` — name=tdd, description=Test-driven development with red-green-r
-- `skills/to-issues/SKILL.md` — name=to-issues, description=Break a plan, spec, or PRD into independ
-- `skills/to-prd/SKILL.md` — name=to-prd, description=Turn the current conversation context in
-- `skills/token-waste/SKILL.md` — name=token-waste, description=Analyze the day's conversations for toke, allowed-tools=Read, Write, Glob, Task, Bash
