@@ -31,7 +31,7 @@ Be extremely concise. Sacrifice grammar for concision.
 
 - **Commit with the identity in `~/vault/USER.md`**, never a tool default. Set `-c user.name -c user.email` per-commit; don't trust global config. Found a wrong-author commit on a fresh private repo → amend `--reset-author` + force-push.
 
-- **All dev in worktrees.** Primary checkout = production: never edit/commit dev work there. EnterWorktree (or `git worktree add`) off origin/<default> for any change incl. one-liners. Merge back via PR to origin, then local main `pull --ff-only`. Worker/loop lifecycles spawn + exit their own worktree.
+- **All dev in worktrees.** Primary checkout = production: never edit/commit dev work there. Prefer **treehouse** (`get` acquires a pooled pre-warmed worktree, `return` recycles it — deps/cache kept) over raw EnterWorktree / `git worktree add`, off origin/<default> for any change incl. one-liners. Merge back via PR to origin, then local main `pull --ff-only`. Worker/loop lifecycles spawn + exit their own worktree.
 
 - **No LiteLLM / multi-key API proxies** — security risk. Direct API + keys from the operator's secret store (see USER.md); route models via pipeliner/config.
 
