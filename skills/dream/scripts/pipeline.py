@@ -62,11 +62,39 @@ def session_key(jsonl: Path) -> str:
     return f"{jsonl.parent.name}/{jsonl.stem}"
 
 
+def has_minable_content(jsonl: Path) -> bool:
+    """True if the session has at least one user/assistant message.
+
+    cli-proxy (and similar) write content-less stub files — a single
+    `{"type":"ai-title",...}` line and nothing else — then keep re-touching
+    them, so their mtime churns and the mtime tracker re-lists them every run,
+    fanning out collector agents onto sessions with nothing to mine. Skip any
+    session whose lines are all non-message types. Short-circuits on the first
+    message line, so real sessions cost only a few lines of read.
+    """
+    try:
+        with open(jsonl) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    if json.loads(line).get("type") in ("user", "assistant"):
+                        return True
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return False
+    return False
+
+
 def sessions_to_process(processed: dict, force: bool = False, limit: int = 0) -> list[Path]:
     """JSONL paths that are new or whose mtime changed since last run.
 
     Returned oldest-mtime first so the backlog drains in age order; capped to
-    `limit` when limit > 0.
+    `limit` when limit > 0. Content-less stub sessions (no user/assistant
+    message) are skipped — they have nothing to mine and otherwise re-list
+    forever on mtime churn.
     """
     out = []
     if not PROJECTS_DIR.is_dir():
@@ -79,6 +107,8 @@ def sessions_to_process(processed: dict, force: bool = False, limit: int = 0) ->
                 entry = processed["sessions"].get(session_key(jsonl))
                 if entry and entry.get("source_mtime") == jsonl.stat().st_mtime:
                     continue
+            if not has_minable_content(jsonl):
+                continue
             out.append(jsonl)
     out.sort(key=lambda p: p.stat().st_mtime)
     if limit > 0:
