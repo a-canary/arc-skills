@@ -52,12 +52,43 @@ workspace: worktree           # worktree | treehouse | <skill-name>
 on-task-verified: merge       # merge | draft-pr | <skill-name>
 todo-list: native             # native | arc-agents | <skill-name>
 feedback-sink: jsonl          # jsonl | <api-endpoint> | <skill-name>
+planning-target: prd-file     # prd-file | arc-agents-ledger | kanban | <skill-name>
+scheduler: cron               # cron (self-installed 12hr backstop) | arc-agents | <skill-name>
 budget:
   weekly: 500k                # tokens/week per repo; resets Monday 00:00 UTC
   bypass:
     - critical-failure        # qa.failed with dimension: critical-failure
     - security                # qa.failed with dimension: security
 ```
+
+### `planning-target`
+
+How director plans the *next* unit of work, independent of how `/task` executes it.
+
+- **`prd-file`** (default) — one `PRD.md` at repo root, addressing only the single
+  most important open gap. On completion, `/director` replaces it with the next
+  PRD rather than accumulating a backlog file. Flat-file, sequential, zero deps.
+- **`arc-agents-ledger`** — delegates planning to arc-agents' `kind=prd` ledger
+  queue (`bin/plan.ts` mints a PRD row at the human-approval gate; arc-agents'
+  `agent=director` profile claims it, runs intake, decomposes into ledger task
+  rows). Useful when a repo already runs arc-agents and wants a queryable,
+  multi-PRD-in-flight backlog instead of one-at-a-time. This is arc-agents'
+  pre-existing PRD-intake pathway — not `/director`'s own interviewer role,
+  which `/director`'s non-AFK mode (grill-me + research, pause/steer/resume)
+  already covers standalone.
+- **`kanban`** / `<skill-name>` — any other planning surface a binding wires up.
+
+### `scheduler`
+
+How `/director` gets re-invoked to drive the AFK loop forward.
+
+- **`cron`** (default) — `/director` is self-sufficient: on first `--afk` boot it
+  installs its own feedback watcher and a 12hr cron entry that re-runs
+  `<harness> /director <repo-root> --afk`. Each invocation reads `.arc/director/`
+  state and resumes where it left off — no daemon, no external scheduler.
+- **`arc-agents`** — if installed, arc-agents' factory can schedule and execute
+  the tick instead of a bare cron entry (its existing supervisor/reaper loop
+  substitutes for the self-installed cron). Optional, not required.
 
 ## Director loop
 
@@ -68,7 +99,8 @@ check budget (binding may delegate to a repo's own governor, e.g. arc-agents'
     dimension critical-failure or security may still dispatch; all other
     gap-delegation pauses until budget resets or a human raises it
   → bypass triggers run at full priority regardless of budget state
-gap-analysis (reads .arc/director/gaps.md + event log)
+gap-analysis (reads .arc/director/gaps.md + event log; under planning-target:
+  prd-file, gaps.md is derived from the current PRD.md's acceptance criteria)
   → open gaps? → delegate via task-delegation binding
   → no gaps, inflight/pending-QA? → sleep (event-driven)
   → no gaps, no inflight, no pending-QA? → idle; sleep until next feedback event
@@ -98,6 +130,11 @@ end of every tick
 | **budget-exceeded** | Weekly token limit reached; restricted to critical-failure/security dispatch only until budget resets or a human raises it |
 
 ## `.arc/` layout
+
+`PRD.md` itself lives at the parent repo's root, not under `.arc/` — it's a
+human-readable planning artifact (`planning-target: prd-file`, the default),
+replaced wholesale when its gap closes. Everything under `.arc/` is director's
+own working state, derived from whatever the current PRD says.
 
 ```
 .arc/
