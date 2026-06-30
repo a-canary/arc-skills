@@ -42,6 +42,12 @@ Most skills are pure markdown — making them visible *is* the install. A few ne
 - `improve-codebase-architecture`, `counsel`
 - `git-guardrails-claude-code`, `setup-pre-commit`, `scaffold-exercises`, `migrate-to-shoehorn`
 
+**Mission-driven orchestration** — autonomous loop from goals to verified outcomes
+- `director` — AFK mission driver: reads MISSION.md/AGENTS.md, gap-analysis loop, delegates work, gates on evidence, prove-before-scale; pause/resume; weekly token budget with critical/security bypass
+- `task` — isolated thin-vertical-slice unit: workspace (worktree/treehouse), TDD contract, adversarial review, merge-or-draft-PR on clear
+- `qa` — user-perspective verification: functional/friction/truthfulness/security dimensions, screenshot evidence, feeds director next tick; critical-failure and security findings trigger budget bypass
+- `feedback` — structured feedback injection: optional feature/version/resource/dimension hints, writes to repo's feedback sink, director batches and dispatches /qa at threshold
+
 **Env-setup installers** — write/install hooks instead of bundling runtime behavior
 - `install-anti-sycophancy` — writes Stop/UserPromptSubmit hook
 - `install-to-trash` — writes PreToolUse hook replacing `rm` with reversible trash-move
