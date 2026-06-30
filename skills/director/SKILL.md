@@ -49,23 +49,25 @@ budget:
 ```
 check budget → at weekly limit? halt and surface to user
   (bypass: qa.failed with dimension critical-failure or security → unlimited for incident)
-gap-analysis (reads .arc/gaps.md + event log)
+gap-analysis (reads .arc/director/gaps.md + event log)
   → open gaps? → delegate via task-delegation binding
   → no gaps, inflight/pending-QA? → sleep (event-driven)
   → no gaps, no inflight, no pending-QA? → idle; sleep until next feedback event
 watch event bus (event-bus binding)
   → task.completed  → validate evidence paths exist → dispatch /qa
   → task.completed, no evidence → reject, re-queue
-  → qa.passed       → close gap; rewrite .arc/gaps.md, .arc/inflight.md
+  → qa.passed       → close gap; rewrite .arc/director/gaps.md, inflight.md
   → qa.failed       → check bypass triggers; emit task.assigned (retry or new slice)
-  → task.failed     → rewrite .arc/blocked.md; re-gap or surface to user
+  → task.failed     → rewrite .arc/director/blocked.md; re-gap or surface to user
   → user.feedback   → append to feedback-sink; batch by (feature, version, resource)
                        when count ≥ threshold → dispatch /qa with batch context
 heartbeat (every 5 min in --afk mode)
-  → tasks open > TTL with no update → mark blocked; rewrite .arc/blocked.md
+  → tasks open > TTL with no update → mark blocked; rewrite .arc/director/blocked.md
+end of every tick
+  → regenerate .arc/local-dev-dash/main.html from director working files
 ```
 
-## Director states (reported each tick, written to .arc/gaps.md header)
+## Director states (reported each tick, written to .arc/director/gaps.md header)
 
 | State | Meaning |
 |---|---|
@@ -76,19 +78,30 @@ heartbeat (every 5 min in --afk mode)
 | **paused** | `.arc/director.paused` sentinel present; no ticks until `/director resume` |
 | **budget-exceeded** | Weekly token limit reached; halted until user adjusts or bypass triggered |
 
-## `.arc/` layout (director owns these files)
+## `.arc/` layout
 
 ```
 .arc/
-  events.jsonl        # IPC event bus (gitignored by default)
-  feedback.jsonl      # user feedback sink (git-tracked)
-  gaps.md             # current gap list + director state header (rewritten each tick)
-  inflight.md         # tasks assigned, not yet completed (rewritten each tick)
-  blocked.md          # stuck tasks with reason (rewritten each tick)
-  director.paused     # sentinel; presence = paused (deleted on resume)
-  specs/<slice>.md    # written by /task before TDD loop
-  qa/<ref>.md         # written by /qa after verification
+  events.jsonl              # IPC event bus (gitignored by default)
+  feedback.jsonl            # user feedback sink (git-tracked)
+  director/                 # director working files (git-tracked)
+    gaps.md                 # current gap list + state header (rewritten each tick)
+    inflight.md             # tasks assigned, not yet completed (rewritten each tick)
+    blocked.md              # stuck tasks with reason (rewritten each tick)
+    director.paused         # sentinel; presence = paused (deleted on resume)
+    specs/<slice>.md        # written by /task before TDD loop
+    qa/<ref>.md             # written by /qa after verification
+  local-dev-dash/           # webui contract (git-tracked; director generates each tick)
+    main.html               # entry point — renders mission, gaps, metrics, lanes
+    mission.md              # restated objective
+    metrics.svg             # KPI chart toward mission completion
+    lanes.json              # roadmap lanes (gaps → tasks → done)
 ```
+
+`local-dev-dash/main.html` is the dashboard contract. Webui iframes or links to it; the repo
+owns what's inside. Inspectable with a plain browser — no server required. Director regenerates
+it at the end of every tick from its working files. arc-webui sidebar chat annotates against
+`main.html` anchors and writes annotations to the `feedback-sink` binding — no ledger touch.
 
 ## Epistemic gates (prove-before-scale)
 

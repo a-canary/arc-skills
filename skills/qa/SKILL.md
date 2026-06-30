@@ -13,6 +13,8 @@ User-perspective verification agent. Tests what a user would see and feel, not w
 /qa "<target description>" [--ref evt_id] [--version v1.2.0] [--feedback-batch fb_01,fb_02]
 ```
 
+QA findings written to `.arc/director/qa/<ref>.md`. Screenshots to `.arc/director/qa/screenshots/`.
+
 - `--ref` — links QA result back to the `task.completed` event being verified
 - `--version` — pins the build/version under test (required for reproducibility)
 - `--feedback-batch` — when dispatched from batched user feedback, lists source `user.feedback` event IDs

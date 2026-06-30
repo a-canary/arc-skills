@@ -37,7 +37,7 @@ on-task-verified: <skill>    # custom action
 
 1. **Parse gap** — extract slice path and acceptance criteria from description
 2. **Create workspace** — via workspace binding; never touches main checkout
-3. **Write spec** — `.arc/specs/<slice>.md`: goal, acceptance criteria, edge cases, out-of-scope
+3. **Write spec** — `.arc/director/specs/<slice>.md`: goal, acceptance criteria, edge cases, out-of-scope
 4. **TDD loop** — write failing tests first, implement until green, no skipped tests
 5. **Adversarial review** — independent agent reads spec + diff; actively tries to find logic errors, missing edge cases, spec violations, security issues; produces a verdict
 6. **Act on verdict** — clear → `on-task-verified` binding action; blocked → fix and re-review; rejected → emit `task.failed`
