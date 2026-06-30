@@ -12,9 +12,15 @@ Framework-agnostic mission driver. Reads goals, identifies gaps, delegates work,
 ```
 /director [repo-root]        # infers repo root if omitted; prompts for binding confirmation
 /director --afk              # skip confirmation, run until idle
-/director pause              # write .arc/director.paused, halt after current tick
-/director resume             # clear .arc/director.paused, replay events since pause, resume loop
+/director pause              # write .arc/director/director.paused, halt after current tick
+/director resume             # clear .arc/director/director.paused, replay events since pause, resume loop
 ```
+
+This repo root is the **parent repo** — where director state lives (`.arc/director/`)
+and whose `AGENTS.md` declares the bindings for itself and any other repos it manages.
+One `/director` instance owns one parent repo; managing multiple repos means declaring
+them as delegation targets in this repo's `AGENTS.md`, not running multiple directors
+against a shared vault path.
 
 ## Boot sequence
 
@@ -24,6 +30,15 @@ Framework-agnostic mission driver. Reads goals, identifies gaps, delegates work,
 4. If not `--afk`: block for user confirmation or edit before proceeding
 5. Replay `.arc/events.jsonl` (full scan) to reconstruct open/inflight/pending-QA task set
 6. Enter the director loop
+
+## Idle backstop
+
+Director is event-driven, not polling — `idle` state sleeps until the next feedback
+event. A **12hr cron backstop** (installed via the harness's scheduler, e.g.
+`ScheduleWakeup`/cron) wakes a fresh tick regardless of events, so a missed or
+dropped event-bus notification can't silently stall the mission past half a day.
+The backstop tick runs the same loop as any other — if there's nothing to do, it
+goes straight back to idle.
 
 ## Bindings
 
@@ -47,8 +62,12 @@ budget:
 ## Director loop
 
 ```
-check budget → at weekly limit? halt and surface to user
-  (bypass: qa.failed with dimension critical-failure or security → unlimited for incident)
+check budget (binding may delegate to a repo's own governor, e.g. arc-agents'
+  bin/director-governor.ts — per-repo weekly threshold, never-fatal)
+  → at weekly limit? restrict to critical-only: only qa.failed with
+    dimension critical-failure or security may still dispatch; all other
+    gap-delegation pauses until budget resets or a human raises it
+  → bypass triggers run at full priority regardless of budget state
 gap-analysis (reads .arc/director/gaps.md + event log)
   → open gaps? → delegate via task-delegation binding
   → no gaps, inflight/pending-QA? → sleep (event-driven)
@@ -61,7 +80,7 @@ watch event bus (event-bus binding)
   → task.failed     → rewrite .arc/director/blocked.md; re-gap or surface to user
   → user.feedback   → append to feedback-sink; batch by (feature, version, resource)
                        when count ≥ threshold → dispatch /qa with batch context
-heartbeat (every 5 min in --afk mode)
+heartbeat (every 5 min in --afk mode; 12hr cron backstop wakes idle directors regardless)
   → tasks open > TTL with no update → mark blocked; rewrite .arc/director/blocked.md
 end of every tick
   → regenerate .arc/local-dev-dash/main.html from director working files
@@ -75,8 +94,8 @@ end of every tick
 | **waiting:inflight** | Tasks assigned; no results yet |
 | **waiting:qa** | Tasks completed; QA dispatched |
 | **idle** | No gaps, no inflight, no pending QA; sleeping until next feedback event |
-| **paused** | `.arc/director.paused` sentinel present; no ticks until `/director resume` |
-| **budget-exceeded** | Weekly token limit reached; halted until user adjusts or bypass triggered |
+| **paused** | `.arc/director/director.paused` sentinel present; no ticks until `/director resume` |
+| **budget-exceeded** | Weekly token limit reached; restricted to critical-failure/security dispatch only until budget resets or a human raises it |
 
 ## `.arc/` layout
 
