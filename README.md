@@ -68,17 +68,15 @@ Most skills are pure markdown — making them visible *is* the install. A few ne
 
 ## Install
 
-1. Drop the `skills/` directory (or any subset) into wherever your harness reads skills from. For Claude Code: `~/.claude/skills/` or a project's `.claude/skills/`.
-2. Skills with a `SETUP.md` have opt-in side-effects (hooks, cron). Run each skill interactively to trigger those side-effects — or skip the SETUP.md entirely and use the skill as pure markdown.
+```bash
+# global (all skills)
+npx skills add a-canary/arc-skills
 
-Skills without a `SETUP.md` need nothing beyond step 1.
+# project-scoped
+npx skills add a-canary/arc-skills --project
+```
 
-> **Setting up on a fresh or non-Linux host (Windows/macOS)?** Skills are pure
-> markdown, so step 1 is the whole install — verify it worked by confirming your
-> harness lists a skill from `skills/` (e.g. it appears in Claude Code's
-> `/<skill-name>` completion). If you run the doc-drift guard below, it's bash —
-> use git-bash or WSL on Windows. Hit an install snag whose fix belongs in these
-> steps? Open a PR so the next host doesn't hit it.
+Skills with a `SETUP.md` have opt-in side-effects (hooks, cron). Run each skill interactively to trigger those — or skip `SETUP.md` entirely and use the skill as pure markdown.
 
 ## Curation principles
 
