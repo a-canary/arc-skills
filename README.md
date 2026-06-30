@@ -96,13 +96,18 @@ match the live install, private infra refs violating curation principle #3).
 The self-heal loops (`/dream`, `/token-waste`, recency-gate) scope to the file
 they identified and have not caught this drift shape in practice.
 
-`bin/arc-skills-doc-drift.sh` is a grep test that fails on three known
-falsified-claim patterns in `skills/*/SKILL.md` and `skills/*/SETUP.md`:
+`bin/arc-skills-doc-drift.sh` is a grep test that fails on four known
+falsified-claim patterns in `skills/*/SKILL.md` and `skills/*/SETUP.md`,
+plus one on-disk shape check:
 
 1. `model: minimax` in skill markdown where the matching `agents/*.md` says
    `model: haiku` (the collector.md / SKILL.md wiring-claim drift).
 2. `claude --bg` in any SKILL.md / SETUP.md (the live install is `claude -p`).
 3. `home-lab-1` in any SKILL.md / SETUP.md (private infra; curation principle #3).
+4. Embedded git worktree under `.claude/worktrees/`. The `.gitignore` keeps new
+   ones untracked but does not catch one already on disk; a clean
+   `git status` should never list anything under that path. (Pattern source:
+   #17 / 4bdd21d — axi-coding-standard survived a squash-merge as 1.2M of dirt.)
 
 Run it locally before opening a PR:
 
