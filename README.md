@@ -4,6 +4,10 @@ Zero-dependency, curated skills for Claude Code and similar harnesses.
 
 Every skill here earns its slot: clear purpose, distinct value, no overlap. Lifted skills include a `SOURCE.md` with attribution to the original author.
 
+**Related repos:**
+- [a-canary/arc-agents](https://github.com/a-canary/arc-agents) — SQLite-ledger agent harness; one optional `task-delegation`/`event-bus` binding target for `/director`, never a hard dependency
+- [a-canary/webui](https://github.com/a-canary/webui) — developer portal/dashboard; reads `/director`'s `.arc/local-dev-dash/main.html` contract
+
 ## Layout
 
 ```
