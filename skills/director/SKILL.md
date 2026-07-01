@@ -88,7 +88,12 @@ How `/director` gets re-invoked to drive the AFK loop forward.
   state and resumes where it left off — no daemon, no external scheduler.
 - **`arc-agents`** — if installed, arc-agents' factory can schedule and execute
   the tick instead of a bare cron entry (its existing supervisor/reaper loop
-  substitutes for the self-installed cron). Optional, not required.
+  substitutes for the self-installed cron), and can dispatch through its own
+  CLI-agent failover group (`fast`/`smart` alias chains) instead of a single
+  fixed harness — useful when a repo wants cross-provider/cross-model retry on
+  a stuck tick rather than depending on one harness's own background-agent or
+  cron mechanism. Optional, not required — see arc-agents
+  [ADR-0012 addendum 2](https://github.com/a-canary/arc-agents/blob/main/docs/adr/0012-director-agent-axi.md).
 
 ## Director loop
 
