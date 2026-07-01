@@ -22,11 +22,74 @@ One `/director` instance owns one parent repo; managing multiple repos means dec
 them as delegation targets in this repo's `AGENTS.md`, not running multiple directors
 against a shared vault path.
 
+## Onboarding (first run)
+
+Triggers when the parent repo has no `AGENTS.md`, or has one with no `## Director
+bindings` section. Runs once, before the normal boot sequence, then falls through
+into it.
+
+1. Run the discovery script — deterministic, no guessing:
+   ```
+   bash skills/director/scripts/discover-setup.sh
+   ```
+   Prints `repo-root`, `agents-md-exists`, `director-bindings-exist`,
+   `git-remote`, `arc-agents-available`, `arc-agents-config`, `vault-path`,
+   `directors-registry`, `repo-already-registered` — each `<key>\t<value>`,
+   `-` for absent.
+
+2. Ask the user (one batched set of questions), pre-filling suggestions from
+   step 1's output — never silently apply a suggestion:
+   - **Which repo should this Director manage?** Default: `repo-root` from
+     discovery. If `repo-already-registered: yes`, warn and ask whether to
+     reconfigure the existing entry or pick a different repo.
+   - **Where should Director's memory/state live?** Default: `.arc/director`
+     (in-repo, git-tracked, zero deps). Offer `vault-path` from discovery as
+     an alternative only if it isn't `-`. A custom path is always allowed.
+   - **Weekly token cap for this repo?** Default: `500k`. Mention the
+     bypass list (`critical-failure`, `security`) always applies regardless
+     of cap.
+   - **Backstop tick cadence, in hours?** Default: `12`. Explain: director is
+     event-driven and sleeps between events; this is only the dead-man's-switch
+     interval, not a poll loop.
+   - **Each remaining binding** (`event-bus`, `task-delegation`, `workspace`,
+     `on-task-verified`, `todo-list`, `feedback-sink`, `planning-target`,
+     `scheduler.mode`): suggest the flat-file/harness-native default for each
+     (see [Bindings](#bindings) below), but if `arc-agents-available: yes`,
+     also surface the arc-agents-backed alternative as a selectable option
+     (e.g. `task-delegation: arc-agents`, `scheduler.mode: arc-agents`) rather
+     than silently preferring it — the habitual default always wins unless
+     the user opts in.
+
+3. Write `AGENTS.md` at the target repo root from
+   `skills/director/AGENTS.md.template`, filling in the answers. If
+   `AGENTS.md` already exists (just missing the bindings section), append the
+   `## Director bindings` block rather than overwriting the file.
+
+4. Register the repo in `~/.config/arc/directors.json` (create if absent):
+   ```jsonc
+   {
+     "directors": {
+       "<parent-repo-root>": {
+         "memory": ".arc/director",         // resolved path from step 2
+         "manages": ["<parent-repo-root>"], // this repo + any delegation targets added later
+         "registered_at": "<ISO date>"
+       }
+     }
+   }
+   ```
+   One entry per parent repo. `manages` starts as just the parent repo itself —
+   additional managed repos are appended here only when this repo's `AGENTS.md`
+   later declares them as delegation targets, not during onboarding.
+
+5. Fall through into the normal boot sequence below — onboarding does not
+   itself confirm or run a tick; boot step 4's confirmation gate still applies.
+
 ## Boot sequence
 
 1. Read (first found): `MISSION.md`, `AGENTS.md`, `CHOICES.md`, `objective.md`
 2. Restate objective — what done looks like, what the constraints are
-3. Read `AGENTS.md` bindings section; if missing or incomplete, prompt once and write answers in
+3. Read `AGENTS.md` bindings section; if missing or incomplete, run
+   [Onboarding](#onboarding-first-run) instead of prompting ad hoc
 4. If not `--afk`: block for user confirmation or edit before proceeding
 5. Replay `.arc/events.jsonl` (full scan) to reconstruct open/inflight/pending-QA task set
 6. Enter the director loop
@@ -34,11 +97,13 @@ against a shared vault path.
 ## Idle backstop
 
 Director is event-driven, not polling — `idle` state sleeps until the next feedback
-event. A **12hr cron backstop** (installed via the harness's scheduler, e.g.
-`ScheduleWakeup`/cron) wakes a fresh tick regardless of events, so a missed or
-dropped event-bus notification can't silently stall the mission past half a day.
-The backstop tick runs the same loop as any other — if there's nothing to do, it
-goes straight back to idle.
+event. A **cron backstop** (`scheduler.backstop-hours` in `AGENTS.md`, default 12hr;
+installed via the harness's scheduler, e.g. `ScheduleWakeup`/cron) wakes a fresh
+tick regardless of events, so a missed or dropped event-bus notification can't
+silently stall the mission past that interval. Lower values catch stalls sooner
+at the cost of a higher token floor (more idle-tick wakeups); higher values are
+cheaper but widen the worst-case silent-stall window. The backstop tick runs the
+same loop as any other — if there's nothing to do, it goes straight back to idle.
 
 ## Bindings
 
@@ -53,7 +118,9 @@ on-task-verified: merge       # merge | draft-pr | <skill-name>
 todo-list: native             # native | arc-agents | <skill-name>
 feedback-sink: jsonl          # jsonl | <api-endpoint> | <skill-name>
 planning-target: prd-file     # prd-file | arc-agents-ledger | kanban | <skill-name>
-scheduler: cron               # cron (self-installed 12hr backstop) | arc-agents | <skill-name>
+scheduler:
+  mode: cron                  # cron (self-installed backstop) | arc-agents | <skill-name>
+  backstop-hours: 12          # idle-backstop tick cadence; lower = more frequent wake, higher token floor
 budget:
   weekly: 500k                # tokens/week per repo; resets Monday 00:00 UTC
   bypass:
@@ -83,7 +150,8 @@ How director plans the *next* unit of work, independent of how `/task` executes 
 How `/director` gets re-invoked to drive the AFK loop forward.
 
 - **`cron`** (default) — `/director` is self-sufficient: on first `--afk` boot it
-  installs its own feedback watcher and a 12hr cron entry that re-runs
+  installs its own feedback watcher and a cron entry, cadence set by
+  `scheduler.backstop-hours` (default 12hr), that re-runs
   `<harness> /director <repo-root> --afk`. Each invocation reads `.arc/director/`
   state and resumes where it left off — no daemon, no external scheduler.
 - **`arc-agents`** — if installed, arc-agents' factory can schedule and execute
@@ -117,7 +185,7 @@ watch event bus (event-bus binding)
   → task.failed     → rewrite .arc/director/blocked.md; re-gap or surface to user
   → user.feedback   → append to feedback-sink; batch by (feature, version, resource)
                        when count ≥ threshold → dispatch /qa with batch context
-heartbeat (every 5 min in --afk mode; 12hr cron backstop wakes idle directors regardless)
+heartbeat (every 5 min in --afk mode; scheduler.backstop-hours cron wakes idle directors regardless)
   → tasks open > TTL with no update → mark blocked; rewrite .arc/director/blocked.md
 end of every tick
   → regenerate .arc/local-dev-dash/main.html from director working files
