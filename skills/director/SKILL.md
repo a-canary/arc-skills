@@ -53,7 +53,7 @@ into it.
      interval, not a poll loop.
    - **Each remaining binding** (`event-bus`, `task-delegation`, `workspace`,
      `on-task-verified`, `todo-list`, `feedback-sink`, `planning-target`,
-     `scheduler.mode`): suggest the flat-file/harness-native default for each
+     `model`, `scheduler.mode`): suggest the flat-file/harness-native default for each
      (see [Bindings](#bindings) below), but if `arc-agents-available: yes`,
      also surface the arc-agents-backed alternative as a selectable option
      (e.g. `task-delegation: arc-agents`, `scheduler.mode: arc-agents`) rather
@@ -118,6 +118,13 @@ on-task-verified: merge       # merge | draft-pr | <skill-name>
 todo-list: native             # native | arc-agents | <skill-name>
 feedback-sink: jsonl          # jsonl | <api-endpoint> | <skill-name>
 planning-target: prd-file     # prd-file | arc-agents-ledger | kanban | <skill-name>
+model:
+  director: fable > opus > sonnet  # director's own self-spawned --afk tick; first tier available wins
+  director-effort: max
+  worker: sonnet               # every task-delegation dispatch
+  worker-effort: max
+  env:
+    DISABLE_INTERLEAVED_THINKING: "true"
 scheduler:
   mode: cron                  # cron (self-installed backstop) | arc-agents | <skill-name>
   backstop-hours: 12          # idle-backstop tick cadence; lower = more frequent wake, higher token floor
@@ -145,6 +152,34 @@ How director plans the *next* unit of work, independent of how `/task` executes 
   already covers standalone.
 - **`kanban`** / `<skill-name>` — any other planning surface a binding wires up.
 
+### `model`
+
+What tier and reasoning effort each self-spawned invocation runs at, and a shared
+env var applied to both. Only governs invocations `/director` spawns itself — a
+foreground `/director` run started interactively inherits whatever model the
+user's session is already on; this binding does not override that.
+
+- **`director`** — priority-ordered fallback list (default `fable > opus > sonnet`)
+  for the `--afk` cron tick: use the first tier the harness actually has.
+- **`worker`** — single tier (default `sonnet`) for every `task-delegation`
+  dispatch (`/task`, its adversarial-review step, `/qa`, and any other entry in
+  `AGENTS.md`'s `## Worker agents` table).
+- **`director-effort` / `worker-effort`** — reasoning effort per tier (default
+  `max` for both).
+- **`env`** — env vars exported before every self-spawned invocation, e.g.
+  `DISABLE_INTERLEAVED_THINKING: "true"`.
+
+Resolved into the actual command depending on `scheduler.mode` /
+`task-delegation`:
+- `native` harness tool (Agent/Task) — pass `model` (and effort, if the harness
+  tool exposes it) as call params; export `env` in the spawning process.
+- `cron` self-install / worker CLI commands — prepend `env` vars, then
+  `--model <tier> --effort <level>`, e.g.
+  `DISABLE_INTERLEAVED_THINKING=true claude --model sonnet --effort max -p "..."`.
+- `arc-agents` backend — map `director`/`worker` onto its `smart_alias`/
+  `fast_alias` exec-CLI aliases (see `select-models` skill) instead of
+  hardcoding a `claude --model` string; `env` still applies at the shell level.
+
 ### `scheduler`
 
 How `/director` gets re-invoked to drive the AFK loop forward.
@@ -152,7 +187,10 @@ How `/director` gets re-invoked to drive the AFK loop forward.
 - **`cron`** (default) — `/director` is self-sufficient: on first `--afk` boot it
   installs its own feedback watcher and a cron entry, cadence set by
   `scheduler.backstop-hours` (default 12hr), that re-runs
-  `<harness> /director <repo-root> --afk`. Each invocation reads `.arc/director/`
+  `<harness> /director <repo-root> --afk` using the `model.director` binding
+  above, e.g. `DISABLE_INTERLEAVED_THINKING=true <harness> --model fable --effort max
+  /director <repo-root> --afk` (falling back to `opus`, then `sonnet`, per the
+  binding's priority list). Each invocation reads `.arc/director/`
   state and resumes where it left off — no daemon, no external scheduler.
 - **`arc-agents`** — if installed, arc-agents' factory can schedule and execute
   the tick instead of a bare cron entry (its existing supervisor/reaper loop
