@@ -11,15 +11,15 @@ USER.md is the personal overlay and overrides it on any conflict.
 
 Be extremely concise. Sacrifice grammar for concision.
 
-- **Prove before scaling.** Demonstrate value on one concrete case before parallelizing, scheduling, fanning out, or productionizing. Single manual run beats scheduled fleet. Asked to "scale X" — first verify X works and matters; propose a minimal validation if proof is missing.
+- **Prove before scaling.** Value on one concrete case before parallelizing/scheduling/fanning out/productionizing. Single manual run beats scheduled fleet. Asked to "scale X" — first verify X works and matters; propose minimal validation if proof missing.
 
-- **Never re-Read a file already read this session** (full or by range) unless you edited it since (Edit/Write return the new state — no verify re-read) or have concrete reason it changed on disk. During an edit/test/fix loop, edit from the in-context copy; re-inspect only a genuinely new range. Top token-waste pattern: source files re-read 7–19×/session.
+- **Never re-Read a file already read this session** unless you edited it since (Edit/Write return new state — no verify re-read) or have concrete reason it changed on disk. In an edit/test/fix loop, edit from the in-context copy; re-inspect only a genuinely new range. Top token-waste pattern: files re-read 7–19×/session.
 
 - **Never Read a `tool-results/<id>.txt` file.** That IS the tool result, already verbatim in context. To re-find a value, scroll back or `grep -n` the one line. Same for re-opening a `~/.claude/waste/*.json` or `/tmp/*-review-*.json` already loaded this session.
 
-- **Grep before reading a large unseen file** (>~300 lines). Need one symbol → `grep -n` then Read with offset/limit, or read the header only. Reserve full reads for files you need end-to-end. Same for Bash: redirect large output to a file (`… > /tmp/out 2>&1`) and grep/tail it ranged — never pipe hundreds of log lines into context for one number.
+- **Grep before reading a large unseen file** (>~300 lines). One symbol → `grep -n` then Read with offset/limit, or header only. Reserve full reads for files needed end-to-end. Same for Bash: redirect large output to a file (`… > /tmp/out 2>&1`) and grep/tail it ranged — never pipe hundreds of log lines in for one number.
 
-- **Measure before you change (TDD baseline + delta).** Don't make a change until you know how to measure it. Before touching code, record a baseline — the current value of whatever the change is supposed to move (a failing test, a benchmark number, an error count, a latency, a metric) — then make the change and record the delta against that baseline. No baseline means no way to tell whether the change helped, hurt, or did nothing; "looks better" is not a measurement. Perf work captures the before-timing, a bug fix captures the reproducing failure first, a refactor captures the green suite it must keep green. State the baseline and the delta explicitly when reporting the change.
+- **Measure before you change (TDD baseline + delta).** Record a baseline first — the current value of whatever the change should move (failing test, benchmark, error count, latency) — then make the change and record the delta. No baseline = no way to tell if it helped; "looks better" is not a measurement. Perf captures before-timing, a bug fix the reproducing failure, a refactor the green suite it must keep green. State baseline + delta when reporting.
 
 - **Self-healing must recency-gate.** A journal/tally entry records when a problem was *observed*, not whether it's still live. Before fixing, confirm the live file still has the shape that caused the issue (`git log` timestamp is a hint; live-file shape is authoritative). Never re-fix what's already fixed.
 
@@ -43,7 +43,7 @@ Be extremely concise. Sacrifice grammar for concision.
 
 - **Red gate = one obligation.** Fix pre-existing failures first; never footnote as out-of-scope. Exception: a later phase of the *same* refactor will green/delete the test → commit but hold push until all green together.
 
-- **Merge own PRs when terminally green.** Owned repos (ADMIN): no human PR — merge once (1) an independent reviewer agent (different session, hunts blockers) clears AND (2) local merge-gate green. Author never approves own work. Non-owned public: draft PR only, operator submits (see USER.md). PR-per-feature shape holds (branch off base, never push straight to main). Evidence must be terminal: state=OPEN, MERGEABLE, CLEAN, all checks COMPLETED/SUCCESS (re-poll at merge time).
+- **Merge own PRs when terminally green.** Owned repos (ADMIN): no human PR — merge once (1) an independent reviewer agent (different session, hunts blockers) clears AND (2) local merge-gate green. Author never approves own work. Non-owned public: draft PR only, operator submits (see USER.md). PR-per-feature (branch off base, never push straight to main). Evidence terminal: state=OPEN, MERGEABLE, CLEAN, all checks COMPLETED/SUCCESS (re-poll at merge time).
 
 - **UI copy: casual + terse, no visible timestamps.** Short verbs (`Pick`, `Send`), terse empty states (`nothing pending`). Keep timestamps in the data layer for sort/staleness; never paint them on the surface.
 

@@ -1,6 +1,6 @@
 ---
 name: select-models
-description: One-time setup that discovers reachable model providers (env vars + pass store), asks the user to pick a fast and a smart model, validates each by actually invoking the CLI, then registers the two picks inside the arc-agents config (exec_cli_alias + fast_alias/smart_alias). Use when first installing arc-skills, when arc-agents/config.json has no fast_alias/smart_alias, or when the user wants to change which fast/smart models the arc tooling uses. arc-skills is the base layer; arc-agents, arc-webui, pipeliner and other arc-* packages read the same arc-agents/config.json.
+description: One-time setup to pick and register the fast + smart models arc tooling uses. Use when first installing arc-skills, when arc-agents/config.json lacks fast_alias/smart_alias, or to change which fast/smart models the arc tools use.
 ---
 
 # select-models
