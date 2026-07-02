@@ -1,6 +1,6 @@
 ---
 name: hard-merge
-description: Adversarial pre-merge review gate for merge-on-clear — cheap mechanical checks first (green tests, lint on diff files, CI on head SHA, merge state CLEAN), then shape (git diff line-by-line, codemap diff, nitpick out-of-scope changes and unneeded files), then adversarial reasoning (name assumptions, what-would-make-this-wrong, top risks, principles/rules violated). Use before merging any PR you own, when acting as an independent reviewer, when the user says "hard-merge", "merge-on-clear", "adversarial review before merge", or "review this before I merge".
+description: Adversarial pre-merge review gate for merge-on-clear — the author drives it and dispatches a freshly SPAWNED reviewer agent for independence (never reviews own work inline). Cheap mechanical checks first (green tests, lint on diff files, CI on head SHA, merge state CLEAN), then shape (git diff line-by-line, codemap diff, nitpick out-of-scope changes and unneeded files), then adversarial reasoning (name assumptions, what-would-make-this-wrong, top risks, principles/rules violated), then a blast-radius gate that escalates to /counsel when the change is not small. Use before merging any PR you own, when the user says "hard-merge", "merge-on-clear", "adversarial review before merge", or "review this before I merge".
 ---
 
 # hard-merge
@@ -9,9 +9,11 @@ Adversarial review before a merge-on-clear. **Assume the diff is wrong; try to p
 
 ## Frame
 
-Two roles, never the same agent. **Author** produced the diff. **Reviewer** (you) is a different session that never saw the author's reasoning, prompted to hunt blockers — not bless work. Author never approves own work; self-judge proves consistency, not correctness. Merge only when an independent reviewer clears AND the local merge-gate is green. Author/subagent reports are UNTRUSTED — verify every checkable claim against source.
+Two roles, never the same agent. **Author** produced the diff and drives this gate. **Reviewer** is a **freshly spawned agent** (Agent/Task tool) that never saw the author's reasoning — the author does NOT play reviewer inline. Independence comes from a separate context, not from the author "putting on a reviewer hat." Author never approves own work; self-judge proves consistency, not correctness. Merge only when the spawned reviewer clears AND the local merge-gate is green. Reviewer/subagent reports are UNTRUSTED — the author verifies every checkable claim against source before acting on a CLEAR.
 
-Default posture: *this diff is wrong until I fail to break it.*
+Dispatch the reviewer with: the PR/diff to review, "hunt for blockers, do not bless — this diff is wrong until you fail to break it", the §1-4 gate below, and "return a CLEAR/BLOCK verdict + findings ranked severe-first, under ~400 tokens, cite `file:line`, paste nothing." Confirm the PR head SHA hasn't drifted since dispatch before trusting the verdict.
+
+Default posture: *this diff is wrong until the spawned reviewer fails to break it.*
 
 ## The gate — hard-fail short-circuits, cheapest first
 
@@ -33,11 +35,15 @@ Default posture: *this diff is wrong until I fail to break it.*
 - [ ] **Top risks**, ranked: data loss > silent corruption > crash > wrong output > perf. Worst thing this diff does if my worst assumption holds?
 - [ ] **Principles/rules violated** — vs project doctrine (CLAUDE.md, ADRs, coding-standards), not vibes. Red gate footnoted out-of-scope? Trust boundary with validation stripped? New dependency where a few lines would do? Abstraction with one implementation?
 
-### 4. Verdict
+### 4. Blast radius -> escalate to /counsel
+- [ ] Estimate blast radius. **Small** = reversible, contained, low-stakes: a single skill/doc/config file, a leaf function with tests, an additive change behind a flag. **Non-small** = anything that can hurt broadly or is hard to undo: schema/migration, auth/security/trust boundary, money path, deploy/infra/CI, a shared lib or interface many callers depend on, data deletion/backfill, public API, or a diff touching many modules at once.
+- [ ] **Non-small blast radius -> STOP and run `/counsel`** before merging. One spawned reviewer is not enough independence for a change that can go broadly wrong; get the 5-expert adversarial panel, then execute its verdict. Small radius -> the single spawned reviewer suffices; proceed.
+
+### 5. Verdict
 - [ ] Every checkable claim in the author's PR text verified against source — grep the constant, don't trust prose.
 - [ ] Findings ranked most-severe first. Blocker -> back to author, not merged with a footnote (red gate = one obligation).
-- [ ] Clear ONLY when nothing survives verification. Reviewer clears + merges in one act. Reversible path preferred; export-to-trash before any delete.
+- [ ] Merge ONLY when the spawned reviewer returns CLEAR, its checkable claims verify against source, and (for non-small radius) `/counsel` has cleared it too. The author merges after verifying the verdict — the reviewer advises, it does not merge. Reversible path preferred; export-to-trash before any delete.
 
 ## Why this order
 
-Broken build makes reasoning moot — don't spend tokens reasoning about a diff that doesn't typecheck. Assumptions before risks: can't rank what you haven't named. Verify-against-source last: most expensive, only matters once the diff looks plausible.
+Broken build makes reasoning moot — don't spend tokens reasoning about a diff that doesn't typecheck. Assumptions before risks: can't rank what you haven't named. Blast-radius gate sits after reasoning, before verdict: you can only judge how far a change can blow once you've named its risks — and a non-small one needs `/counsel`, not a lone reviewer, before the verdict is even reachable. Verify-against-source last: most expensive, only matters once the diff looks plausible. The reviewer is spawned, not the author in a reviewer hat, because independence is a property of context, not intent — the same head can't blind itself to its own reasoning.
