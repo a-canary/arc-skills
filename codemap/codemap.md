@@ -1,10 +1,10 @@
 ---
-generated: 2026-06-24T22:10:45.324Z @5b9e6e7
+generated: 2026-07-02T04:11:53.778Z @41cb1e0
 project: arc-skills
 ecosystems: [unknown]
 source_files: 8
-test_files: 2
-graph_source: madge
+test_files: 0
+graph_source: regex (approximate)
 graph_analyzed: false
 dead_count: null
 untested_count: null
@@ -19,7 +19,7 @@ tool: codemap
 ## Module shapes (LOC by module)
 _Modules = directories (no import graph to cluster)._
 
-- `skills` — 3068 LOC
+- `skills` — 2977 LOC
 
 ## Seams (cross-module import edges)
 
@@ -40,32 +40,28 @@ _none detected_
 
 ## Top external deps
 
-- `sys` — 7 imports
-- `json` — 6 imports
-- `pathlib` — 6 imports
 - `argparse` — 5 imports
+- `sys` — 5 imports
+- `json` — 4 imports
+- `pathlib` — 4 imports
 - `datetime` — 3 imports
 - `re` — 3 imports
-- `subprocess` — 3 imports
 - `node:child_process` — 2 imports
 - `node:fs` — 2 imports
 - `node:path` — 2 imports
 - `collections` — 2 imports
-- `tempfile` — 2 imports
-- `pytest` — 2 imports
+- `fs` — 2 imports
 - `os` — 1 imports
+- `subprocess` — 1 imports
 - `node:os` — 1 imports
 - `node:url` — 1 imports
 - `pkg` — 1 imports
-- `fs` — 1 imports
 - `typing` — 1 imports
 - `extract` — 1 imports
-- `scripts` — 1 imports
-- `contextlib` — 1 imports
-- `io` — 1 imports
+- `readline` — 1 imports
 - `hashlib` — 1 imports
 
-## Docs with frontmatter (56)
+## Docs with frontmatter (61)
 
 - `skills/adaptation-review/SKILL.md` — name=adaptation-review, description=Review the last N days (default 10) of s, allowed-tools=Read, Write, Glob, Task, Bash
 - `skills/adaptation-review/agents/regression-reviewer.md` — name=regression-reviewer, description=Review the last N days of dream/token-wa, tools=Read, Glob, Grep, Bash, model=opus
@@ -83,11 +79,13 @@ _none detected_
 - `skills/dart/SKILL.md` — name=dart, description=Frame the system before you act. Run a D
 - `skills/decompose-skill/SKILL.md` — name=decompose-skill, description=Split a SKILL.md over 100 lines into foc
 - `skills/diagnose/SKILL.md` — name=diagnose, description=Disciplined diagnosis loop for hard bugs
+- `skills/director/SKILL.md` — name=director, description=AFK-capable mission driver that reads MI
 - `skills/dream-insights/SKILL.md` — name=dream-insights, description=Show the latest dream journal and adapta, allowed-tools=Read, Glob, Bash
 - `skills/dream-status/SKILL.md` — name=dream-status, description=Show dream processing state and today's , allowed-tools=Read, Glob, Bash
 - `skills/dream/SKILL.md` — name=dream, description=Mine conversation history for Claude's o, allowed-tools=Read, Write, Glob, Task, Bash
 - `skills/dream/agents/adapter.md` — name=adapter, description=Read the daily journal and make one syst, tools=Read, Glob, Grep, Edit, Write, Bash, model=opus
 - `skills/dream/agents/collector.md` — name=collector, description=Page through a conversation session and , tools=Bash, Read, Glob, Task, model=haiku
+- `skills/feedback/SKILL.md` — name=feedback, description=Injects structured user feedback into a 
 - `skills/fresh-deploy-friction/SKILL.md` — name=fresh-deploy-friction, description=Spin up a throwaway fresh-user container
 - `skills/git-guardrails-claude-code/SKILL.md` — name=git-guardrails-claude-code, description=Set up Claude Code hooks to block danger
 - `skills/grill-me/SKILL.md` — name=grill-me, description=Interview the user relentlessly about a 
@@ -97,6 +95,7 @@ _none detected_
 - `skills/install-anti-sycophancy/SKILL.md` — name=install-anti-sycophancy, description=Install a UserPromptSubmit + Stop hook p
 - `skills/install-behavioral-rules/SKILL.md` — name=install-behavioral-rules, description=Symlink every harness's user-level confi
 - `skills/install-to-trash/SKILL.md` — name=install-to-trash, description=Install a PreToolUse hook that intercept
+- `skills/jsonl-db/SKILL.md` — name=jsonl-db, description=Append, query, update, and GC a .jsonl f
 - `skills/karpathy-guidelines/SKILL.md` — name=karpathy-guidelines, description=Behavioral guidelines to reduce common L, license=MIT
 - `skills/ke-memory/SKILL.md` — name=ke-memory, description=Use the knowledge engine for durable cro
 - `skills/ke/SKILL.md` — name=ke, description=Knowledge Engine — one CLI for semantic 
@@ -104,6 +103,3 @@ _none detected_
 - `skills/pipeliner/SKILL.md` — name=pipeliner, description=Build/run pipeliner modules (npm pi-pipe
 - `skills/profiling-ladder/SKILL.md` — name=profiling-ladder, description=Pick the right optimization rung. Move d
 - `skills/prototype/SKILL.md` — name=prototype, description=Build a throwaway prototype to flesh out
-- `skills/scaffold-exercises/SKILL.md` — name=scaffold-exercises, description=Create exercise directory structures wit
-- `skills/schedule-hygiene/SKILL.md` — name=schedule-hygiene, description=Write cron / systemd-timer entries that 
-- `skills/select-models/SKILL.md` — name=select-models, description=One-time setup that discovers reachable 
