@@ -16,7 +16,7 @@ Usage:
 
     --offset N      message index to start from (0-based, default 0)
     --window M      max number of cleaned messages to emit (default 80)
-    --max-bytes B   soft cap on emitted message-body bytes (default 40000);
+    --max-bytes B   soft cap on emitted message-body bytes (default 20000);
                     the window stops early once exceeded so a few fat
                     tool_results can't blow the consumer's context budget.
 
