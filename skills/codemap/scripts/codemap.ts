@@ -736,10 +736,15 @@ function renderMd(g: Graph, sig: ReturnType<typeof computeSignals>, ts: string):
   const moduleLoc = new Map<string, number>();
   for (const f of Object.values(g.files)) if (f.kind === "source") moduleLoc.set(moduleOf(f.rel), (moduleLoc.get(moduleOf(f.rel)) || 0) + f.loc);
 
+  // ponytail: resolve real repo name from git remote, not path.basename — worker
+  // worktrees suffix the dirname (`arc-skills-000134-…`) and would leak into snapshots.
+  const remoteUrl = sh("git", ["config", "--get", "remote.origin.url"]);
+  const projectName = remoteUrl ? path.basename(remoteUrl.trim().replace(/\.git$/, "")) : path.basename(g.root);
+
   const L: string[] = [];
   L.push("---");
   L.push(`generated: ${ts}`);
-  L.push(`project: ${path.basename(g.root)}`);
+  L.push(`project: ${projectName}`);
   L.push(`ecosystems: [${g.ecosystems.join(", ")}]`);
   L.push(`source_files: ${sig.counts.source}`);
   L.push(`test_files: ${sig.counts.test}`);
@@ -751,7 +756,7 @@ function renderMd(g: Graph, sig: ReturnType<typeof computeSignals>, ts: string):
   L.push("tool: codemap");
   L.push("---");
   L.push("");
-  L.push(`# Codemap — ${path.basename(g.root)}`);
+  L.push(`# Codemap — ${projectName}`);
   L.push("");
   L.push("> Deterministic static snapshot (no LLM). Re-run after changes and diff `codemap.json` to see what moved.");
   L.push("");
