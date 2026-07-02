@@ -45,16 +45,19 @@ Most skills are pure markdown — making them visible *is* the install. A few ne
 - `handoff`, `write-a-skill`
 - `improve-codebase-architecture`, `counsel`
 - `git-guardrails-claude-code`, `setup-pre-commit`, `scaffold-exercises`, `migrate-to-shoehorn`
+- `coding-standards` — default language-routing, strictness, diagnostics, and TDD rules for the arc software factory (explicit user/project instructions override)
 
 **Mission-driven orchestration** — autonomous loop from goals to verified outcomes
 - `director` — AFK mission driver: reads MISSION.md/AGENTS.md, gap-analysis loop, delegates work, gates on evidence, prove-before-scale; pause/resume; weekly token budget with critical/security bypass
 - `task` — isolated thin-vertical-slice unit: workspace (worktree/treehouse), TDD contract, adversarial review, merge-or-draft-PR on clear
 - `qa` — user-perspective verification: functional/friction/truthfulness/security dimensions, screenshot evidence, feeds director next tick; critical-failure and security findings trigger budget bypass
 - `feedback` — structured feedback injection: optional feature/version/resource/dimension hints, writes to repo's feedback sink, director batches and dispatches /qa at threshold
+- `pipeliner` — npm `pi-pipeliner` runner (`defineModule`/`defineChain` + Thompson sampling); the cron runner `director` and `schedule-hygiene` build on
 
 **Env-setup installers** — write/install hooks instead of bundling runtime behavior
 - `install-anti-sycophancy` — writes Stop/UserPromptSubmit hook
 - `install-to-trash` — writes PreToolUse hook replacing `rm` with reversible trash-move
+- `install-behavioral-rules` — symlinks every harness's user-level config (`CLAUDE.md`, `pi.md`, …) to the canonical `AGENTS.md`; idempotent
 - `schedule-hygiene` — writes cron/systemd-timer entries that fire hygiene skills via `claude -p`
 
 **Pre-PR**
@@ -71,10 +74,21 @@ Most skills are pure markdown — making them visible *is* the install. A few ne
 - `dream` — mine conversation history for failure modes, make one system improvement
 - `dream-insights` — show latest dream journal without re-running
 - `dream-status` — show dream processing state and today's journal entry counts
+- `adaptation-review` — read-only nightly audit of recent `/dream` + `/token-waste` self-healing changes; flags silent reverts, thrashing, and AGENTS.md rule-bloat
+
+**Knowledge substrate** — durable memory + git-tracked data layers shared across projects
+- `ke` — one CLI for semantic recall, gap-driven research (web→ingest), and persisting learnings to a Qdrant-indexed vault at `~/vault/ke/`
+- `ke-memory` — the recall-before/persist-after motion the `ke` CLI exists for, framed as cross-project durable memory
+- `jsonl-db` — git-tracked event bus / task store (one JSON object per line, append-only, GC); not for transactional workloads — use SQLite there
+
+**Local LLM runtime**
+- `cli-proxy` — OpenAI-compatible endpoint at `http://127.0.0.1:7890/v1` routing to claude/gemini/qwen/kilo/opencode CLIs + minimax API; use whenever code or a pipeline needs an LLM API endpoint
 
 **Domain workflows** — narrow vertical skills for specific external systems
 - `vast-cli` — drive the `vastai` CLI correctly: search/create/poll/ssh/stop, with the proxy-unset + PATH-shim + ssh-rotation traps that silently no-op the CLI
+- `vast-compute` — read-before-reserving rules for shared vast.ai GPU boxes: mandatory local smoke test, cooperative lease, keep-warm batching
 - `vast-instance` — on-box best practices for vast.ai GPU jobs: bandwidth-gate, `*-runtime` images, the verified LFM2.5 pin stack, HF-token guard, stage-verify
+- `fresh-deploy-friction` — simulate a brand-new user in a throwaway container, drive a minimal task, convert install/operation snags into committed fixes + PRs in the source repo
 
 ## Install
 
