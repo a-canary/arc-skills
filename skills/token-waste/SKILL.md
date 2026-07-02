@@ -1,6 +1,6 @@
 ---
 name: token-waste
-description: Analyze the day's conversations for token waste — context loaded but never used, or loaded badly — then make one system change that prevents the worst recurring pattern. Phase 1 detects whole-file Reads that should have been Grep + targeted read, re-reads of files already in context, Bash output dumped to context instead of piped to a file, large results never referenced, content loaded twice (repeated), content that was obvious/filler or confusing/contradictory at the size it was loaded, and — over the re-injected instruction context (skill bodies, the catalog, memory, system-reminders) — instructions that are repeated (a skill body re-pasted every turn), extreme-obvious, or confusing/contradictory; Phase 2 adapts one agent/skill/tool/rule/doc/instruction-body to stop the highest-impact pattern (one change per day, like /dream). Companion to /dream (which targets agent effectiveness); this one targets context-window economy. Use when the user wants to find token waste, audit context usage, identify confusing/obvious/repeated instructions, or asks to "annotate/tally what was loaded but not used".
+description: Audit the day's sessions for token waste (context loaded but unused or loaded badly) and make one surgical system change to stop the worst recurring pattern. Companion to /dream — /dream fixes agent effectiveness, this fixes context-window economy. Use when the user wants to find token waste, audit context usage, identify confusing/obvious/repeated instructions, or tally what was loaded but not used.
 allowed-tools: Read, Write, Glob, Task, Bash
 ---
 
@@ -98,21 +98,25 @@ echo "day=$DAY out=$OUT"
 ### Step 2 — Find that day's sessions
 
 Sessions touched on the target day across every project dir (bounded both ends so
-a back-dated run doesn't sweep in everything since):
+a back-dated run doesn't sweep in everything since). **Write the list to a file and
+report only the count** — never print the path list to context (that is the day's own
+`bash_dump` waste pattern; Step 3 iterates the file, not stdout):
 
 ```bash
 find ~/.claude/projects -name '*.jsonl' \
-  -newermt "$DAYDASH 00:00:00" ! -newermt "$NEXT 00:00:00" -print
+  -newermt "$DAYDASH 00:00:00" ! -newermt "$NEXT 00:00:00" -print > "$WORK/sessions.txt"
+wc -l < "$WORK/sessions.txt"   # count only; the path list lives in $WORK/sessions.txt
 ```
 
-If none, write an empty result and stop:
+If the count is 0, write an empty result and stop:
 ```json
 {"date":"<DAY>","sessions_analyzed":0,"total_candidate_wasted_tokens":0,"by_pattern":{},"examples":[]}
 ```
 
 ### Step 3 — Detect candidates (deterministic, parallel)
 
-For EACH session file, run the detector to its scratch JSON. Run up to 5 in parallel:
+For EACH session file listed in `$WORK/sessions.txt`, run the detector to its scratch
+JSON — loop over the file; do not re-list the paths to context. Run up to 5 in parallel:
 
 ```bash
 python "$DETECT" "<session.jsonl>" --project "<project>" \

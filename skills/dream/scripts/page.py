@@ -16,7 +16,7 @@ Usage:
 
     --offset N      message index to start from (0-based, default 0)
     --window M      max number of cleaned messages to emit (default 80)
-    --max-bytes B   soft cap on emitted message-body bytes (default 40000);
+    --max-bytes B   soft cap on emitted message-body bytes (default 20000);
                     the window stops early once exceeded so a few fat
                     tool_results can't blow the consumer's context budget.
 
@@ -36,8 +36,15 @@ from extract import parse_jsonl, yaml_value  # noqa: E402
 extract.TAGGING_ENABLED = False  # windowing replaces COMPRESS tagging
 
 DEFAULT_WINDOW = 80
-DEFAULT_MAX_BYTES = 40000
-TRUNCATE_TAIL = 2000  # keep this many chars when truncating one oversized field
+# Each page is dumped straight into the collector's context, so this byte cap IS
+# the per-page token cost (~1 token / 4 bytes). 40000 bytes ~= 7k tokens/page was
+# the single biggest session-review bleed (21 dumps ~= 99k tokens, tally
+# 20260629): windows get skimmed for one failure marker, then discarded. Halve
+# the cap so the worst-case dump is ~3.5k tokens; the window still pages forward,
+# it just emits fewer fat tool_results per page. Override with --max-bytes when a
+# session genuinely needs wider context.
+DEFAULT_MAX_BYTES = 20000
+TRUNCATE_TAIL = 1200  # keep this many chars when truncating one oversized field
 
 
 def _block(key: str, text: str, indent: str = "    ", max_chars: int = 0) -> list[str]:
