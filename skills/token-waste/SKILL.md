@@ -98,12 +98,15 @@ echo "day=$DAY out=$OUT"
 ### Step 2 — Find that day's sessions
 
 Sessions touched on the target day across every project dir (bounded both ends so
-a back-dated run doesn't sweep in everything since). **Write the list to a file and
-report only the count** — never print the path list to context (that is the day's own
-`bash_dump` waste pattern; Step 3 iterates the file, not stdout):
+a back-dated run doesn't sweep in everything since). Search **both** source roots —
+interactive Claude Code (`~/.claude/projects`) and the headless `pi` agent fleet
+(`~/.pi/agent/sessions`); the detector normalizes pi's tool schema to canonical, so
+it scores both identically. **Write the list to a file and report only the count** —
+never print the path list to context (that is the day's own `bash_dump` waste
+pattern; Step 3 iterates the file, not stdout):
 
 ```bash
-find ~/.claude/projects -name '*.jsonl' \
+find ~/.claude/projects ~/.pi/agent/sessions -name '*.jsonl' \
   -newermt "$DAYDASH 00:00:00" ! -newermt "$NEXT 00:00:00" -print > "$WORK/sessions.txt"
 wc -l < "$WORK/sessions.txt"   # count only; the path list lives in $WORK/sessions.txt
 ```

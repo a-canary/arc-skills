@@ -39,7 +39,14 @@ from pathlib import Path
 
 STATE_DIR = Path.home() / ".claude" / "dream" / "state"
 PROCESSED_FILE = STATE_DIR / "processed.json"
-PROJECTS_DIR = Path.home() / ".claude" / "projects"
+# Both session sources share one JSONL schema (pi's tool records are normalized
+# to canonical in extract.py), so the collector pages them identically. pi's
+# top-level record type is "message" (nested message.role); Claude's is
+# "user"/"assistant" — has_minable_content() below accepts both.
+SESSION_ROOTS = [
+    Path.home() / ".claude" / "projects",        # interactive Claude Code
+    Path.home() / ".pi" / "agent" / "sessions",  # headless pi agent fleet
+]
 
 
 def load_processed() -> dict:
@@ -71,6 +78,11 @@ def has_minable_content(jsonl: Path) -> bool:
     fanning out collector agents onto sessions with nothing to mine. Skip any
     session whose lines are all non-message types. Short-circuits on the first
     message line, so real sessions cost only a few lines of read.
+
+    Two source schemas: Claude Code tags each turn `type:"user"/"assistant"`
+    at top level; pi wraps every turn in `type:"message"` with the role nested
+    under `message.role`. Accept both, else every pi session reads as an empty
+    stub and never gets mined.
     """
     try:
         with open(jsonl) as f:
@@ -79,10 +91,16 @@ def has_minable_content(jsonl: Path) -> bool:
                 if not line:
                     continue
                 try:
-                    if json.loads(line).get("type") in ("user", "assistant"):
-                        return True
+                    rec = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                t = rec.get("type")
+                if t in ("user", "assistant"):
+                    return True
+                # pi shape: {"type":"message","message":{"role":...}}
+                if t == "message" and isinstance(rec.get("message"), dict) \
+                        and rec["message"].get("role") in ("user", "assistant", "toolResult"):
+                    return True
     except OSError:
         return False
     return False
@@ -97,19 +115,20 @@ def sessions_to_process(processed: dict, force: bool = False, limit: int = 0) ->
     forever on mtime churn.
     """
     out = []
-    if not PROJECTS_DIR.is_dir():
-        return out
-    for project_dir in PROJECTS_DIR.iterdir():
-        if not project_dir.is_dir():
+    for root in SESSION_ROOTS:
+        if not root.is_dir():
             continue
-        for jsonl in project_dir.glob("*.jsonl"):
-            if not force:
-                entry = processed["sessions"].get(session_key(jsonl))
-                if entry and entry.get("source_mtime") == jsonl.stat().st_mtime:
-                    continue
-            if not has_minable_content(jsonl):
+        for project_dir in root.iterdir():
+            if not project_dir.is_dir():
                 continue
-            out.append(jsonl)
+            for jsonl in project_dir.glob("*.jsonl"):
+                if not force:
+                    entry = processed["sessions"].get(session_key(jsonl))
+                    if entry and entry.get("source_mtime") == jsonl.stat().st_mtime:
+                        continue
+                if not has_minable_content(jsonl):
+                    continue
+                out.append(jsonl)
     out.sort(key=lambda p: p.stat().st_mtime)
     if limit > 0:
         out = out[:limit]

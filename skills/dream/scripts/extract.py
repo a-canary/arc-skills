@@ -175,6 +175,66 @@ def extract_tool_info(block: dict) -> dict:
     return info
 
 
+# Map pi's lowercase tool names to the canonical Claude tool names so the
+# per-tool field extraction (extract_tool_info) and any name-keyed downstream
+# logic fire identically on both sources.
+_PI_TOOL_NAMES = {
+    "bash": "Bash", "read": "Read", "write": "Write", "edit": "Edit",
+    "glob": "Glob", "grep": "Grep", "task": "Task", "webfetch": "WebFetch",
+    "websearch": "WebSearch", "ls": "LS", "multiedit": "MultiEdit",
+    "notebookedit": "NotebookEdit", "todowrite": "TodoWrite",
+}
+
+
+def canonicalize_message(inner: dict) -> dict:
+    """Normalize a `pi` agent message to the canonical Claude JSONL shape.
+
+    The two session sources diverge in their tool schema only:
+      - pi assistant `toolCall` block {id,name,arguments} -> `tool_use` {id,name,input}
+      - pi top-level `toolResult` role -> a `user` message carrying one
+        `tool_result` block {tool_use_id,is_error,content}
+    Interactive Claude Code already uses the canonical shape, so it passes
+    through untouched. Everything downstream (role dispatch, tool linkage,
+    waste detection) then works on one schema.
+    """
+    if not isinstance(inner, dict):
+        return inner
+    role = inner.get("role")
+
+    # pi tool-result message -> canonical user/tool_result
+    if role == "toolResult":
+        return {
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": inner.get("toolCallId", ""),
+                "is_error": inner.get("isError", False),
+                "content": inner.get("content", ""),
+            }],
+        }
+
+    # pi assistant `toolCall` blocks -> canonical `tool_use` blocks
+    content = inner.get("content")
+    if isinstance(content, list) and any(
+        isinstance(b, dict) and b.get("type") == "toolCall" for b in content
+    ):
+        new_content = []
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "toolCall":
+                name = b.get("name", "unknown")
+                new_content.append({
+                    "type": "tool_use",
+                    "id": b.get("id", ""),
+                    "name": _PI_TOOL_NAMES.get(name, name),
+                    "input": b.get("arguments", {}),
+                })
+            else:
+                new_content.append(b)
+        return {**inner, "content": new_content}
+
+    return inner
+
+
 def extract_message(msg: dict, line_num: int, index: int) -> dict | None:
     """Extract a clean message dict from raw JSONL message."""
     if is_noise_message(msg):
@@ -185,14 +245,12 @@ def extract_message(msg: dict, line_num: int, index: int) -> dict | None:
         "line": line_num,
     }
 
-    # Handle nested message structure
-    if "message" in msg and isinstance(msg["message"], dict):
-        inner = msg["message"]
-        role = inner.get("role")
-        content = inner.get("content")
-    else:
-        role = msg.get("role")
-        content = msg.get("content")
+    # Handle nested message structure, then normalize `pi`-shaped tool records
+    # to the canonical Claude schema so the dispatch below is source-agnostic.
+    inner = msg["message"] if ("message" in msg and isinstance(msg["message"], dict)) else msg
+    inner = canonicalize_message(inner)
+    role = inner.get("role")
+    content = inner.get("content")
 
     # Determine message type
     msg_type = msg.get("type", "")

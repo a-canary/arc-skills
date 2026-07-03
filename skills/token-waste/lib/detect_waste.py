@@ -95,6 +95,58 @@ def est_tokens(text: str, chars_per_token: float) -> int:
     return int(len(text) / chars_per_token)
 
 
+# pi lowercase tool names -> canonical Claude names, so the Read/Grep/Glob
+# linkage below keys identically on both sources.
+_PI_TOOL_NAMES = {
+    "bash": "Bash", "read": "Read", "write": "Write", "edit": "Edit",
+    "glob": "Glob", "grep": "Grep", "task": "Task", "webfetch": "WebFetch",
+    "websearch": "WebSearch", "ls": "LS", "multiedit": "MultiEdit",
+    "notebookedit": "NotebookEdit", "todowrite": "TodoWrite",
+}
+
+
+def canonicalize_message(inner: dict) -> dict:
+    """Normalize a `pi` agent message to the canonical Claude JSONL shape.
+
+    Only the tool schema diverges: pi assistant `toolCall` blocks become
+    `tool_use` blocks, and pi top-level `toolResult` messages become a `user`
+    message carrying one `tool_result` block. Interactive Claude Code is already
+    canonical and passes through untouched, so the tool_use/tool_result linkage
+    below counts tokens on both sources. Without this, pi sessions show zero
+    tool traffic and the day reads falsely "clean".
+    """
+    if not isinstance(inner, dict):
+        return inner
+    if inner.get("role") == "toolResult":
+        return {
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": inner.get("toolCallId", ""),
+                "is_error": inner.get("isError", False),
+                "content": inner.get("content", ""),
+            }],
+        }
+    content = inner.get("content")
+    if isinstance(content, list) and any(
+        isinstance(b, dict) and b.get("type") == "toolCall" for b in content
+    ):
+        new_content = []
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "toolCall":
+                name = b.get("name", "unknown")
+                new_content.append({
+                    "type": "tool_use",
+                    "id": b.get("id", ""),
+                    "name": _PI_TOOL_NAMES.get(name, name),
+                    "input": b.get("arguments", {}),
+                })
+            else:
+                new_content.append(b)
+        return {**inner, "content": new_content}
+    return inner
+
+
 def text_of(content) -> str:
     """Flatten a content field (string or block list) to plain text."""
     if isinstance(content, str):
@@ -237,6 +289,7 @@ def parse(filepath: Path, chars_per_token: float):
                 continue
 
             inner = msg.get("message") if isinstance(msg.get("message"), dict) else msg
+            inner = canonicalize_message(inner)
             role = inner.get("role")
             content = inner.get("content")
 
