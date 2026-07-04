@@ -212,6 +212,9 @@ check budget (binding may delegate to a repo's own governor, e.g. arc-agents'
   → bypass triggers run at full priority regardless of budget state
 gap-analysis (reads .arc/director/gaps.md + event log; under planning-target:
   prd-file, gaps.md is derived from the current PRD.md's acceptance criteria)
+  → [?] unverified candidates (from task.discovered)? → validate each against
+    source (grep the claim, read the file:line) → promote to [ ] open gap or
+    drop with reason; a candidate is never delegated until promoted
   → open gaps? → delegate via task-delegation binding
   → no gaps, inflight/pending-QA? → sleep (event-driven)
   → no gaps, no inflight, no pending-QA? → idle; sleep until next feedback event
@@ -221,6 +224,12 @@ watch event bus (event-bus binding)
   → qa.passed       → close gap; rewrite .arc/director/gaps.md, inflight.md
   → qa.failed       → check bypass triggers; emit task.assigned (retry or new slice)
   → task.failed     → rewrite .arc/director/blocked.md; re-gap or surface to user
+  → task.discovered → a chamber (worker/reviewer) reported a follow-up gap it
+                       uniquely learned. Append to gaps.md as an UNVERIFIED
+                       candidate ([?] prefix); never dispatch against it this
+                       tick — next gap-analysis validates it against source
+                       before it becomes a real [ ] gap (subagent reports are
+                       untrusted; discovery nominates work, it can't mint it)
   → user.feedback   → append to feedback-sink; batch by (feature, version, resource)
                        when count ≥ threshold → dispatch /qa with batch context
 heartbeat (every 5 min in --afk mode; scheduler.backstop-hours cron wakes idle directors regardless)
@@ -234,6 +243,7 @@ end of every tick
 | State | Meaning |
 |---|---|
 | **delegating** | Open gaps exist; emitting task.assigned events |
+| **triaging** | Unverified `[?]` candidates from task.discovered await source-validation before this tick promotes or drops them |
 | **waiting:inflight** | Tasks assigned; no results yet |
 | **waiting:qa** | Tasks completed; QA dispatched |
 | **idle** | No gaps, no inflight, no pending QA; sleeping until next feedback event |
@@ -273,8 +283,16 @@ it at the end of every tick from its working files. arc-webui sidebar chat annot
 ## Epistemic gates (prove-before-scale)
 
 - `task.completed` without `evidence:[{path,description}]` → rejected, re-queued
+- `task.completed` without a reachability declaration — either `wires-to:<live-path>`
+  or `inert:true` — → rejected, re-queued. A slice that ships a capability nothing
+  reaches must say so; `inert:true` makes the director auto-emit a `task.discovered`
+  activation candidate so the wiring can't dangle unowned (the recurring "shipped
+  inert, no gap owns the wiring" failure — trading epic #133 hit it twice)
 - `qa.passed` without `evidence` → rejected, re-queued
 - `qa.failed` without `reproduction` → rejected, re-queued
+- `task.discovered` → never delegated directly; lands as an UNVERIFIED `[?]`
+  candidate that next gap-analysis must validate against source before promotion
+  (backflow can nominate work, never mint it — subagent reports are untrusted)
 - User feedback → never creates a task directly; dispatches `/qa` first
 - User feedback batched by `(feature, version, resource)` — count increases trust, QA still required
 
@@ -282,8 +300,10 @@ it at the end of every tick from its working files. arc-webui sidebar chat annot
 
 ```jsonl
 {"id":"evt_01","type":"task.assigned","status":"open","ts":1751234567,"slice":"auth/login","acceptance":"all edge cases green","worker_id":"tdd-agent"}
-{"id":"evt_02","type":"task.completed","status":"resolved","ts":1751234890,"ref":"evt_01","worker_id":"tdd-agent","evidence":[{"path":"tests/auth.test.ts","description":"12/12 green"},{"path":"src/auth/login.ts","description":"matches spec"}]}
+{"id":"evt_02","type":"task.completed","status":"resolved","ts":1751234890,"ref":"evt_01","worker_id":"tdd-agent","wires-to":"src/routes/auth.ts","evidence":[{"path":"tests/auth.test.ts","description":"12/12 green"},{"path":"src/auth/login.ts","description":"matches spec"}]}
 {"id":"evt_03","type":"qa.passed","status":"resolved","ts":1751235000,"ref":"evt_02","evidence":[{"path":"qa/screenshots/login-2.1.0.png","description":"happy path, no friction"}]}
+{"id":"evt_04","type":"task.completed","status":"resolved","ts":1751235010,"ref":"evt_01b","worker_id":"tdd-agent","inert":true,"evidence":[{"path":"src/counsel/notes.ts","description":"counselNotes() built + unit-green, byte-identical to main until wired"}]}
+{"id":"evt_05","type":"task.discovered","status":"open","ts":1751235012,"parent":"evt_04","gap":"wire counselNotes() into daily-cycle read path — inert until then","evidence":[{"path":"src/counsel/notes.ts:12","description":"exported, zero callers"}]}
 {"id":"fb_01","type":"user.feedback","status":"open","ts":1751235100,"feature":"auth/login","version":"2.1.0","resource":"/login","description":"submit button unresponsive on mobile"}
 ```
 
