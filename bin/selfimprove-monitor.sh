@@ -13,7 +13,10 @@ mkdir -p "$(dirname "$OUT")"
 reasons=""
 [ -f "$HOME/.claude/dream/journal/$(date -d yesterday +%F).md" ] || reasons+=" no-journal-yesterday"
 section=$(tac "$LOG" 2>/dev/null | awk '/nightly start/{print; exit} {print}' | tac)
-echo "$section" | grep -q "nightly done" || reasons+=" no-nightly-done"
+# "nightly done" must be TODAY's (box is UTC, nightly ends ~03:30Z, monitor 07:30Z) —
+# a stale prior-day section means the nightly never fired (e.g. dangling symlink,
+# lost crontab) and that must read FAIL, not OK.
+echo "$section" | grep -q "\[$(date -u +%F)T[^]]*\] nightly done" || reasons+=" no-nightly-done-today"
 echo "$section" | grep -q "SELFIMPROVE_FAIL" && reasons+=" $(echo "$section" | grep -o 'SELFIMPROVE_FAIL stage=[^ ]*' | tr '\n' ',')"
 if [ -z "$reasons" ]; then
   echo "[$(date -u +%FT%TZ)] OK" >> "$OUT"
