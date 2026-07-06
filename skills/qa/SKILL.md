@@ -51,6 +51,8 @@ Pass:
 {"type":"qa.passed","status":"resolved","ref":"evt_01","evidence":[{"path":"qa/screenshots/login-happy-2.1.0.png","description":"happy path in 3 steps, no friction found"}]}
 ```
 
+When you were dispatched to verify a **deployed live surface** (post-merge, per hard-merge §6 — not the pre-merge diff), add `"phase":"post-deploy"` to the emitted `qa.passed`. That field is what tells the director this is the live-surface result that closes a production gap, distinct from the pre-deploy diff pass. Omit it for any pre-deploy QA.
+
 Fail:
 ```jsonl
 {"type":"qa.failed","status":"resolved","ref":"evt_01","dimension":"critical-failure","reproduction":[{"path":"qa/screenshots/login-broken-2.1.0.png","description":"submit hangs on mobile — reproduced on iOS Safari and Chrome Android"}]}

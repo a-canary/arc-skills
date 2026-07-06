@@ -126,7 +126,15 @@ gap-analysis (reads .arc/director/gaps.md + event log; under planning-target:
 watch event bus (event-bus binding)
   → task.completed  → validate evidence paths exist → dispatch /qa
   → task.completed, no evidence → reject, re-queue
-  → qa.passed       → close gap; rewrite .arc/director/gaps.md, inflight.md
+  → qa.passed (no phase field) → non-production surface: close gap; rewrite
+                      .arc/director/gaps.md, inflight.md. Production surface: do
+                      NOT close the gap at merge — merge per on-task-verified
+                      binding, deploy, then dispatch /qa again against the LIVE
+                      surface (hard-merge §6) WITH phase:post-deploy on its emitted
+                      event so this branch and the next are mechanically distinct.
+  → qa.passed (phase:post-deploy) → the live-surface result: close gap. Route its
+                      findings to the next gap tick; a critical/truthfulness one
+                      triggers rollback, then re-gap from findings.
   → qa.failed       → check bypass triggers; emit task.assigned (retry or new slice)
   → task.failed     → rewrite .arc/director/blocked.md; re-gap or surface to user
   → user.feedback   → append to feedback-sink; batch by (feature, version, resource)

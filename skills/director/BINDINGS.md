@@ -13,7 +13,7 @@ Declared in `AGENTS.md`. Director prompts on first boot for any missing binding,
 event-bus: jsonl              # jsonl | db | <skill-name>
 task-delegation: native       # native (harness tool) | arc-agents | <skill-name>
 workspace: worktree           # worktree | treehouse | <skill-name>
-on-task-verified: merge       # merge | draft-pr | <skill-name>
+on-task-verified: merge       # merge | draft-pr | <skill-name>; production surface: /hard-merge pre-merge, then /qa post-deploy
 todo-list: native             # native | arc-agents | <skill-name>
 feedback-sink: jsonl          # jsonl | <api-endpoint> | <skill-name>
 planning-target: prd-file     # prd-file | arc-agents-ledger | kanban | <skill-name>
@@ -136,5 +136,8 @@ it at the end of every tick from its working files. arc-webui sidebar chat annot
 {"id":"evt_01","type":"task.assigned","status":"open","ts":1751234567,"slice":"auth/login","acceptance":"all edge cases green","worker_id":"tdd-agent"}
 {"id":"evt_02","type":"task.completed","status":"resolved","ts":1751234890,"ref":"evt_01","worker_id":"tdd-agent","evidence":[{"path":"tests/auth.test.ts","description":"12/12 green"},{"path":"src/auth/login.ts","description":"matches spec"}]}
 {"id":"evt_03","type":"qa.passed","status":"resolved","ts":1751235000,"ref":"evt_02","evidence":[{"path":"qa/screenshots/login-2.1.0.png","description":"happy path, no friction"}]}
+{"id":"evt_04","type":"qa.passed","status":"resolved","ts":1751235400,"ref":"evt_02","phase":"post-deploy","evidence":[{"path":"qa/screenshots/login-live-2.1.0.png","description":"live surface, deployed result verified"}]}
 {"id":"fb_01","type":"user.feedback","status":"open","ts":1751235100,"feature":"auth/login","version":"2.1.0","resource":"/login","description":"submit button unresponsive on mobile"}
 ```
+
+`phase` is optional and appears only on a `qa.passed` from a **post-deploy** live-surface run (see `SKILL.md` director loop + `hard-merge` §6). Absent = the pre-deploy diff-QA pass; `"post-deploy"` = the live-surface pass that actually closes a production gap. The two are otherwise identical events, so the field is what makes the director's two `qa.passed` branches mechanically selectable.
