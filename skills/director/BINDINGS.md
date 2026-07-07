@@ -71,6 +71,8 @@ fail-open, always**: any capacity error → proceed as if unbound and emit
   --tokens <n> --status ok|429`. Contract + estimator details:
   `skills/capacity/SKILL.md`.
 
+### `model`
+
 What tier and reasoning effort each self-spawned invocation runs at, and a shared
 env var applied to both. Only governs invocations `/director` spawns itself — a
 foreground `/director` run started interactively inherits whatever model the
