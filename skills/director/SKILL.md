@@ -118,6 +118,12 @@ check budget (binding may delegate to a repo's own governor, e.g. arc-agents'
     dimension critical-failure or security may still dispatch; all other
     gap-delegation pauses until budget resets or a human raises it
   → bypass triggers run at full priority regardless of budget state
+check capacity (capacity binding, if bound — ADVISORY: any CLI error →
+  proceed unbound + emit capacity.failopen; never blocks a dispatch)
+  → route per dispatch (lane: bypass work = critical, exploratory = research,
+    else standard): run → dispatch; park → re-queue + emit capacity.parked
+    (carry vast_stop); escalate → dispatch on best alternative provider
+  → record every provider response back (tokens + ok|429)
 gap-analysis (reads .arc/director/gaps.md + event log; under planning-target:
   prd-file, gaps.md is derived from the current PRD.md's acceptance criteria)
   → open gaps? → delegate via task-delegation binding

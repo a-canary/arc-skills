@@ -32,6 +32,7 @@ budget:
   bypass:
     - critical-failure        # qa.failed with dimension: critical-failure
     - security                # qa.failed with dimension: security
+capacity: none                # none | capacity (shared cross-director provider headroom; advisory, fail-open)
 ```
 
 ### `planning-target`
@@ -51,7 +52,24 @@ How director plans the *next* unit of work, independent of how `/task` executes 
   already covers standalone.
 - **`kanban`** / `<skill-name>` — any other planning surface a binding wires up.
 
-### `model`
+### `capacity`
+
+Shared cross-director provider arbitration. `budget` caps what THIS repo may
+spend; `capacity` answers whether the *shared* provider (one Claude 5h window,
+one MiniMax weekly cap, one vast wallet) has headroom right now. **Advisory +
+fail-open, always**: any capacity error → proceed as if unbound and emit
+`capacity.failopen`; a capacity failure must never block a dispatch.
+
+- **`none`** (default) — skip entirely.
+- **`capacity`** — before each dispatch run
+  `bun ~/.claude/skills/capacity/capacity.ts route --provider <p> --lane <tier>`
+  (lane: bypass-trigger work = `critical`, exploratory = `research`, else
+  `standard`). Verdict `run` → dispatch; `park` → re-queue the task with a gap
+  note + emit `capacity.parked` (carry `vast_stop` through); `escalate`
+  (critical only) → dispatch anyway on the best alternative provider, note the
+  constraint. After every provider response, `capacity.ts record --provider <p>
+  --tokens <n> --status ok|429`. Contract + estimator details:
+  `skills/capacity/SKILL.md`.
 
 What tier and reasoning effort each self-spawned invocation runs at, and a shared
 env var applied to both. Only governs invocations `/director` spawns itself — a
