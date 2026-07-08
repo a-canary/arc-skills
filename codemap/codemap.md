@@ -1,10 +1,10 @@
 ---
-generated: 2026-07-02T04:11:53.778Z @41cb1e0
+generated: 2026-07-08T10:02:33.264Z @c9408a0
 project: arc-skills
 ecosystems: [unknown]
 source_files: 8
 test_files: 0
-graph_source: regex (approximate)
+graph_source: madge
 graph_analyzed: false
 dead_count: null
 untested_count: null
@@ -19,7 +19,7 @@ tool: codemap
 ## Module shapes (LOC by module)
 _Modules = directories (no import graph to cluster)._
 
-- `skills` — 2977 LOC
+- `skills` — 2813 LOC
 
 ## Seams (cross-module import edges)
 
@@ -46,14 +46,14 @@ _none detected_
 - `pathlib` — 4 imports
 - `datetime` — 3 imports
 - `re` — 3 imports
-- `node:child_process` — 2 imports
 - `node:fs` — 2 imports
+- `node:child_process` — 2 imports
+- `node:os` — 2 imports
 - `node:path` — 2 imports
 - `collections` — 2 imports
 - `fs` — 2 imports
 - `os` — 1 imports
 - `subprocess` — 1 imports
-- `node:os` — 1 imports
 - `node:url` — 1 imports
 - `pkg` — 1 imports
 - `typing` — 1 imports
@@ -61,11 +61,12 @@ _none detected_
 - `readline` — 1 imports
 - `hashlib` — 1 imports
 
-## Docs with frontmatter (61)
+## Docs with frontmatter (63)
 
 - `skills/adaptation-review/SKILL.md` — name=adaptation-review, description=Review the last N days (default 10) of s, allowed-tools=Read, Write, Glob, Task, Bash
 - `skills/adaptation-review/agents/regression-reviewer.md` — name=regression-reviewer, description=Review the last N days of dream/token-wa, tools=Read, Glob, Grep, Bash, model=opus
 - `skills/anti-sycophancy/SKILL.md` — name=anti-sycophancy, description=Strip validating, hedging, and flatterin
+- `skills/api-providers/SKILL.md` — name=api-providers, description=LLM/API provider registry — pass-store k
 - `skills/berzerk/SKILL.md` — name=berzerk, description=>
 - `skills/blog/SKILL.md` — name=blog, description=Pre-PR. Draft a blog entry and write it 
 - `skills/cam/SKILL.md` — name=cam, description=Design a Collector/Adaptor/Monitor (CAM)
@@ -91,6 +92,7 @@ _none detected_
 - `skills/grill-me/SKILL.md` — name=grill-me, description=Interview the user relentlessly about a 
 - `skills/grill-with-docs/SKILL.md` — name=grill-with-docs, description=Grilling session that challenges your pl
 - `skills/handoff/SKILL.md` — name=handoff, description=Compact the current conversation into a , argument-hint=What will the next session be used for?
+- `skills/hard-merge/SKILL.md` — name=hard-merge, description=Adversarial pre-merge review gate for me
 - `skills/improve-codebase-architecture/SKILL.md` — name=improve-codebase-architecture, description=Find deepening opportunities in a codeba
 - `skills/install-anti-sycophancy/SKILL.md` — name=install-anti-sycophancy, description=Install a UserPromptSubmit + Stop hook p
 - `skills/install-behavioral-rules/SKILL.md` — name=install-behavioral-rules, description=Symlink every harness's user-level confi
@@ -101,5 +103,3 @@ _none detected_
 - `skills/ke/SKILL.md` — name=ke, description=Knowledge Engine — one CLI for semantic 
 - `skills/migrate-to-shoehorn/SKILL.md` — name=migrate-to-shoehorn, description=Migrate test files from `as` type assert
 - `skills/pipeliner/SKILL.md` — name=pipeliner, description=Build/run pipeliner modules (npm pi-pipe
-- `skills/profiling-ladder/SKILL.md` — name=profiling-ladder, description=Pick the right optimization rung. Move d
-- `skills/prototype/SKILL.md` — name=prototype, description=Build a throwaway prototype to flesh out
