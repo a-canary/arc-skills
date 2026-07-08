@@ -50,7 +50,7 @@ Every signal is a cheap static heuristic. Treat as a lead, not a verdict.
 
 ## Extending to other languages
 
-Import resolution and export extraction are JS/TS-first (madge for the graph, regex for exports). Python/Go/Rust currently get file inventory, LOC, config/doc/output classification, and module shapes, but the dependency graph (and therefore dead/cycle signals) is only fully wired for JS/TS. For other languages, see the aggregator (`aggregate.ts`), which shells out to per-language AST tools (vulture, pydeps, …).
+Import resolution and export extraction are JS/TS-first (madge for the graph, regex for exports). Python/Go/Rust currently get file inventory, LOC, config/doc/output classification, and module shapes, but the dependency graph (and therefore dead/cycle signals) is only fully wired for JS/TS. A multi-language aggregator was prototyped and trashed as an orphan; see git history if needed. The codemap today only emits JS/TS dead/cycle signals.
 
 To add a language: extend `IMPORT_RE`/`EXPORT_RE` (or add a per-language extractor like `PY_IMPORT_RE`) and teach `resolveLocal` how that language maps a specifier to a file path. Everything downstream (signals, render) is language-agnostic once edges exist.
 
