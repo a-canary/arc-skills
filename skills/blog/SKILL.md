@@ -30,14 +30,26 @@ This is a **pre-PR** skill, not a setup or post-commit skill. It runs against st
 
 ## Invocation
 
+There is no installed `blog` command. The skill is run by executing the
+TypeScript API from arc-agents (see **Procedure** step 5 and **Ledger API**
+below). From a repo with staged or branch diffs:
+
 ```bash
-blog                    # draft from staged diff or branch-vs-base, write row to ledger
-blog --base main        # explicit base for branch diff
-blog --skip "reason"   # skip blogging this branch (logs reason to stdout)
-blog --dry-run          # print proposed entry, do not write
-blog --serve            # serve the demo root (assets directory) on :8087
-blog --publish          # rsync demo root to $ARC_DEMO_HOST
+# Pre-PR draft (write a blog row to the ledger):
+cd /path/to/your/repo
+ARC_AGENTS_ROOT=~/repos/arc-agents \
+  bun -e '
+    import { Database } from "bun:sqlite";
+    import { createBlogPost } from "~/repos/arc-agents/src/ledger/blog.ts";
+    import { migrate } from "~/repos/arc-agents/src/ledger/migrate.ts";
+    // ...build input from git diff, call createBlogPost(db, input)
+  '
 ```
+
+Flags from earlier revisions (`--base`, `--serve`, `--publish`, `--dry-run`,
+`--skip`) are workflow hints — wrap the API call in a script if you want
+them. Keep that script under 50 lines; call the API directly rather than
+re-introducing a bash shim.
 
 ## Environment variables
 
