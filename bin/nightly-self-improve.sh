@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# arc-skills nightly self-improvement: dream + token-waste + adaptation-review.
+# arc-skills nightly self-improvement: dream + token-waste + adaptation-review
+# + agent knowledge-gap loop (extract-agent-gaps.py collector → /gap-remediate adaptor).
 # Fires at 03:00 local; analyzes the day that just ended.
 #   - dream is mtime-incremental (no date arg; picks up everything since last run)
 #   - token-waste needs WASTE_DAY=yesterday or it only sees hours since midnight
@@ -51,4 +52,21 @@ run token-waste token-waste.log
 # regressions. Read-only — spawns a reviewer subagent, makes no edits itself.
 export REVIEW_DAY="$(date -d yesterday +%F)"
 run adaptation-review adaptation-review.log
+
+# Knowledge-gap loop (CAM): the AGENT's own confusion — facts it got wrong, was
+# uncertain on, or the user had to correct — mined nightly and remediated.
+#   stage 1 (collector, featherless Qwen3-32B): extract-agent-gaps.py reads
+#     yesterday's sessions, appends dense gap lines to ~/.claude/dream/agent-gaps.log.
+#     Its own timeout — run() wraps claude only. Slow-burn, non-urgent.
+#   stage 2+3 (adaptor, Opus): /gap-remediate ranks the log by severity×frequency,
+#     picks the top gap, checks AGENTS.md/MEMORY.md/ke, and makes ONE add-or-clarify
+#     edit, logging the decision back. Runs via run() (claude -p, acceptEdits).
+GAPS="${GAPS:-$HOME/.config/arc-hygiene/extract-agent-gaps.py}"
+echo "== $(date -Is) agent-gaps (featherless)" >> "$LOG_DIR/agent-gaps.log"
+timeout 30m python3 "$GAPS" >> "$LOG_DIR/agent-gaps.log" 2>&1
+gc=$?
+echo "[$(date -u +%FT%TZ)] agent-gaps exit=$gc" >> "$LOG_DIR/nightly.log"
+[ "$gc" -ne 0 ] && echo "[$(date -u +%FT%TZ)] SELFIMPROVE_FAIL stage=agent-gaps exit=$gc" >> "$LOG_DIR/nightly.log"
+run gap-remediate gap-remediate.log
+
 echo "[$(date -u +%FT%TZ)] nightly done (WASTE_DAY=$WASTE_DAY)" >> "$LOG_DIR/nightly.log"
