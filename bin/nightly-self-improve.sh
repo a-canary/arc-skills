@@ -51,4 +51,16 @@ run token-waste token-waste.log
 # regressions. Read-only — spawns a reviewer subagent, makes no edits itself.
 export REVIEW_DAY="$(date -d yesterday +%F)"
 run adaptation-review adaptation-review.log
+
+# Points-of-confusion: a USER-experience signal (not Claude's failure modes /
+# not token economy), so it uses featherless.ai directly rather than claude -p.
+# Slow-burn, non-urgent — its own timeout since run() wraps claude only.
+# Writes ~/.claude/dream/journal/confusion-YYYY-MM-DD.md.
+CONFUSION="${CONFUSION:-$HOME/.config/arc-hygiene/extract-confusion.py}"
+echo "== $(date -Is) confusion (featherless)" >> "$LOG_DIR/confusion.log"
+timeout 30m python3 "$CONFUSION" >> "$LOG_DIR/confusion.log" 2>&1
+cc=$?
+echo "[$(date -u +%FT%TZ)] confusion exit=$cc" >> "$LOG_DIR/nightly.log"
+[ "$cc" -ne 0 ] && echo "[$(date -u +%FT%TZ)] SELFIMPROVE_FAIL stage=confusion exit=$cc" >> "$LOG_DIR/nightly.log"
+
 echo "[$(date -u +%FT%TZ)] nightly done (WASTE_DAY=$WASTE_DAY)" >> "$LOG_DIR/nightly.log"
