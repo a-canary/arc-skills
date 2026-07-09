@@ -29,11 +29,36 @@ The skill is the procedure; the CLI is a thin convenience. Implementing a `to-tr
 
 ## Naming convention
 
-Trashed paths get a timestamp suffix so concurrent moves don't collide and restores stay traceable:
+Trashed paths get a timestamp + relative-path suffix so concurrent moves and
+basename collisions (e.g. two `CONTEXT.md` files in different dirs) stay
+distinguishable and restores stay traceable:
 
 ```
-~/trash/<unix-ts>_<original-basename>/
+~/trash/<unix-ts>__<relative-path>/
 ```
+
+`<relative-path>` is the path of the trashed file relative to the repo root
+(or the deepest common ancestor when trashing files from outside a repo),
+with `/` rewritten to `--`. Examples:
+
+```
+~/trash/1782317031__contexts--encounters--CONTEXT.md/
+~/trash/1782317031__contexts--tavern--CONTEXT.md/
+~/trash/1782317031__PRD-v1.md/
+```
+
+`__` separates the timestamp from the path; `--` separates path components.
+Neither can appear in normal POSIX paths, so collisions across distinct
+files are impossible. If two files share an *identical* full relative path
+(can only happen via a hardlink duplication), the script appends `-2`, `-3`,
+etc.
+
+**Why not just `<ts>_<basename>`?** Two files with the same basename in
+different directories (`contexts/encounters/CONTEXT.md` and
+`contexts/tavern/CONTEXT.md`) collided and the second move clobbered the
+first — losing recoverable content. Observed in
+`000109-hygiene-arc-webui-trash-retired-files` (arc-webui #10 sweep,
+2026-06-24).
 
 ## Sweep procedure (manual, multi-file)
 
@@ -60,25 +85,13 @@ Trashed paths get a timestamp suffix so concurrent moves don't collide and resto
 
 Default: **30 days** in `~/trash/`. After that, a separate cron (see `schedule-hygiene`) hard-deletes if disk pressure exists.
 
-## Restore
-
-```bash
-# 1. Find it
-ls ~/trash/ | grep <name>
-
-# 2. Move it back
-mv ~/trash/<ts>_<name> <original-path>
-
-# 3. Revert doc updates if needed
-git diff HEAD~ -- '<doc>'
-```
 
 ## Log format
 
 Append a JSONL record per move to `~/trash/.log.jsonl`:
 
 ```json
-{"ts":"2026-05-22T20:59:00Z","action":"trash","path":"src/legacy/old.ts","reason":"replaced by src/new.ts","trashed_to":"~/trash/1779389812_old.ts","refs_updated":3}
+{"ts":"2026-05-22T20:59:00Z","action":"trash","path":"src/legacy/old.ts","reason":"replaced by src/new.ts","trashed_to":"~/trash/1779389812__src--legacy--old.ts","refs_updated":3}
 ```
 
 Sweep summaries get their own line:
@@ -96,7 +109,9 @@ Sweep summaries get their own line:
 
 ## Reference implementation
 
-A 50-line `to-trash` in shell:
+A ~60-line `to-trash` in shell. Computes the relative path from the repo
+root (or first ancestor with `.git`) so concurrent moves of files with the
+same basename in different directories land in distinct trash dirs:
 
 ```bash
 #!/usr/bin/env bash
@@ -113,9 +128,29 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -z "$reason" ]] && { echo "--reason required" >&2; exit 2; }
 [[ -e "$path" ]] || { echo "no such path: $path" >&2; exit 2; }
+
+# Compute relative path from repo root (or absolute path if outside any repo)
+abs="$(cd "$(dirname "$path")" && pwd)/$(basename "$path")"
+rel="$abs"
+dir="$(dirname "$abs")"
+while [[ "$dir" != "/" ]]; do
+  # -e not -d: in git worktrees, .git is a *file* pointing at the real gitdir
+  if [[ -e "$dir/.git" ]]; then rel="${abs#$dir/}"; break; fi
+  dir="$(dirname "$dir")"
+done
+# Sanitize: / → -- so the trash dir name is a single valid filesystem component
+rel_sanitized="${rel//\//--}"
+
 mkdir -p ~/trash
 ts=$(date +%s)
-dest=~/trash/${ts}_$(basename "$path")
+dest=~/trash/${ts}__${rel_sanitized}
+# Collision-guard for identical full paths (hardlink duplicates)
+n=2
+while [[ -e "$dest" ]]; do
+  dest=~/trash/${ts}__${rel_sanitized}-${n}
+  n=$((n+1))
+done
+
 if $dry; then
   echo "would move: $path -> $dest"
   echo "references:"
@@ -126,4 +161,21 @@ $force || ! lsof "$path" >/dev/null 2>&1 || { echo "in use" >&2; exit 1; }
 mv "$path" "$dest"
 echo "{\"ts\":\"$(date -u +%FT%TZ)\",\"action\":\"trash\",\"path\":\"$path\",\"reason\":\"$reason\",\"trashed_to\":\"$dest\"}" >> ~/trash/.log.jsonl
 echo "trashed: $dest"
+```
+
+## Restore
+
+```bash
+# 1. Find it
+ls ~/trash/ | grep <name-fragment>
+
+# 2. Move it back. <rel-path> is the original relative path
+#    (trash dir name with __<ts>__ prefix stripped and -- restored to /):
+mv ~/trash/<ts>__<rel-with-double-dashes> <rel-path>
+
+# Example: 1782317031__contexts--encounters--CONTEXT.md -> contexts/encounters/CONTEXT.md
+mv ~/trash/1782317031__contexts--encounters--CONTEXT.md contexts/encounters/CONTEXT.md
+
+# 3. Revert doc updates if needed
+git diff HEAD~ -- '<doc>'
 ```
