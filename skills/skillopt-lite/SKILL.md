@@ -65,6 +65,12 @@ at it (run.sh mounts that dir at `/results`), and runs
 both. Failed rows emit `output: ""` and the run continues. Docker is heavy:
 default concurrency 1, use `--limit` while iterating.
 
+Output semantics: `solve()` does not expose the agent's final text — rollout's
+`output` is a serialized `SolveResult` (status, pass_rate, telemetry, workdir).
+The pairwise judge is therefore comparing real execution *outcomes*, not prose.
+Upgrade path when needed: a deterministic gate mode on pass_rate deltas
+(SkillOpt-native outcome scoring), skipping the LLM judge entirely.
+
 ## Self-check
 
 `bun skills/skillopt-lite/skillopt.ts selftest` — Wilson math, split determinism,
