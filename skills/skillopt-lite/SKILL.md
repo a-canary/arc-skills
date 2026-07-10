@@ -48,6 +48,23 @@ keep the old champion in git history. On HOLD: keep champion, reflect again with
 new hypothesis (loop from step 3). Never promote on point estimate, small n, or
 self-judged results — the judge model must differ from the replay model.
 
+## Rollout gate (tool-heavy skills)
+
+Replay is a cheap hypothetical screen: chat-only, no tools — it tests what the
+agent *says*, not what it *does*. For tool-heavy skills, finalists that pass
+replay get a `rollout`: real sandboxed execution in arc-factory's arcsim
+container (docker, network-none inner sandbox, MINIMAX_API_KEY only — no
+Anthropic key, no host home/vault).
+
+`rollout --rows test.jsonl --spec challenger.md --out rollouts-challenger.jsonl [--factory ~/repos/arc-factory] [--limit N] [--concurrency 1]`
+
+Per row it writes spec.md + prompt.txt to a temp dir, points `ARCSIM_RESULTS`
+at it (run.sh mounts that dir at `/results`), and runs
+`<factory>/bench/rollout-one.ts` inside arcsim; `out.json`'s `output` lands as
+`{id, output}` — the same shape replay writes, so the same judge/gate consumes
+both. Failed rows emit `output: ""` and the run continues. Docker is heavy:
+default concurrency 1, use `--limit` while iterating.
+
 ## Self-check
 
 `bun skills/skillopt-lite/skillopt.ts selftest` — Wilson math, split determinism,
