@@ -83,3 +83,10 @@ younger than 7 days** — OPEN rows ARE the visible log; closing a fresh row
 - Zero agent trust: verify subagent/reviewer claims against source before acting.
 - Under ~10 min of work; park anything bigger as a ledger feedback row for the
   mission's director instead of doing it here.
+- **Park budget: at most ONE parked item per run, and NEVER a new PRD/issue
+  row.** Before parking, grep `issues`+`feedback` for an existing row on the
+  same theme (title keyword) — found → cite it, don't duplicate. Observed
+  2026-07-10: runs minted 21 review-state PRDs in one day (11 on allmissions),
+  flooding Aaron's review queue — oversight that manufactures human check-ins
+  is anti-autonomy. Improvement ideas go in the run's log row `action`/`parked`
+  line; only a mission director promotes one to a PRD.
