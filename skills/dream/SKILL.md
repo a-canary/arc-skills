@@ -15,7 +15,7 @@ sessions in memory and writes one append-only journal; the adapter reads it and
 edits one thing.
 
 ```
-sessions (~/.claude/projects/*/*.jsonl)
+sessions (~/.claude/projects/*/*.jsonl  +  ~/.pi/agent/sessions/*/*.jsonl)
         │  page.py streams 80-message windows (in memory, no YAML on disk)
         ▼
 collector (haiku) ── Explore subagents on ambiguous failures
@@ -38,7 +38,11 @@ one edit to an agent | skill | tool | pipeline | script
    python3 ~/.claude/skills/dream/scripts/pipeline.py --list --limit 50
    ```
    This prints up to 50 new/changed session JSONL paths (oldest-mtime first),
-   checked against `~/.claude/dream/state/processed.json`. The `--limit` caps
+   drawn from **both** source roots — interactive Claude Code
+   (`~/.claude/projects`) and the headless `pi` agent fleet
+   (`~/.pi/agent/sessions`); both normalize to one JSONL schema so the collector
+   pages them identically. Checked against
+   `~/.claude/dream/state/processed.json`. The `--limit` caps
    how many sessions one run drains so a cold start (thousands of unprocessed
    sessions) can't spawn thousands of agents in a single tick — the nightly
    cron works the backlog down over successive runs. Omit `--limit` only for a
