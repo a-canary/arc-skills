@@ -2,7 +2,7 @@
 // skillopt-lite: champion/challenger loop for one agent-spec text artifact.
 // Subcommands: mine | split | replay | judge | gate | selftest. No deps beyond bun stdlib.
 
-import { readdirSync, readFileSync, writeFileSync, statSync, mkdirSync } from "fs";
+import { readdirSync, readFileSync, writeFileSync, statSync, mkdirSync, mkdtempSync, appendFileSync, rmSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 
@@ -180,6 +180,41 @@ async function replay() {
   console.error(`replayed ${results.filter((r) => r.output).length}/${rows.length} -> ${out}`);
 }
 
+// --- rollout: real sandboxed execution via arc-factory arcsim (docker-heavy).
+// run.sh mounts $ARCSIM_RESULTS at /results, so a per-row temp dir IS the exchange dir.
+// Contract: <factory>/bench/rollout-one.ts <specFile> <promptFile> <outFile> -> {output, exitCode}.
+async function rollout() {
+  const spec = readFileSync(opt("spec")!, "utf8");
+  let rows = readJsonl(opt("rows")!);
+  const limit = opt("limit"); if (limit) rows = rows.slice(0, Number(limit));
+  const out = opt("out")!;
+  const factory = opt("factory", join(homedir(), "repos", "arc-factory"))!.replace(/^~/, homedir());
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, "");
+  mkdirSync("/tmp/skillopt-rollout", { recursive: true });
+  let done = 0;
+  await pmap(rows, async (r: any) => {
+    const dir = mkdtempSync("/tmp/skillopt-rollout/row-");
+    let output = "";
+    try {
+      writeFileSync(join(dir, "spec.md"), spec);
+      writeFileSync(join(dir, "prompt.txt"), String(r.prompt ?? ""));
+      const p = Bun.spawnSync(
+        ["bash", join(factory, "bench/arcsim/run.sh"), "bun", "bench/rollout-one.ts",
+          "/results/spec.md", "/results/prompt.txt", "/results/out.json"],
+        { env: { ...process.env, ARCSIM_RESULTS: dir }, stdout: "ignore", stderr: "inherit" });
+      // rollout-one exits nonzero on status!=="ok" but still writes a full SolveResult —
+      // that failure outcome is judge-relevant, so read out.json before the exit check.
+      output = String(JSON.parse(readFileSync(join(dir, "out.json"), "utf8")).output ?? "").slice(0, CAP);
+      if (!output && p.exitCode !== 0) throw new Error(`run.sh exit ${p.exitCode}`);
+    } catch (e) { console.error(`row ${r.id} failed: ${e}`); }
+    appendFileSync(out, JSON.stringify({ id: r.id, output }) + "\n");
+    console.error(`rollout ${++done}/${rows.length} ${r.id} ${output ? "ok" : "EMPTY"}`);
+    rmSync(dir, { recursive: true, force: true });
+  }, Number(opt("concurrency", "1")));
+  console.error(`rollout done -> ${out}`);
+}
+
 // --- judge: pairwise blind, X/Y randomized per row via seeded id hash ---
 export const parseVerdict = (raw: string, aIsX: boolean) => {
   const m = raw.match(/\{[^{}]*"winner"[^{}]*\}/);
@@ -259,9 +294,11 @@ function selftest() {
   eq(parseVerdict('junk {"winner":"tie","why":""} trailing', true), { winner: "tie", why: "" }, "tie embedded");
   eq(parseVerdict("no json here", true), null, "garbage -> null");
   eq(parseVerdict('{"winner":"Z","why":""}', true), null, "bad label -> null");
+  // opt parsing
+  eq(opt("no-such-flag", "dflt"), "dflt", "opt default");
   console.log("selftest OK");
 }
 
-const cmds: Record<string, () => any> = { mine, split, replay, judge, gate, selftest };
-if (!cmd || !cmds[cmd]) { console.error("usage: bun skillopt.ts mine|split|replay|judge|gate|selftest [--flags]"); process.exit(1); }
+const cmds: Record<string, () => any> = { mine, split, replay, rollout, judge, gate, selftest };
+if (!cmd || !cmds[cmd]) { console.error("usage: bun skillopt.ts mine|split|replay|rollout|judge|gate|selftest [--flags]"); process.exit(1); }
 await cmds[cmd]();
