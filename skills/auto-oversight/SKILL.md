@@ -60,8 +60,16 @@ passthrough project):
 
 ```
 bun -e '…insert into feedback (id,project,source,submitter,body_md,state,created_at)
-        values ("ao-<mission>-<rand>","allmissions","direct","auto-oversight",<body>,"OPEN",<now-iso>)'
+        values ("ao-<mission>-<rand>","allmissions","auto-oversight","auto-oversight",<body>,"OPEN",<now-iso>)'
 ```
+
+`source` MUST be `"auto-oversight"` (untrusted), never `"direct"`: `direct` is a
+trusted source, so ONE log row passes the aggregator's confirmation gate, mints
+a junk PRD, and the drain flips the row resolved — the log blanks itself and
+Aaron's review queue fills with noise (observed 2026-07-10; durable drain-side
+exclusion is PRD "Exclude auto-oversight log rows from the Lane-2 feedback
+drain"). An untrusted source needs 3 distinct submitters to confirm; this
+skill's single stable submitter never does, so rows persist.
 
 Housekeeping in the same run: mark this skill's own `allmissions` rows older
 than 7 days `state='resolved'` so the page stays bounded. **NEVER touch rows
