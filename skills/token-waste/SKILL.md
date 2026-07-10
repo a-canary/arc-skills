@@ -133,7 +133,7 @@ For EACH candidate JSON with candidates, spawn the analyst. Run up to 3 in paral
 
 ```
 Task: Score waste in <session>
-Agent: token-waste:waste-analyst
+Agent: waste-analyst    # unnamespaced -- the Task `subagent_type` is the bare agent name, NOT `token-waste:waste-analyst`
 Prompt: Read $WORK/<session>.json. Confirm real token waste, score severity, and
         prescribe the cheaper tool call per the agent spec. Return the JSON array only.
 ```
@@ -170,7 +170,7 @@ Only if `$OUT` has ≥1 example. Spawn a single adapter:
 
 ```
 Task: Adapt away the top token-waste pattern for <DAY>
-Agent: token-waste:waste-adapter
+Agent: waste-adapter    # unnamespaced -- the Task `subagent_type` is the bare agent name, NOT `token-waste:waste-adapter`
 Prompt: Read /tmp/session-waste-examples-<DAY>.json. Group examples by root cause,
         pick the single highest-impact group, and make ONE surgical change to an
         agent / skill / tool / ~/AGENTS.md rule so that pattern stops recurring.

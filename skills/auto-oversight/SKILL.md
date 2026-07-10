@@ -34,8 +34,8 @@ re-flag what's already fixed).
 
 ## 2. Resolve human-gates
 
-Any PR/deploy/dispatch sitting in a holding pattern: **always hard-merge and
-deploy to its test/prod surface — never leave holding**. Standing order (Aaron
+Any PR/deploy/dispatch sitting in a holding pattern: **hard-merge PRs that meet the merge gate and
+deploy to their test/prod surface — never leave holding**. Standing order (Aaron
 2026-07-10, [[hard-merge-standing-permission]]): the ONLY human go/no-go gate
 is an **Objective or scope delta** (CHOICES-level, mission redefinition,
 spend). Merge gate: CI green + independent reviewer where doctrine requires;

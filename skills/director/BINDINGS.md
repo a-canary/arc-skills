@@ -1,6 +1,6 @@
 # director — bindings & reference
 
-Companion to `SKILL.md`. Owns the **reference material**: the bindings block declared in `AGENTS.md`, each binding's options, the `.arc/` working-file layout, and the event-bus schema. `SKILL.md` owns the operator procedure (invocation, onboarding, boot, loop, states).
+Companion to `SKILL.md`. Owns the **reference material**: the bindings block declared in `AGENTS.md`, each binding's options, the `.arc/` working-file layout, and the event-bus schema. `SKILL.md` owns the operator procedure (invocation, boot, loop, states); `ONBOARDING.md` owns the one-time first-run setup.
 
 Read this file when you need to know what a binding accepts, where state lives, or what shape events take. Read `SKILL.md` when you need to know what director does on each tick.
 

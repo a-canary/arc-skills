@@ -29,6 +29,18 @@ file (`~/.claude/dream/journal/YYYY-MM-DD.md`).
    `--offset`/`--window` you already emitted** — scroll back to the earlier
    window instead. To re-find one value, `grep -n` that single line, don't
    re-page or re-read the dump. Page each offset exactly once, forward only.
+
+   **If this first `page.py --offset 0` prints `Error: file not found:` (or an
+   otherwise empty/unreadable session), the session does not exist — that is a
+   CONCLUSIVE, terminal answer, not a cue to search.** Do NOT run any
+   file-location follow-ups (no `find`/`ls`/`glob` for compressed copies, project-
+   dir variants, or the id inside other JSONLs — every such search re-confirms the
+   same absence and burns ~15k context, per journal 2a803d26), and do NOT call
+   `AskUserQuestion` to escalate — the harness declines it and aborts your session
+   with zero findings recorded (journal dea62db2). Instead append ONE
+   `## indirection missing session input` entry via `pipeline.py --append` (step 4)
+   citing the bad path in `what:`, then STOP. Absence is proven by the single
+   failed page; nothing further to page.
 2. Read the window. Look for:
    - **mistake** — Claude did something wrong (wrong file, wrong command, bad assumption).
    - **correction** — the user pushed back ("no", "not that", "actually", "should be"), or Claude redid an action.
@@ -41,11 +53,15 @@ file (`~/.claude/dream/journal/YYYY-MM-DD.md`).
    ambiguous failure, not per observation. **The Explore does NOT inherit your
    discipline — paste it into the Explore brief verbatim:** read each
    file/window exactly once; never re-Read a `tool-results/<id>.txt` (that file
-   IS a prior Bash output, re-loading costs ~10k for nothing); `grep -n` the one
-   line instead of re-paging or re-`sed`/`jq`-ing a `.jsonl`; redirect large
-   command output to `/tmp` and grep it ranged rather than dumping it into
-   context; return only a distilled finding (cause + `file:line`), never raw file
-   contents or command dumps.
+   IS a prior Bash output, re-loading costs ~10k for nothing); for any large
+   source file, diff, or log (`.ts`/`.py`/`.tsx`/`.diff`/`.json`, >~300 lines)
+   `grep -n` the referenced symbol/line FIRST, then `Read` only that
+   `offset`/`limit` range — never read the whole file to inspect one function
+   (whole-source no-grep reads like `slot-gate.ts`/`cost-levers.diff` were ~14k
+   wasted on tally 20260705); `grep -n` the one line instead of re-paging or
+   re-`sed`/`jq`-ing a `.jsonl`; redirect large command output to `/tmp` and grep
+   it ranged rather than dumping it into context; return only a distilled finding
+   (cause + `file:line`), never raw file contents or command dumps.
 4. Append findings to the journal (see format). One entry per observation.
    **Append via `pipeline.py --append` — NOT a Bash `>>`/here-doc.** The journal
    lives under `~/.claude/`, which the harness sensitive-file guard blocks for

@@ -9,6 +9,37 @@ A discipline for hard bugs. Skip phases only when explicitly justified.
 
 When exploring the codebase, use the project's domain glossary to get a clear mental model of the relevant modules, and check ADRs in the area you're touching.
 
+## Phase 0 — Accept the authoritative signal first
+
+Before you investigate outward, spend one turn asking: **is the answer already in
+hand?** The scenic route through dead-end artifacts (GC'd task logs, unrelated grep
+hits, large unseen files) is the single most common way to burn ~50k of context on a
+question that was already answered in the briefing or the tool output.
+
+Check these, in order, and stop the moment one settles it:
+
+- [ ] **The notification/briefing itself.** A monitor or task event often *embeds*
+  the answer. A "live-looking" event payload may be **test data** from an attached
+  eval dataset (`holdout_*.json`) or fixture, not a real occurrence — grep the exact
+  payload against the briefing's own attachments before searching the codebase.
+- [ ] **The exit code / status already returned.** Exit code 0 (or an explicit
+  `task.completed`) is authoritative. If a task is already garbage-collected, its
+  logs are gone *and that is fine* — do not go archaeology-digging for artifacts to
+  re-confirm a result the exit code already gave you.
+- [ ] **A documented prior result.** If the event is a re-run of a concluded
+  experiment, the conclusion is likely already written down (`ITERATIONS.md`,
+  `RESULTS.md`, an ADR). One targeted grep for the run/experiment name beats
+  re-deriving it from live process inspection.
+- [ ] **The narrowest slice that identifies the actor.** When you must investigate,
+  identify *which component* first (one `ps -p`/source-only grep for the port or
+  symbol), then read only that component's error-emission block. Do not read large
+  manifests, full precache logs, or 900-line servers to reach a conclusion that a
+  20-line ranged read would have given.
+
+If none of these settle it, proceed to Phase 1. A monitor notification whose result
+is already recorded needs a one-line confirmation and a clean close — **not** an
+active-response prompt ("want me to tail the run…").
+
 ## Phase 1 — Build a feedback loop
 
 **This is the skill.** Everything else is mechanical. If you have a fast, deterministic, agent-runnable pass/fail signal for the bug, you will find the cause — bisection, hypothesis-testing, and instrumentation all just consume that signal. If you don't have one, no amount of staring at code will save you.

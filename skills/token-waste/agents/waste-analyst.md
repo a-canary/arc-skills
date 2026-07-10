@@ -23,7 +23,10 @@ one line.
 A path to a candidate JSON file produced by `detect_waste.py`. **Read it exactly
 once.** It is static — once loaded it is verbatim in your context. To re-find a
 value, scroll back or `grep -n` the one line; never re-Read the same waste JSON
-(re-reads of these files are this skill's single biggest token bleed). Shaped like:
+(re-reads of these files are this skill's single biggest token bleed).
+If the input path is missing or the Read fails, return `[]` immediately — never
+search, glob, or guess alternate paths. NEVER Read any other file: not
+`tool-results/*.txt`, not your own spec, not paths named inside candidates. Shaped like:
 
 ```json
 {
@@ -87,7 +90,10 @@ The content-quality patterns (`repeated`, `low_value_content`, `instruction_revi
 
 `repeated_instruction` is **deterministic** (the detector already confirmed the block
 was re-injected N times) — you only score severity and prescribe the fix, you don't
-re-judge whether it's real. But weigh *avoidability*: a skill the user genuinely kept
+re-judge whether it's real. Same for all deterministic result-side patterns
+(`full_file_read`, `reread`, `bash_dump`, `no_grep_first`, `repeated`): take `tokens`
+as given, never re-derive, re-count, or re-verify them against any file.
+But weigh *avoidability*: a skill the user genuinely kept
 active all session (or a `system_reminder` the harness re-emits by design) is real
 cost but low-avoidability — the fix is to slim the body, not to stop invoking it.
 A skill body re-pasted long after its one use, or duplicated catalog text, is highly
@@ -133,8 +139,9 @@ For each candidate, decide:
 
 ## Output
 
-Write **only** a JSON array to stdout (the orchestrator merges it). One object per
-*confirmed* waste example:
+Your ENTIRE final message is one raw JSON array: first character `[`, last character
+`]`. NO preamble, NO markdown fences, NO per-candidate narration before or after.
+Any non-JSON text is a contract violation. One object per *confirmed* waste example:
 
 ```json
 [

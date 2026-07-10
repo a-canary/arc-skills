@@ -68,6 +68,13 @@ QUALITY_REVIEW_TOKENS = 1500
 # go to the LLM, so we only send the biggest few — reviewing the largest results
 # first is where the token-quality payoff is. Keeps the analyst's bill bounded.
 MAX_QUALITY_REVIEW = 12
+# Hard cap on candidates written to the per-session JSON. The analyst reads this
+# file WHOLE to score it, so an unbounded list (231 hits / ~26k tokens on a noisy
+# session) turns the waste-hunter into the day's biggest bleed. The list is
+# size-ordered, so the kept slice holds every high-impact hit the adapter acts
+# on; the sub-300-token tail is noise. The headline `candidate_wasted_tokens` is
+# computed from the FULL list before the trim, so the true total is preserved.
+MAX_CANDIDATES = 40
 
 # --- Instruction-context thresholds -------------------------------------------
 # Instruction context is the directive text the harness *re-injects* as attachment
@@ -513,6 +520,13 @@ def detect(filepath: Path, project: str, chars_per_token: float) -> dict:
         key = ("instr", c["target"]) if c["tool"] == "instruction" else ("call", c["index"])
         dedup[key] = max(dedup.get(key, 0), c["tokens"])
     wasted_tokens = sum(dedup.values())
+
+    # Cap the per-session candidate list the analyst must Read whole (see
+    # MAX_CANDIDATES). `wasted_tokens` above is computed from the FULL list, so
+    # the session's true headline total survives the trim; `candidate_count`
+    # reports the pre-trim total and `candidates_truncated` flags any drop.
+    full_count = len(candidates)
+    kept = candidates[:MAX_CANDIDATES]
     return {
         "session_id": filepath.stem,
         "project": project,
@@ -520,8 +534,9 @@ def detect(filepath: Path, project: str, chars_per_token: float) -> dict:
         "chars_per_token": chars_per_token,
         "total_tool_result_tokens": total_tool_tokens,
         "candidate_wasted_tokens": wasted_tokens,
-        "candidate_count": len(candidates),
-        "candidates": candidates,
+        "candidate_count": full_count,
+        "candidates_truncated": full_count - len(kept),
+        "candidates": kept,
     }
 
 
