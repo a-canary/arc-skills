@@ -7,6 +7,9 @@ import { join, dirname } from "path";
 import { homedir } from "os";
 
 const PROXY = "http://127.0.0.1:7890/v1/chat/completions";
+// override per-run: --base https://api.featherless.ai/v1/chat/completions + SKILLOPT_API_KEY env
+const BASE = () => opt("base", PROXY)!;
+const KEY = process.env.SKILLOPT_API_KEY;
 const CAP = 8000;
 
 const args = process.argv.slice(2);
@@ -56,10 +59,10 @@ const shuffle = <T>(rows: T[], seed: number) => {
 async function llm(model: string, user: string): Promise<string> {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const ctl = AbortSignal.timeout(120_000);
-      const res = await fetch(PROXY, {
+      const ctl = AbortSignal.timeout(Number(opt("timeout", "120")) * 1000);
+      const res = await fetch(BASE(), {
         method: "POST", signal: ctl,
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...(KEY ? { authorization: `Bearer ${KEY}` } : {}) },
         body: JSON.stringify({ model, messages: [{ role: "user", content: user }] }),
       });
       if (!res.ok) throw new Error(`http ${res.status}`);
@@ -153,12 +156,23 @@ async function replay() {
   const rows = readJsonl(opt("rows")!);
   const model = opt("model", "cli/claude/haiku")!;
   const out = opt("out")!;
+  const hermetic = args.includes("--hermetic");
+  const conc = Number(opt("concurrency", "2"));
   const results = await pmap(rows, async (r: any) => {
-    // spec + row prompt folded into ONE user message (proxy refuses system role)
-    const msg = `${spec}\n\n---\n\nYour task (from the dispatching agent):\n\n${r.prompt}`;
+    // spec + row prompt folded into ONE user message (proxy refuses system role).
+    // Prefix line is load-bearing: cli-proxy hands the prompt to the CLI as an argv,
+    // so a leading "---" (spec frontmatter) parses as a flag and 500s.
+    let msg = `You are the agent defined by this spec:\n\n${spec}\n\n---\n\nYour task (from the dispatching agent):\n\n${r.prompt}`;
+    if (hermetic) {
+      // pure-chat backends (featherless etc.) have no file access: inline referenced files
+      for (const p of new Set(r.prompt.match(/\/home\/\w+\/\S+\.json\b/g) ?? [])) {
+        try { msg += `\n\n---\nContent of ${p} (inlined — you cannot read files; use this):\n${readFileSync(p as string, "utf8").slice(0, 12000)}`; }
+        catch { msg += `\n\n---\n${p} is missing.`; }
+      }
+    }
     try { return { id: r.id, output: (await llm(model, msg)).slice(0, CAP) }; }
     catch (e) { console.error(`row ${r.id} failed: ${e}`); return { id: r.id, output: null }; }
-  });
+  }, conc);
   writeJsonl(out, results);
   console.error(`replayed ${results.filter((r) => r.output).length}/${rows.length} -> ${out}`);
 }
