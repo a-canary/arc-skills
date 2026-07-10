@@ -2,8 +2,8 @@
 // skillopt-lite: champion/challenger loop for one agent-spec text artifact.
 // Subcommands: mine | split | replay | judge | gate | selftest. No deps beyond bun stdlib.
 
-import { readdirSync, readFileSync, writeFileSync, statSync } from "fs";
-import { join } from "path";
+import { readdirSync, readFileSync, writeFileSync, statSync, mkdirSync } from "fs";
+import { join, dirname } from "path";
 import { homedir } from "os";
 
 const PROXY = "http://127.0.0.1:7890/v1/chat/completions";
@@ -17,8 +17,10 @@ const opt = (name: string, dflt?: string) => {
 };
 const readJsonl = (p: string) =>
   readFileSync(p, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
-const writeJsonl = (p: string, rows: any[]) =>
+const writeJsonl = (p: string, rows: any[]) => {
+  mkdirSync(dirname(p), { recursive: true });
   writeFileSync(p, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+};
 
 // --- deterministic PRNG + hash (mulberry32 / fnv1a) ---
 const mulberry32 = (seed: number) => () => {
@@ -139,8 +141,9 @@ function split() {
   const inp = opt("in")!, frac = Number(opt("test-frac", "0.5")), seed = Number(opt("seed", "42"));
   const rows = shuffle(readJsonl(inp), seed);
   const nTest = Math.round(rows.length * frac);
-  writeJsonl("test.jsonl", rows.slice(0, nTest));
-  writeJsonl("train.jsonl", rows.slice(nTest));
+  const dir = dirname(inp);
+  writeJsonl(join(dir, "test.jsonl"), rows.slice(0, nTest));
+  writeJsonl(join(dir, "train.jsonl"), rows.slice(nTest));
   console.error(`split ${rows.length} -> test ${nTest}, train ${rows.length - nTest} (seed ${seed})`);
 }
 
