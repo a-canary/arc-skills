@@ -64,7 +64,10 @@ bun -e '…insert into feedback (id,project,source,submitter,body_md,state,creat
 ```
 
 Housekeeping in the same run: mark this skill's own `allmissions` rows older
-than 7 days `state='resolved'` so the page stays bounded.
+than 7 days `state='resolved'` so the page stays bounded. **NEVER touch rows
+younger than 7 days** — OPEN rows ARE the visible log; closing a fresh row
+(yours or a prior run's) blanks /m/allmissions. Uppercase `'OPEN'` exactly;
+`state='new'` gets drained by the */5 aggregator, other casings don't render.
 
 ## Rules
 
