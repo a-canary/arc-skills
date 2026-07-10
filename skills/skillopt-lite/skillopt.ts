@@ -200,7 +200,11 @@ async function rollout() {
     const dir = mkdtempSync("/tmp/skillopt-rollout/row-");
     let output = "";
     try {
-      if (staged) cpSync(r.dir, dir, { recursive: true });
+      if (staged) {
+        cpSync(r.dir, dir, { recursive: true });
+        // staged copies keep host perms (e.g. 600 session files) — container uid differs
+        Bun.spawnSync(["chmod", "-R", "a+rwX", dir]);
+      }
       else writeFileSync(join(dir, "prompt.txt"), String(r.prompt ?? ""));
       writeFileSync(join(dir, "spec.md"), spec);
       const p = Bun.spawnSync(
