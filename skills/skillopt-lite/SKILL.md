@@ -65,11 +65,17 @@ at it (run.sh mounts that dir at `/results`), and runs
 both. Failed rows emit `output: ""` and the run continues. Docker is heavy:
 default concurrency 1, use `--limit` while iterating.
 
-Output semantics: `solve()` does not expose the agent's final text — rollout's
-`output` is a serialized `SolveResult` (status, pass_rate, telemetry, workdir).
-The pairwise judge is therefore comparing real execution *outcomes*, not prose.
-Upgrade path when needed: a deterministic gate mode on pass_rate deltas
-(SkillOpt-native outcome scoring), skipping the LLM judge entirely.
+For agents whose prompts reference input files, pre-stage them:
+`rollout --staged staged/index.jsonl ...` where each row is `{id, dir}` and
+`dir` holds `prompt.txt` + the input files (prompt paths rewritten to
+`/results/...`). Each dir is copied per-row (arms never share state) and
+chmod'd readable (container uid differs from host).
+
+Output semantics: rollout-one.ts invokes pi directly (not ProgramBench
+`solve()`); `output` is the agent's real final text after sandboxed tool
+execution — same shape replay writes, judged pairwise the same way.
+GOTCHA: rollout truncates `--out` at start — resume to a SEPARATE file and
+concat, never re-point a partial one.
 
 ## Self-check
 
