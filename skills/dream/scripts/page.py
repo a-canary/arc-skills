@@ -37,13 +37,16 @@ extract.TAGGING_ENABLED = False  # windowing replaces COMPRESS tagging
 
 DEFAULT_WINDOW = 80
 # Each page is dumped straight into the collector's context, so this byte cap IS
-# the per-page token cost (~1 token / 4 bytes). 40000 bytes ~= 7k tokens/page was
-# the single biggest session-review bleed (21 dumps ~= 99k tokens, tally
-# 20260629): windows get skimmed for one failure marker, then discarded. Halve
-# the cap so the worst-case dump is ~3.5k tokens; the window still pages forward,
-# it just emits fewer fat tool_results per page. Override with --max-bytes when a
-# session genuinely needs wider context.
-DEFAULT_MAX_BYTES = 20000
+# the per-page token cost (~1 token / 4 bytes). It must also stay UNDER the
+# harness's inline-display threshold (~16k bytes): a page above it is spilled to a
+# `tool-results/<id>.txt` stub with a "read the full result" pointer, and the
+# haiku collector obeys the pointer and `Read`s the file back — the exact re-read
+# its own definition forbids (37 such reads / ~262k tokens, tally 20260705; pages
+# measured 37-41k because the old 20k cap counted only message-body bytes, not
+# YAML structure, so real pages ran ~2x the cap). 12000 keeps a fully-rendered
+# page ~9-12k bytes — inline, never spilled, still ~3k tokens. Override with
+# --max-bytes only when a session genuinely needs wider context.
+DEFAULT_MAX_BYTES = 12000
 TRUNCATE_TAIL = 1200  # keep this many chars when truncating one oversized field
 
 
@@ -121,9 +124,16 @@ def main():
     start = min(max(0, args.offset), total)
     window_end = min(total, start + args.window)
 
-    # Truncate any single field that alone would exceed the byte cap, so one
-    # fat tool_result can't dominate a page.
-    max_field_chars = max(TRUNCATE_TAIL, args.max_bytes) if args.max_bytes else 0
+    # Truncate any single field so no one tool_result can dominate — and, more
+    # importantly, so a page never swells past the harness's inline-display
+    # threshold. Above that threshold the harness spills the whole page to a
+    # `tool-results/<id>.txt` stub with a "read the full result" pointer, and the
+    # haiku collector obeys that pointer and `Read`s the file — the exact re-read
+    # its own definition forbids (37 such reads / ~262k tokens, tally 20260705).
+    # Capping a single field at a quarter of the page budget keeps any one field
+    # from filling the page, so mid-size fields can't sum a page past --max-bytes
+    # into spill territory. Override with a larger --max-bytes for wider fields.
+    max_field_chars = max(TRUNCATE_TAIL, args.max_bytes // 4) if args.max_bytes else 0
 
     body: list[str] = []
     emitted_bytes = 0
