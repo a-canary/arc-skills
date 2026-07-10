@@ -54,7 +54,7 @@ into it.
    - **Each remaining binding** (`event-bus`, `task-delegation`, `workspace`,
      `on-task-verified`, `todo-list`, `feedback-sink`, `planning-target`,
      `model`, `scheduler.mode`): suggest the flat-file/harness-native default for each
-     (see [Bindings](#bindings) below), but if `arc-agents-available: yes`,
+     (see [BINDINGS.md](BINDINGS.md)), but if `arc-agents-available: yes`,
      also surface the arc-agents-backed alternative as a selectable option
      (e.g. `task-delegation: arc-agents`, `scheduler.mode: arc-agents`) rather
      than silently preferring it — the habitual default always wins unless
@@ -105,101 +105,9 @@ at the cost of a higher token floor (more idle-tick wakeups); higher values are
 cheaper but widen the worst-case silent-stall window. The backstop tick runs the
 same loop as any other — if there's nothing to do, it goes straight back to idle.
 
-## Bindings
+## Reference
 
-Declared in `AGENTS.md`. Director prompts on first boot for any missing binding, writes the answer back.
-
-```md
-## Director bindings
-event-bus: jsonl              # jsonl | db | <skill-name>
-task-delegation: native       # native (harness tool) | arc-agents | <skill-name>
-workspace: worktree           # worktree | treehouse | <skill-name>
-on-task-verified: merge       # merge | draft-pr | <skill-name>
-todo-list: native             # native | arc-agents | <skill-name>
-feedback-sink: jsonl          # jsonl | <api-endpoint> | <skill-name>
-planning-target: prd-file     # prd-file | arc-agents-ledger | kanban | <skill-name>
-model:
-  director: fable > opus > sonnet  # director's own self-spawned --afk tick; first tier available wins
-  director-effort: max
-  worker: sonnet               # every task-delegation dispatch
-  worker-effort: max
-  env:
-    DISABLE_INTERLEAVED_THINKING: "true"
-scheduler:
-  mode: cron                  # cron (self-installed backstop) | arc-agents | <skill-name>
-  backstop-hours: 12          # idle-backstop tick cadence; lower = more frequent wake, higher token floor
-budget:
-  weekly: 500k                # tokens/week per repo; resets Monday 00:00 UTC
-  bypass:
-    - critical-failure        # qa.failed with dimension: critical-failure
-    - security                # qa.failed with dimension: security
-```
-
-### `planning-target`
-
-How director plans the *next* unit of work, independent of how `/task` executes it.
-
-- **`prd-file`** (default) — one `PRD.md` at repo root, addressing only the single
-  most important open gap. On completion, `/director` replaces it with the next
-  PRD rather than accumulating a backlog file. Flat-file, sequential, zero deps.
-- **`arc-agents-ledger`** — delegates planning to arc-agents' `kind=prd` ledger
-  queue (`bin/plan.ts` mints a PRD row at the human-approval gate; arc-agents'
-  `agent=director` profile claims it, runs intake, decomposes into ledger task
-  rows). Useful when a repo already runs arc-agents and wants a queryable,
-  multi-PRD-in-flight backlog instead of one-at-a-time. This is arc-agents'
-  pre-existing PRD-intake pathway — not `/director`'s own interviewer role,
-  which `/director`'s non-AFK mode (grill-me + research, pause/steer/resume)
-  already covers standalone.
-- **`kanban`** / `<skill-name>` — any other planning surface a binding wires up.
-
-### `model`
-
-What tier and reasoning effort each self-spawned invocation runs at, and a shared
-env var applied to both. Only governs invocations `/director` spawns itself — a
-foreground `/director` run started interactively inherits whatever model the
-user's session is already on; this binding does not override that.
-
-- **`director`** — priority-ordered fallback list (default `fable > opus > sonnet`)
-  for the `--afk` cron tick: use the first tier the harness actually has.
-- **`worker`** — single tier (default `sonnet`) for every `task-delegation`
-  dispatch (`/task`, its adversarial-review step, `/qa`, and any other entry in
-  `AGENTS.md`'s `## Worker agents` table).
-- **`director-effort` / `worker-effort`** — reasoning effort per tier (default
-  `max` for both).
-- **`env`** — env vars exported before every self-spawned invocation, e.g.
-  `DISABLE_INTERLEAVED_THINKING: "true"`.
-
-Resolved into the actual command depending on `scheduler.mode` /
-`task-delegation`:
-- `native` harness tool (Agent/Task) — pass `model` (and effort, if the harness
-  tool exposes it) as call params; export `env` in the spawning process.
-- `cron` self-install / worker CLI commands — prepend `env` vars, then
-  `--model <tier> --effort <level>`, e.g.
-  `DISABLE_INTERLEAVED_THINKING=true claude --model sonnet --effort max -p "..."`.
-- `arc-agents` backend — map `director`/`worker` onto its `smart_alias`/
-  `fast_alias` exec-CLI aliases (see `select-models` skill) instead of
-  hardcoding a `claude --model` string; `env` still applies at the shell level.
-
-### `scheduler`
-
-How `/director` gets re-invoked to drive the AFK loop forward.
-
-- **`cron`** (default) — `/director` is self-sufficient: on first `--afk` boot it
-  installs its own feedback watcher and a cron entry, cadence set by
-  `scheduler.backstop-hours` (default 12hr), that re-runs
-  `<harness> /director <repo-root> --afk` using the `model.director` binding
-  above, e.g. `DISABLE_INTERLEAVED_THINKING=true <harness> --model fable --effort max
-  /director <repo-root> --afk` (falling back to `opus`, then `sonnet`, per the
-  binding's priority list). Each invocation reads `.arc/director/`
-  state and resumes where it left off — no daemon, no external scheduler.
-- **`arc-agents`** — if installed, arc-agents' factory can schedule and execute
-  the tick instead of a bare cron entry (its existing supervisor/reaper loop
-  substitutes for the self-installed cron), and can dispatch through its own
-  CLI-agent failover group (`fast`/`smart` alias chains) instead of a single
-  fixed harness — useful when a repo wants cross-provider/cross-model retry on
-  a stuck tick rather than depending on one harness's own background-agent or
-  cron mechanism. Optional, not required — see arc-agents
-  [ADR-0012 addendum 2](https://github.com/a-canary/arc-agents/blob/main/docs/adr/0012-director-agent-axi.md).
+Bindings, the `.arc/` working-file layout, and the event-bus schema are in [`BINDINGS.md`](BINDINGS.md). Read it when you need to know what a binding accepts, where state lives, or what shape events take; read this file for the operator procedure below.
 
 ## Director loop
 
@@ -210,26 +118,31 @@ check budget (binding may delegate to a repo's own governor, e.g. arc-agents'
     dimension critical-failure or security may still dispatch; all other
     gap-delegation pauses until budget resets or a human raises it
   → bypass triggers run at full priority regardless of budget state
+check capacity (capacity binding, if bound — ADVISORY: any CLI error →
+  proceed unbound + emit capacity.failopen; never blocks a dispatch)
+  → route per dispatch (lane: bypass work = critical, exploratory = research,
+    else standard): run → dispatch; park → re-queue + emit capacity.parked
+    (carry vast_stop); escalate → dispatch on best alternative provider
+  → record every provider response back (tokens + ok|429)
 gap-analysis (reads .arc/director/gaps.md + event log; under planning-target:
   prd-file, gaps.md is derived from the current PRD.md's acceptance criteria)
-  → [?] unverified candidates (from task.discovered)? → validate each against
-    source (grep the claim, read the file:line) → promote to [ ] open gap or
-    drop with reason; a candidate is never delegated until promoted
   → open gaps? → delegate via task-delegation binding
   → no gaps, inflight/pending-QA? → sleep (event-driven)
   → no gaps, no inflight, no pending-QA? → idle; sleep until next feedback event
 watch event bus (event-bus binding)
   → task.completed  → validate evidence paths exist → dispatch /qa
   → task.completed, no evidence → reject, re-queue
-  → qa.passed       → close gap; rewrite .arc/director/gaps.md, inflight.md
+  → qa.passed (no phase field) → non-production surface: close gap; rewrite
+                      .arc/director/gaps.md, inflight.md. Production surface: do
+                      NOT close the gap at merge — merge per on-task-verified
+                      binding, deploy, then dispatch /qa again against the LIVE
+                      surface (hard-merge §6) WITH phase:post-deploy on its emitted
+                      event so this branch and the next are mechanically distinct.
+  → qa.passed (phase:post-deploy) → the live-surface result: close gap. Route its
+                      findings to the next gap tick; a critical/truthfulness one
+                      triggers rollback, then re-gap from findings.
   → qa.failed       → check bypass triggers; emit task.assigned (retry or new slice)
   → task.failed     → rewrite .arc/director/blocked.md; re-gap or surface to user
-  → task.discovered → a chamber (worker/reviewer) reported a follow-up gap it
-                       uniquely learned. Append to gaps.md as an UNVERIFIED
-                       candidate ([?] prefix); never dispatch against it this
-                       tick — next gap-analysis validates it against source
-                       before it becomes a real [ ] gap (subagent reports are
-                       untrusted; discovery nominates work, it can't mint it)
   → user.feedback   → append to feedback-sink; batch by (feature, version, resource)
                        when count ≥ threshold → dispatch /qa with batch context
 heartbeat (every 5 min in --afk mode; scheduler.backstop-hours cron wakes idle directors regardless)
@@ -243,69 +156,19 @@ end of every tick
 | State | Meaning |
 |---|---|
 | **delegating** | Open gaps exist; emitting task.assigned events |
-| **triaging** | Unverified `[?]` candidates from task.discovered await source-validation before this tick promotes or drops them |
 | **waiting:inflight** | Tasks assigned; no results yet |
 | **waiting:qa** | Tasks completed; QA dispatched |
 | **idle** | No gaps, no inflight, no pending QA; sleeping until next feedback event |
 | **paused** | `.arc/director/director.paused` sentinel present; no ticks until `/director resume` |
 | **budget-exceeded** | Weekly token limit reached; restricted to critical-failure/security dispatch only until budget resets or a human raises it |
 
-## `.arc/` layout
-
-`PRD.md` itself lives at the parent repo's root, not under `.arc/` — it's a
-human-readable planning artifact (`planning-target: prd-file`, the default),
-replaced wholesale when its gap closes. Everything under `.arc/` is director's
-own working state, derived from whatever the current PRD says.
-
-```
-.arc/
-  events.jsonl              # IPC event bus (gitignored by default)
-  feedback.jsonl            # user feedback sink (git-tracked)
-  director/                 # director working files (git-tracked)
-    gaps.md                 # current gap list + state header (rewritten each tick)
-    inflight.md             # tasks assigned, not yet completed (rewritten each tick)
-    blocked.md              # stuck tasks with reason (rewritten each tick)
-    director.paused         # sentinel; presence = paused (deleted on resume)
-    specs/<slice>.md        # written by /task before TDD loop
-    qa/<ref>.md             # written by /qa after verification
-  local-dev-dash/           # webui contract (git-tracked; director generates each tick)
-    main.html               # entry point — renders mission, gaps, metrics, lanes
-    mission.md              # restated objective
-    metrics.svg             # KPI chart toward mission completion
-    lanes.json              # roadmap lanes (gaps → tasks → done)
-```
-
-`local-dev-dash/main.html` is the dashboard contract. Webui iframes or links to it; the repo
-owns what's inside. Inspectable with a plain browser — no server required. Director regenerates
-it at the end of every tick from its working files. arc-webui sidebar chat annotates against
-`main.html` anchors and writes annotations to the `feedback-sink` binding — no ledger touch.
-
 ## Epistemic gates (prove-before-scale)
 
 - `task.completed` without `evidence:[{path,description}]` → rejected, re-queued
-- `task.completed` without a reachability declaration — either `wires-to:<live-path>`
-  or `inert:true` — → rejected, re-queued. A slice that ships a capability nothing
-  reaches must say so; `inert:true` makes the director auto-emit a `task.discovered`
-  activation candidate so the wiring can't dangle unowned (the recurring "shipped
-  inert, no gap owns the wiring" failure — trading epic #133 hit it twice)
 - `qa.passed` without `evidence` → rejected, re-queued
 - `qa.failed` without `reproduction` → rejected, re-queued
-- `task.discovered` → never delegated directly; lands as an UNVERIFIED `[?]`
-  candidate that next gap-analysis must validate against source before promotion
-  (backflow can nominate work, never mint it — subagent reports are untrusted)
 - User feedback → never creates a task directly; dispatches `/qa` first
 - User feedback batched by `(feature, version, resource)` — count increases trust, QA still required
-
-## Event schema
-
-```jsonl
-{"id":"evt_01","type":"task.assigned","status":"open","ts":1751234567,"slice":"auth/login","acceptance":"all edge cases green","worker_id":"tdd-agent"}
-{"id":"evt_02","type":"task.completed","status":"resolved","ts":1751234890,"ref":"evt_01","worker_id":"tdd-agent","wires-to":"src/routes/auth.ts","evidence":[{"path":"tests/auth.test.ts","description":"12/12 green"},{"path":"src/auth/login.ts","description":"matches spec"}]}
-{"id":"evt_03","type":"qa.passed","status":"resolved","ts":1751235000,"ref":"evt_02","evidence":[{"path":"qa/screenshots/login-2.1.0.png","description":"happy path, no friction"}]}
-{"id":"evt_04","type":"task.completed","status":"resolved","ts":1751235010,"ref":"evt_01b","worker_id":"tdd-agent","inert":true,"evidence":[{"path":"src/counsel/notes.ts","description":"counselNotes() built + unit-green, byte-identical to main until wired"}]}
-{"id":"evt_05","type":"task.discovered","status":"open","ts":1751235012,"parent":"evt_04","gap":"wire counselNotes() into daily-cycle read path — inert until then","evidence":[{"path":"src/counsel/notes.ts:12","description":"exported, zero callers"}]}
-{"id":"fb_01","type":"user.feedback","status":"open","ts":1751235100,"feature":"auth/login","version":"2.1.0","resource":"/login","description":"submit button unresponsive on mobile"}
-```
 
 ## What director does NOT own
 
