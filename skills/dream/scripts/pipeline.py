@@ -114,21 +114,27 @@ def sessions_to_process(processed: dict, force: bool = False, limit: int = 0) ->
     message) are skipped — they have nothing to mine and otherwise re-list
     forever on mtime churn.
     """
+    def _maybe_add(jsonl, out, processed, force):
+        if not force:
+            entry = processed["sessions"].get(session_key(jsonl))
+            if entry and entry.get("source_mtime") == jsonl.stat().st_mtime:
+                return
+        if not has_minable_content(jsonl):
+            return
+        out.append(jsonl)
+
     out = []
     for root in SESSION_ROOTS:
         if not root.is_dir():
             continue
+        # glob both layouts: project subdirs and legacy pi flat files at the root
+        for jsonl in root.glob("*.jsonl"):
+            _maybe_add(jsonl, out, processed, force)
         for project_dir in root.iterdir():
             if not project_dir.is_dir():
                 continue
             for jsonl in project_dir.glob("*.jsonl"):
-                if not force:
-                    entry = processed["sessions"].get(session_key(jsonl))
-                    if entry and entry.get("source_mtime") == jsonl.stat().st_mtime:
-                        continue
-                if not has_minable_content(jsonl):
-                    continue
-                out.append(jsonl)
+                _maybe_add(jsonl, out, processed, force)
     out.sort(key=lambda p: p.stat().st_mtime)
     if limit > 0:
         out = out[:limit]
