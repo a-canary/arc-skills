@@ -203,8 +203,10 @@ async function rollout() {
         ["bash", join(factory, "bench/arcsim/run.sh"), "bun", "bench/rollout-one.ts",
           "/results/spec.md", "/results/prompt.txt", "/results/out.json"],
         { env: { ...process.env, ARCSIM_RESULTS: dir }, stdout: "ignore", stderr: "inherit" });
-      if (p.exitCode !== 0) throw new Error(`run.sh exit ${p.exitCode}`);
+      // rollout-one exits nonzero on status!=="ok" but still writes a full SolveResult —
+      // that failure outcome is judge-relevant, so read out.json before the exit check.
       output = String(JSON.parse(readFileSync(join(dir, "out.json"), "utf8")).output ?? "").slice(0, CAP);
+      if (!output && p.exitCode !== 0) throw new Error(`run.sh exit ${p.exitCode}`);
     } catch (e) { console.error(`row ${r.id} failed: ${e}`); }
     appendFileSync(out, JSON.stringify({ id: r.id, output }) + "\n");
     console.error(`rollout ${++done}/${rows.length} ${r.id} ${output ? "ok" : "EMPTY"}`);
