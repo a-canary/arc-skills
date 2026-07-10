@@ -218,7 +218,8 @@ async function rollout() {
     } catch (e) { console.error(`row ${r.id} failed: ${e}`); }
     appendFileSync(out, JSON.stringify({ id: r.id, output }) + "\n");
     console.error(`rollout ${++done}/${rows.length} ${r.id} ${output ? "ok" : "EMPTY"}`);
-    rmSync(dir, { recursive: true, force: true });
+    // container-uid-owned files can EACCES host rm — leak the tempdir, don't kill the run
+    try { rmSync(dir, { recursive: true, force: true }); } catch (e) { console.error(`warn: leak ${dir}: ${e}`); }
   }, Number(opt("concurrency", "1")));
   console.error(`rollout done -> ${out}`);
 }
