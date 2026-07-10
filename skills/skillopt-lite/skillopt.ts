@@ -162,7 +162,10 @@ async function replay() {
     // spec + row prompt folded into ONE user message (proxy refuses system role).
     // Prefix line is load-bearing: cli-proxy hands the prompt to the CLI as an argv,
     // so a leading "---" (spec frontmatter) parses as a flag and 500s.
-    let msg = `You are the agent defined by this spec:\n\n${spec}\n\n---\n\nYour task (from the dispatching agent):\n\n${r.prompt}`;
+    // ponytail: prompt-level guard only — chat-only backends are isolated by construction
+    // (no tools), but cli/claude/* backends run a real CLI with live tools. If the target
+    // agent's rows contain write/mutate instructions, use a chat-only backend or a sandbox.
+    let msg = `REPLAY MODE — historical evaluation. You are READ-ONLY: never Write, Edit, run state-changing Bash, or touch databases/ledgers/journals; produce your answer as message text only.\n\nYou are the agent defined by this spec:\n\n${spec}\n\n---\n\nYour task (from the dispatching agent):\n\n${r.prompt}`;
     if (hermetic) {
       // pure-chat backends (featherless etc.) have no file access: inline referenced files
       for (const p of new Set(r.prompt.match(/\/home\/\w+\/\S+\.json\b/g) ?? [])) {
