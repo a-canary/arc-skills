@@ -2,7 +2,7 @@
 // skillopt-lite: champion/challenger loop for one agent-spec text artifact.
 // Subcommands: mine | split | replay | judge | gate | selftest. No deps beyond bun stdlib.
 
-import { readdirSync, readFileSync, writeFileSync, statSync, mkdirSync, mkdtempSync, appendFileSync, rmSync } from "fs";
+import { readdirSync, readFileSync, writeFileSync, statSync, mkdirSync, mkdtempSync, appendFileSync, rmSync, cpSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 
@@ -185,7 +185,10 @@ async function replay() {
 // Contract: <factory>/bench/rollout-one.ts <specFile> <promptFile> <outFile> -> {output, exitCode}.
 async function rollout() {
   const spec = readFileSync(opt("spec")!, "utf8");
-  let rows = readJsonl(opt("rows")!);
+  // --staged index.jsonl: rows are {id, dir} pre-staged dirs (prompt.txt + input files);
+  // each dir is COPIED into the per-row tempdir so arms never mutate the shared staging.
+  const staged = opt("staged");
+  let rows = staged ? readJsonl(staged) : readJsonl(opt("rows")!);
   const limit = opt("limit"); if (limit) rows = rows.slice(0, Number(limit));
   const out = opt("out")!;
   const factory = opt("factory", join(homedir(), "repos", "arc-factory"))!.replace(/^~/, homedir());
@@ -197,8 +200,9 @@ async function rollout() {
     const dir = mkdtempSync("/tmp/skillopt-rollout/row-");
     let output = "";
     try {
+      if (staged) cpSync(r.dir, dir, { recursive: true });
+      else writeFileSync(join(dir, "prompt.txt"), String(r.prompt ?? ""));
       writeFileSync(join(dir, "spec.md"), spec);
-      writeFileSync(join(dir, "prompt.txt"), String(r.prompt ?? ""));
       const p = Bun.spawnSync(
         ["bash", join(factory, "bench/arcsim/run.sh"), "bun", "bench/rollout-one.ts",
           "/results/spec.md", "/results/prompt.txt", "/results/out.json"],
