@@ -90,3 +90,8 @@ younger than 7 days** — OPEN rows ARE the visible log; closing a fresh row
   flooding Aaron's review queue — oversight that manufactures human check-ins
   is anti-autonomy. Improvement ideas go in the run's log row `action`/`parked`
   line; only a mission director promotes one to a PRD.
+- **Verify a guard is actually missing before adding it.** A comment without a
+  command on the *next* line often has its command two lines down; print the
+  full surrounding block (`sed -n 'N,Mp'` on the live file) before inserting
+  any cron/config line. Observed 2026-07-11: a "missing" log-trim cron was
+  present all along — the fix inserted a duplicate that had to be reverted.
