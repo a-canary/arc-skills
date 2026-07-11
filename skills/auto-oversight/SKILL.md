@@ -15,6 +15,15 @@ That's THIS run's mission. Immediately write back the next in cycle
 `trading → onenation → autonomy → local-models → trading` so a crashed run
 never wedges the rotation.
 
+**Compute the write-back from the value you just READ, never from the mission
+you expected.** Two loops share this file; if the read value differs from your
+prediction, another loop already rotated — your mission is the READ value, and
+writing your precomputed "next" re-inserts a mission and double-audits it.
+Best shape: one command that cats the file THEN writes read+1, so a stale
+prediction can't leak in. Observed 2026-07-11: an interactive run expecting
+`trading` read `onenation` (cron took trading minutes earlier) and wrote
+`onenation` back — self-cancelling no-op caught only by hand.
+
 **Freshness gate — skip duplicate audits.** After rotating, check the ledger
 for a recent audit of this mission:
 
