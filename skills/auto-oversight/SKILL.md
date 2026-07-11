@@ -15,6 +15,20 @@ That's THIS run's mission. Immediately write back the next in cycle
 `trading → onenation → autonomy → local-models → trading` so a crashed run
 never wedges the rotation.
 
+**Freshness gate — skip duplicate audits.** After rotating, check the ledger
+for a recent audit of this mission:
+
+```
+select id from feedback where source='auto-oversight'
+  and id like 'ao-<mission-slug>-%' and created_at >= <now minus 90 min ISO>
+```
+
+A row exists → another oversight loop (cron vs interactive share the rotation)
+already audited this mission; say so, log NOTHING, and end the run. Observed
+2026-07-11: cron and an interactive loop double-audited trading (02:08 + 02:33)
+and autonomy (04:10 + 04:29) — each duplicate is a full model run producing a
+near-identical log row.
+
 Mission → surfaces:
 - **trading**: repo `~/repos/trading`, director `.arc/director/*`, crons (shadow rebalance, director-tick), open PRs, `/m/trading`
 - **onenation**: repo `/home/aaron/projects/OneNation` (deploy checkout = prod), docker stack, QA journey cron log `.claude/qa-journey-cron.log`, open PRs, `/m/onenation`
