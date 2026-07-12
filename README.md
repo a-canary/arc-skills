@@ -58,7 +58,7 @@ Most skills are pure markdown — making them visible *is* the install. A few ne
 - `install-anti-sycophancy` — writes Stop/UserPromptSubmit hook
 - `install-to-trash` — writes PreToolUse hook replacing `rm` with reversible trash-move
 - `install-behavioral-rules` — symlinks every harness's user-level config (`CLAUDE.md`, `pi.md`, …) to the canonical `AGENTS.md`; idempotent
-- `schedule-hygiene` — writes cron/systemd-timer entries that fire hygiene skills via `claude -p`
+- `schedule-hygiene` — pointer to the real cron rotation (`hygiene-tick.ts`) that fires hygiene skills via ledger tasks
 
 **Pre-PR**
 - `blog` — drafts an entry in the ledger blog table via arc-agents API from the staged diff so the post is reviewed alongside the code
