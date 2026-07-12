@@ -23,12 +23,22 @@ file (`~/.claude/dream/journal/YYYY-MM-DD.md`).
    python3 ~/.claude/skills/dream/scripts/page.py <session.jsonl> --offset <N> --window 80
    ```
    Start at `--offset 0`. The window the Bash call prints **is already in your
-   context** — read it from there. **Never `Read` a `tool-results/<id>.txt`
-   file** (that file *is* the Bash output you just got, re-loading it costs ~10k
-   tokens for zero new information), and **never re-run `page.py` on an
-   `--offset`/`--window` you already emitted** — scroll back to the earlier
-   window instead. To re-find one value, `grep -n` that single line, don't
-   re-page or re-read the dump. Page each offset exactly once, forward only.
+   context** — read it from there. Let `page.py` print straight to stdout;
+   **do NOT redirect it to `/tmp/pageN.txt` (or `/tmp/sessionN.txt`,
+   `/tmp/page_sN_M.txt`) and then `Read` the file back** — that pays for the
+   same window twice (the redirect writes it, the Read re-loads it) and was the
+   single biggest `subagents` bleed on tally 20260711 (~40k tokens across
+   `/tmp/page*.txt` reread + unreferenced page loads). If you must redirect
+   (only to `grep -n` one line out of a huge window), grep the file — never
+   `Read` it whole. **Never `Read` a `tool-results/<id>.txt` file** (that file
+   *is* the Bash output you just got, re-loading it costs ~10k tokens for zero
+   new information), and **never re-run `page.py` on an `--offset`/`--window`
+   you already emitted** — scroll back to the earlier window instead. To
+   re-find one value, `grep -n` that single line, don't re-page or re-read the
+   dump. **Page only the offsets you will actually read** — do not fan out
+   several speculative `--offset` pages up front "to have them"; page one, read
+   it, then decide if the next is worth it. Page each offset exactly once,
+   forward only.
 
    **If this first `page.py --offset 0` prints `Error: file not found:` (or an
    otherwise empty/unreadable session), the session does not exist — that is a

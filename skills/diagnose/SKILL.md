@@ -25,7 +25,15 @@ Check these, in order, and stop the moment one settles it:
 - [ ] **The exit code / status already returned.** Exit code 0 (or an explicit
   `task.completed`) is authoritative. If a task is already garbage-collected, its
   logs are gone *and that is fine* — do not go archaeology-digging for artifacts to
-  re-confirm a result the exit code already gave you.
+  re-confirm a result the exit code already gave you. **The inverse is equally
+  authoritative and more often missed: a non-zero exit or a tool result marked
+  `is_error: true` is a FAILURE — never mine "(no output)" for optimistic meaning
+  (e.g. reading a failed `systemctl status` as "it's running"). Read the exit code
+  literally before drawing any state conclusion.** Exit code **127 = command/CLI
+  not found**, not a fact about the diagnosed system: the tool you invoked is
+  absent (`sqlite3`, a `systemctl` fallback, etc.). Before concluding, check for a
+  programmatic fallback (e.g. `better-sqlite3` in `package.json`, a different binary
+  path) or say the dependency is missing — do not assume the environment has it.
 - [ ] **A documented prior result.** If the event is a re-run of a concluded
   experiment, the conclusion is likely already written down (`ITERATIONS.md`,
   `RESULTS.md`, an ADR). One targeted grep for the run/experiment name beats

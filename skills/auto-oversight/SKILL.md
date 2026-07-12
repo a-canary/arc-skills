@@ -88,8 +88,18 @@ passthrough project):
 
 ```
 bun -e '…insert into feedback (id,project,source,submitter,body_md,state,created_at)
-        values ("ao-<mission>-<rand>","allmissions","auto-oversight","auto-oversight",<body>,"OPEN",<now-iso>)'
+        values ("ao-<mission>-<rand>","allmissions","auto-oversight","auto-oversight",<body>,"LOG",<now-iso>)'
 ```
+
+**State rule (2026-07-12, operator directive): `LOG` unless actionable.**
+Routine audit rows are journal entries, not feedback — insert them with
+`state="LOG"` (a sink every drain/count ignores; all consumers filter
+`state='OPEN'`). Insert `state="OPEN"` ONLY when the row demands action a
+human or another agent must take (a resolvable gate, a defect, an operator
+decision) — and state the required action in the first line of `body_md`.
+The freshness gate above is state-agnostic (id+created_at), so LOG rows
+still suppress duplicate audits.
+
 
 `source` MUST be `"auto-oversight"` (untrusted), never `"direct"`: `direct` is a
 trusted source, so ONE log row passes the aggregator's confirmation gate, mints
