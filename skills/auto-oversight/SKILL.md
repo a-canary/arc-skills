@@ -32,6 +32,11 @@ select id from feedback where source='auto-oversight'
   and id like 'ao-<mission-slug>-%' and created_at >= <now minus 90 min ISO>
 ```
 
+No `sqlite3` binary on this host — run the query (and the step-4 insert) via
+`~/.bun/bin/bun -e '…bun:sqlite…'` against `~/vault/ledger.db` (`bun` needs
+the full path or `PATH=$HOME/.bun/bin:$PATH`; cron env lacks it). Exit 127
+here is a tooling error, NOT a clear gate — never skip the check.
+
 A row exists → another oversight loop (cron vs interactive share the rotation)
 already audited this mission; say so, log NOTHING, and end the run. Observed
 2026-07-11: cron and an interactive loop double-audited trading (02:08 + 02:33)
