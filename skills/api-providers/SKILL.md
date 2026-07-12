@@ -16,6 +16,7 @@ Keys live in the GPG `pass` store. Never inline; pull at use: `pass show api/<pr
 | openrouter | `api/openrouter/api-key` | https://openrouter.ai/api/v1 | Bearer |
 | featherless | `api/featherless/api-key` | https://api.featherless.ai/v1 | Bearer |
 | chutes | `api/chutes/api-key` | https://llm.chutes.ai/v1 | Bearer |
+| cerebras | `api/cerebras/api-key` | https://api.cerebras.ai/v1 | Bearer — KEY NOT YET PROVISIONED |
 | claude (OAuth) | `api/claude/oauth-token` | via cli-proxy http://127.0.0.1:7890/v1 | Max quota — no per-token cost (see `/cli-proxy`) |
 | huggingface | `api/huggingface/token` | huggingface.co hub | model downloads, gated repos |
 | vast | `api/vast/api-key` | vast.ai CLI | GPU leasing (see `/vast-cli`, `/vast-compute`) |
