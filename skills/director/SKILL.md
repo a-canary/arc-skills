@@ -71,6 +71,11 @@ check capacity (capacity binding, if bound — ADVISORY: any CLI error →
     else standard): run → dispatch; park → re-queue + emit capacity.parked
     (carry vast_stop); escalate → dispatch on best alternative provider
   → record every provider response back (tokens + ok|429)
+reconcile (scripts/reconcile.sh <repo-root> — before gap analysis, rewrites
+  .arc/director/inflight.md rows against GitHub truth: a row claiming a PR is
+  OPEN/pending-operator that gh reports MERGED moves to a "## Recently closed"
+  section and emits a reconcile.moved event. Fail-open: no gh / not
+  authenticated / no matching rows → no-op, inflight.md untouched)
 gap-analysis (reads .arc/director/gaps.md + event log; under planning-target:
   prd-file, gaps.md is derived from the current PRD.md's acceptance criteria)
   → open gaps? → delegate via task-delegation binding
