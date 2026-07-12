@@ -24,7 +24,7 @@ Classify links: github / arxiv-whitepaper / docs / promo-noise. Keep the first t
 ## 2. Transcript
 
 ```bash
-yt-dlp --skip-download --write-auto-subs --sub-langs en --sub-format vtt -o t "$URL"
+yt-dlp --skip-download --write-auto-subs --sub-langs en --sub-format vtt -o t "$URL"   # no en subs? check meta.json subtitles keys
 python3 ~/.claude/skills/youtube-extract/scripts/clean_vtt.py t.en.vtt > transcript.txt
 ```
 
@@ -43,8 +43,8 @@ Per timestamp (compute END = start + 2s yourself):
 
 ```bash
 yt-dlp -f "bestvideo[height<=720]" --download-sections "*HH:MM:SS-HH:MM:SS_END" -o "seg.%(ext)s" "$URL"
-ffmpeg -y -i seg.mp4 -frames:v 1 shot_HHMMSS.jpg 2>/dev/null   # may core-dump AFTER writing — check file exists
-rm seg.mp4
+ffmpeg -y -i seg.* -frames:v 1 shot_HHMMSS.jpg 2>/dev/null   # may core-dump AFTER writing — check file exists
+rm seg.*
 ```
 
 Read each image; transcribe charts/tables/code into text in the breakdown (the jpg is temp, the text is durable).
