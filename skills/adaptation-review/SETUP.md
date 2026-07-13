@@ -10,16 +10,18 @@ agents directory. One-time install:
 
 The agent prompt ships at `skills/adaptation-review/agents/`. Symlink it where
 Claude Code discovers subagents (`~/.claude/agents/`), so the skill can spawn
-`regression-reviewer` by name:
+`regression-reviewer` by name. Use the shared `bin/install-skill-agents.sh`
+(idempotent; backs up any wrong-target link or real file to `~/trash/` before
+replacing — same contract as `install-behavioral-rules/inject.sh`):
 
 ```bash
-mkdir -p ~/.claude/agents
-ln -sf ~/.claude/skills/adaptation-review/agents/regression-reviewer.md \
-       ~/.claude/agents/regression-reviewer.md
+bin/install-skill-agents.sh adaptation-review regression-reviewer.md
 ```
 
-(`~/.claude/skills/` is itself a symlink into the arc-skills repo, so the agent
-file tracks the repo — edit once, installed everywhere.)
+(Path can be relative to any cwd — the script resolves `~/.claude/skills/` via
+the symlink into the arc-skills repo.) (`~/.claude/skills/` is itself a symlink
+into the arc-skills repo, so the agent file tracks the repo — edit once,
+installed everywhere.)
 
 ## 2. Model
 
