@@ -117,6 +117,12 @@ shared-resource discipline rule in AGENTS.md. Gates you cannot resolve
 (sudo, secrets, scope deltas): make sure they're visible on the webui
 (ledger feedback row → /approvals), then leave them.
 
+**Reconcile ledger vs closed PRs.** A review-state ledger row whose PR (or
+worker branch's PR) was closed unmerged by a deliberate verdict (YAGNI,
+superseded, duplicate) is stale — the human decision already landed. Cancel
+the row with an event citing the verdict; never leave it haunting the queue
+(recurred 2026-07-13: onenation #172/#173 rows sat in review after close).
+
 ## 3. One small autonomy action
 
 One concrete change that removes a check-in or hardens a system substitute
