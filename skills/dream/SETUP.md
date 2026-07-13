@@ -11,16 +11,17 @@ directory. So there is a one-time install:
 
 The agent prompts ship at `skills/dream/agents/`. Symlink them where Claude Code
 discovers subagents (`~/.claude/agents/`), so `/dream` can spawn `collector` and
-`adapter` by name:
+`adapter` by name. Use the shared `bin/install-skill-agents.sh` (idempotent;
+backs up any wrong-target link or real file to `~/trash/` before replacing —
+same contract as `install-behavioral-rules/inject.sh`):
 
 ```bash
-mkdir -p ~/.claude/agents
-ln -sf ~/.claude/skills/dream/agents/collector.md ~/.claude/agents/collector.md
-ln -sf ~/.claude/skills/dream/agents/adapter.md   ~/.claude/agents/adapter.md
+bin/install-skill-agents.sh dream collector.md adapter.md
 ```
 
-(`~/.claude/skills/` is itself a symlink into this repo, so the agent files
-track the repo — edit once, installed everywhere.)
+(Path can be relative to any cwd — the script resolves `~/.claude/skills/` via
+the symlink into this repo.) (`~/.claude/skills/` is itself a symlink into this
+repo, so the agent files track the repo — edit once, installed everywhere.)
 
 ## 2. Configure a fast and a smart model
 

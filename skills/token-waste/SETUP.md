@@ -12,16 +12,19 @@ install:
 
 The agent prompts ship at `skills/token-waste/agents/`. Symlink them where Claude
 Code discovers subagents (`~/.claude/agents/`), so `/token-waste` can spawn
-`waste-analyst` and `waste-adapter` by name:
+`waste-analyst` and `waste-adapter` by name. Use the shared
+`bin/install-skill-agents.sh` (idempotent; backs up any wrong-target link or
+real file to `~/trash/` before replacing — same contract as
+`install-behavioral-rules/inject.sh`). The `adapter.md:waste-adapter.md`
+rename avoids shadowing `/dream`'s `adapter.md`:
 
 ```bash
-mkdir -p ~/.claude/agents
-ln -sf ~/.claude/skills/token-waste/agents/waste-analyst.md ~/.claude/agents/waste-analyst.md
-ln -sf ~/.claude/skills/token-waste/agents/adapter.md       ~/.claude/agents/waste-adapter.md
+bin/install-skill-agents.sh token-waste waste-analyst.md adapter.md:waste-adapter.md
 ```
 
-(`~/.claude/skills/` is itself a symlink into this repo, so the agent files track
-the repo — edit once, installed everywhere.)
+(Path can be relative to any cwd — the script resolves `~/.claude/skills/` via
+the symlink into this repo.) (`~/.claude/skills/` is itself a symlink into this
+repo, so the agent files track the repo — edit once, installed everywhere.)
 
 ## 2. Configure a fast and a smart model
 
