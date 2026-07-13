@@ -49,6 +49,24 @@ Mission → surfaces:
 - **autonomy**: repos `~/repos/arc-agents`, `~/repos/arc-webui`, `~/repos/arc-skills`; feedback drain cron; webui :8080 up; open PRs
 - **local-models**: `~/repos/starlight-slm` (symlink → /mnt/Storage1; unmounted = parked, say so and move on)
 
+## 0.5. Backstop the parked-action queue (trading only, for now)
+
+Before judging, re-notice parked actions that have gone stale or lost their
+receipt. The trading repo ships this as a pure tool (`tools/oversight-backstop.ts`,
+PR #179):
+
+```
+cd ~/repos/trading && tsx tools/oversight-backstop.ts report <mission>
+```
+
+It prints a JSON `BackstopReport`. Read two fields:
+- `agedFlaggedIds` — open parked rows past their freshness window (stale).
+- `missingReceiptIds` — closed rows with no completion receipt.
+
+Both are re-notices, not auto-closes: genuine human-gate rows stay OPEN by
+design (parked-item-handoff). Carry these two arrays into step 4's log line.
+Mission has no backstop tool → skip this step (only trading ships one today).
+
 ## 1. Judge (explore + explain, briefly)
 
 For the mission answer each: **active?** (recent commits/ticks/cron fires) ·
@@ -82,9 +100,12 @@ commit identity from ~/vault/USER.md). Small; prove before scaling.
 ## 4. Log to /m/allmissions
 
 Append the run's distilled record (mission, verdicts one line each, gates
-resolved/remaining, action taken) as a ledger feedback row so the webui
-renders it on /m/allmissions (attention axis shows OPEN rows for the
-passthrough project):
+resolved/remaining, action taken, plus the step-0.5 backstop result) as a
+ledger feedback row so the webui renders it on /m/allmissions (attention axis
+shows OPEN rows for the passthrough project). Receipt-verification clause: if
+`agedFlaggedIds` or
+`missingReceiptIds` from step 0.5 is non-empty, append `aged-flagged=<ids>`
+and/or `missing-receipt=<ids>` to the log line; empty arrays add nothing.
 
 ```
 bun -e '…insert into feedback (id,project,source,submitter,body_md,state,created_at)
