@@ -112,7 +112,12 @@ deploy to their test/prod surface — never leave holding**. Standing order (Aar
 2026-07-10, [[hard-merge-standing-permission]]): the ONLY human go/no-go gate
 is an **Objective or scope delta** (CHOICES-level, mission redefinition,
 spend). Merge gate: CI green + independent reviewer where doctrine requires;
-re-poll mergeStateStatus at merge time. Docker: own-stack only, obey the
+re-poll mergeStateStatus at merge time. **Merge multiple green PRs one at a
+time, not in a check-then-merge shell loop**: each merge transiently flips
+sibling PRs' mergeStateStatus to UNKNOWN, so a chained `grep -q CLEAN &&
+merge` loop aborts silently after the first merge (observed 2026-07-13:
+arc-agents #358 merged, #357/#356/#348 skipped though CLEAN on re-poll).
+Docker: own-stack only, obey the
 shared-resource discipline rule in AGENTS.md. Gates you cannot resolve
 (sudo, secrets, scope deltas): make sure they're visible on the webui
 (ledger feedback row → /approvals), then leave them.
