@@ -49,6 +49,44 @@ Mission → surfaces:
 - **autonomy**: repos `~/repos/arc-agents`, `~/repos/arc-webui`, `~/repos/arc-skills`; feedback drain cron; webui :8080 up; open PRs
 - **local-models**: `~/repos/starlight-slm` (symlink → /mnt/Storage1; unmounted = parked, say so and move on)
 
+## 0.5. Backstop parked-actions
+
+Run the **parked-action backstop** for THIS run's mission (the `next` value
+READ in step 0). This is the receipt-verification clause of the rotation:
+when a prior oversight pass parked an action for another mission's director
+(`kind=parked-action`, `project=allmissions`, `source=auto-oversight`,
+`state=OPEN`), the target mission's director tick is supposed to dispatch it
+and close the row with a receipt (a `kind=note` event tagged `receipt:
+<dispatched-issue-id>`). This pass re-checks that the loop actually ran.
+
+```
+tsx ~/repos/trading/tools/oversight-backstop.ts report <mission>
+# mission == the `next` value READ in step 0 (NOT what you expected)
+# binary lives in the trading repo (PR #179) — verify `gh pr view 179 --repo
+# a-canary/Trading --json state,mergedAt` returns merged before relying on
+# it; exit 127 here is a tooling error, NOT a clear gate — log it and end.
+```
+
+Tool prints a `BackstopReport` JSON object — read it and note the
+`agedFlaggedIds[]` (OPEN rows older than one full rotation ≈ 6h, a director
+missed them) and `missingReceiptIds[]` (CLOSED rows in the last 7 days with
+no receipt event — director dispatched but did not record the receipt). Both
+arrays are typically empty; surface them in the step-4 /m/allmissions log row.
+Pure helper available too — `renderLogLine(report)` from the same module
+formats a one-line summary if you don't want to walk the JSON yourself.
+
+**Why this step exists.** Before this step, the backstop ran only if a future
+oversight pass remembered to call it — and the receipt-verification clause was
+never wired to the /m/allmissions log row. Parked-action rows piled up without
+the loop ever confirming whether they were consumed. This step makes the
+verification automatic on every rotation, matching the `LOG` clause in step 4
+(operator directive 2026-07-12: routine audit rows are `LOG`, not `OPEN`,
+unless they demand action).
+
+Genuine human-gate parked rows stay `OPEN` by design (parked-item-handoff
+US #8) — do NOT auto-close them on the basis of being `stale`. Stale +
+`OPEN` = re-notice in the log row, not a resolution.
+
 ## 1. Judge (explore + explain, briefly)
 
 For the mission answer each: **active?** (recent commits/ticks/cron fires) ·
@@ -84,7 +122,13 @@ commit identity from ~/vault/USER.md). Small; prove before scaling.
 Append the run's distilled record (mission, verdicts one line each, gates
 resolved/remaining, action taken) as a ledger feedback row so the webui
 renders it on /m/allmissions (attention axis shows OPEN rows for the
-passthrough project):
+passthrough project). **Body MUST include the backstop summary from step 0.5:**
+either paste `renderLogLine(BackstopReport)` verbatim or surface
+`agedFlaggedIds[]` and `missingReceiptIds[]` explicitly (e.g.
+`backstop: aged-flagged=<ids>; missing-receipt=<ids>` — empty both is normal
+and worth stating so a missing backstop is visible as one). The fresh
+audit-suppression window (id+created_at ≥ now−90 min) ignores `state`, so LOG
+rows still suppress duplicates.
 
 ```
 bun -e '…insert into feedback (id,project,source,submitter,body_md,state,created_at)
