@@ -105,6 +105,23 @@ For the mission answer each: **active?** (recent commits/ticks/cron fires) ·
 Read facts from tool output; verify before alarming (recency-gate — never
 re-flag what's already fixed).
 
+### 1.5. Run mission hygiene sweep
+
+If `<repo>/scripts/hygiene-sweep.ts` exists, run its public CLI against this
+mission's production checkout and vault:
+
+```
+bun <repo>/scripts/hygiene-sweep.ts sweep --checkout <repo> --vault <mission-vault>
+```
+
+The CLI resolves the manifest in order: `<mission-vault>/hygiene.manifest.json`,
+then `<repo>/scripts/hygiene.manifest.json`. An absent manifest is an opt-out:
+skip the sweep and record `hygiene: skipped (no manifest)`. When present, keep
+the emitted JSON receipt and include a compact `hygiene:` line in step 4
+(actions and paths; `none` when the receipt list is empty). Never reimplement
+partitioning in this skill or move unknown paths by hand — the mission-owned
+script enforces allowlist/litter/unknown boundaries and reversible trash.
+
 ## 2. Resolve human-gates
 
 Any PR/deploy/dispatch sitting in a holding pattern: **hard-merge PRs that meet the merge gate and
@@ -133,9 +150,9 @@ commit identity from ~/vault/USER.md). Small; prove before scaling.
 ## 4. Log to /m/allmissions
 
 Append the run's distilled record (mission, verdicts one line each, gates
-resolved/remaining, action taken) as a ledger feedback row so the webui
-renders it on /m/allmissions (attention axis shows OPEN rows for the
-passthrough project). **Body MUST include the backstop summary from step 0.5:**
+resolved/remaining, action taken, hygiene sweep result) as a ledger feedback
+row so the webui renders it on /m/allmissions (attention axis shows OPEN rows
+for the passthrough project). **Body MUST include the backstop summary from step 0.5:**
 either paste `renderLogLine(BackstopReport)` verbatim or surface
 `agedFlaggedIds[]` and `missingReceiptIds[]` explicitly (e.g.
 `backstop: aged-flagged=<ids>; missing-receipt=<ids>` — empty both is normal
