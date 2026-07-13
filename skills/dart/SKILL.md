@@ -1,6 +1,6 @@
 ---
 name: dart
-description: Frame the system before you act. Run a DART pass (Deconstruct, Analyze, Recognize, Test) + a systems-thinking lens BEFORE debugging a bug, designing/architecting a new system, or reviewing an existing one — so you fix the structure, not the symptom, and match your move to the kind of system you're in. Use when starting a debug, a design/architecture, or a code/system review; when a bug keeps coming back; when a system "shouldn't behave like this"; or when the user says "DART", "systems thinking", "frame this", "step back before fixing".
+description: Frame the system before you act. Run a DART pass (Deconstruct, Analyze, Recognize, Test) + a systems-thinking lens before debugging, designing, or reviewing — so you fix the structure, not the symptom. Use when starting a debug/design/review, when a bug keeps coming back, or when the user says "DART", "systems thinking", or "frame this".
 ---
 
 # DART — frame before you fix

@@ -1,6 +1,6 @@
 ---
 name: hard-merge
-description: Adversarial pre-merge review gate for merge-on-clear — the author drives it and dispatches a freshly SPAWNED reviewer agent for independence (never reviews own work inline). Cheap mechanical checks first (green tests, lint on diff files, CI on head SHA, merge state CLEAN), then shape (git diff line-by-line, codemap diff, nitpick out-of-scope changes and unneeded files), then adversarial reasoning (name assumptions, what-would-make-this-wrong, top risks, principles/rules violated), then an independence-and-escalation gate — a second disjoint reviewer for a production surface (two-party independence), and /counsel for non-small blast radius or a disputed production merge. Use before merging any PR you own, when the user says "hard-merge", "merge-on-clear", "adversarial review before merge", or "review this before I merge".
+description: Adversarial pre-merge review gate for merge-on-clear — the author drives it but dispatches a freshly spawned reviewer agent for independence (never reviews own work inline). Use before merging any PR you own, or when the user says "hard-merge", "merge-on-clear", or "adversarial review before merge".
 ---
 
 # hard-merge

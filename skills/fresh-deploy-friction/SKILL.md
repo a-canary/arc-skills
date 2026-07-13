@@ -1,6 +1,6 @@
 ---
 name: fresh-deploy-friction
-description: Spin up a throwaway fresh-user container, install one or more tools/repos into it exactly as a brand-new user would (no sudo, no pre-seeded PATH, no cached deps), drive a minimal real task through them, and turn every install/operation snag into a committed fix + PR in the source repo. Use when the user wants to find friction in a tool's install or first-run experience, validate a fresh/clean-machine deploy, reproduce a "works on my box" install bug, harden setup docs for other OSes, or asks to "simulate a new user installing X".
+description: Spin up a throwaway fresh-user container, install tools/repos as a brand-new user would (no sudo, no pre-seeded PATH, no cached deps), drive a minimal real task, and turn every snag into a committed fix + PR in the source repo. Use to find install/first-run friction, validate a clean-machine deploy, reproduce a "works on my box" bug, or "simulate a new user installing X".
 ---
 
 # fresh-deploy-friction

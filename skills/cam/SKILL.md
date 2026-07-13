@@ -1,6 +1,6 @@
 ---
 name: cam
-description: Design a Collector/Adaptor/Monitor (CAM) judgment gate — many cheap collectors read wide, one smart adaptor writes narrow, a monitor measures effect over time, all over ONE append-only ledger. Use when building or reviewing any recurring evidence⇒decision⇒measure loop: a self-healing/reflection cycle, a deploy or promotion gate, a daily agent pipeline, or any "agents gather evidence and exactly one decision gets written" design. Covers mandatory per-tier model designation (recall vs precision), interlocks vs gates, loud-failure evidence contracts, halt-via-ledger-row, and the standing-watch → pipeliner conversion path.
+description: Design a Collector/Adaptor/Monitor (CAM) judgment gate — many cheap collectors read wide, one smart adaptor writes narrow, a monitor measures effect, all over ONE append-only ledger. Use when building or reviewing any recurring evidence⇒decision⇒measure loop: a self-healing cycle, a deploy/promotion gate, or any "agents gather evidence and exactly one decision gets written" design.
 ---
 
 # CAM — Collector / Adaptor / Monitor

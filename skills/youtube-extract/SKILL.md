@@ -1,6 +1,6 @@
 ---
 name: youtube-extract
-description: Extract info and judgement from a YouTube video — clean transcript, chapter map, screenshots of critical visual moments (charts, code, slides), and referenced material (github repos, whitepapers, links) fetched and assessed against the video's claims. Use when asked to summarize, analyze, or mine a YouTube video/talk (trading-finance signal, coding technique, AI method) or given a youtube.com/youtu.be URL needing more than a title. Default output when caller specifies none: durables banked to ke, full breakdown to a tmp file.
+description: Extract info and judgement from a YouTube video — clean transcript, chapter map, screenshots of critical visual moments, and referenced material (repos, whitepapers, links) assessed against the video's claims. Use when asked to summarize, analyze, or mine a YouTube video/talk, or given a youtube.com/youtu.be URL needing more than a title.
 ---
 
 # youtube-extract

@@ -1,6 +1,6 @@
 ---
 name: champion-challenger
-description: Design and run a champion/challenger self-improvement loop — continuously A/B a known-good "champion" against a new "challenger" and promote only when it clears a pre-registered gate. Use when building or reviewing a promotion gate, deploy ladder, model-promotion rule, A/B/experiment harness, backtest-before-deploy flow, or any "is this new version actually better, and safe to ship?" decision. Covers the shared vocabulary, the gate design, the eval instruments and their blind spots, and the false-promotion pitfalls (leakage, peeking, Goodhart, self-judging) across ML deployment, web A/B, and quant trading.
+description: Design and run a champion/challenger self-improvement loop — continuously A/B a known-good "champion" against a new "challenger" and promote only when it clears a pre-registered gate. Use when building or reviewing a promotion gate, deploy ladder, model-promotion rule, A/B/experiment harness, backtest-before-deploy flow, or any "is this new version actually better, and safe to ship?" decision.
 ---
 
 # Champion / Challenger

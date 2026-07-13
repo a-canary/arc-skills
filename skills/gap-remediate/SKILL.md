@@ -1,6 +1,6 @@
 ---
 name: gap-remediate
-description: Nightly CAM adaptor over the agent knowledge-gap log. Reads the append-only ~/.claude/dream/agent-gaps.log (dense lines written by extract-agent-gaps.py, the cheap featherless collector), ranks gaps by severity × frequency, picks the single most critical one, checks whether it is already covered in AGENTS.md / MEMORY.md / ke, then either ADDS it or CLARIFIES what is there — one narrow write per night. Records the decision back to the log. Use when the user wants to close the highest-impact recurring agent knowledge gap, or asks what the nightly gap loop decided.
+description: Nightly CAM adaptor over the agent knowledge-gap log — ranks gaps in ~/.claude/dream/agent-gaps.log by severity × frequency, picks the single most critical one, and makes one narrow write to a knowledge surface (AGENTS.md / MEMORY.md / ke). Use when the user wants to close the top recurring agent knowledge gap, or asks what the nightly gap loop decided.
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash
 ---
 
