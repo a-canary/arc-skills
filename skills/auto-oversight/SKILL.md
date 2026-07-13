@@ -23,6 +23,13 @@ Best shape: one command that cats the file THEN writes read+1, so a stale
 prediction can't leak in. Observed 2026-07-11: an interactive run expecting
 `trading` read `onenation` (cron took trading minutes earlier) and wrote
 `onenation` back — self-cancelling no-op caught only by hand.
+**Parse the JSON tolerantly** — the file may contain whitespace
+(`{"next": "onenation"}`); a rigid `grep '"next":"'` misses it and silently
+falls back to `trading`. Use `grep -o '"next"[[:space:]]*:[[:space:]]*"[^"]*"'`
+or a real JSON parser, and always echo the raw file + parsed mission together
+so a mismatch is visible. Observed 2026-07-13: space-format file + rigid grep
+nearly double-audited trading; caught only because raw cat printed alongside.
+Write-back canonical form: no spaces (`{"next":"autonomy"}`).
 
 **Freshness gate — skip duplicate audits.** After rotating, check the ledger
 for a recent audit of this mission:
