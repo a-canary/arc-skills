@@ -119,8 +119,12 @@ merge` loop aborts silently after the first merge (observed 2026-07-13:
 arc-agents #358 merged, #357/#356/#348 skipped though CLEAN on re-poll).
 Docker: own-stack only, obey the
 shared-resource discipline rule in AGENTS.md. Gates you cannot resolve
-(sudo, secrets, scope deltas): make sure they're visible on the webui
-(ledger feedback row → /approvals), then leave them.
+(sudo, secrets, scope deltas): make sure they're visible on the webui —
+an OPEN ledger feedback row renders on /m/<mission> (the attention axis).
+NOTE: /approvals is a DIFFERENT queue (PRD approvals); feedback rows never
+appear there. Verify visibility against /m/<mission>, not /approvals — a
+zero-hit grep of /approvals is normal, NOT a webui gap (observed
+2026-07-14). Then leave them.
 
 **Reconcile ledger vs closed PRs.** A review-state ledger row whose PR (or
 worker branch's PR) was closed unmerged by a deliberate verdict (YAGNI,
