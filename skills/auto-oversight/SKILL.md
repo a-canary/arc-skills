@@ -139,6 +139,17 @@ One concrete change that removes a check-in or hardens a system substitute
 with a named substitute. Ship it (branch → PR → merge, worktree for dev,
 commit identity from ~/vault/USER.md). Small; prove before scaling.
 
+**Zero-delta cycles de-risk, they don't idle** (operator directive
+2026-07-15): if the mission shows no delta and no missing guard, do NOT log
+"action: none needed". Instead pick ONE blocked task or operator-gated
+objective (gate rows, waiting:operator slices) and build the smallest
+hypothesis experiment or prototype that proves an assumption or assuages a
+risk behind the block — read-only investigation, dry-run, sandboxed
+prototype. Attach the evidence to the gate row so the operator decision
+shrinks. Never execute the gated action itself; the experiment must stay on
+the safe side of the gate (read-only vs live-money, sandbox vs prod,
+branch vs push).
+
 ## 4. Log to /m/allmissions
 
 Append the run's distilled record (mission, verdicts one line each, gates
