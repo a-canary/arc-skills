@@ -67,8 +67,11 @@ and close the row with a receipt (a `kind=note` event tagged `receipt:
 <dispatched-issue-id>`). This pass re-checks that the loop actually ran.
 
 ```
-tsx ~/repos/trading/tools/oversight-backstop.ts report <mission>
+npx tsx ~/repos/trading/tools/oversight-backstop.ts report <mission>
 # mission == the `next` value READ in step 0 (NOT what you expected)
+# MUST be tsx, never bun — the tool ends in `runCliIfMain(module, …)` (repo
+# CJS convention) and bun dies "ReferenceError: module is not defined";
+# that's a tooling error, not a clear gate — rerun with npx tsx.
 # binary lives in the trading repo (PR #179) — verify `gh pr view 179 --repo
 # a-canary/Trading --json state,mergedAt` returns merged before relying on
 # it; exit 127 here is a tooling error, NOT a clear gate — log it and end.
