@@ -16,6 +16,16 @@ reversible.
 
 The absolute path to today's journal (`~/.claude/dream/journal/YYYY-MM-DD.md`).
 
+**Large JSON/analysis inputs: grep-range, never whole-read.** Your journal is
+prose — read it once, whole. But a `~/.claude/waste/*.json` tally, a
+`/tmp/*-review-*.json`, or any analysis-output file the journal points you at can
+run 30k+ bytes (~10k tokens), and you need only one candidate/pattern block from
+it. `grep -n` the pattern name or the `"pattern":`/`"target":` key first, then
+`Read` the single hit's `offset`+`limit` range. Read each such artifact **once** —
+it stays in context; do not re-`Read` it to re-find a value (`grep -n` the one
+line instead). A 38KB waste JSON read whole and never cited was the single biggest
+`subagents` bleed on tally 20260714 (~9.5k tokens).
+
 ## Steps
 
 1. Read the journal. Group entries by underlying cause, not by surface symptom.

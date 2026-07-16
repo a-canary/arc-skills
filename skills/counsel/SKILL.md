@@ -7,14 +7,6 @@ description: "Run an adversarial counsel session with 5 domain experts. Each exp
 
 Simulates an adversarial conversation between 5 domain experts to stress-test a decision, plan, or technical approach.
 
-## Usage
-
-```
-/skill:counsel [topic or question]
-```
-
-Or paste the full context and ask: "Counsel this"
-
 ## Workflow
 
 ### Round 1: Independent Investigation + Opening Arguments
@@ -70,16 +62,6 @@ Or paste the full context and ask: "Counsel this"
    ### Dissenting Views
    - ...
    ```
-
-## Expert Personas
-
-| Expert | Domain | Focus |
-|--------|--------|-------|
-| skeptic | Critical analysis | Assumptions, failure modes |
-| pragmatist | Implementation | Feasibility, complexity, timelines |
-| strategist | Long game | Alignment with goals, second-order effects |
-| historian | Pattern matching | Similar past decisions, lessons learned |
-| devil-advocate | Opposition | Steelman the alternative |
 
 ## Implementation Notes
 

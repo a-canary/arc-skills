@@ -58,64 +58,29 @@ Bindings, the `.arc/` working-file layout, and the event-bus schema are in [`BIN
 
 ## Director loop
 
-```
-check budget (binding may delegate to a repo's own governor, e.g. arc-agents'
-  bin/director-governor.ts — per-repo weekly threshold, never-fatal)
-  → at weekly limit? restrict to critical-only: only qa.failed with
-    dimension critical-failure or security may still dispatch; all other
-    gap-delegation pauses until budget resets or a human raises it
-  → bypass triggers run at full priority regardless of budget state
-check capacity (capacity binding, if bound — ADVISORY: any CLI error →
-  proceed unbound + emit capacity.failopen; never blocks a dispatch)
-  → route per dispatch (lane: bypass work = critical, exploratory = research,
-    else standard): run → dispatch; park → re-queue + emit capacity.parked
-    (carry vast_stop); escalate → dispatch on best alternative provider
-  → record every provider response back (tokens + ok|429)
-gap-analysis (reads .arc/director/gaps.md + event log; under planning-target:
-  prd-file, gaps.md is derived from the current PRD.md's acceptance criteria)
-  → open gaps? → delegate via task-delegation binding
-  → no gaps, inflight/pending-QA? → sleep (event-driven)
-  → no gaps, no inflight, no pending-QA? → idle; sleep until next feedback event
-watch event bus (event-bus binding)
-  → task.completed  → validate evidence paths exist → dispatch /qa
-  → task.completed, no evidence → reject, re-queue
-  → qa.passed (no phase field) → non-production surface: close gap; rewrite
-                      .arc/director/gaps.md, inflight.md. Production surface: do
-                      NOT close the gap at merge — merge per on-task-verified
-                      binding, deploy, then dispatch /qa again against the LIVE
-                      surface (hard-merge §6) WITH phase:post-deploy on its emitted
-                      event so this branch and the next are mechanically distinct.
-  → qa.passed (phase:post-deploy) → the live-surface result: close gap. Route its
-                      findings to the next gap tick; a critical/truthfulness one
-                      triggers rollback, then re-gap from findings.
-  → qa.failed       → check bypass triggers; emit task.assigned (retry or new slice)
-  → task.failed     → rewrite .arc/director/blocked.md; re-gap or surface to user
-  → user.feedback   → append to feedback-sink; batch by (feature, version, resource)
-                       when count ≥ threshold → dispatch /qa with batch context
-heartbeat (every 5 min in --afk mode; scheduler.backstop-hours cron wakes idle directors regardless)
-  → tasks open > TTL with no update → mark blocked; rewrite .arc/director/blocked.md
-end of every tick
-  → regenerate .arc/local-dev-dash/main.html from director working files
-```
+Each tick: **budget** (governor binding; at weekly limit → critical-only:
+qa.failed critical-failure/security still dispatch, all else pauses; bypass
+triggers ignore budget) → **capacity** (advisory binding; CLI error → proceed
+unbound + capacity.failopen; route run/park/escalate, record every provider
+response) → **gap-analysis** (reads gaps.md + event log; open gaps → delegate;
+none + inflight/pending-QA → sleep; none at all → idle) → **watch event bus** →
+**heartbeat** (5 min in --afk; backstop cron wakes idle) → **end**: regenerate
+`.arc/local-dev-dash/main.html`.
 
-## Director states (reported each tick, written to .arc/director/gaps.md header)
+Full event-bus routing and event schema are in [`BINDINGS.md`](BINDINGS.md).
+The load-bearing gates that never relax:
 
-| State | Meaning |
-|---|---|
-| **delegating** | Open gaps exist; emitting task.assigned events |
-| **waiting:inflight** | Tasks assigned; no results yet |
-| **waiting:qa** | Tasks completed; QA dispatched |
-| **idle** | No gaps, no inflight, no pending QA; sleeping until next feedback event |
-| **paused** | `.arc/director/director.paused` sentinel present; no ticks until `/director resume` |
-| **budget-exceeded** | Weekly token limit reached; restricted to critical-failure/security dispatch only until budget resets or a human raises it |
+- `task.completed` → evidence paths must exist, else reject + re-queue → dispatch `/qa`
+- `qa.passed` non-production → close gap. **Production → do NOT close at merge**:
+  merge per on-task-verified binding, deploy, re-dispatch `/qa` against the LIVE
+  surface (hard-merge §6) with `phase:post-deploy`; only that post-deploy pass
+  closes the gap (critical/truthfulness finding → rollback, re-gap).
+- `qa.failed` → check bypass triggers; retry or new slice. `task.failed` →
+  blocked.md; re-gap or surface. `user.feedback` → sink + batch by
+  (feature, version, resource); at threshold → `/qa`, never a direct task.
 
-## Epistemic gates (prove-before-scale)
-
-- `task.completed` without `evidence:[{path,description}]` → rejected, re-queued
-- `qa.passed` without `evidence` → rejected, re-queued
-- `qa.failed` without `reproduction` → rejected, re-queued
-- User feedback → never creates a task directly; dispatches `/qa` first
-- User feedback batched by `(feature, version, resource)` — count increases trust, QA still required
+State (written to gaps.md header): delegating · waiting:inflight · waiting:qa ·
+idle · paused (sentinel) · budget-exceeded (critical-only until reset/raised).
 
 ## What director does NOT own
 
