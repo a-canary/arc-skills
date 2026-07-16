@@ -44,6 +44,18 @@ Check these, in order, and stop the moment one settles it:
   manifests, full precache logs, or 900-line servers to reach a conclusion that a
   20-line ranged read would have given.
 
+- [ ] **The config the symptom depends on — before any outward subsystem.** When a
+  high-level complaint ("bot not responding", "wrong model", "nothing sent") could be
+  a mis-set config, verify the config FIRST: grep the *consumer code* for the exact
+  key it reads (`defaultProvider`, `defaultModel`, …) and diff that against the live
+  config file. A key-name mismatch between what code expects and what config provides
+  silently disables the feature and mimics a network/auth/rate-limit outage. Do not
+  investigate Discord, API keys, `pass`, or 429s until the config path that feeds the
+  symptom is confirmed correct — that ordering error burned 85 and 40 tool calls on
+  2026-04-02 for a settings-key mismatch a 5-call code grep would have found. Also:
+  a correct-looking live config does NOT prove propagation — running cron/RPC sessions
+  keep old models until restarted; flag drift rather than assume consistency.
+
 If none of these settle it, proceed to Phase 1. A monitor notification whose result
 is already recorded needs a one-line confirmation and a clean close — **not** an
 active-response prompt ("want me to tail the run…").
