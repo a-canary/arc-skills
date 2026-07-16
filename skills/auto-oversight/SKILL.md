@@ -36,8 +36,18 @@ for a recent audit of this mission:
 
 ```
 select id from feedback where source='auto-oversight'
-  and id like 'ao-<mission-slug>-%' and created_at >= <now minus 90 min ISO>
+  and id like 'ao-<mission-slug>-%'
+  and replace(created_at,' ','T') >= <now minus 90 min ISO>
 ```
+
+**Normalize the timestamp in SQL** — ledger `created_at` mixes formats
+(`2026-07-16 09:40:18` space-separated and `2026-07-16T09:40:18Z` ISO). A
+plain `created_at >= '<ISO>'` string compare silently excludes every
+space-format row (`' '` sorts before `'T'`), so a fresh audit logged by the
+other loop passes the gate unseen. Observed 2026-07-16: an `ao-autonomy-*`
+row was invisible to the rigid compare (harmless at 150 min old; at <90 min
+it would have double-audited). Always compare on
+`replace(created_at,' ','T')`.
 
 No `sqlite3` binary on this host — run the query (and the step-4 insert) via
 `~/.bun/bin/bun -e '…bun:sqlite…'` against `~/vault/ledger.db` (`bun` needs
