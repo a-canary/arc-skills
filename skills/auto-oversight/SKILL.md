@@ -205,6 +205,24 @@ younger than 7 days** — OPEN rows ARE the visible log; closing a fresh row
 (yours or a prior run's) blanks /m/allmissions. Uppercase `'OPEN'` exactly;
 `state='new'` gets drained by the */5 aggregator, other casings don't render.
 
+`created_at` is MIXED-TYPE (some rows integer epoch, some ISO strings), and in
+SQLite any integer < any string — a naive `created_at < '<ISO cutoff>'`
+false-resolves EVERY integer-stamped row instantly (this blanked fresh LOG rows
+and hid an OPEN merge gate, observed 2026-07-17). Use exactly this type-safe
+comparison, never a string cutoff:
+
+```sql
+UPDATE feedback SET state='resolved'
+ WHERE project='allmissions' AND source='auto-oversight'
+   AND state IN ('LOG','OPEN')
+   AND (CASE WHEN typeof(created_at)='integer' THEN created_at
+        ELSE CAST(strftime('%s',created_at) AS INTEGER) END)
+       < CAST(strftime('%s','now','-7 days') AS INTEGER);
+```
+
+Never resolve a row whose body starts with `GATE` — gate rows close only when
+their gate action is verifiably done, age is irrelevant.
+
 ## Rules
 
 - Fully self-directed: git, cron, systemd, harness edits — no approvals.
