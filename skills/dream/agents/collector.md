@@ -38,7 +38,13 @@ file (`~/.claude/dream/journal/YYYY-MM-DD.md`).
    dump. **Page only the offsets you will actually read** — do not fan out
    several speculative `--offset` pages up front "to have them"; page one, read
    it, then decide if the next is worth it. Page each offset exactly once,
-   forward only.
+   forward only. **Never disable the token-waste guards to force a read
+   through** — do NOT prepend `REREAD_GUARD=off`, `BASH_DUMP_GUARD=off`, or
+   `LARGE_READ_BYTES=...` to any `page.py`, `cat`, `grep`, or `Read` (a
+   `BASH_DUMP_GUARD=off cat /tmp/s1.txt` full-dump bypass was a top `subagents`
+   bleed on tally 20260716). If a guard fires it is naming the cheaper path —
+   take it: `grep -n` the one line out of the dump and Read only that hit's
+   `offset`/`limit` range. The bypass env vars are for the operator, not you.
 
    **If this first `page.py --offset 0` prints `Error: file not found:` (or an
    otherwise empty/unreadable session), the session does not exist — that is a
@@ -119,6 +125,13 @@ entries that aren't about gather cost.
 
 Rules:
 - Quote user corrections verbatim; do not paraphrase them.
+- **Never copy a secret into the journal.** If a source line (a tool_result,
+  env dump, config, log) contains an API key, token, password, or private key --
+  including partial/prefix forms like `sk-or-v1-`, `sk-ant-`, `cpk_`, `ghp_`,
+  `AKIA`, `-----BEGIN`, `Bearer `, or any long high-entropy string -- do NOT
+  reproduce it. Redact to a placeholder (`sk-ant-<REDACTED>`) and describe the
+  leak shape instead of the value. The journal is git-tracked and long-lived;
+  a quoted secret is a second exposure. This overrides "verbatim" for secrets.
 - Be conservative — log clear events, not maybes.
 - Always include a `ref:` so the adapter can trace the source.
 - If the window holds nothing notable, page on without writing.
