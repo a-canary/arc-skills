@@ -44,8 +44,9 @@ below (boot step 4's confirmation gate still applies).
 ## Idle backstop
 
 Director is event-driven, not polling — `idle` state sleeps until the next feedback
-event. A **cron backstop** (`scheduler.backstop-hours` in `AGENTS.md`, default 12hr;
-installed via the harness's scheduler, e.g. `ScheduleWakeup`/cron) wakes a fresh
+event. A **cron backstop** (`scheduler.backstop-hours` in `AGENTS.md`, default 12hr —
+NOT 1–2hr; don't conflate with `ScheduleWakeup`, whose per-call delay clamps to 1hr max
+and cannot implement a 12hr backstop — install via cron) wakes a fresh
 tick regardless of events, so a missed or dropped event-bus notification can't
 silently stall the mission past that interval. Lower values catch stalls sooner
 at the cost of a higher token floor (more idle-tick wakeups); higher values are
