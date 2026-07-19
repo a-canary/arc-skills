@@ -69,15 +69,34 @@ def session_key(jsonl: Path) -> str:
     return f"{jsonl.parent.name}/{jsonl.stem}"
 
 
-def has_minable_content(jsonl: Path) -> bool:
-    """True if the session has at least one user/assistant message.
+def _content_nonempty(content) -> bool:
+    """True if a message's content carries any substantive payload.
 
-    cli-proxy (and similar) write content-less stub files — a single
-    `{"type":"ai-title",...}` line and nothing else — then keep re-touching
-    them, so their mtime churns and the mtime tracker re-lists them every run,
-    fanning out collector agents onto sessions with nothing to mine. Skip any
-    session whose lines are all non-message types. Short-circuits on the first
-    message line, so real sessions cost only a few lines of read.
+    An assistant turn that errored client-side or produced nothing is recorded
+    with an empty content list (`[]`) or an empty/absent string. Such turns are
+    not minable. Anything with a non-empty list or a non-blank string counts.
+    """
+    if isinstance(content, list):
+        return len(content) > 0
+    if isinstance(content, str):
+        return bool(content.strip())
+    return content is not None
+
+
+def has_minable_content(jsonl: Path) -> bool:
+    """True if the session has a substantive assistant message.
+
+    cli-proxy / health-monitor crons (and similar) write content-less stub
+    files — either a single `{"type":"ai-title",...}` line, or a lone user
+    alert plus an *empty* assistant turn (`content: []`, from a client-side
+    UTF-8/ByteString API error) — then keep re-touching them, so their mtime
+    churns and the mtime tracker re-lists them every run, fanning collector
+    agents onto sessions with nothing to mine (50/50 zero-yield on 2026-07-18).
+
+    A session is minable only if it has at least one assistant message whose
+    content is non-empty; a user alert with an empty/errored assistant reply
+    yields nothing. Short-circuits on the first such message, so real sessions
+    cost only a few lines of read.
 
     Two source schemas: Claude Code tags each turn `type:"user"/"assistant"`
     at top level; pi wraps every turn in `type:"message"` with the role nested
@@ -95,12 +114,14 @@ def has_minable_content(jsonl: Path) -> bool:
                 except json.JSONDecodeError:
                     continue
                 t = rec.get("type")
-                if t in ("user", "assistant"):
+                if t == "assistant" and _content_nonempty(rec.get("content")):
                     return True
                 # pi shape: {"type":"message","message":{"role":...}}
-                if t == "message" and isinstance(rec.get("message"), dict) \
-                        and rec["message"].get("role") in ("user", "assistant", "toolResult"):
-                    return True
+                if t == "message" and isinstance(rec.get("message"), dict):
+                    msg = rec["message"]
+                    if msg.get("role") == "assistant" \
+                            and _content_nonempty(msg.get("content")):
+                        return True
     except OSError:
         return False
     return False
