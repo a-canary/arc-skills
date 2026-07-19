@@ -63,10 +63,21 @@ Each tick: **budget** (governor binding; at weekly limit → critical-only:
 qa.failed critical-failure/security still dispatch, all else pauses; bypass
 triggers ignore budget) → **capacity** (advisory binding; CLI error → proceed
 unbound + capacity.failopen; route run/park/escalate, record every provider
-response) → **gap-analysis** (reads gaps.md + event log; open gaps → delegate;
-none + inflight/pending-QA → sleep; none at all → idle) → **watch event bus** →
+response) → **gap-analysis** (reads gaps.md state header + open-gap rows ranged,
+never whole — see read discipline below; open gaps → delegate; none +
+inflight/pending-QA → sleep; none at all → idle) → **watch event bus** →
 **heartbeat** (5 min in --afk; backstop cron wakes idle) → **end**: regenerate
 `.arc/local-dev-dash/main.html`.
+
+**Tick read discipline — never dump state files whole.** `gaps.md` is
+append-only: only the top `state:`/`prev-state:` header and any open-gap rows
+drive a tick; the rest is historical log (a steady-state file runs 200+ lines /
+~8k tokens for one live line). Each tick, read state ranged, not whole:
+`grep -n '^state:\|^prev-state:\|^## ' gaps.md` then Read only the hit range;
+`grep` `blocked.md` for open rows rather than `cat`; parse
+`feedback.jsonl`/`events.jsonl` by redirecting to `/tmp` and grepping the OPEN /
+unprocessed rows, never piping the full dump into context. Full-file reads of
+these files each tick were the single largest director-tick token bleed.
 
 Full event-bus routing and event schema are in [`BINDINGS.md`](BINDINGS.md).
 The load-bearing gates that never relax:
