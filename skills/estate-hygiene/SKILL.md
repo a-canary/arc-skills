@@ -1,6 +1,6 @@
 ---
 name: estate-hygiene
-description: Audit the repo estate — verdict every repo/stamp retain|deprecate|archive|trash, resolve duplicate lineages, prune litter. Run when the estate feels cluttered or after binning new names into missions.json.
+description: Audit the repo estate — verdict every repo/stamp retain|deprecate|archive|trash, resolve duplicate lineages, prune litter. Run when the estate feels cluttered or after binning new names into MISSIONS.yaml.
 ---
 
 # estate-hygiene
@@ -8,7 +8,7 @@ description: Audit the repo estate — verdict every repo/stamp retain|deprecate
 Drive the repo estate to the M-0012 objective: every name (disk repo, ledger
 stamp, litter dir) carries an explicit **retain | deprecate | archive | trash**
 verdict; duplicate lineages resolved. Working sheet:
-`arc-webui/docs/repo-estate-audit.md`. Registry: `arc-webui/config/missions.json`.
+`arc-webui/docs/repo-estate-audit.md`. Registry: `~/vault/MISSIONS.yaml` (flat YAML, slug keys).
 
 ## Definitions
 
@@ -62,5 +62,5 @@ referenced cannot be trashed.
 
 New repo ONLY when it needs its own deploy cadence, privacy boundary, or TTL —
 otherwise it's a directory in an existing repo. Seams between repos are data
-files with documented shape (ledger.db, missions.json, CHOICES fences), never
+files with documented shape (ledger.db, MISSIONS.yaml, CHOICES fences), never
 shared libraries.
