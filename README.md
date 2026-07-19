@@ -69,6 +69,7 @@ Most skills are pure markdown — making them visible *is* the install. A few ne
 **System design** — reusable architecture frameworks
 - `cam` — Collector/Adaptor/Monitor judgment-gate framework: read wide, write narrow, measure over time, one append-only ledger
 - `champion-challenger` — promote a challenger over the champion only past a pre-registered AND-gate
+- `mission-metrics` — define/refine a mission, objectives, metrics, dashboard, and hillclimb loop per project module over the existing substrate
 
 **Session reflection** (supply-chain / self-improvement)
 - `dream` — mine conversation history for failure modes, make one system improvement
