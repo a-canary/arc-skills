@@ -10,7 +10,7 @@ infrastructure — it fills in four surfaces that already render:
 
 | Layer | Lives in | Owner |
 |---|---|---|
-| Mission | `arc-webui/config/missions.json` `{slug: {problem, subscribes}}` | webui repo (slugs append-only) |
+| Mission | `arc-webui/config/missions.json` `{missions: {slug: {problem, subscribes}}}` | webui repo (slugs append-only) |
 | Objectives | target repo `CHOICES.md`, one ` ```objectives ` fence | target repo, PR-gated |
 | Metric samples | webui SQLite `objective_metrics(project, metric, value, recorded_at)` | the **recorder** you name below |
 | Charts | lead repo `.arc/dashboard.json` (rendered at `/m/:project`) | `publish-mission-dashboards.ts` or the recorder |
