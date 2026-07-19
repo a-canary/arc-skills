@@ -1,66 +1,94 @@
 ---
 name: mission-metrics
-description: Define or refine a mission, its objectives, metrics, dashboard, and hillclimbing loop for a project, module, or feature — wired into the existing substrate (missions.json, CHOICES.md objectives fence, objective_metrics, .arc/dashboard.json). Use when starting a project/module/feature, when a dashboard shows plain chips or empty charts, when an objective has no verdict or no data, or when the user says "define the mission", "what are we optimizing", "add metrics", or "set up hillclimbing".
+description: Intense HITL grilling session — one question at a time, interleaved with repo reads, session mining, and web research — that converges on a project/module's mission, audience, the value delivered, metrics that actually measure that value (direct where possible, nearest proxy where speed-to-value demands), a phase order for those metrics, and one hillclimb(scope, metric, gate) eval per phase. Use when starting a project/module/feature, when a dashboard is dead or verdict-less, or when the user says "define the mission", "what are we optimizing", "add metrics", or "set up hillclimbing".
 ---
 
-# Mission → Objectives → Metrics → Dashboard → Hillclimb
+# Mission-Metrics Grilling
 
-Definition discipline over the EXISTING substrate. This skill creates no new
-infrastructure — it fills in four surfaces that already render:
+A **HITL grilling session** (wayfinder-style): the agent asks **one question at
+a time**, never answers its own questions, and between questions does the
+legwork — read the repo, mine recent sessions, WebFetch competitor/domain
+material — so each next question is sharper than the last. The user's answers
+are the source of truth; research only shapes what to ask and what to propose.
 
-| Layer | Lives in | Owner |
-|---|---|---|
-| Mission | `arc-webui/config/missions.json` `{missions: {slug: {problem, subscribes}}}` | webui repo (slugs append-only) |
-| Objectives | target repo `CHOICES.md`, one ` ```objectives ` fence | target repo, PR-gated |
-| Metric samples | webui SQLite `objective_metrics(project, metric, value, recorded_at)` | the **recorder** you name below |
-| Charts | lead repo `.arc/dashboard.json` (rendered at `/m/:project`) | `publish-mission-dashboards.ts` or the recorder |
+The session converges on five artifacts, in order. Don't advance until the
+current one is agreed in the user's own words (restate, get a yes):
 
-Hillclimb mechanics are NOT here — gate design is [champion-challenger](../champion-challenger/SKILL.md), recurring evidence⇒decision loops are [cam](../cam/SKILL.md). This skill defines *what* to climb.
+## 1. Mission, value, audience
 
-## Define (new mission / module / feature)
+Grill until all three are one sentence each:
+- **Who is the audience** — the specific person/group whose day changes.
+- **What hurts** — the problem (mission = problem, not solution).
+- **What value we provide** — the delta they experience when it works.
 
-1. **Mission = a problem, not a solution.** One sentence of who hurts and how. If the repo's mission isn't in `missions.json`, add the slug + `subscribes: [repo-dirname]` (append-only). A module/feature does NOT get its own mission — it gets objective rows under the repo's mission, goal prefixed with the module name (`webui-chat: …`).
-2. **1–2 objectives max** per module. More than 2 = pick the two that matter; completion rate halves at 3+. Each objective is one fence row:
-   ```
-   - goal: <module>: <qualitative direction> | provenance: user-directed | metric: <name> | gate: <shape>
-   ```
-3. **Outcome, not activity.** A goal/metric describing work shipped ("land PR", "add endpoint") is a task, not an objective — ~half of real-world KRs fail this way. Rewrite as the behavior delta the work should cause.
-4. **Metrics come in a triple** per objective:
-   - **Output** (the North Star for this module) — lagging, what the mission actually wants moved.
-   - **1–3 controllable inputs** — things the module can move *this week*; these are what you hillclimb. Outputs-only dashboards leave no lever to pull.
-   - **Guardrail pair** — the counter-metric on the most likely gaming axis (speed↔quality, volume↔churn, pass-rate↔coverage). Target up AND guardrail flat, or no promotion.
-   Extra metrics beyond the output go in as their own fence rows (the schema is flat).
-5. **Gate must be machine-parseable.** `evalGate` understands exactly two shapes: band `"7-12%"` and count `"8 @ 12.5%"`. A prose gate ("cut at -5/-10") renders as a verdict-less chip forever. Prose belongs in the goal text; the gate field gets a band or count.
-6. **No recorder, no metric.** A metric row without a named writer is decoration — the dominant observed failure (declared metrics with zero samples, empty dashboards). Before committing the fence row, name the recorder in the same change: which cron/script/agent appends the `objective_metrics` sample or writes the `.arc/dashboard.json` series, and at what cadence. If you can't name one, either build the one-liner recorder now or delete the metric.
-7. **Baseline first.** Record the current value as the first sample before any work (TDD baseline + delta). No baseline = no way to claim the hillclimb helped.
+Research between questions: read README/CHOICES/ADRs for claimed intent, mine
+recent sessions for what's actually being built, fetch how competitors frame
+the same value. Contradiction between claim and behavior = your next question.
 
-## Refine (existing mission with dead surfaces)
+## 2. Direct metrics of the value
 
-Diagnose from the dashboard, unmeasured looks identical to healthy — check deliberately:
+For the agreed value, **design the direct metric first** — the number that, if
+it moved, the audience would verifiably be better off. Discuss it even when
+it's expensive or slow (retention, comprehension, real-world action taken).
 
-- **Plain chip, no verdict** → gate isn't band/count shaped. Reshape the gate (step 5).
-- **Chip but no data / empty chart** → no recorder, or recorder dead. `sqlite3` the `objective_metrics` table for the metric's latest `recorded_at`; stale ⇒ fix or build the recorder (step 6).
-- **Metric saturated** (pinned at gate for weeks) → Goodhart expiry: retire it, re-derive the next metric from fresh error analysis, keep the guardrail.
-- **Objective with provenance `inferred`** → promote to `user-directed` only via the human-gated PR path; agents propose, never self-promote.
-- **>2 active objectives per module** → cut to the two with live recorders.
+## 3. Nearest-proxy metrics
 
-## Hillclimb loop (per objective)
+Where the direct metric is infeasible, slow, or blocks speed-to-market,
+co-design the **nearest proxy**: cheaper/faster, causally closest to the
+direct metric. For each proxy, state in one line (a) what direct metric it
+stands in for, (b) the gap — how it could move without the value moving
+(its Goodhart axis), (c) what would eventually confirm it against the direct
+metric. Prefer a measurable proxy today over a perfect metric never.
 
-Error-analysis-first — optimizers only fix known failures; discovery finds new ones:
+## 4. Phase order
 
-1. Read real traces/outcomes for the module → name the top failure mode.
-2. Make the failure measurable → that's your next **input** metric (add row + recorder).
-3. Run one challenger change against the champion, promotion pre-registered per [champion-challenger](../champion-challenger/SKILL.md): input ↑ ∧ output not worse ∧ guardrail flat.
-4. Promote or revert, record the sample, go to 1. Recurring/scheduled version of this loop = a [cam](../cam/SKILL.md) gate, with the dashboard as its monitor.
+Sequence the metrics into **phases** by priority and speed-to-value: phase 1
+is the single metric whose movement proves the core value soonest; later
+phases layer in the direct/retention/quality metrics, usually **composing**
+earlier ones so a later phase can't regress an earlier win. Grill the order —
+"why is this first?" — until the user owns it.
 
-Weekly cadence, same dashboard at every level — the review's purpose is discovering which inputs actually move the output, not status theater.
+## 5. Hillclimb spec per phase
 
-## Definition-of-done checklist
+Each phase gets exactly one eval line, machine-readable:
 
-- [ ] Mission slug exists in `missions.json`, repo in `subscribes`
-- [ ] ≤2 objective rows per module in the CHOICES.md fence, goals are outcomes
-- [ ] Every metric: output/input/guardrail role stated in goal text
-- [ ] Every gate band- or count-shaped (evalGate-parseable)
-- [ ] Every metric names its recorder + cadence, first baseline sample recorded
-- [ ] `/m/:project` shows verdict chips + live series (not plain chips)
-- [ ] Hillclimb gate pre-registered (champion-challenger checklist)
+```
+phase 1: hillclimb(scope=engagement_pipeline, metric=quiz_pass_rate, gate=quiz_pass_rate>80)
+phase 2: hillclimb(scope=engagement_pipeline, metric=(quiz_pass_rate>80)*retention_rate, gate=quiz_pass_rate>90 and retention_rate>80)
+```
+
+- `scope` — the module/pipeline being climbed (what a challenger may change).
+- `metric` — the number (or composition of earlier metrics) being maximized.
+- `gate` — the pass condition that closes the phase and opens the next; later
+  gates keep earlier metrics in the conjunction (no regressions).
+Promotion mechanics per phase = [champion-challenger](../champion-challenger/SKILL.md);
+a recurring scheduled climb = a [cam](../cam/SKILL.md) gate.
+
+## Persist to substrate
+
+Record the outcome on the surfaces that already render (create no new infra):
+
+| Artifact | Lives in |
+|---|---|
+| Mission | `arc-webui/config/missions.json` `{missions:{slug:{problem,subscribes}}}` |
+| Phase plan (hillclimb lines + proxy rationale) | target repo `CHOICES.md`, prose above the fence |
+| Active phase's metrics | `CHOICES.md` ```objectives``` fence rows (`goal \| provenance \| metric \| gate`) |
+| Samples | `objective_metrics(project, metric, value, recorded_at)` — **no recorder, no metric**: name the writer + cadence in the same change |
+| Charts | lead repo `.arc/dashboard.json` → `/m/:project` |
+
+Fence gates must be evalGate-parseable (band `N-M[%]` or count `N @ …`);
+the fence holds the **current phase only** — advancing a phase is a PR that
+swaps the rows. Provenance from this session = `user-directed` (the user
+answered the questions); agent-only inference stays `inferred`. Record the
+baseline sample for each phase-1 metric before any climb.
+
+## Rules of the grilling
+
+- One question per message. Many at once overwhelms.
+- Never answer your own question or proceed on a guessed answer — this
+  session only resolves through the live exchange.
+- Interleave research between questions; cite what you found in one line
+  when it motivates the question.
+- Restate each agreed artifact before moving on; the user's "yes" is the gate.
+- Push back: activity metrics ("PRs merged"), solution-shaped missions, and
+  proxy metrics with no named gap all get challenged, not transcribed.
