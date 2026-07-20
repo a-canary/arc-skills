@@ -18,7 +18,12 @@ file (`~/.claude/dream/journal/YYYY-MM-DD.md`).
 
 ## Loop
 
-1. Page the session:
+1. Page the session — **only ever through `page.py`**. NEVER `Read` (or `cat`)
+   the raw `.jsonl` directly: a raw session file is one giant noise-laden blob
+   (a single `tool_result` can be 50KB) and reading it whole was the largest
+   single bleed on tally 20260719 (a 12.3k-token raw JSONL `Read` that was never
+   even cited). `page.py` is the ONLY sanctioned way to view a session — it
+   strips noise, caps bytes, and windows the content:
    ```bash
    python3 ~/.claude/skills/dream/scripts/page.py <session.jsonl> --offset <N> --window 80
    ```

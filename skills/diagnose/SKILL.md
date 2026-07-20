@@ -34,6 +34,15 @@ Check these, in order, and stop the moment one settles it:
   absent (`sqlite3`, a `systemctl` fallback, etc.). Before concluding, check for a
   programmatic fallback (e.g. `better-sqlite3` in `package.json`, a different binary
   path) or say the dependency is missing — do not assume the environment has it.
+  The same `127`/"`<cmd>`: not found" emitted **by the diagnosed system itself**
+  (e.g. `pass: not found` inside a Docker container, a missing CLI in a systemd
+  unit's PATH) is an **environment/deployment gap — a missing binary or unmounted
+  secret — NOT a code-logic bug**. Fix the layer that is actually broken (install
+  the binary, mount the secret/`auth.json`, correct the container env) before you
+  touch application code: editing + committing + pushing code against an
+  environmental error leaves the identical message on the next run and burned 5+
+  edit/push cycles on 2026-04-07 chasing pi-model-router logic for a container that
+  simply lacked the `pass` binary.
 - [ ] **A documented prior result.** If the event is a re-run of a concluded
   experiment, the conclusion is likely already written down (`ITERATIONS.md`,
   `RESULTS.md`, an ADR). One targeted grep for the run/experiment name beats

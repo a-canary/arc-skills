@@ -168,11 +168,27 @@ def cmd_list(force: bool, limit: int = 0) -> None:
         print(jsonl)
 
 
-def cmd_done(session_arg: str) -> None:
+def cmd_done(session_arg: str, reached_eof: bool = False) -> None:
     jsonl = Path(session_arg).expanduser()
     if not jsonl.exists():
         print(f"Error: session not found: {jsonl}", file=sys.stderr)
         sys.exit(1)
+    if not reached_eof:
+        # Evidence gate: refuse to mark a session processed unless the caller
+        # confirms it paged all the way to page.py's `next_offset: EOF` footer.
+        # A skipped-but-marked-done session is silently lost from the pipeline
+        # (it never requeues) -- exactly what happened when a "large session" was
+        # --done'd without paging (journal 2026-07-20). The collector/batch
+        # driver must pass --reached-eof, and only after it has actually seen the
+        # EOF footer for this session. No flag = no mark; the session stays on
+        # the --list requeue.
+        print(
+            f"Refusing --done without --reached-eof: {jsonl}\n"
+            "Page the session to `next_offset: EOF` first, then re-run with "
+            "--reached-eof. Session left unprocessed so it requeues.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     processed = load_processed()
     processed["sessions"][session_key(jsonl)] = {
         "processed": datetime.now(timezone.utc).isoformat(),
@@ -211,13 +227,14 @@ def main():
     group.add_argument("--done", metavar="SESSION", help="Mark a session JSONL processed")
     group.add_argument("--append", metavar="JOURNAL", help="Append entry block from stdin to JOURNAL")
     parser.add_argument("--force", action="store_true", help="With --list, ignore mtime and list all sessions")
+    parser.add_argument("--reached-eof", action="store_true", help="With --done, confirm the session was paged to next_offset: EOF (required to mark processed)")
     parser.add_argument("--limit", type=int, default=0, help="With --list, cap to N oldest sessions (0 = no cap)")
     args = parser.parse_args()
 
     if args.list:
         cmd_list(args.force, args.limit)
     elif args.done:
-        cmd_done(args.done)
+        cmd_done(args.done, reached_eof=args.reached_eof)
     else:
         cmd_append(args.append)
 

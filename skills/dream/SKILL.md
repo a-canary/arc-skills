@@ -51,10 +51,16 @@ one edit to an agent | skill | tool | pipeline | script
    journal path. Run up to 3 in parallel (haiku is cheap, but cli-proxy has
    limited concurrency). The collector pages the session with `scripts/page.py`,
    digs into ambiguous failures with `Explore`, and appends findings.
-4. After a session is collected, mark it processed:
+4. After a session is **fully paged to `next_offset: EOF`**, mark it processed:
    ```bash
-   python3 ~/.claude/skills/dream/scripts/pipeline.py --done <session.jsonl>
+   python3 ~/.claude/skills/dream/scripts/pipeline.py --done <session.jsonl> --reached-eof
    ```
+   `--done` now **refuses without `--reached-eof`** (exit 2). Only pass the flag
+   once the collector reported reaching EOF for that session. If a session was
+   skipped or only partially paged (e.g. "large session, not analyzed"), do NOT
+   pass the flag -- leave it unmarked so `--list` requeues it next run. A
+   skipped-but-marked-done session is silently lost from the pipeline forever
+   (journal 2026-07-20).
 
 ## Phase 2 — Adapt (opus)
 
