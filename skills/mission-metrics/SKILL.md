@@ -5,6 +5,9 @@ description: Intense HITL grilling session — one question at a time, interleav
 
 # Mission-Metrics Grilling
 
+TDD for design/UX: approved metrics + gates are the failing test suite written
+before development — doctrine in [references/design-tdd-spec.md](references/design-tdd-spec.md).
+
 A **HITL grilling session** (wayfinder-style): the agent asks **one question at
 a time**, never answers its own questions, and between questions does the
 legwork — read the repo, mine recent sessions, WebFetch competitor/domain
