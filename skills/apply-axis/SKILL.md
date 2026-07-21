@@ -1,11 +1,11 @@
 ---
-name: apply-mission
-description: Propose, for user approval, how a mission axis applies to ONE repo — a CHOICES.md "## Axis:" interpretation, phase-ordered objectives, and one hillclimb(scope, metric, gate) eval per phase — landed via the apply-on-approve CHOICES.md PR lane. Use when a repo lacks an interpretation for a relevant axis, after /define-mission's repo walk, or when the user says "apply the mission to this repo", "propose objectives", or "add metric gates".
+name: apply-axis
+description: Propose, for user approval, how a global axis applies to ONE repo — a CHOICES.md "## Axis:" interpretation, phase-ordered objectives, and one hillclimb(scope, metric, gate) eval per phase — landed via the apply-on-approve CHOICES.md PR lane. Use when a repo lacks an interpretation for a relevant axis, after /define-axis's repo walk, or when the user says "apply the axis to this repo", "apply the mission", "propose objectives", or "add metric gates".
 ---
 
-# Apply-Mission (repo-level)
+# Apply-Axis (repo-level)
 
-Specializes a global axis (`~/vault/missions/<slug>.md`) into one repo's
+Specializes a global axis (`~/vault/axes/<slug>.md`) into one repo's
 objectives and gates. Metric-design method =
 [mission-metrics](../mission-metrics/SKILL.md) §2–5; this skill is the
 per-repo orchestrator. Output is a PROPOSAL — the user approves.

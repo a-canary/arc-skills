@@ -5,7 +5,7 @@ description: Self-directed improvement loop that drives a repo's current phase g
 
 # Hillclimb (phase-gate climbing)
 
-Executes the eval lines `/apply-mission` landed. The contract: **gate =
+Executes the eval lines `/apply-axis` landed. The contract: **gate =
 all previous phases' metrics ∧ current phase's gate** — a climb that
 regresses an earlier win doesn't count.
 
@@ -14,14 +14,14 @@ regresses an earlier win doesn't count.
 1. **Parse** — repo CHOICES.md: current phase's
    `hillclimb(scope, metric, gate)` + the axis file it serves. Refuse to
    climb a `veto+skew` axis (never scored) or a metric whose proxy gap is
-   unnamed — route back to /apply-mission instead.
+   unnamed — route back to /apply-axis instead.
 2. **Measure baseline** — via the metric's named recorder into
    `objective_metrics`. No recorder → fixing that IS the first climb step.
    Rate metrics obey no-rate-without-power: Wilson 95% CI, required n
    before claiming movement; underpowered → collect samples, don't claim.
 3. **Green already?** — gate passes at baseline → propose the
    phase-advance PR (swap the objectives-fence rows to the next phase's,
-   per apply-mission §3) and stop.
+   per apply-axis §3) and stop.
 4. **Pick the gap** — highest-leverage change *inside scope* (scope is the
    only thing a challenger may touch). One challenger at a time.
 5. **Challenge** — implement via [/task](../task/SKILL.md) (worktree, TDD,

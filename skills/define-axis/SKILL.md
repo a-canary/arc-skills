@@ -1,18 +1,20 @@
 ---
-name: define-mission
-description: HITL interview that defines or refines a global mission axis in ~/vault/missions/<slug>.md — abstract goal-axis, bounded/unbounded type, values applied to all projects — then walks candidate repos dispatching /apply-mission per repo. Use when a new mission/axis is proposed or detected undefined, when an existing axis needs refinement, or when the user says "define the mission", "new mission", "add an axis", or "refine the axis".
+name: define-axis
+description: HITL interview that defines or refines a global axis in ~/vault/axes/<slug>.md — abstract goal-axis, bounded/unbounded type, values applied to all projects — then walks candidate repos dispatching /apply-axis per repo. Use when a new axis/global mission is proposed or detected undefined, when an existing axis needs refinement, or when the user says "define the axis", "new axis", "new mission", or "refine the axis".
 ---
 
-# Define-Mission (axis-level)
+# Define-Axis (global level)
 
-Axes ARE the missions: one file per axis in `~/vault/missions/<slug>.md`,
-global and abstract; repos interpret them locally via `/apply-mission`.
-Spec: `~/vault/missions/SPEC.md`.
+**Axis** = global value-dimension in `~/vault/axes/<slug>.md` (formerly
+"mission" in MISSIONS.yaml), abstract, applied to all projects; repos
+interpret it locally via `/apply-axis`. **Mission** stays repo-local: a
+repo's CHOICES.md `## Mission` section (its audience/problem/value, per
+mission-metrics) — never confuse the two. Spec: `~/vault/axes/SPEC.md`.
 
 ## Detection triggers (run this skill when…)
 
 - A conversation, PRD, or objective names a goal that maps to **no existing
-  axis** (`ls ~/vault/missions/*.md`, check `aliases:` too).
+  axis** (`ls ~/vault/axes/*.md`, check `aliases:` too).
 - A new value-dimension is proposed ("we should also care about X").
 - An objective/metric row carries no axis tag and none fits.
 
@@ -44,7 +46,7 @@ cap, overlap with an existing axis (refine that one instead).
 
 ## 2. Write the axis file
 
-`~/vault/missions/<slug>.md` — frontmatter `slug, axis, type, cap|mode,
+`~/vault/axes/<slug>.md` — frontmatter `slug, axis, type, cap|mode,
 values, aliases, approved` + prose body (direction + values list).
 **`approved: null` always — only the user sets the approval date.** Until
 approved, agents do only throw-away/exploratory work on the axis. Commit to
@@ -55,7 +57,7 @@ vault.
 Enumerate candidates: `~/repos/*`, aliases' legacy subscribe lists, repos
 whose CHOICES/README plausibly touch the axis. For each, judge relevance in
 one line; for each relevant repo dispatch
-[/apply-mission](../apply-mission/SKILL.md) (batch the resulting proposals
+[/apply-axis](../apply-axis/SKILL.md) (batch the resulting proposals
 for one approval pass). The walk may run pre-approval: its outputs are
 user-gated proposals, i.e. throw-away until approved. Irrelevant repos get a recorded `n/a` — absence of
 an Axis section then reads as "judged n/a", not "gap".
