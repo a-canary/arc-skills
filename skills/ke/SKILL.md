@@ -1,11 +1,11 @@
 ---
 name: ke
-description: Knowledge Engine — one CLI for semantic recall, gap-driven research (web→ingest), and persisting durable learnings to a Qdrant-indexed vault. Use for R&D recall before starting work, INSTEAD of raw WebSearch on durable questions, and to bank any durable finding (verdicts, gotchas, decisions).
+description: Knowledge Engine — one CLI for semantic recall, gap-driven research (web→ingest), and persisting durable learnings to a local sqlite-vec-indexed vault (Xenova/all-MiniLM-L6-v2, no API key). Use for R&D recall before starting work, INSTEAD of raw WebSearch on durable questions, and to bank any durable finding (verdicts, gotchas, decisions).
 ---
 
 # ke — Knowledge Engine
 
-One CLI tool, one skill. Binary: `ke` (`~/.bun/bin/ke`; fallback `bun ~/repos/ke/bin/ke-tool.ts`). KB at `~/vault/ke/` (Qdrant on `localhost:6333`). `ke` with no args prints full usage.
+One CLI tool, one skill. Binary: `ke` (`~/.bun/bin/ke`; fallback `bun ~/repos/ke/bin/ke-tool.ts`). KB at `~/vault/ke/` (local sqlite-vec index, embeddings via Xenova/all-MiniLM-L6-v2 — no server, no API key). `ke` with no args prints full usage.
 
 ## Verbs
 
