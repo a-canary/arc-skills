@@ -70,8 +70,8 @@ a recurring scheduled climb = a [cam](../cam/SKILL.md) gate.
 ## Persist to substrate
 
 This skill is the shared METHOD; the orchestrators are
-[define-mission](../define-mission/SKILL.md) (axis-level interview + repo
-walk), [apply-mission](../apply-mission/SKILL.md) (per-repo objectives +
+[define-axis](../define-axis/SKILL.md) (axis-level interview + repo
+walk), [apply-axis](../apply-axis/SKILL.md) (per-repo objectives +
 gates proposal), and [hillclimb](../hillclimb/SKILL.md) (drive the gates
 green). Every objective/metric names its axis slug.
 
@@ -79,7 +79,7 @@ Record the outcome on the surfaces that already render (create no new infra):
 
 | Artifact | Lives in |
 |---|---|
-| Mission/axis + approval | `~/vault/missions/<slug>.md` axis file (see `~/vault/missions/SPEC.md`; legacy `MISSIONS.yaml` stays live until loader cutover) — `approved:` = date the USER approved the full definition; until set, agents do ONLY throw-away prototypes/exploratory work on the mission |
+| Axis + approval | `~/vault/axes/<slug>.md` axis file (see `~/vault/axes/SPEC.md`; legacy `MISSIONS.yaml` stays live until loader cutover) — `approved:` = date the USER approved the full definition; until set, agents do ONLY throw-away prototypes/exploratory work on the axis |
 | Phase plan (hillclimb lines + proxy rationale) | target repo `CHOICES.md`, prose above the fence |
 | Active phase's metrics | `CHOICES.md` ```objectives``` fence rows (`goal \| provenance \| metric \| gate`) |
 | Samples | `objective_metrics(project, metric, value, recorded_at)` — **no recorder, no metric**: name the writer + cadence in the same change |
