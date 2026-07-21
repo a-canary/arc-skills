@@ -56,7 +56,8 @@ Enumerate candidates: `~/repos/*`, aliases' legacy subscribe lists, repos
 whose CHOICES/README plausibly touch the axis. For each, judge relevance in
 one line; for each relevant repo dispatch
 [/apply-mission](../apply-mission/SKILL.md) (batch the resulting proposals
-for one approval pass). Irrelevant repos get a recorded `n/a` — absence of
+for one approval pass). The walk may run pre-approval: its outputs are
+user-gated proposals, i.e. throw-away until approved. Irrelevant repos get a recorded `n/a` — absence of
 an Axis section then reads as "judged n/a", not "gap".
 
 ## 4. Persist
