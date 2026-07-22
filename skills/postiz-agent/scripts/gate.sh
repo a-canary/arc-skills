@@ -16,7 +16,8 @@ emit() { printf '%s\t%s\n' "$1" "$2"; }
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 emit repo-root "$repo_root"
 
-# ponytail: grep two known files, not a walk. Projects declare in AGENTS.md or CHOICES.md.
+# ponytail: grep two known files, not a walk. Projects declare in AGENTS.md or CHOICES.md;
+# extend the list on the first legit declaration elsewhere (false NO_DECLARATION block).
 declared_in="-"
 for f in "$repo_root/AGENTS.md" "$repo_root/CHOICES.md"; do
   [ -f "$f" ] || continue
