@@ -8,9 +8,9 @@ description: HITL interview that defines or refines a global mission section in 
 **Mission** = global value-dimension section (`### UM-xxxx`) in
 `~/vault/missions.md`, abstract, applied to all projects; repos interpret it
 locally via `/apply-mission` into a CHOICES.md `## Mission:` section.
-**Axis** = the superset: missions + global principles (hygiene, use-value,
-prove-before-scale, why-before-how — defined in AGENTS.md); missions.md holds
-the axis ranking, position = rank, vetoes bind by kind at any rank. Spec: `~/vault/missions-proposals/SPEC.md`.
+**Axis** = the superset: missions + global principles (defined in AGENTS.md);
+missions.md holds the axis ranking (hygiene, use-value ranked; prove-before-scale,
+why-before-how always-on unranked), position = rank, vetoes bind by kind at any rank. Spec: `~/vault/missions-proposals/SPEC.md`.
 
 ## Detection triggers (run this skill when…)
 
