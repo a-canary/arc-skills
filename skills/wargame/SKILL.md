@@ -1,6 +1,6 @@
 ---
 name: wargame
-description: Turn a plan or repo into a branching runbook that fights the mission on paper move-by-move — every move carries its expected observation, most-likely failure, and countermove, every fork a trigger, every branch an abort condition. Writes to <repo>/.wargame/. Use when the user wants to wargame a project, stress-test execution (not just the plan), pre-simulate contingencies so a cheaper model can execute confidently, or runs it after /grill-me. Not a plan — a plan assumes linearity; a wargame assumes reality fights back.
+description: Turn a plan or repo into a branching runbook that fights the mission on paper move-by-move (each move: expected observation, likely failure, countermove; each fork: a trigger and abort condition). Writes to <repo>/.wargame/. Use to stress-test execution (not just the plan) or pre-simulate contingencies for a cheaper executor; often run after /grill-me. A plan assumes linearity; a wargame assumes reality fights back.
 model: claude-fable-5
 effort: xhigh
 ---
@@ -51,23 +51,11 @@ resolved branch into contingencies.
 
 ## Output tree
 
-Write to `<repo>/.wargame/`:
-
-```
-.wargame/
-├── main.md            # index: missions, status, links, executor, global abort conditions
-├── success.md         # what counts as a complete wargame (the gate)
-├── ledger.md          # blockers + (variable) placeholders needing human input
-├── assumptions.md     # unverified assumptions, recon that couldn't resolve
-├── tasks/             # one mission-brief file per mission (the input objective)
-│   └── <mission>.md
-└── wargames/          # one wargame per mission (the branching runbook)
-    └── <mission>.md
-```
-
-Create files lazily — only when you have something to write. `main.md` always
-exists as the index. See [templates.md](reference/templates.md) for
-`main.md`, `success.md`, `ledger.md`, and mission-brief scaffolds.
+Write to `<repo>/.wargame/`, one file per role: `main.md` (index — always
+present), `success.md` (the gate), `ledger.md` (blockers + `(variable)`
+placeholders), `assumptions.md`, `tasks/<mission>.md` (briefs), and
+`wargames/<mission>.md` (the runbooks). Create files lazily. Full tree layout +
+scaffolds for every file: [templates.md](reference/templates.md).
 
 ## Executing the runbook
 

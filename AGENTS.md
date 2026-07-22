@@ -39,6 +39,8 @@ Be extremely concise. Sacrifice grammar for concision.
 
 - **No LiteLLM / multi-key API proxies** — security risk. Direct API + keys from the operator's secret store (see USER.md); route models via pipeliner/config.
 
+- **Never print a secret's value into tool output.** To check whether a key/token is set, test *presence* not value: `[ -n "$MINIMAX_API_KEY" ] && echo set || echo unset`, or `printenv MINIMAX_API_KEY >/dev/null && echo set`. Never `env | grep -i key`, `echo $X_API_KEY`, or any pipe that echoes the literal secret — the value lands verbatim in the session log (and git-tracked journals/tallies downstream). Masked prefixes count as leaks. Applies to API keys, tokens, passwords, GPG-pass reads: consume them into a variable/command, never surface them.
+
 - **Install only first-party + self-authored.** Upstream maintainer's main repo, or own code. Reject by default all UGC plugins / skill libs / dashboards / memory providers.
 
 - **Configs and rules live in a git repo, symlinked into place.** Source-of-truth for any config/ruleset is a tracked file in a repo; the consuming location (`~/.claude/CLAUDE.md`, `~/.pi/pi.md`, dotfiles, …) is a symlink back to it — the `npx skills` pattern. Never hand-maintain divergent copies. Edit the canonical, the symlinks follow.

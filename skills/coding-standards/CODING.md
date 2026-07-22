@@ -47,6 +47,14 @@ When a CLI / tool / command emits output an **agent** consumes (search hits, sta
 
 Generalizes U-4 to every agent-consumed surface. Keep human-pretty output for TTY; AXI shaping is the default for the agent path. Proven on `ke search` (PR a-canary/ke#59): title↔summary dedup + gist truncation cut output ~10%.
 
+### U-7 — Anchor Edit `old_string` on freshly-grepped bytes, not remembered excerpts
+Exact-string Edit requires a byte-for-byte match of the current file. Matching against a *remembered* excerpt (from an earlier Read, a truncated dump, or reconstructed indentation) produces "could not find the exact text" failures — off-by-one whitespace, tabs-vs-spaces, a line that was already reflowed. Two-plus such failures in a row on the same edit is the signal to STOP retrying blind and re-anchor:
+- **Re-anchor before the 3rd attempt, not after.** `grep -n` a short, unique token near the edit site, then `Read` that exact `offset`/`limit` range so `old_string` is copied from live bytes — never re-typed from memory.
+- **Shrink the anchor.** Match the *smallest* unique surrounding string, not a multi-line block; fewer bytes copied = fewer whitespace traps.
+- **Whitespace-ambiguous region** (mixed tabs/spaces, trailing spaces) → prefer `Write` of the whole small file, or a ranged `Read` immediately before the Edit so the copy is fresh.
+
+Prevents the zero-productivity spiral where 3+ Edits fail and no change lands (KE optimization session 2026-04-20). Costs one `grep -n` + one ranged `Read`; saves the failed-retry loop.
+
 ---
 
 ## (F) Factory implementation
