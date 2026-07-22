@@ -63,7 +63,10 @@ phase 2: hillclimb(scope=engagement_pipeline, metric=(quiz_pass_rate>80)*retenti
 - `scope` — the module/pipeline being climbed (what a challenger may change).
 - `metric` — the number (or composition of earlier metrics) being maximized.
 - `gate` — the pass condition that closes the phase and opens the next; later
-  gates keep earlier metrics in the conjunction (no regressions).
+  gates keep earlier metrics in the conjunction (no regressions) and may
+  **re-tighten** their bands as the product matures — a game gates
+  `num_users>10 and fps>20` in alpha but `num_users>100 and fps>40` in
+  beta; the latest band is the live one.
 Promotion mechanics per phase = [champion-challenger](../champion-challenger/SKILL.md);
 a recurring scheduled climb = a [cam](../cam/SKILL.md) gate.
 
