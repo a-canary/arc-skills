@@ -5,7 +5,7 @@ description: Propose, for user approval, how a global axis applies to ONE repo �
 
 # Apply-Axis (repo-level)
 
-Specializes a global axis (`~/vault/missions.md` `## <slug>` section) into one repo's
+Specializes a global axis (`~/vault/missions.md` `### V-xxxx` rule) into one repo's
 objectives and gates. Metric-design method =
 [mission-metrics](../mission-metrics/SKILL.md) §2–5; this skill is the
 per-repo orchestrator. Output is a PROPOSAL — the user approves.
@@ -32,7 +32,7 @@ A `## Axis: <slug>` section for the repo's CHOICES.md:
   `phase N: hillclimb(scope=…, metric=…, gate=…)` — scope is what a
   challenger may change; gates compose so no phase regresses a prior win.
 
-Every objective/metric row NAMES the axis slug — dashboards aggregate by
+Every objective/metric row NAMES the V-ID — dashboards aggregate by
 axis; an untagged objective is a lint gap.
 
 ## 3. Objectives fence (current phase only)

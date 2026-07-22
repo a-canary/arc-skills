@@ -14,7 +14,7 @@ mission-metrics) — never confuse the two. Spec: `~/vault/axes/SPEC.md`.
 ## Detection triggers (run this skill when…)
 
 - A conversation, PRD, or objective names a goal that maps to **no existing
-  axis** (grep `^## ` ~/vault/missions.md, check `aliases:` too).
+  axis** (grep `^### V-` ~/vault/missions.md).
 - A new value-dimension is proposed ("we should also care about X").
 - An objective/metric row carries no axis tag and none fits.
 
@@ -46,7 +46,7 @@ cap, overlap with an existing axis (refine that one instead).
 
 ## 2. Write the axis file
 
-`~/vault/missions.md` `## <slug>` section — meta line `slug, axis, type, cap|mode,
+`~/vault/missions.md` `### V-xxxx` rule — Supports line `slug, axis, type, cap|mode,
 values, aliases, approved` + prose body (direction + values list).
 **`approved: null` always — only the user sets the approval date.** Until
 approved, agents do only throw-away/exploratory work on the axis. Commit to
