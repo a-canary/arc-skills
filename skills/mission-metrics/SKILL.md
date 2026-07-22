@@ -40,7 +40,7 @@ Where the direct metric is infeasible, slow, or blocks speed-to-market,
 co-design the **nearest proxy**: cheaper/faster, causally closest to the
 direct metric. For each proxy, state in one line (a) what direct metric it
 stands in for, (b) the gap — how it could move without the value moving
-(its Goodhart axis), (c) what would eventually confirm it against the direct
+(its Goodhart mission), (c) what would eventually confirm it against the direct
 metric. Prefer a measurable proxy today over a perfect metric never.
 
 ## 4. Phase order
@@ -73,16 +73,16 @@ a recurring scheduled climb = a [cam](../cam/SKILL.md) gate.
 ## Persist to substrate
 
 This skill is the shared METHOD; the orchestrators are
-[define-axis](../define-axis/SKILL.md) (axis-level interview + repo
-walk), [apply-axis](../apply-axis/SKILL.md) (per-repo objectives +
+[define-mission](../define-mission/SKILL.md) (mission-level interview + repo
+walk), [apply-mission](../apply-mission/SKILL.md) (per-repo objectives +
 gates proposal), and [hillclimb](../hillclimb/SKILL.md) (drive the gates
-green). Every objective/metric names its axis slug.
+green). Every objective/metric names its mission slug.
 
 Record the outcome on the surfaces that already render (create no new infra):
 
 | Artifact | Lives in |
 |---|---|
-| Axis + approval | `~/vault/missions.md` `### V-xxxx` rule (see `~/vault/axes/SPEC.md`; legacy `MISSIONS.yaml` stays live until loader cutover) — `approved:` = date the USER approved the full definition; until set, agents do ONLY throw-away prototypes/exploratory work on the axis |
+| Mission + approval | `~/vault/missions.md` `### UM-xxxx` rule (see `~/vault/missions-proposals/SPEC.md`; legacy `MISSIONS.yaml` stays live until loader cutover) — `approved:` = date the USER approved the full definition; until set, agents do ONLY throw-away prototypes/exploratory work on the mission |
 | Phase plan (hillclimb lines + proxy rationale) | target repo `CHOICES.md`, prose above the fence |
 | Active phase's metrics | `CHOICES.md` ```objectives``` fence rows (`goal \| provenance \| metric \| gate`) |
 | Samples | `objective_metrics(project, metric, value, recorded_at)` — **no recorder, no metric**: name the writer + cadence in the same change |

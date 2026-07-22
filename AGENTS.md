@@ -13,8 +13,8 @@ USER.md is the personal overlay and overrides it on any conflict.
 
 - **This file (AGENTS.md, public)** — HOW, globally: always-on operational rules every agent needs every turn, any repo, any work. Generic only; specifics live in the docs below and are referenced, never copied.
 - **`~/vault/USER.md` (private)** — WHO: operator identity, infra facts, secret locations, preferences. Overlays this file; wins any conflict.
-- **`~/vault/missions.md` (private)** — WHY: global value cascade (V-IDs), priorities, vetoes. Planning/design/decomposition surfaces only.
-- **`<repo>/CHOICES.md`** — WHAT, per repo: prioritized decisions, mission, objectives, `## Axis:` sections citing V-IDs.
+- **`~/vault/missions.md` (private)** — WHY: global value cascade (UM-IDs), priorities, vetoes. Planning/design/decomposition surfaces only.
+- **`<repo>/CHOICES.md`** — WHAT, per repo: prioritized decisions, mission, objectives, `## Mission:` sections citing UM-IDs.
 - **`<repo>/AGENTS.md`** — HOW, per repo: repo-scoped operating rules extending this file.
 
 Loading rule: **workers** load this file + USER.md + the repo's AGENTS.md. **Planners and reviewers** read all five. A line stays here only if all agents doing all work need it; else it moves down a tier.
@@ -65,13 +65,13 @@ Be extremely concise. Sacrifice grammar for concision.
 
 - **Gebrauchswert: functionality before|over visual appeal.** Optimize the practical value a user derives from everyday functionality, not visual appeal. Feature/design forks default to the option that does more daily work; polish serves use, never the reverse.
 
-- **Never present fabricated data as real (V-0500).** No mocked/simulated/estimated values reported as measurements; no suppressed errors; certifying a condition needs logged evidence. Unmeasured = not passed.
+- **Never present fabricated data as real (UM-0500).** No mocked/simulated/estimated values reported as measurements; no suppressed errors; certifying a condition needs logged evidence. Unmeasured = not passed.
 
 - **Self-judge ≠ quality.** A producing model scoring against its own rubric proves consistency, not quality. Get a second *disagreeing* judge before claiming improvement; diminishing self-judge deltas = stop signal, not success.
 
 - **Paper-prototype before implementation.** Any new module design/spec MUST be validated with /paper-prototype before code is written: hand-execute the process on live/near-prod data (existing APIs + proven code only, md/json/csv/html intermediates) and land the SPEC-DELTA (validated flow, submodules, dependencies, spec revisions) back into the spec. No implementation issues (/to-issues) or worker dispatch on an unvetted spec. Skip only for trivial changes with no new process (one-liners, config, copy), stating the skip.
 
-- **Undefined axis → /define-axis.** A goal/objective/PRD that maps to no rule (`### V-xxxx`) in `~/vault/missions.md`, or proposes a new value-dimension, must not proceed to PRD/issues/implementation — run /define-axis first (then /apply-axis per repo). Every objective/metric names its V-ID; `[pending user review]` tags are cleared by the user only.
+- **Undefined mission (UM) → /define-mission.** A goal/objective/PRD that maps to no rule (`### UM-xxxx`) in `~/vault/missions.md`, or proposes a new value-dimension, must not proceed to PRD/issues/implementation — run /define-mission first (then /apply-mission per repo). Every objective/metric names its UM-ID; `[pending user review]` tags are cleared by the user only.
 
 - **Engineer for zero agent trust.** No unit of agent work is believed — it is *checked*: plans wargamed (/wargame) before execution, code compiled + tested, worker outputs verified against rubric/standards/common-problem lists, checkers themselves audited (a gate is also a work unit). Verification is what makes cheap models safe: distrust reduces cost and increases speed at no quality loss. Check-vs-claim conflict → retry once with the discrepancy named; still conflicting → escalate to a higher-tier model, never paper over. Specific instances: subagent-reports-UNTRUSTED, self-judge ≠ quality, merge-on-clear reviewer gate; doctrine root of hypothesis_not_fact (arc-agents/roles/AGENTS.md).
 
