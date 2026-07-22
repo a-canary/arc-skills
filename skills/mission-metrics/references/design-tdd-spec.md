@@ -15,7 +15,7 @@ the gates are user-approved is a prototype — throw-away by definition.
 | Red | Fence rows render NO-GO / verdict-less on `/m/:slug` |
 | Make it pass | Build the pipeline/feature until gates read GO |
 | Green | Phase gate holds (all conjunctions true) |
-| Refactor, keep green | Hillclimb the scope; later phases keep earlier metrics in the gate |
+| Refactor, keep green | Hillclimb the scope; later phases keep earlier metrics in the gate, possibly at tighter bands |
 | Never delete a failing test to pass | Never widen a gate to pass — changing a gate is a user decision |
 
 ## Lifecycle
@@ -31,7 +31,11 @@ the gates are user-approved is a prototype — throw-away by definition.
    value + GO/WATCH/NO-GO verdict + trend.
 5. **Advance.** Phase gate holds → PR swaps the fence rows to the next
    phase's metrics; earlier metrics stay in the new gate's conjunction
-   (no-regression, like a kept passing test).
+   (no-regression, like a kept passing test) — and a phase may re-tighten
+   an earlier metric's band (alpha `num_users>10, fps>20` → beta
+   `num_users>100, fps>40`; latest band is live). The advance PR also
+   greps in-scope `ponytail:` debt markers: ceiling hit by the next gate →
+   pay before advancing, else the marker rides.
 
 ## Invariants
 
