@@ -82,7 +82,7 @@ Record the outcome on the surfaces that already render (create no new infra):
 
 | Artifact | Lives in |
 |---|---|
-| Axis + approval | `~/vault/missions.md` `## <slug>` section (see `~/vault/axes/SPEC.md`; legacy `MISSIONS.yaml` stays live until loader cutover) — `approved:` = date the USER approved the full definition; until set, agents do ONLY throw-away prototypes/exploratory work on the axis |
+| Axis + approval | `~/vault/missions.md` `### V-xxxx` rule (see `~/vault/axes/SPEC.md`; legacy `MISSIONS.yaml` stays live until loader cutover) — `approved:` = date the USER approved the full definition; until set, agents do ONLY throw-away prototypes/exploratory work on the axis |
 | Phase plan (hillclimb lines + proxy rationale) | target repo `CHOICES.md`, prose above the fence |
 | Active phase's metrics | `CHOICES.md` ```objectives``` fence rows (`goal \| provenance \| metric \| gate`) |
 | Samples | `objective_metrics(project, metric, value, recorded_at)` — **no recorder, no metric**: name the writer + cadence in the same change |
