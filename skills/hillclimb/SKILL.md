@@ -8,8 +8,8 @@ description: Self-directed improvement loop that drives a repo's current phase g
 Executes the eval lines `/apply-axis` landed. The contract: **gate =
 all previous phases' metrics ∧ current phase's gate** — a climb that
 regresses an earlier win doesn't count. A later phase may **re-tighten**
-an earlier metric's band (alpha: `num_users>10 ∧ fps>20`; beta:
-`num_users>100 ∧ fps>40`) — the carried metric holds at its latest band.
+an earlier metric's band (alpha: `num_users>10 and fps>20`; beta:
+`num_users>100 and fps>40`) — the carried metric holds at its latest band.
 
 ## Loop
 
@@ -25,8 +25,8 @@ an earlier metric's band (alpha: `num_users>10 ∧ fps>20`; beta:
    phase-advance PR (swap the objectives-fence rows to the next phase's,
    per apply-axis §3) and stop. The advance PR also greps in-scope
    `ponytail:` markers and checks each named ceiling against the next
-   phase's gate — ceiling hit → pay that debt before advancing;
-   otherwise the marker rides.
+   phase's gate — ceiling hit → pay that debt (via /task, like any
+   climb change) before advancing; otherwise the marker rides.
 4. **Pick the gap** — highest-leverage change *inside scope* (scope is the
    only thing a challenger may touch). One challenger at a time.
 5. **Challenge** — implement via [/task](../task/SKILL.md) (worktree, TDD,
