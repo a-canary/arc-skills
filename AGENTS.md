@@ -9,6 +9,16 @@ skills, not this file.
 infra, preferences, and project constraints. This file is the generic doctrine;
 USER.md is the personal overlay and overrides it on any conflict.
 
+## File boundaries (earn-it-to-keep)
+
+- **This file (AGENTS.md, public)** — HOW, globally: always-on operational rules every agent needs every turn, any repo, any work. Generic only; specifics live in the docs below and are referenced, never copied.
+- **`~/vault/USER.md` (private)** — WHO: operator identity, infra facts, secret locations, preferences. Overlays this file; wins any conflict.
+- **`~/vault/missions.md` (private)** — WHY: global value cascade (V-IDs), priorities, vetoes. Planning/design/decomposition surfaces only.
+- **`<repo>/CHOICES.md`** — WHAT, per repo: prioritized decisions, mission, objectives, `## Axis:` sections citing V-IDs.
+- **`<repo>/AGENTS.md`** — HOW, per repo: repo-scoped operating rules extending this file.
+
+Loading rule: **workers** load this file + USER.md + the repo's AGENTS.md. **Planners and reviewers** read all five. A line stays here only if all agents doing all work need it; else it moves down a tier.
+
 Be extremely concise. Sacrifice grammar for concision.
 
 - **Prove before scaling.** Value on one concrete case before parallelizing/scheduling/fanning out/productionizing. Single manual run beats scheduled fleet. Asked to "scale X" — first verify X works and matters; propose minimal validation if proof missing.
@@ -69,4 +79,4 @@ Be extremely concise. Sacrifice grammar for concision.
 
 - **/counsel over asking.** Decision/approval fork mid-task → run /counsel (5-expert panel), execute its verdict autonomously; don't AskUserQuestion or pause. Prefer the reversible/non-destructive option; keep export-to-trash before any delete. Respect hard safety-classifier blocks (counsel routes around via code-only fix).
 
-- **Docker: own-stack only + shared-resource discipline.** Mission automations operate ONLY their own repo's containers/compose files (per-repo `.claude/settings.json` allow-rules, name-scoped). Never touch another stack (immich, postiz, other missions) — no `docker system prune`, no blanket restarts, no killing containers you didn't start; cross-stack action needs /counsel. Shared host etiquette: check disk (>10G free) + load before builds; one heavy build/pull at a time; GPU single-tenant (`nvidia-smi` before claiming); never bind another service's port (check `ss -ltn` first); under capacity contention yield by mission priority (trading > onenation > autonomy > local-models).
+- **Docker: own-stack only + shared-resource discipline.** Mission automations operate ONLY their own repo's containers/compose files (per-repo `.claude/settings.json` allow-rules, name-scoped). Never touch another stack (see USER.md for the host's stacks) — no `docker system prune`, no blanket restarts, no killing containers you didn't start; cross-stack action needs /counsel. Shared host etiquette: check disk (>10G free) + load before builds; one heavy build/pull at a time; GPU single-tenant (`nvidia-smi` before claiming); never bind another service's port (check `ss -ltn` first); under capacity contention yield by mission priority (`~/vault/missions.md` order).
