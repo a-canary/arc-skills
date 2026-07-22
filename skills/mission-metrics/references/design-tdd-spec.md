@@ -23,7 +23,7 @@ the gates are user-approved is a prototype — throw-away by definition.
 1. **Red first.** Run `/mission-metrics` (HITL grilling) → audience, value,
    direct metric, proxy ladder with named Goodhart gaps, phase order, one
    `hillclimb(scope, metric, gate)` line per phase.
-2. **Approve.** User sets `approved: <date>` on the mission section in `~/vault/missions.md` (legacy `MISSIONS.yaml` until loader cutover).
+2. **Approve.** User sets `approved: <date>` on the mission section in `~/vault/missions.md` (loader cutover done 2026-07-22; MISSIONS.yaml retired).
    Until then: prototypes and exploration only, no durable build-out.
 3. **Baseline.** Record the current value of every phase-1 metric in
    `objective_metrics` before any climb (no baseline = no delta).

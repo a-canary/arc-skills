@@ -82,7 +82,7 @@ Record the outcome on the surfaces that already render (create no new infra):
 
 | Artifact | Lives in |
 |---|---|
-| Mission + approval | `~/vault/missions.md` `### UM-xxxx` rule (see `~/vault/missions-proposals/SPEC.md`; legacy `MISSIONS.yaml` stays live until loader cutover) — `approved:` = date the USER approved the full definition; until set, agents do ONLY throw-away prototypes/exploratory work on the mission |
+| Mission + approval | `~/vault/missions.md` `### UM-xxxx` rule (see `~/vault/missions-proposals/SPEC.md`; loader cutover done 2026-07-22 — registry lives in the missions.md yaml fence, MISSIONS.yaml retired) — `approved:` = date the USER approved the full definition; until set, agents do ONLY throw-away prototypes/exploratory work on the mission |
 | Phase plan (hillclimb lines + proxy rationale) | target repo `CHOICES.md`, prose above the fence |
 | Active phase's metrics | `CHOICES.md` ```objectives``` fence rows (`goal \| provenance \| metric \| gate`) |
 | Samples | `objective_metrics(project, metric, value, recorded_at)` — **no recorder, no metric**: name the writer + cadence in the same change |
