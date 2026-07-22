@@ -5,7 +5,8 @@ description: Propose, for user approval, how a global mission applies to ONE rep
 
 # Apply-Mission (repo-level)
 
-Specializes a global mission (`~/vault/missions.md` `### UM-xxxx` rule) into one repo's
+Specializes a global mission (`~/vault/missions.md` `### UM-xxxx` rule; axis =
+missions + global principles, ranked there) into one repo's
 objectives and gates. Metric-design method =
 [mission-metrics](../mission-metrics/SKILL.md) §2–5; this skill is the
 per-repo orchestrator. Output is a PROPOSAL — the user approves.
