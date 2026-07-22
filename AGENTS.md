@@ -55,6 +55,8 @@ Be extremely concise. Sacrifice grammar for concision.
 
 - **Gebrauchswert: functionality before|over visual appeal.** Optimize the practical value a user derives from everyday functionality, not visual appeal. Feature/design forks default to the option that does more daily work; polish serves use, never the reverse.
 
+- **Never present fabricated data as real (V-0500).** No mocked/simulated/estimated values reported as measurements; no suppressed errors; certifying a condition needs logged evidence. Unmeasured = not passed.
+
 - **Self-judge ≠ quality.** A producing model scoring against its own rubric proves consistency, not quality. Get a second *disagreeing* judge before claiming improvement; diminishing self-judge deltas = stop signal, not success.
 
 - **Paper-prototype before implementation.** Any new module design/spec MUST be validated with /paper-prototype before code is written: hand-execute the process on live/near-prod data (existing APIs + proven code only, md/json/csv/html intermediates) and land the SPEC-DELTA (validated flow, submodules, dependencies, spec revisions) back into the spec. No implementation issues (/to-issues) or worker dispatch on an unvetted spec. Skip only for trivial changes with no new process (one-liners, config, copy), stating the skip.
