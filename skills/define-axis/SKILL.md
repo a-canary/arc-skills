@@ -1,11 +1,11 @@
 ---
 name: define-axis
-description: HITL interview that defines or refines a global axis in ~/vault/axes/<slug>.md — abstract goal-axis, bounded/unbounded type, values applied to all projects — then walks candidate repos dispatching /apply-axis per repo. Use when a new axis/global mission is proposed or detected undefined, when an existing axis needs refinement, or when the user says "define the axis", "new axis", "new mission", or "refine the axis".
+description: HITL interview that defines or refines a global axis section in ~/vault/missions.md — abstract goal-axis, bounded/unbounded type, values applied to all projects — then walks candidate repos dispatching /apply-axis per repo. Use when a new axis/global mission is proposed or detected undefined, when an existing axis needs refinement, or when the user says "define the axis", "new axis", "new mission", or "refine the axis".
 ---
 
 # Define-Axis (global level)
 
-**Axis** = global value-dimension in `~/vault/axes/<slug>.md` (formerly
+**Axis** = global value-dimension section in `~/vault/missions.md` (formerly
 "mission" in MISSIONS.yaml), abstract, applied to all projects; repos
 interpret it locally via `/apply-axis`. **Mission** stays repo-local: a
 repo's CHOICES.md `## Mission` section (its audience/problem/value, per
@@ -14,7 +14,7 @@ mission-metrics) — never confuse the two. Spec: `~/vault/axes/SPEC.md`.
 ## Detection triggers (run this skill when…)
 
 - A conversation, PRD, or objective names a goal that maps to **no existing
-  axis** (`ls ~/vault/axes/*.md`, check `aliases:` too).
+  axis** (grep `^## ` ~/vault/missions.md, check `aliases:` too).
 - A new value-dimension is proposed ("we should also care about X").
 - An objective/metric row carries no axis tag and none fits.
 
@@ -46,7 +46,7 @@ cap, overlap with an existing axis (refine that one instead).
 
 ## 2. Write the axis file
 
-`~/vault/axes/<slug>.md` — frontmatter `slug, axis, type, cap|mode,
+`~/vault/missions.md` `## <slug>` section — meta line `slug, axis, type, cap|mode,
 values, aliases, approved` + prose body (direction + values list).
 **`approved: null` always — only the user sets the approval date.** Until
 approved, agents do only throw-away/exploratory work on the axis. Commit to

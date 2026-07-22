@@ -5,7 +5,7 @@ description: Propose, for user approval, how a global axis applies to ONE repo �
 
 # Apply-Axis (repo-level)
 
-Specializes a global axis (`~/vault/axes/<slug>.md`) into one repo's
+Specializes a global axis (`~/vault/missions.md` `## <slug>` section) into one repo's
 objectives and gates. Metric-design method =
 [mission-metrics](../mission-metrics/SKILL.md) §2–5; this skill is the
 per-repo orchestrator. Output is a PROPOSAL — the user approves.

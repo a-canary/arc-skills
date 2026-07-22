@@ -23,7 +23,7 @@ the gates are user-approved is a prototype — throw-away by definition.
 1. **Red first.** Run `/mission-metrics` (HITL grilling) → audience, value,
    direct metric, proxy ladder with named Goodhart gaps, phase order, one
    `hillclimb(scope, metric, gate)` line per phase.
-2. **Approve.** User sets `approved: <date>` on the axis file `~/vault/axes/<slug>.md` (legacy `MISSIONS.yaml` until loader cutover).
+2. **Approve.** User sets `approved: <date>` on the axis section in `~/vault/missions.md` (legacy `MISSIONS.yaml` until loader cutover).
    Until then: prototypes and exploration only, no durable build-out.
 3. **Baseline.** Record the current value of every phase-1 metric in
    `objective_metrics` before any climb (no baseline = no delta).
@@ -53,5 +53,5 @@ the gates are user-approved is a prototype — throw-away by definition.
 
 ## Substrate (unchanged, see SKILL.md)
 
-~/vault/axes/<slug>.md (axis + approval) → repo CHOICES.md phase plan + fence →
+~/vault/missions.md `## <slug>` (axis + approval) → repo CHOICES.md phase plan + fence →
 objective_metrics samples → `.arc/dashboard.json` charts → `/m/:slug` verdicts.
