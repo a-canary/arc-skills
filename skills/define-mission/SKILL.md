@@ -5,11 +5,12 @@ description: HITL interview that defines or refines a global mission section in 
 
 # Define-Mission (global level)
 
-**Mission** = global value-dimension section in `~/vault/missions.md` (formerly
-"mission" in MISSIONS.yaml), abstract, applied to all projects; repos
-interpret it locally via `/apply-mission`. **Mission** stays repo-local: a
-repo's CHOICES.md `## Mission` section (its audience/problem/value, per
-mission-metrics) — never confuse the two. Spec: `~/vault/missions-proposals/SPEC.md`.
+**Mission** = global value-dimension section (`### UM-xxxx`) in
+`~/vault/missions.md`, abstract, applied to all projects; repos interpret it
+locally via `/apply-mission` into a CHOICES.md `## Mission:` section.
+**Axis** = the superset: missions + global principles (defined in AGENTS.md);
+missions.md holds the axis ranking (hygiene, use-value ranked; prove-before-scale,
+why-before-how always-on unranked), position = rank, vetoes bind by kind at any rank. Spec: `~/vault/missions-proposals/SPEC.md`.
 
 ## Detection triggers (run this skill when…)
 
