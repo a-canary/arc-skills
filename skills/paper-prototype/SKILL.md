@@ -9,6 +9,29 @@ Hand-execute the designed process step-by-step, on real data, before any code ex
 The deliverable is not working software — it is a **spec delta**: the spec as corrected
 by reality, plus the submodules and dependencies reality forced you to name.
 
+## Run in a fresh subagent (context isolation)
+
+The validation is only honest if it works from the **written spec alone**. Run inline,
+you already carry the design conversation — assumptions, half-formed rationale, fixes
+you were about to make — and you'll improvise past spec gaps instead of surfacing them.
+That validates the spec-plus-your-head, not the spec.
+
+So dispatch this via the `Agent` tool as a **fresh** subagent (NOT a `fork` — a fork
+inherits your context and re-leaks it). Hand it **only the `## Process` and `## Hard
+rules` sections below — never this section** (and never the whole SKILL.md; that would
+re-hand it the "dispatch a fresh subagent" line and it would recurse), plus:
+
+- the spec/API-design file path (and any ADR/CHOICES it cites),
+- the `.paper/<module>/` working dir.
+
+The dispatched subagent IS the runtime that walks the Process — it executes the steps
+inline in its own clean context; it does NOT dispatch a further subagent.
+
+Do NOT paste the design discussion. If the subagent can't proceed without a fact that
+isn't in the spec, that missing fact IS a finding — it goes in SPEC-DELTA, it does not
+get supplied from your memory. The subagent returns the SPEC-DELTA.md path + a one-line
+summary; you read the delta, not its working files.
+
 ## Hard rules
 
 - **No new code.** Call only existing APIs, proven CLIs, deployed services, shell
@@ -19,7 +42,12 @@ by reality, plus the submodules and dependencies reality forced you to name.
   files. Invented sample data proves nothing; the whole point is that real data
   breaks assumptions.
 - **Every step leaves an artifact.** Each step's output is an md/json/csv/html file
-  on disk. You (the agent) are the runtime; the files are the memory between steps.
+  on disk. You — the subagent walking these steps — are the runtime; the files are the
+  memory between steps.
+- **You are the executor, not a dispatcher.** Walk the steps inline in this context. Do
+  NOT spawn a further subagent and do NOT re-invoke the paper-prototype skill — you ARE
+  the paper-prototype run. (If you somehow received the skill's intro section too, ignore
+  its "dispatch a fresh subagent" instruction; it is meant for the caller, not for you.)
 
 ## Process
 
