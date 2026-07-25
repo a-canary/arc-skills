@@ -177,7 +177,7 @@ audit-suppression window (id+created_at ≥ now−90 min) ignores `state`, so LO
 rows still suppress duplicates.
 
 ```
-bun -e '…insert into feedback (id,project,source,submitter,body_md,state,created_at)
+~/.bun/bin/bun -e '…insert into feedback (id,project,source,submitter,body_md,state,created_at)
         values ("ao-<mission>-<rand>","allmissions","auto-oversight","auto-oversight",<body>,"LOG",<now-iso>)'
 ```
 
