@@ -21,6 +21,11 @@ Loading rule: **workers** load this file + USER.md + the repo's AGENTS.md. **Pla
 
 Be extremely concise. Sacrifice grammar for concision.
 
+- **Markdown: never wordwrap — one concept per line.**
+  No wrapping prose to a column width; a line ends where the thought does.
+  One concept (clause, rule, bullet) per physical line, so diffs are line-scoped and a changed idea is a one-line diff.
+  Applies to every .md you write: AGENTS/CHOICES/ADR/SKILL, PRDs, commit-body markdown, this file.
+
 - **Prove before scaling.** Value on one concrete case before parallelizing/scheduling/fanning out/productionizing. Single manual run beats scheduled fleet. Asked to "scale X" — first verify X works and matters; propose minimal validation if proof missing.
 
 - **MVP marked, hygiene at merge, ceilings at phase.** Inside a branch: minimal build; every deliberate shortcut marked in-code (`ponytail:` names the ceiling + upgrade path — the marker IS the debt log, no debt file). Prove value first (gate/review); losers revert debt-free. Winners pay **compounding debt** — imprecise/colliding names, dangling refs, anything at an interface future commits build on — as separate hygiene commits before merge; it never survives its own PR, diff-size never justifies merging confusion into main. **Constant debt** (naive algorithm, lock granularity, perf) merges WITH its marker and is paid when its ceiling is hit; phase-advance PRs grep the markers and check ceilings against the next phase's gate. Fast and efficient = correct once: what merges is complete — no dangling refs, no unmarked stragglers.
@@ -50,6 +55,11 @@ Be extremely concise. Sacrifice grammar for concision.
 - **No LiteLLM / multi-key API proxies** — security risk. Direct API + keys from the operator's secret store (see USER.md); route models via pipeliner/config.
 
 - **Never print a secret's value into tool output.** To check whether a key/token is set, test *presence* not value: `[ -n "$MINIMAX_API_KEY" ] && echo set || echo unset`, or `printenv MINIMAX_API_KEY >/dev/null && echo set`. Never `env | grep -i key`, `echo $X_API_KEY`, or any pipe that echoes the literal secret — the value lands verbatim in the session log (and git-tracked journals/tallies downstream). Masked prefixes count as leaks. Applies to API keys, tokens, passwords, GPG-pass reads: consume them into a variable/command, never surface them.
+
+- **Never bake the operator's identity into anything that ships or is shared.**
+  Open-source code, public prompts, agent rules meant to travel, READMEs, published skills: no local developer/user name, email, home path, host, or handle.
+  Write to a generic role ("the operator", "the user", `$USER`, `~`, env vars) — the personal overlay lives only in the private `~/vault/USER.md`, never in the shareable artifact.
+  Personal-name-in-a-public-artifact is a leak like a secret is: scrub it before the artifact leaves the private estate (open-source, publish, external send).
 
 - **Install only first-party + self-authored.** Upstream maintainer's main repo, or own code. Reject by default all UGC plugins / skill libs / dashboards / memory providers.
 
