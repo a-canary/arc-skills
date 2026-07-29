@@ -22,6 +22,10 @@ Single-deep. No nesting, no plugins, no bundled binaries.
 
 Most skills are pure markdown — making them visible *is* the install. A few need a hook or cron entry to work by default; those carry a `SETUP.md` next to their `SKILL.md`. The skill stays fully usable without it — `SETUP.md` only makes its behavior apply *automatically*.
 
+## Vocabulary
+
+Skills, plans, and designs share a small vocabulary of leading words — patterns and concepts named in one term so callers don't restate the shape. See [`CONTEXT.md`](./CONTEXT.md) for the cross-project vocabulary (CAM, wargame, afk, MVP, …). Each downstream repo carries its own `CONTEXT.md` for repo-local terms.
+
 ## Categories
 
 **Behavioral guardrails** — keep model output honest and on-task

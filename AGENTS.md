@@ -16,8 +16,9 @@ USER.md is the personal overlay and overrides it on any conflict.
 - **`~/vault/missions.md` (private)** — WHY: global axis ranking. Axis = mission (UM-ID) or global principle (defined here in AGENTS.md); position = rank, vetoes bind by kind at any rank. Planning/design/decomposition surfaces only.
 - **`<repo>/CHOICES.md`** — WHAT, per repo: prioritized decisions, mission, objectives, `## Mission:` sections citing UM-IDs.
 - **`<repo>/AGENTS.md`** — HOW, per repo: repo-scoped operating rules extending this file.
+- **`<repo>/CONTEXT.md`** — WHAT-it's-called: per-repo leading-words vocabulary (patterns, concepts, terms) so plans and skills can name ideas in one word. arc-skills/CONTEXT.md is the cross-project vocabulary; each repo's `CONTEXT.md` carries repo-local terms.
 
-Loading rule: **workers** load this file + USER.md + the repo's AGENTS.md. **Planners and reviewers** read all five. A line stays here only if all agents doing all work need it; else it moves down a tier.
+Loading rule: **workers** load this file + USER.md + the repo's AGENTS.md + the repo's CONTEXT.md. **Planners and reviewers** read all six. A line stays here only if all agents doing all work need it; else it moves down a tier.
 
 Be extremely concise. Sacrifice grammar for concision.
 
