@@ -1,22 +1,33 @@
 ---
 name: counsel
-description: "Run an adversarial counsel session with 5 domain experts. Each expert takes turns running queries (read files, ke-recall) and presenting arguments across 2 rounds, then synthesize into a concise report or course of action. Use when user says 'counsel', 'get expert advice', 'adversarial review', or wants multiple perspectives on a decision."
+description: "Run an adversarial counsel session with 5 experts along 5 unique axes (advocate | critic | pragmatist | historian | futurist). Each expert runs queries (read files, ke-recall) and presents arguments across 2 rounds, then synthesize into a concise report or course of action. Use when user says 'counsel', 'get expert advice', 'adversarial review', or wants multiple perspectives on a decision."
 ---
 
 # Counsel — Adversarial Expert Panel
 
-Simulates an adversarial conversation between 5 domain experts to stress-test a decision, plan, or technical approach.
+Simulates an adversarial conversation between 5 experts along **5 unique axes**
+to stress-test a decision, plan, or technical approach. Each axis is a
+distinct lens — none of them duplicates another. If a panel can't keep the
+5 distinct, reduce to fewer axes rather than collapse two.
+
+## The 5 axes
+
+| Axis | Lens | Asks |
+| --- | --- | --- |
+| **advocate** | Steelman — argue FOR | What's the strongest possible case for this proposal? What would its best advocate say? |
+| **critic** | Argue AGAINST | What flaws, failure modes, hidden costs, weak assumptions exist? What would a hostile reviewer find? |
+| **pragmatist** | Implementation reality (now) | Cost, time, complexity, dependencies. What does day-to-day operation look like? |
+| **historian** | Past precedents | What worked / didn't before? What does ke or the literature say about analogous decisions? |
+| **futurist** | Long-term implications | Second-order effects, scaling, lock-in. What does this commit us to in 6 months / 2 years? |
+
+The axes are orthogonal: advocate vs critic = direction; pragmatist vs futurist = time horizon; historian = precedent vs the proposal itself. No axis is "find weaknesses" twice, and no axis is "think long-term" twice.
 
 ## Workflow
 
 ### Round 1: Independent Investigation + Opening Arguments
 
-1. **Spawn 5 expert sub-sessions** in parallel:
-   - `skeptic` — Challenges assumptions, finds weaknesses
-   - `pragmatist` — Focuses on implementation reality
-   - `strategist` — Evaluates long-term implications
-   - `historian` — Draws parallels to past decisions (via ke:recall)
-   - `devil-advocate` — Takes the opposing position
+1. **Spawn 5 expert sub-sessions** in parallel — one per axis above.
+   Each session takes the role assigned; none may overlap into another axis.
 
 2. **Each expert runs their own research:**
    ```
