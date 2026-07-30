@@ -23,11 +23,22 @@ Keys live in the GPG `pass` store. Never inline; pull at use: `pass show api/<pr
 
 All chat providers are OpenAI-compatible (`POST <base>/chat/completions`) except anthropic (native Messages API).
 
-## Live doc (daily-refreshed)
+## Live doc (refreshed hourly by cron)
 
-`~/vault/api/PROVIDERS.md` — per-provider model tables: availability, warm status, context length, intelligence score, memory-notes. Refreshed daily by cron running `refresh.ts` (this skill dir); see `SETUP.md`.
+`~/vault/api/PROVIDERS.md` — per-provider model tables: availability, warm status, context length, intelligence score, memory-notes, plus a chat-smoke line per provider. Refreshed hourly by cron running `refresh.ts` (this skill dir); see `SETUP.md`.
 
-The doc is GENERATED. Source of truth is `~/vault/api/models.json` (watchlist, intel scores, notes). To add a model, bank a note, or record a score: edit `models.json`, then `bun ~/repos/arc-skills/skills/api-providers/refresh.ts`. Intel = curated score (Artificial Analysis index or internal ProgramBench) — filled by hand when measured, never guessed.
+The doc is GENERATED. Source of truth is `~/vault/api/models.json` (watchlist, intel scores, notes, optional `probe_model`). To add a model, bank a note, or record a score: edit `models.json`, then `bun ~/repos/arc-skills/skills/api-providers/refresh.ts`. Intel = curated score (Artificial Analysis index or internal ProgramBench) — filled by hand when measured, never guessed.
+
+## Chat-smoke probe
+
+`refresh.ts` does **two** probes per provider:
+
+1. **List endpoint** (`p.list`) — model catalog, used to populate the per-model table.
+2. **Chat smoke** (`p.probe_model` → `POST {p.base}/chat/completions` with `messages:[{role:user,content:ping}]`, `max_tokens:4`) — single-token ping, catches `list=200 but inference=402/429` (chutes subscription-cap case) and tests pool failover for cli-proxy.
+
+Provider smoke result lands as a `> chat smoke:` line in PROVIDERS.md. If smoke fails, every model in that provider flips to `✗ quota` in the table. Set `probe_model` per-provider in models.json; absent = smoke skipped (the right call for anthropic, which is native Messages API, not OpenAI-compatible).
+
+For **cli-proxy** specifically, set `base: http://127.0.0.1:7890/v1` with `probe_model: "smart"` — that exercises the full failover chain. A green smoke on `smart` doesn't prove each alias is live (one might be silently masked by another), but a red smoke means the whole pool is unusable. arc-skills deliberately knows nothing about cli-proxy internals — it's just another OpenAI-compat endpoint that happens to be local.
 
 ## Featherless limits (three separate caps — plan `feather_pro_plus`)
 
