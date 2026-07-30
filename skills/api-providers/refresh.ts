@@ -17,8 +17,9 @@ type Provider = {
   pass?: string;
   auth?: "bearer" | "anthropic";
   list?: string; // model-list URL; absent = static provider (no list API)
+  probe_model?: string; // model id to ping via /chat/completions; absent = skip smoke test
   notes?: string;
-  models: Record<string, ModelMeta>;
+  models?: Record<string, ModelMeta>; // optional: cli-proxy has no watchlist, just probe_model
 };
 type Registry = { providers: Record<string, Provider> };
 
@@ -47,23 +48,49 @@ function extractModels(json: unknown): LiveModel[] {
     .filter((e) => e.id);
 }
 
-async function fetchLive(name: string, p: Provider): Promise<{ live: Map<string, LiveModel>; line: string }> {
+function authHeaders(p: Provider): Record<string, string> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (!p.pass) return headers;
+  const key = passShow(p.pass);
+  if (p.auth === "anthropic") {
+    headers["x-api-key"] = key;
+    headers["anthropic-version"] = "2023-06-01";
+  } else headers.Authorization = `Bearer ${key}`;
+  return headers;
+}
+
+async function fetchLive(p: Provider): Promise<{ live: Map<string, LiveModel>; line: string }> {
   if (!p.list) return { live: new Map(), line: "static (no list API)" };
   try {
-    const headers: Record<string, string> = {};
-    if (p.pass) {
-      const key = passShow(p.pass);
-      if (p.auth === "anthropic") {
-        headers["x-api-key"] = key;
-        headers["anthropic-version"] = "2023-06-01";
-      } else headers.Authorization = `Bearer ${key}`;
-    }
-    const res = await fetch(p.list, { headers, signal: AbortSignal.timeout(30_000) });
+    const res = await fetch(p.list, { headers: authHeaders(p), signal: AbortSignal.timeout(30_000) });
     if (!res.ok) return { live: new Map(), line: `FETCH FAILED: HTTP ${res.status}` };
     const models = extractModels(await res.json());
     return { live: new Map(models.map((m) => [m.id, m])), line: `${models.length} models listed` };
   } catch (err) {
     return { live: new Map(), line: `FETCH FAILED: ${err}` };
+  }
+}
+
+// ponytail: 1-token ping against p.base/chat/completions — catches list-up-but-quota-down (chutes 402)
+// and CLI-proxy pool alias state (smart/fast failover). Skipped if probe_model unset.
+async function chatSmoke(p: Provider): Promise<string> {
+  if (!p.probe_model) return "skip";
+  const url = `${p.base.replace(/\/$/, "")}/chat/completions`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: authHeaders(p),
+      body: JSON.stringify({
+        model: p.probe_model,
+        messages: [{ role: "user", content: "ping" }],
+        max_tokens: 4,
+      }),
+      signal: AbortSignal.timeout(45_000),
+    });
+    if (res.ok) return `smoke OK (${p.probe_model})`;
+    return `SMOKE FAILED: HTTP ${res.status} (${p.probe_model})`;
+  } catch (err) {
+    return `SMOKE FAILED: ${err}`;
   }
 }
 
@@ -78,17 +105,23 @@ const out: string[] = [
 ];
 
 for (const [name, p] of Object.entries(reg.providers)) {
-  const { live, line } = await fetchLive(name, p);
+  const { live, line } = await fetchLive(p);
+  const smoke = await chatSmoke(p);
   out.push(`## ${name}`, "");
-  out.push(`\`${p.base}\` · key \`pass show ${p.pass}\` · ${line} (${now})`);
+  const keyBit = p.pass ? `key \`pass show ${p.pass}\` · ` : "";
+  out.push(`\`${p.base}\` · ${keyBit}${line} (${now})`);
+  if (smoke !== "skip") out.push(`> chat smoke: ${smoke} (${now})`);
   if (p.notes) out.push(`> ${p.notes}`);
-  out.push("", "| model | avail | warm/status | ctx | intel | notes |", "|---|---|---|---|---|---|");
-  for (const [id, meta] of Object.entries(p.models)) {
-    const m = live.get(id);
-    const avail = !p.list ? "static" : line.startsWith("FETCH FAILED") ? "?" : m ? "✓" : "✗";
-    out.push(
-      `| ${id} | ${avail} | ${m?.status ?? "-"} | ${m?.ctx ?? "-"} | ${meta.intel ?? "?"} | ${meta.notes ?? ""} |`,
-    );
+  if (p.models && Object.keys(p.models).length) {
+    out.push("", "| model | avail | warm/status | ctx | intel | notes |", "|---|---|---|---|---|---|");
+    for (const [id, meta] of Object.entries(p.models)) {
+      const m = live.get(id);
+      const down = smoke.startsWith("SMOKE FAILED");
+      const avail = !p.list ? "static" : line.startsWith("FETCH FAILED") ? "?" : down ? "✗ quota" : m ? "✓" : "✗";
+      out.push(
+        `| ${id} | ${avail} | ${m?.status ?? "-"} | ${m?.ctx ?? "-"} | ${meta.intel ?? "?"} | ${meta.notes ?? ""} |`,
+      );
+    }
   }
   out.push("");
 }

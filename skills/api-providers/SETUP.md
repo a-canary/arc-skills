@@ -7,10 +7,10 @@ Requires: `bun`, `pass` (GPG agent must be usable from cron — trading crons al
 ## Install
 
 ```bash
-(crontab -l; echo '17 6 * * * $HOME/.bun/bin/bun $HOME/repos/arc-skills/skills/api-providers/refresh.ts >> $HOME/vault/api/refresh.log 2>&1') | crontab -
+(crontab -l; echo '17 * * * * $HOME/.bun/bin/bun $HOME/repos/arc-skills/skills/api-providers/refresh.ts >> $HOME/vault/api/refresh.log 2>&1') | crontab -
 ```
 
-Fires 06:17 UTC daily. Failures land loudly in `~/vault/api/refresh.log` and as `FETCH FAILED` rows in the doc itself.
+Fires hourly at :17. Quota caps can drain mid-day, so daily was too slow. Failures land loudly in `~/vault/api/refresh.log` and as `FETCH FAILED` / `SMOKE FAILED` rows in the doc itself.
 
 ## Reversal
 
