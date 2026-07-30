@@ -120,6 +120,30 @@ How `/director` gets re-invoked to drive the AFK loop forward.
   cron mechanism. Optional, not required — see arc-agents
   [ADR-0012 addendum 2](https://github.com/a-canary/arc-agents/blob/main/docs/adr/0012-director-agent-axi.md).
 
+### `task-delegation`
+
+How a worker dispatches a subagent. Binding name is fixed; the value selects which dispatch layer runs.
+
+- **`native`** (default) — the host harness's own tool. Each harness exposes its
+  own name and shape (Claude Code's Agent/Task, pi's tool surface, etc.); the
+  binding value is the literal the harness accepts. Sync, in-process, full tool
+  surface; runs in the harness's auth context. Best when the host has a working
+  tool-using agent (Claude OAuth, pi on a non-capped provider, etc.).
+- **`arc-agents`** — bookie ledger dispatch via `ledger create --kind task
+  --type ...`; the factory's scheduled tick claims and runs the row through
+  `worker-shell.sh` (one tmux pane per worker, full tools, observable). Async,
+  budgeted, ledger-tracked. Use when the host harness auth is capped, when the
+  work is deferrable, or when audit-trail via the ledger matters more than
+  wall-clock latency.
+- **`<skill-name>`** — any other dispatch surface a binding wires up. Pick a
+  skill that already exists on the host and accepts a prompt + tool surface;
+  document the exact token in a sub-section here. Reserved for hosts where
+  neither `native` nor `arc-agents` is the right shape.
+
+Resolution at runtime: a worker reads its repo's `task-delegation:` binding at
+load time, picks the matching dispatcher, and runs there. No global fallback
+— a worker without a declared binding gets `native`.
+
 ## `.arc/` layout
 
 `PRD.md` itself lives at the parent repo's root, not under `.arc/` — it's a
