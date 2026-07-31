@@ -55,3 +55,8 @@ UI bugs are rarely isolated: one visible glitch usually signals more behind it.
 
 - A throwaway prototype or spike where the artifact is discarded — rules 1, 4, and 6 relax; rules 2, 3, 5 still hold.
 - The user explicitly asked for the quick/minimal version — honour that over rule 1.
+
+## Always-on rules (from AGENTS.md split)
+
+- **UI copy: casual + terse, no visible timestamps.** Short verbs (`Pick`, `Send`), terse empty states (`nothing pending`). Keep timestamps in the data layer for sort/staleness; never paint them on the surface.
+- **Gebrauchswert: functionality before|over visual appeal.** Optimize the practical value a user derives from everyday functionality, not visual appeal. Feature/design forks default to the option that does more daily work; polish serves use, never the reverse.

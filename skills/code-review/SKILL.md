@@ -87,3 +87,7 @@ A change can pass one axis and fail the other:
 - Code that does exactly what the issue asked but breaks the project's conventions → **Spec pass, Standards fail.**
 
 Reporting them separately stops one axis from masking the other.
+
+## Always-on rules (from AGENTS.md split)
+
+- **No rate without power.** Sample size set by required confidence, not the cached artifact. Report Wilson 95% CI; overlapping CIs = same result. Underpowered → no point estimate. Applies when code-review compares two implementations.
