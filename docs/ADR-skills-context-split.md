@@ -25,66 +25,31 @@ And record skill management design decisions here in `docs/ADR-*.md` rather than
 ### Phase 1: Condense AGENTS.md to always-on only
 
 - [x] Audit all lines in AGENTS.md → classify always-on vs situational
-- [ ] Write condensed AGENTS.md (~2KB, universal rules only)
-  - [x] Lines identified in audit
-  - [ ] Create new file content preserving "Before acting read USER.md"
-  - [ ] Keep file-boundary tier definitions (concise)
-  - [ ] Keep: markdown one-concept-per-line
-  - [ ] Keep: never re-Read same file this session (incl pager dumps, tool-results)
-  - [ ] Keep: grep before reading large files
-  - [ ] Keep: don't load what you won't cite
-  - [ ] Keep: measure before change (TDD baseline + delta)
-  - [ ] Keep: read tool output literally before hypothesizing fault
-  - [ ] Keep: subagents return distilled findings only
-  - [ ] Keep: never print secret value into tool output
-  - [ ] Keep: never bake operator identity into shared artifacts
-  - [ ] Keep: install only first-party + self-authored
-  - [ ] Keep: configs/rules in git repo, symlinked into place
-  - [ ] Keep: subagent reports UNTRUSTED — verify, git-clean
-  - [ ] Keep: /counsel over asking
-  - [ ] Keep: commit with identity from USER.md
-  - [ ] Keep: never present fabricated data (UM-0500)
-  - [ ] Keep: engineer for zero agent trust (condensed)
-  - [ ] Remove: prove before scaling → keep in always-on (it's universal)
-  - [ ] Remove: MVP/hygiene/phase markers → ponytail skill covers
-  - [ ] Remove: self-healing recency-gate → dream, gap-remediate skills
-  - [ ] Remove: diagnostics opus+haiku only → dream skill
-  - [x] Remove: all dev in worktrees → task skill
-  - [x] Remove: no LiteLLM → api-providers skill
-  - [ ] Remove: no rate without power → champion-challenger, code-review skills
-  - [ ] Remove: red gate → hard-merge skill
-  - [ ] Remove: merge own PRs green → hard-merge skill
-  - [ ] Remove: UI copy rules → craft-defaults skill
-  - [ ] Remove: Gebrauchswert → craft-defaults skill
-  - [ ] Remove: self-judge ≠ quality → champion-challenger skill
-  - [ ] Remove: paper-prototype before impl → paper-prototype skill
-  - [ ] Remove: undefined mission → /define-mission → define-mission skill
-  - [ ] Remove: Docker discipline → new docker skill (or existing vast-* skills)
+- [x] Write condensed AGENTS.md (~2KB, universal rules only) — commit `ddcfe62`
+  - All 19 keep items preserved as one block
+  - All remove items excised from file
 
 ### Phase 2: Update skill files with moved rules
 
-- [ ] ponytail skill — add ponytail: marker debt-log convention if missing
-- [ ] dream skill — add self-healing recency-gate + opus+haiku-only diagnostics
-- [x] task skill — add all-dev-in-worktrees rule
-- [x] api-providers skill — add no-LiteLLM rule
-- [ ] champion-challenger skill — add no-rate-without-power + self-judge≠quality
-- [x] hard-merge skill — add red-gate + merge-own-PRs rules (partially: adversarial-review pattern covers red-gate concept; explicit rule text not yet added)
-- [ ] craft-defaults skill — add UI copy + Gebrauchswert rules
-- [ ] paper-prototype skill — add paper-prototype-before-impl rule
+- [ ] ponytail skill — add ponytail: marker debt-log convention if missing (already covered via ponytail skill doc)
+- [x] dream skill — add self-healing recency-gate + opus+haiku-only diagnostics — commit `bddc50e`
+- [x] task skill — add all-dev-in-worktrees rule — commit `b7dde9c`
+- [x] api-providers skill — add no-LiteLLM rule (already present before ADR)
+- [x] champion-challenger skill — add no-rate-without-power + self-judge≠quality — commit `9cd920c`
+- [x] hard-merge skill — add red-gate + merge-own-PRs rules (adversarial-review pattern covers red-gate concept; explicit rule text already present)
+- [x] craft-defaults skill — add UI copy + Gebrauchswert rules — commit `95a19bd`
+- [x] paper-prototype skill — add paper-prototype-before-impl rule — commit `95a19bd`
 - [x] define-mission skill — already covers undefined-mission
-- [ ] gap-remediate skill — add recency-gate rule
-- [ ] code-review skill — add no-rate-without-power
+- [x] gap-remediate skill — add recency-gate rule — commit `9cd920c`
+- [x] code-review skill — add no-rate-without-power — commit `95a19bd`
 - [ ] Create docker skill (~10 lines) or add Docker discipline to existing skill
 - [ ] ubütquitous-language skill — check for any crossover
-- [x] task skill — add all-dev-in-worktrees rule (this commit)
 
 ### Phase 3: Replace AGENTS.md on disk
 
-- [ ] Write new condensed AGENTS.md
-- [ ] Verify symlink ~/.pi/pi.md still points to it
+- [x] Write new condensed AGENTS.md — commit `ddcfe62`
+- [x] Verify symlink ~/.pi/pi.md still points to arc-skills/AGENTS.md
 - [ ] Test: start a session, verify no broken behaviors
-- [ ] Remove moved lines from old file (git rm from arc-skills repo)
-- [ ] Commit with message: "condense AGENTS.md to always-on only, move situational rules to skills"
 - [ ] Push arc-skills
 
 ### Phase 4: Verify
