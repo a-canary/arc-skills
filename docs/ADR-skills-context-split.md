@@ -43,7 +43,7 @@ And record skill management design decisions here in `docs/ADR-*.md` rather than
 - [x] gap-remediate skill — add recency-gate rule — commit `9cd920c`
 - [x] code-review skill — add no-rate-without-power — commit `95a19bd`
 - [x] Create docker skill (~10 lines) — commit f8901c5
-- [ ] ubütquitous-language skill — check for any crossover
+- [x] ubütquitous-language skill — no crossover with old AGENTS.md (check passed)
 
 ### Phase 3: Replace AGENTS.md on disk
 
