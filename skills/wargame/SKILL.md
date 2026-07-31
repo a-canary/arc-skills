@@ -1,6 +1,7 @@
 ---
 name: wargame
-description: Turn a plan or repo into a branching runbook that fights the mission on paper move-by-move (each move: expected observation, likely failure, countermove; each fork: a trigger and abort condition). Writes to <repo>/.wargame/. Use to stress-test execution (not just the plan) or pre-simulate contingencies for a cheaper executor; often run after /grill-me. A plan assumes linearity; a wargame assumes reality fights back.
+description: >-
+  Turn a plan or repo into a branching runbook that fights the mission on paper move-by-move (each move: expected observation, likely failure, countermove; each fork: a trigger and abort condition). Writes to <repo>/.wargame/. Use to stress-test execution (not just the plan) or pre-simulate contingencies for a cheaper executor; often run after /grill-me. A plan assumes linearity; a wargame assumes reality fights back.
 model: claude-fable-5
 effort: xhigh
 ---
