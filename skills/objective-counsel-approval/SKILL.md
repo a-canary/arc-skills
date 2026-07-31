@@ -1,6 +1,7 @@
 ---
 name: objective-counsel-approval
-description: Adjudicate ONE planner-proposed objective per run via a /counsel panel — research the proposal, review it against the general context AND every axis in ~/vault/missions.md (missions + ranked principles), then write exactly one verdict: revise (with notes) | approve | reject | human-gate. Expensive, so hard-throttled to 1 counsel/hour: each cron run gathers all OPEN proposals, prioritizes, and adjudicates only the single top one. Use for the hourly proposal-adjudication cron, or when the user says "run objective counsel", "adjudicate proposals", or "counsel-approve an objective".
+description: >-
+  Adjudicate ONE planner-proposed objective per run via a /counsel panel — research the proposal, review it against the general context AND every axis in ~/vault/missions.md (missions + ranked principles), then write exactly one verdict: revise (with notes) | approve | reject | human-gate. Expensive, so hard-throttled to 1 counsel/hour: each cron run gathers all OPEN proposals, prioritizes, and adjudicates only the single top one. Use for the hourly proposal-adjudication cron, or when the user says "run objective counsel", "adjudicate proposals", or "counsel-approve an objective".
 ---
 
 # Objective-Counsel-Approval
@@ -102,7 +103,10 @@ No class matches → the proposal is counsel-eligible; proceed to §3.
 ## 3. Run counsel over the proposal
 
 Invoke [/counsel](../counsel/SKILL.md) on the single proposal. The panel's brief
-is scoped to two review lenses, both mandatory:
+is scoped to two review lenses. Both lenses are always run — neither may be
+skipped. Within the all-axis lens, every axis gets an explicit verdict, and
+`n/a` is a legitimate verdict: most axes are n/a to most objectives. "Required"
+means no axis is silently dropped, never that every axis must fire.
 
 - **General review** — is the objective well-formed? Direct metric of the value
   (or proxy with the Goodhart gap named)? Recorder + cadence specified? Gate
