@@ -82,3 +82,7 @@ write. If nothing is worth changing, log a no-op — never force an edit.
   Verify checkable claims (a path exists, an API limit) before writing them.
 - **Recency-gate.** If the top gap's fact is already live and correct on its
   surface, it was likely fixed already — log covered, don't re-fix.
+
+## Always-on rules (from AGENTS.md split)
+
+- **Self-healing must recency-gate.** A journal/tally entry records when a problem was *observed*, not whether it's still live. Before fixing, confirm the live file still has the shape that caused the issue (`git log` timestamp is a hint; live-file shape is authoritative). Never re-fix what's already fixed.

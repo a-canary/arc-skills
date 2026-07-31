@@ -46,3 +46,8 @@ A challenger looks better but isn't whenever the comparison is **contaminated** 
 - [GLOSSARY.md](GLOSSARY.md) — every term (champion, challenger, dwell, SRM, CUPED, blast radius, freeze-replay, Goodhart…), grouped, with common field synonyms.
 - [EXAMPLES.md](EXAMPLES.md) — the shared skeleton worked side-by-side across three systems (a trading strategy / an ML model / a web product), a vocabulary map, and the mechanics worth transplanting between domains.
 - [PITFALLS.md](PITFALLS.md) — false-promotion traps by domain (ML / web A/B / quant) + cross-cutting, each with its guard.
+
+## Always-on rules (from AGENTS.md split)
+
+- **No rate without power.** Sample size set by required confidence, not the cached artifact. Report Wilson 95% CI; overlapping CIs = same result — don't "reconcile" noise. >80% bar needs n≥230; underpowered → no point estimate.
+- **Self-judge ≠ quality.** A producing model scoring against its own rubric proves consistency, not quality. Get a second *disagreeing* judge before claiming improvement; diminishing self-judge deltas = stop signal, not success.
