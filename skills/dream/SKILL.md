@@ -108,3 +108,8 @@ both days' journals.
 └── state/
     └── processed.json       # incremental mtime tracking
 ```
+
+## Always-on rules (from AGENTS.md split)
+
+- **Self-healing must recency-gate.** A journal/tally entry records when a problem was *observed*, not whether it's still live. Before fixing, confirm the live file still has the shape that caused the issue.
+- **Diagnostic/self-healing subagents run on Claude opus + haiku only.** Cheap half = `model: haiku`, judgment half = `model: opus`. Never minimax or a `pi -p --provider` alias.
