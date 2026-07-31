@@ -42,7 +42,7 @@ And record skill management design decisions here in `docs/ADR-*.md` rather than
 - [x] define-mission skill — already covers undefined-mission
 - [x] gap-remediate skill — add recency-gate rule — commit `9cd920c`
 - [x] code-review skill — add no-rate-without-power — commit `95a19bd`
-- [ ] Create docker skill (~10 lines) or add Docker discipline to existing skill
+- [x] Create docker skill (~10 lines) — commit f8901c5
 - [ ] ubütquitous-language skill — check for any crossover
 
 ### Phase 3: Replace AGENTS.md on disk
