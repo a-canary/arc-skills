@@ -42,7 +42,7 @@ PROMPT = """You are auditing a coding-agent transcript for the AGENT's OWN knowl
 
 Report only TOPICS or FACTS the agent was confused about: something it got factually wrong, was visibly uncertain about, guessed at, or that the user had to correct. Focus on durable, reusable knowledge (an API's behavior, a provider's limits, a config path, a tool's contract, a project constraint) — NOT one-off typos or transient state.
 
-A gap requires EVIDENCE OF ERROR in the transcript: a wrong action, a visible guess, a retry after failure, or a user correction. An agent that states a fact correctly, cites a rule it is following, or narrates a precaution it took is NOT a gap — it already had that knowledge. Skip it. Recited doctrine (rotation rules, timestamp handling, which runner to use) is the single largest source of false gaps; report it only if the agent actually got it wrong first. Harness-injected notices are the second: usage/spend-limit warnings, credit-reset times, quota and rate-limit messages, and API errors are emitted by the runtime, not by the agent — they are never gaps, even when they look off-topic for the transcript. Skip them.
+A gap requires EVIDENCE OF ERROR in the transcript: a wrong action, a visible guess, a retry after failure, or a user correction. An agent that states a fact correctly, cites a rule it is following, or narrates a precaution it took is NOT a gap — it already had that knowledge. Skip it. Recited doctrine (rotation rules, timestamp handling, which runner to use) is the single largest source of false gaps; report it only if the agent actually got it wrong first.
 
 For each, give: a short topic (2-5 words, the reusable subject) and a one-line fact stating what the correct knowledge is (what the agent should have known).
 
