@@ -105,7 +105,12 @@ How `/director` gets re-invoked to drive the AFK loop forward.
 
 - **`cron`** (default) — `/director` is self-sufficient: on first `--afk` boot it
   installs its own feedback watcher and a cron entry, cadence set by
-  `scheduler.backstop-hours` (default 12hr), that re-runs
+  `scheduler.backstop-hours` (default 12hr — NOT 1–2hr; don't conflate with
+  `ScheduleWakeup`, whose per-call delay clamps to 1hr max and cannot implement a
+  12hr backstop, so it must be a real cron entry). Lower cadence catches stalls
+  sooner at a higher idle-tick token floor; higher is cheaper but widens the
+  worst-case silent-stall window. The backstop tick runs the same loop as any
+  other — nothing to do → straight back to idle. It re-runs
   `<harness> /director <repo-root> --afk` using the `model.director` binding
   above, e.g. `DISABLE_INTERLEAVED_THINKING=true <harness> --model fable --effort max
   /director <repo-root> --afk` (falling back to `opus`, then `sonnet`, per the

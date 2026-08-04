@@ -86,3 +86,20 @@ The axes are orthogonal: advocate vs critic = direction; pragmatist vs futurist 
 - 2 rounds maximum (avoids analysis paralysis)
 - Each argument limited to 5 sentences max (forces clarity)
 - Report must include concrete next steps
+
+## Why counsel, not a single reviewer
+
+Counsel **bypasses the self-approve / self-judgment limitation** by adversarially
+reviewing from multiple independent perspectives. Per AGENTS.md: a model
+scoring against its own rubric proves consistency, not quality — and a single
+reviewer reading the same author's reasoning from a shared context is still
+self-approval in disguise. The 5 axes (advocate / critic / pragmatist /
+historian / futurist) are deliberately orthogonal so each argues from a
+distinct lens, with critic-vs-advocate and pragmatist-vs-futurist balancing
+each other. When `/hard-merge` (or any merge-on-clear gate) needs judgment
+that a single reviewer's CLEAR can't carry — non-small blast radius, disputed
+verdict on a production surface, or a long-running agent needing a second
+opinion on its own work — counsel is the replacement for that single
+reviewer. Same trigger as /hard-merge's §4 panel escalation; same 5-expert
+shape; same outcome (judgment breadth + audit trail, NOT a mechanical
+unlock — a merge classifier still sees only the diff and may block).

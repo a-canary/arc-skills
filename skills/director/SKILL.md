@@ -43,15 +43,10 @@ below (boot step 4's confirmation gate still applies).
 
 ## Idle backstop
 
-Director is event-driven, not polling — `idle` state sleeps until the next feedback
-event. A **cron backstop** (`scheduler.backstop-hours` in `AGENTS.md`, default 12hr —
-NOT 1–2hr; don't conflate with `ScheduleWakeup`, whose per-call delay clamps to 1hr max
-and cannot implement a 12hr backstop — install via cron) wakes a fresh
-tick regardless of events, so a missed or dropped event-bus notification can't
-silently stall the mission past that interval. Lower values catch stalls sooner
-at the cost of a higher token floor (more idle-tick wakeups); higher values are
-cheaper but widen the worst-case silent-stall window. The backstop tick runs the
-same loop as any other — if there's nothing to do, it goes straight back to idle.
+Director is event-driven, not polling — `idle` sleeps until the next feedback event.
+A cron backstop wakes a fresh tick regardless, so a dropped event can't silently stall
+the mission. Cadence, the `ScheduleWakeup` gotcha, and the token/stall tradeoff are on
+the `scheduler` binding in [`BINDINGS.md`](BINDINGS.md).
 
 ## Reference
 
@@ -72,8 +67,23 @@ inflight/pending-QA → sleep; none at all → idle) → **watch event bus** →
 **Tick read discipline — never dump state files whole.** `gaps.md` is
 append-only: only the top `state:`/`prev-state:` header and any open-gap rows
 drive a tick; the rest is historical log (a steady-state file runs 200+ lines /
-~8k tokens for one live line). Each tick, read state ranged, not whole:
-`grep -n '^state:\|^prev-state:\|^## ' gaps.md` then Read only the hit range;
+~8k tokens for one live line).
+
+Read the header with the **Read tool, `offset: 1, limit: 12`** — never through
+Bash. `sed -n`, `head -N`, `cat`, and `grep … | tail` land their full output in
+context verbatim and can't be re-scoped once emitted. On 20260725 six Bash pokes
+at `gaps.md` across the trading + OneNation directors burned ~28k tokens, and
+the worst (7.3k) was a `grep -n '^state:…' | tail -40` — the command this
+section used to recommend. A `^state:` grep is NOT cheap here: each `state:`
+line is a multi-thousand-char prose paragraph, so 43 header hits out-costs
+reading the whole file. Need one older value → `grep -n` that single literal and
+Read only the hit's range.
+
+**Keep the header one line of state, not a changelog.** Writing `state:` /
+`prev-state:`, cap at ~200 chars: state token, tick number, timestamp, short
+clause. Narrative — what was refuted, why, what shipped — goes in the gap row or
+the commit message, not the header every future tick must re-read and re-pay.
+
 `grep` `blocked.md` for open rows rather than `cat`; parse
 `feedback.jsonl`/`events.jsonl` by redirecting to `/tmp` and grepping the OPEN /
 unprocessed rows, never piping the full dump into context. Full-file reads of

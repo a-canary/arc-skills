@@ -1,6 +1,7 @@
 ---
 name: paper-prototype
-description: Hand-execute a designed module's process end-to-end BEFORE writing its code — walk each step manually with live or near-production data, using only existing APIs and proven code, writing md/json/csv/html intermediate files. Produces a vetted spec delta: validated step contracts, discovered submodules, dependency list, and spec revisions. Use when a module spec/API design exists but implementation hasn't started, when the user says "paper prototype", "hand-execute the design", "desk-check the spec", or before /to-issues on an unproven design.
+description: >-
+  Hand-execute a designed module's process end-to-end BEFORE writing its code — walk each step manually with live or near-production data, using only existing APIs and proven code, writing md/json/csv/html intermediate files. Produces a vetted spec delta: validated step contracts, discovered submodules, dependency list, and spec revisions. Use when a module spec/API design exists but implementation hasn't started, when the user says "paper prototype", "hand-execute the design", "desk-check the spec", or before /to-issues on an unproven design.
 ---
 
 # Paper Prototype
@@ -97,3 +98,7 @@ One full end-to-end pass with real data, every step evidenced by artifacts, and 
 SPEC-DELTA.md whose revisions section is non-empty. A paper prototype that found
 zero spec revisions was run on invented data or skipped the hand-execution — redo
 the suspect steps.
+
+## Always-on rules (from AGENTS.md split)
+
+- **Paper-prototype before implementation.** Any new module design/spec MUST be validated with paper-prototype before code is written: hand-execute the process on live/near-prod data (existing APIs + proven code only, md/json/csv/html intermediates) and land the SPEC-DELTA back into the spec. Skip only for trivial changes with no new process (one-liners, config, copy), stating the skip.

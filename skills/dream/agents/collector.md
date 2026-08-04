@@ -60,7 +60,22 @@ file (`~/.claude/dream/journal/YYYY-MM-DD.md`).
    `AskUserQuestion` to escalate — the harness declines it and aborts your session
    with zero findings recorded (journal dea62db2). Instead append ONE
    `## indirection missing session input` entry via `pipeline.py --append` (step 4)
-   citing the bad path in `what:`, then STOP. Absence is proven by the single
+   citing the bad path in `what:`, then STOP. **Only claim absence if `page.py`
+   literally printed `Error: file not found:` -- quote that exact line in the
+   entry's `what:`.** If `page.py` printed a `session_id:`/`message_count:`
+   header, the file EXISTS and you must mine it normally, however trivial its
+   content; a 2-message stub is a real 0-findings session, not a missing one.
+   Never infer absence from a path *looking* wrong, from your own memory of the
+   session root, or from an `ls`/`Read` against a path you rewrote: sessions live
+   under `~/.pi/agent/sessions/<project>/` as well as
+   `~/.claude/projects/<project>/`, so page the path you were GIVEN, verbatim,
+   and never substitute a different root. A false "missing session" entry is
+   worse than no entry -- it leaves a minable session unprocessed, so it requeues
+   on every future run and burns one collector agent nightly, forever (journal
+   2026-07-25: a stub that pages to EOF in one call was logged
+   `ref: file not found` after an invented `~/.claude/projects/` root was
+   searched instead of the given `~/.pi/agent/sessions/` path).
+   Absence is proven by the single
    failed page; nothing further to page.
 2. Read the window. Look for:
    - **mistake** — Claude did something wrong (wrong file, wrong command, bad assumption).

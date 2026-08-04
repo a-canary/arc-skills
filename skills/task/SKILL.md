@@ -31,6 +31,8 @@ workspace: <skill>      # custom skill provides workspace
 on-task-verified: merge      # merge to head immediately
 on-task-verified: draft-pr   # open a draft PR for human review
 on-task-verified: <skill>    # custom action
+
+> **Primary checkout = production:** never edit/commit dev work there. All dev in worktrees. Merge back via PR to origin, then local main `pull --ff-only`.
 ```
 
 ## Execution sequence
