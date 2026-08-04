@@ -31,7 +31,7 @@ And record skill management design decisions here in `docs/ADR-*.md` rather than
 
 ### Phase 2: Update skill files with moved rules
 
-- [ ] ponytail skill — add ponytail: marker debt-log convention if missing (already covered via ponytail skill doc)
+- [x] ponytail skill — N/A: ponytail is an external plugin (`ponytail:ponytail`), not owned by this repo; marker convention already documented in the plugin's own skill doc
 - [x] dream skill — add self-healing recency-gate + opus+haiku-only diagnostics — commit `bddc50e`
 - [x] task skill — add all-dev-in-worktrees rule — commit `b7dde9c`
 - [x] api-providers skill — add no-LiteLLM rule (already present before ADR)
