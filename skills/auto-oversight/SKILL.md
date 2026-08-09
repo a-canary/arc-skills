@@ -150,6 +150,9 @@ worker branch's PR) was closed unmerged by a deliberate verdict (YAGNI,
 superseded, duplicate) is stale — the human decision already landed. Cancel
 the row with an event citing the verdict; never leave it haunting the queue
 (recurred 2026-07-13: onenation #172/#173 rows sat in review after close).
+Ledger event table is `issue_events(issue_id,ts,agent,kind,payload_md)` —
+there is NO `events` table; an insert into `events` throws and bun -e exits
+silently, so verify the event row landed (observed 2026-08-09).
 
 ## 3. One small autonomy action
 
