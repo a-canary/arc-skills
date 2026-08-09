@@ -53,6 +53,12 @@ No `sqlite3` binary on this host — run the query (and the step-4 insert) via
 `~/.bun/bin/bun -e '…bun:sqlite…'` against `~/vault/ledger.db` (`bun` needs
 the full path or `PATH=$HOME/.bun/bin:$PATH`; cron env lacks it). Exit 127
 here is a tooling error, NOT a clear gate — never skip the check.
+**Open the db with `new (require("bun:sqlite").Database)(path)`, NEVER
+`require("bun:sqlite").open(path)`** — the `.open` form exits 0 with ZERO
+stdout (no `[]`, no error), so a fresh audit row is invisible and the gate
+false-clears into a double-audit. Observed 2026-08-09. Any gate query that
+prints nothing (not even `[]`) is a tooling error — rerun with the
+`Database` constructor before treating the gate as clear.
 
 A row exists → another oversight loop (cron vs interactive share the rotation)
 already audited this mission; say so, log NOTHING, and end the run. Observed
