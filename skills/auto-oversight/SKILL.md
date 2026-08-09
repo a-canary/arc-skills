@@ -131,7 +131,13 @@ deploy to their test/prod surface — never leave holding**. Standing order (Aar
 2026-07-10, [[hard-merge-standing-permission]]): the ONLY human go/no-go gate
 is an **Objective or scope delta** (CHOICES-level, mission redefinition,
 spend). Merge gate: CI green + independent reviewer where doctrine requires;
-re-poll mergeStateStatus at merge time. **Merge multiple green PRs one at a
+re-poll mergeStateStatus at merge time. **BEFORE merging ANY PR, grep the
+ledger for an OPEN gate row citing it**
+(`select id from feedback where state='OPEN' and body_md like '%PR #<n>%'`) —
+a prior pass may have operator-gated it as a scope delta; an OPEN GATE row
+overrides CLEAN/MERGEABLE. Observed 2026-08-09: PR #12 (starlight-slm) was
+hard-merged despite gate row ao-local-models-gate-wm6us8 and 4 rounds of
+attached hold-evidence; merge had to be reverted on origin/main. **Merge multiple green PRs one at a
 time, not in a check-then-merge shell loop**: each merge transiently flips
 sibling PRs' mergeStateStatus to UNKNOWN, so a chained `grep -q CLEAN &&
 merge` loop aborts silently after the first merge (observed 2026-07-13:
