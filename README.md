@@ -47,7 +47,7 @@ Skills, plans, and designs share a small vocabulary of leading words — pattern
 - `tdd`, `grill-with-docs`, `grill-me`, `zoom-out`
 - `to-prd`, `to-issues`, `triage`, `prototype`, `diagnose`
 - `handoff`, `write-a-skill`
-- `improve-codebase-architecture`, `counsel`
+- `counsel`
 - `git-guardrails-claude-code`, `setup-pre-commit`, `scaffold-exercises`, `migrate-to-shoehorn`
 - `coding-standards` — default language-routing, strictness, diagnostics, and TDD rules for the arc software factory (explicit user/project instructions override)
 
