@@ -1,39 +1,47 @@
 ---
 name: slow-lane
-description: Route LLM calls for long-running, non-user-facing work through the idle-llm-proxy slow lane (http://192.168.1.103:8081 with a #slow model-name suffix) so it queues behind the local llama-server's idle slots instead of stealing them from interactive work. Use for any background/batch/agent LLM call — cron jobs, pipelines, subagent work, ETL, generation — and NOT for user-facing/interactive requests (those hit the same endpoint without the suffix, or use the CLI proxies).
+description: Route LLM calls for long-running, non-user-facing work (cron, pipelines, subagents, ETL, generation) through arc-llm-proxy's slow-lane aliases so they queue behind the local llama-server's idle slots instead of stealing them from interactive work. Use for any background/batch LLM call; NOT for user-facing/interactive requests (those use fast-lane aliases or direct models). Cron jobs must run without claude — slow-lane aliases only.
 ---
 
 # slow-lane
 
-The local model box (192.168.1.103) runs llama-server (Bonsai-27B, multimodal) on `:1234` behind `idle-llm-proxy` on a single port:
+`arc-llm-proxy` runs on the operator box (LAN `192.168.1.159`, local `127.0.0.1`) on port `8091`, fronting the model box's llama-server (192.168.1.103:1234, Bonsai-27B). One endpoint, five role aliases — `/v1/models` is the whole model surface:
 
-- `http://192.168.1.103:8081` — the only endpoint. Routing is by model name:
-  - model ending in `#slow` → **slow lane**: queues, dispatches only into idle slots, always reserves headroom for fast traffic.
-  - anything else → **fast lane**: immediate passthrough, never queues.
+| alias | lane | use |
+|---|---|---|
+| `planning` | fast | interview, planning, design |
+| `hard` | fast | difficult execution |
+| `easy` | fast | cheap local tasks |
+| `bench` | **slow** | benchmarks, evals |
+| `driver` | **slow** | plan execution, orchestration |
+
+Slow-lane aliases queue and dispatch only into idle slots, always reserving one slot for fast traffic. `#slow`/`#fast` on any alias overrides its lane.
 
 ## Rule
 
-Long-running or non-user-facing LLM calls append `#slow` to the model name. If it would wait, let it wait — that is the point. Never hit `:1234` directly from other work; you'd bypass the queue and starve interactive requests.
+Long-running or non-user-facing LLM calls use a slow-lane alias (`bench`/`driver`). If it would wait, let it wait — that is the point. **Cron jobs never use claude** — they run on these free local models; compensate for model limits with pipeliner designs (small chained steps, explicit retries). Never hit `:1234` on the model box directly — you'd bypass the queue and starve interactive requests.
 
 ## Usage
 
 ```bash
-curl -s http://192.168.1.103:8081/v1/chat/completions \
+source /home/aaron/repos/arc-llm-proxy/deploy/.keys.env   # FACTORY_KEY for cron/agent use
+curl -s http://192.168.1.159:8091/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -H 'X-User: my-job' \
-  -d '{"model":"Bonsai-27B-Q1_0.gguf#slow","max_tokens":512,"messages":[{"role":"user","content":"..."}]}'
+  -H "Authorization: Bearer $FACTORY_KEY" \
+  -d '{"model":"bench","max_tokens":512,"messages":[{"role":"user","content":"..."}]}'
 ```
 
-- OpenAI-compatible; the proxy strips the `#slow` suffix before forwarding, so upstream sees the plain model name.
-- `X-User` header: per-user round-robin fairness — with several clients queued, dispatch alternates one request per user per cycle. Set it to something identifying (job name, agent name); it falls back to `default` when absent.
-- Vision works (`image_url` with data-URL or URL content parts).
+- OpenAI-compatible; the proxy rewrites alias + suffix to the upstream model name before forwarding.
+- Auth: `Authorization: Bearer <key>` (or `x-api-key`). The key IS the queue identity — per-key round-robin fairness, one request per key per cycle.
+- `pi` clients: provider `arc-proxy` is registered in `~/.pi/agent/models.json` → `pi --model arc-proxy/bench -p ...`.
 - The model is a thinking model: reasoning consumes `max_tokens` before `content`. Budget accordingly (20 tokens ≈ empty content).
-- Set generous client timeouts — `#slow` requests block in the queue until a slot frees.
-- Ops: `GET :8081/__queue` → `{"queue":N,"inflight":N,"lastIdle":N}`; `GET :8081/health` → `{"ok":true}`.
+- Set generous client timeouts — slow-lane requests block in the queue until a slot frees.
+- Ops: `GET /__queue` (key required) → `{"queue":N,"inflight":N,"lastIdle":N}`; `GET /health` (open) → `{"ok":true}`.
 
-## Box ops
+## Proxy ops
 
-- Proxy: `C:\repos\idle-llm-proxy\` on the box, start via `start-proxy.bat` (or `wmic process call create "cmd /c C:\repos\idle-llm-proxy\start-proxy.bat"` over ssh; kill by PID only — the box runs other node.exe processes). Source of truth: `~/repos/idle-llm-proxy` (git).
-- llama-server must be started with `--mmproj mmproj-Bonsai-27B-BF16.gguf` for vision; a restart without it silently drops multimodal.
-- Single slot (`-np 1`): one slow request at a time; others queue.
+- Source of truth: `~/repos/arc-llm-proxy` (git). Local run: `deploy/keys.local.json` (key→user, chmod 600), `deploy/aliases.local.json` (per-host alias map), `deploy/.keys.env` (key values, chmod 600, gitignored).
+- Restart: kill by PID (`ss -ltnp | grep 8091`), then relaunch with `LLAMA_URL=http://192.168.1.103:1234 PORT=8091 POLL_MS=2000 KEYS_FILE=deploy/keys.local.json ALIASES_FILE=deploy/aliases.local.json node server.ts`. No hot reload — key/alias edits need a restart.
+- Alias changes: sync per the `_note` in `aliases.default.json` (arc-agents config, pi models.json, this skill).
+- Model box: single slot (`-np 1`) — one slow request at a time, others queue. llama-server currently runs WITHOUT `--mmproj` (vision off); enabling it needs an authorized restart.
 - Restarting either service needs authorization — don't bounce it speculatively.
