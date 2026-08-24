@@ -8,9 +8,11 @@
 #     two adapters' edits for regressions/side-effects. REVIEW_DAY=yesterday so it
 #     includes the night's own two changes in the window.
 # The two adapters each make ONE edit; adaptation-review makes none (reports only).
-# Unattended, so it runs with --permission-mode acceptEdits and a scoped
-# --allowedTools list (NOT --dangerously-skip-permissions). Review output via the
-# daily journal (~/.claude/dream/journal/YYYY-MM-DD.md) and ~/.cache/arc-hygiene/*.log.
+# Unattended: runs via `pi -p` (print mode auto-approves tools) with a scoped
+# --tools allowlist, on the slow-lane `arc-proxy/hygiene` alias (arc-llm-proxy
+# :8091 — local Bonsai box; the alias is the stable handle, backend is a config
+# swap). Review output via the daily journal (~/.claude/dream/journal/YYYY-MM-DD.md)
+# and ~/.cache/arc-hygiene/*.log.
 #
 # Canonical copy: ~/repos/arc-skills/bin/nightly-self-improve.sh
 # Deployed via symlink from ~/.config/arc-hygiene/nightly-self-improve.sh —
@@ -21,8 +23,9 @@ _lib="$(dirname "$(readlink -f "$0")")/lib/log-event.sh"
 LOG_DIR="${LOG_DIR:-$HOME/.cache/arc-hygiene}"   # overridable for stub tests
 mkdir -p "$LOG_DIR"
 NIGHTLY_LOG="$LOG_DIR/nightly.log"
-CLAUDE="${CLAUDE:-$HOME/.local/bin/claude}"      # overridable for stub tests
-TOOLS="Read Write Edit Glob Grep Bash Task"
+PI="${PI:-/usr/local/lib/node_modules/node/bin/pi}"  # overridable for stub tests
+HYGIENE_MODEL="${HYGIENE_MODEL:-arc-proxy/hygiene}"  # slow lane via arc-llm-proxy :8091
+TOOLS="read,bash,edit,write"
 
 # One instance at a time — a hung run must not stack with the next cron fire.
 exec 9>"/tmp/nightly-self-improve.lock"
@@ -33,11 +36,10 @@ fi
 
 run() {  # run() <skill> <logfile>
   echo "== $(date -Is) /$1" >> "$LOG_DIR/$2"
-  # 90m = ~3.5x observed max stage duration (dream p-max 25m over 6 nights to 2026-07-06).
-  # dream is incremental (processed.json) so a timeout-killed run resumes next night.
-  timeout 90m "$CLAUDE" -p "/$1" \
-    --permission-mode acceptEdits \
-    --allowedTools $TOOLS \
+  # 240m: slow local lane (single-slot box, minutes per idle prompt, queue-wait
+  # when the box is busy). dream is incremental (processed.json) so a
+  # timeout-killed run resumes next night.
+  timeout 240m "$PI" -p --model "$HYGIENE_MODEL" --tools $TOOLS "/$1" \
     >> "$LOG_DIR/$2" 2>&1
   local c=$?
   log_event "$NIGHTLY_LOG" "$1 exit=$c"
@@ -57,15 +59,16 @@ run adaptation-review adaptation-review.log
 
 # Knowledge-gap loop (CAM): the AGENT's own confusion — facts it got wrong, was
 # uncertain on, or the user had to correct — mined nightly and remediated.
-#   stage 1 (collector, featherless Qwen3-32B): extract-agent-gaps.py reads
-#     yesterday's sessions, appends dense gap lines to ~/.claude/dream/agent-gaps.log.
-#     Its own timeout — run() wraps claude only. Slow-burn, non-urgent.
-#   stage 2+3 (adaptor, Opus): /gap-remediate ranks the log by severity×frequency,
-#     picks the top gap, checks AGENTS.md/MEMORY.md/ke, and makes ONE add-or-clarify
-#     edit, logging the decision back. Runs via run() (claude -p, acceptEdits).
+#   stage 1 (collector, slow lane via arc-llm-proxy :8091): extract-agent-gaps.py
+#     reads yesterday's sessions (claude + pi), appends dense gap lines to
+#     ~/.claude/dream/agent-gaps.log. Its own timeout — run() wraps pi only.
+#     Slow-burn, non-urgent.
+#   stage 2+3 (adaptor, hygiene alias): /gap-remediate ranks the log by
+#     severity×frequency, picks the top gap, checks AGENTS.md/MEMORY.md/ke, and
+#     makes ONE add-or-clarify edit, logging the decision back. Runs via run().
 GAPS="${GAPS:-$HOME/.config/arc-hygiene/extract-agent-gaps.py}"
-echo "== $(date -Is) agent-gaps (featherless)" >> "$LOG_DIR/agent-gaps.log"
-timeout 30m python3 "$GAPS" >> "$LOG_DIR/agent-gaps.log" 2>&1
+echo "== $(date -Is) agent-gaps (slow lane)" >> "$LOG_DIR/agent-gaps.log"
+timeout 120m python3 "$GAPS" >> "$LOG_DIR/agent-gaps.log" 2>&1
 gc=$?
 log_event "$NIGHTLY_LOG" "agent-gaps exit=$gc"
 [ "$gc" -ne 0 ] && log_fail "$NIGHTLY_LOG" agent-gaps "$gc"

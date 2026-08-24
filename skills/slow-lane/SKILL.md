@@ -5,7 +5,7 @@ description: Route LLM calls for long-running, non-user-facing work (cron, pipel
 
 # slow-lane
 
-`arc-llm-proxy` runs on the operator box (LAN `192.168.1.159`, local `127.0.0.1`) on port `8091`, fronting the model box's llama-server (192.168.1.103:1234, Bonsai-27B). One endpoint, five role aliases — `/v1/models` is the whole model surface:
+`arc-llm-proxy` runs on the operator box (LAN `192.168.1.159`, local `127.0.0.1`) on port `8091`, fronting the model box's llama-server (192.168.1.103:1234, Bonsai-27B). One endpoint, six role aliases — `/v1/models` is the whole model surface:
 
 | alias | lane | use |
 |---|---|---|
@@ -14,6 +14,7 @@ description: Route LLM calls for long-running, non-user-facing work (cron, pipel
 | `easy` | fast | cheap local tasks |
 | `bench` | **slow** | benchmarks, evals |
 | `driver` | **slow** | plan execution, orchestration |
+| `hygiene` | **slow** | nightly self-improvement cron (dream/token-waste/adaptation-review/gap-remediate) |
 
 Slow-lane aliases queue and dispatch only into idle slots, always reserving one slot for fast traffic. `#slow`/`#fast` on any alias overrides its lane.
 
