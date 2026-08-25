@@ -179,3 +179,15 @@ mv ~/trash/1782317031__contexts--encounters--CONTEXT.md contexts/encounters/CONT
 # 3. Revert doc updates if needed
 git diff HEAD~ -- '<doc>'
 ```
+
+## Termination
+
+Drive to `merged` via bookie with `--evidence "trashed <N> files, updated refs in <files>"` and `--pr <branch-or-url>`.
+
+**Zero-diff outcome.** Sweep found nothing retired (all candidates still referenced / below threshold), or the trash already happened at head: merge in place with no PR —
+
+```
+update <id> --state merged --no-diff --in-place --evidence "<negative result + where verified>"   # evidence ≤280 chars
+```
+
+Never open an empty PR to satisfy the merge guard. `--no-diff` skips the diff_review requirement; for a non-zero diff, emit exactly **one** `diff_review` event per sha (re-emitting 3–5× is ledger noise — pipeliner rows 000229/000256).
