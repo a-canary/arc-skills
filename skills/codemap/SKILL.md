@@ -1,6 +1,6 @@
 ---
 name: codemap
-description: Generate a deterministic PlantUML map + snapshot report of a project using static analysis (no LLM) — module shapes, seams, dead code, untested code, redundancy, configs, docs. Use when the user wants a fast codebase snapshot, a dependency/architecture diagram, to spot dead or untested or redundant code, to understand an unfamiliar repo, or to diff structure before vs after a change. Lightweight quick-look companion to improve-codebase-architecture.
+description: Generate a deterministic PlantUML map + snapshot report of a project using static analysis (no LLM) — module shapes, seams, dead code, untested code, redundancy, configs, docs. Use when the user wants a fast codebase snapshot, a dependency/architecture diagram, to spot dead or untested or redundant code, to understand an unfamiliar repo, or to diff structure before vs after a change. Lightweight quick-look companion to the arc-agents `improve-architecture` skill.
 ---
 
 # Codemap
@@ -33,10 +33,10 @@ git diff <refA> <refB> -- codemap/codemap.json # any two refs
 
 The IR is byte-stable across re-runs (only the timestamp line moves), so a clean diff means structure didn't change.
 
-## When to use this vs improve-codebase-architecture
+## When to use this vs improve-architecture (arc-agents)
 
 - **codemap** — quick, deterministic, before/after a change. "What's the shape? what's dead? what's untested? what moved?" Seconds, no judgment.
-- **improve-codebase-architecture** — slow, opinionated, LLM-driven deepening proposals against domain language + ADRs. Use codemap's output as its input.
+- **improve-architecture** — slow, opinionated, LLM-driven deepening proposals against domain language + ADRs. Use codemap's output as its input.
 
 ## Reading the output
 

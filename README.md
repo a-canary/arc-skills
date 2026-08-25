@@ -44,11 +44,8 @@ Skills, plans, and designs share a small vocabulary of leading words — pattern
 - `codemap` — deterministic (no-LLM) static-analysis snapshot → PlantUML + report: module shapes, seams, dead/untested/redundant code; diff before vs after a change
 
 **Engineering workflow** (matt-pocock)
-- `tdd`, `grill-with-docs`, `grill-me`, `zoom-out`
-- `to-prd`, `to-issues`, `triage`, `prototype`, `diagnose`
-- `handoff`, `write-a-skill`
-- `improve-codebase-architecture`, `counsel`
-- `git-guardrails-claude-code`, `setup-pre-commit`, `scaffold-exercises`, `migrate-to-shoehorn`
+- `zoom-out`, `diagnose`
+- `write-a-skill`, `counsel`
 - `coding-standards` — default language-routing, strictness, diagnostics, and TDD rules for the arc software factory (explicit user/project instructions override)
 
 **Mission-driven orchestration** — autonomous loop from goals to verified outcomes

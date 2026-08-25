@@ -1,7 +1,7 @@
 ---
 name: wargame
 description: >-
-  Turn a plan or repo into a branching runbook that fights the mission on paper move-by-move (each move: expected observation, likely failure, countermove; each fork: a trigger and abort condition). Writes to <repo>/.wargame/. Use to stress-test execution (not just the plan) or pre-simulate contingencies for a cheaper executor; often run after /grill-me. A plan assumes linearity; a wargame assumes reality fights back.
+  Turn a plan or repo into a branching runbook that fights the mission on paper move-by-move (each move: expected observation, likely failure, countermove; each fork: a trigger and abort condition). Writes to <repo>/.wargame/. Use to stress-test execution (not just the plan) or pre-simulate contingencies for a cheaper executor; often run after a grilling session. A plan assumes linearity; a wargame assumes reality fights back.
 model: claude-fable-5
 effort: xhigh
 ---
@@ -21,13 +21,13 @@ war-gaming, **not executing** — the output is a runbook, not a build.
 /wargame <mission or file>  # wargame a specific mission
 ```
 
-After `/grill-me`: the grill resolved the decision tree — now wargame each
+After grilling: the grill resolved the decision tree — now wargame each
 resolved branch into contingencies.
 
 ## Workflow
 
 1. **Scope missions.** One mission = one meaty end-to-end objective (a feature,
-   a migration, a setup, a fix). From the repo, `/grill-me` output, or the
+   a migration, a setup, a fix). From the repo, grilling output, or the
    user's laundry list. If >1, draft **all** wargames before polishing any.
 2. **Name the executor** (optional). If told which model will execute (e.g.
    Sonnet 5), tailor moves to its known behaviour — spawn a `claude-code-guide`

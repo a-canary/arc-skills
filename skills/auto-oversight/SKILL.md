@@ -53,6 +53,12 @@ No `sqlite3` binary on this host — run the query (and the step-4 insert) via
 `~/.bun/bin/bun -e '…bun:sqlite…'` against `~/vault/ledger.db` (`bun` needs
 the full path or `PATH=$HOME/.bun/bin:$PATH`; cron env lacks it). Exit 127
 here is a tooling error, NOT a clear gate — never skip the check.
+**Open the db with `new (require("bun:sqlite").Database)(path)`, NEVER
+`require("bun:sqlite").open(path)`** — the `.open` form exits 0 with ZERO
+stdout (no `[]`, no error), so a fresh audit row is invisible and the gate
+false-clears into a double-audit. Observed 2026-08-09. Any gate query that
+prints nothing (not even `[]`) is a tooling error — rerun with the
+`Database` constructor before treating the gate as clear.
 
 A row exists → another oversight loop (cron vs interactive share the rotation)
 already audited this mission; say so, log NOTHING, and end the run. Observed
@@ -125,7 +131,13 @@ deploy to their test/prod surface — never leave holding**. Standing order (Aar
 2026-07-10, [[hard-merge-standing-permission]]): the ONLY human go/no-go gate
 is an **Objective or scope delta** (CHOICES-level, mission redefinition,
 spend). Merge gate: CI green + independent reviewer where doctrine requires;
-re-poll mergeStateStatus at merge time. **Merge multiple green PRs one at a
+re-poll mergeStateStatus at merge time. **BEFORE merging ANY PR, grep the
+ledger for an OPEN gate row citing it**
+(`select id from feedback where state='OPEN' and body_md like '%PR #<n>%'`) —
+a prior pass may have operator-gated it as a scope delta; an OPEN GATE row
+overrides CLEAN/MERGEABLE. Observed 2026-08-09: PR #12 (starlight-slm) was
+hard-merged despite gate row ao-local-models-gate-wm6us8 and 4 rounds of
+attached hold-evidence; merge had to be reverted on origin/main. **Merge multiple green PRs one at a
 time, not in a check-then-merge shell loop**: each merge transiently flips
 sibling PRs' mergeStateStatus to UNKNOWN, so a chained `grep -q CLEAN &&
 merge` loop aborts silently after the first merge (observed 2026-07-13:
@@ -144,6 +156,9 @@ worker branch's PR) was closed unmerged by a deliberate verdict (YAGNI,
 superseded, duplicate) is stale — the human decision already landed. Cancel
 the row with an event citing the verdict; never leave it haunting the queue
 (recurred 2026-07-13: onenation #172/#173 rows sat in review after close).
+Ledger event table is `issue_events(issue_id,ts,agent,kind,payload_md)` —
+there is NO `events` table; an insert into `events` throws and bun -e exits
+silently, so verify the event row landed (observed 2026-08-09).
 
 ## 3. One small autonomy action
 

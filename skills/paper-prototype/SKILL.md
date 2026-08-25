@@ -1,7 +1,7 @@
 ---
 name: paper-prototype
 description: >-
-  Hand-execute a designed module's process end-to-end BEFORE writing its code — walk each step manually with live or near-production data, using only existing APIs and proven code, writing md/json/csv/html intermediate files. Produces a vetted spec delta: validated step contracts, discovered submodules, dependency list, and spec revisions. Use when a module spec/API design exists but implementation hasn't started, when the user says "paper prototype", "hand-execute the design", "desk-check the spec", or before /to-issues on an unproven design.
+  Hand-execute a designed module's process end-to-end BEFORE writing its code — walk each step manually with live or near-production data, using only existing APIs and proven code, writing md/json/csv/html intermediate files. Produces a vetted spec delta: validated step contracts, discovered submodules, dependency list, and spec revisions. Use when a module spec/API design exists but implementation hasn't started, when the user says "paper prototype", "hand-execute the design", "desk-check the spec", or before /to-tickets on an unproven design.
 ---
 
 # Paper Prototype
@@ -90,7 +90,7 @@ Work in `<repo>/.paper/<module>/` (gitignored or committed — spec author's cal
      failure modes only volume reveals).
 
 Then update the original spec/CHOICES/ADR from the delta, or hand SPEC-DELTA.md
-to /to-issues — each submodule is a natural vertical-slice issue.
+to /to-tickets — each submodule is a natural vertical-slice ticket.
 
 ## Judging done
 
