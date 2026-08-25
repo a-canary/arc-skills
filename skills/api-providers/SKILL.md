@@ -5,6 +5,8 @@ description: LLM/API provider registry — pass-store key paths, endpoints, per-
 
 # api-providers
 
+**Full ontology** (providers, models, aliases, hosts, routing policy, sync points): `ontology/README.md` in this directory. Read the topic file when a routing/host/alias question goes beyond per-key lookup.
+
 Keys live in the GPG `pass` store. Never inline; pull at use: `pass show api/<provider>/<entry>`.
 
 ## Keys + endpoints
