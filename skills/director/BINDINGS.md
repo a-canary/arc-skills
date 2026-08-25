@@ -48,7 +48,7 @@ How director plans the *next* unit of work, independent of how `/task` executes 
   rows). Useful when a repo already runs arc-agents and wants a queryable,
   multi-PRD-in-flight backlog instead of one-at-a-time. This is arc-agents'
   pre-existing PRD-intake pathway — not `/director`'s own interviewer role,
-  which `/director`'s non-AFK mode (grill-me + research, pause/steer/resume)
+  which `/director`'s non-AFK mode (grilling + research, pause/steer/resume)
   already covers standalone.
 - **`kanban`** / `<skill-name>` — any other planning surface a binding wires up.
 
