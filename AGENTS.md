@@ -15,6 +15,11 @@ preferences, project constraints. `~/vault/USER.md` overrides this file on confl
 - **`<repo>/CHOICES.md`** — WHAT per repo: mission, objectives, decisions.
 - **`<repo>/AGENTS.md`** — HOW per repo: repo-scoped rules.
 - **`<repo>/CONTEXT.md`** — Per-repo vocabulary.
+- **`~/vault/ontology/OVERVIEW.md`** — Agentic harness ontology (meta map:
+  harnesses, ledger/factory, LLM routing, knowledge, scheduling, roles).
+  Placement policy: project-scoped maps live in the repo; meta maps in vault.
+  Read the topic file when touching that subsystem; `findings.md` tracks
+  open overlaps/conflicts/gaps (each ticketed in the ledger).
 
 ## Context loading
 
