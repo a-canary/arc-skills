@@ -3,17 +3,24 @@
 Canonical source of always-on agent rules. Git-tracked; each harness config
 symlinks back here.
 
-**Before acting you MUST read `~/vault/USER.md`** — operator identity, infra,
-preferences, project constraints. USER.md overrides this file on conflict.
+**Before acting you MUST read `~/vault/user.md`** — operator identity, infra,
+preferences, project constraints. `~/vault/USER.md` overrides this file on conflict.
 
 ## File boundaries
 
 - **AGENTS.md (public)** — HOW globally: rules every agent needs every turn.
-- **`~/vault/USER.md` (private)** — WHO: operator identity, infra, secrets, preferences. Overrides.
+- **`~/vault/user.md` (private)** — WHO: operator identity, missions, communication style.
+- **`~/vault/USER.md` (private)** — WHO override: infra, secrets, preferences. Overrides user.md on conflict.
 - **`~/vault/missions.md` (private)** — WHY: global axis ranking (UM-IDs + principles).
 - **`<repo>/CHOICES.md`** — WHAT per repo: mission, objectives, decisions.
 - **`<repo>/AGENTS.md`** — HOW per repo: repo-scoped rules.
 - **`<repo>/CONTEXT.md`** — Per-repo vocabulary.
+
+## Context loading
+
+At session start, load these files into the system prompt:
+- `~/vault/user.md`
+- `~/vault/USER.md` (overrides user.md on conflict)
 
 ## Always-on universal rules
 
@@ -42,3 +49,9 @@ preferences, project constraints. USER.md overrides this file on conflict.
 - **Never present fabricated data as real (UM-0500).** Unmeasured = not passed.
 - **Engineer for zero agent trust.** No output believed — checked. Distrust
   reduces cost at no quality loss.
+- **Write lane (prose rule; structural gate pending — arc-director
+  DESIGN.md invariant 7).** Only write files under `~/repos/**`, `/tmp/**`,
+  `~/vault/ke/**`, `~/vault/director/**`, and the ledger (via bookie only).
+  Any other path — new home dirs, `~/bin`, `~/agents`, other vault subtrees —
+  requires captain approval before the first write. Check the target path
+  before writing, not after.
