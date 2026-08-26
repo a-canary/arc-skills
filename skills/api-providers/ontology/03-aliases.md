@@ -41,8 +41,8 @@ Routing tokens: `cli/<tool>/<sub>/<effort>` (CLI backends), `pi/<provider>/<mode
 |---|---|
 | `planning` / `hard` / `easy` / `bench` / `driver` / `hygiene` | `pi --model arc-proxy/<alias> -p {prompt}` |
 
-Pointers: `default_alias=planning`, `fast_alias=easy`, `smart_alias=planning`.
-Fallback rule (`getAliasCommands`): unknown alias → silently falls back to `default_alias`. **This silent fallback is what hides ghost aliases** (below).
+Pointers: `default_alias=planning`, `fast_alias=easy`, `smart_alias=planning`; every pointer must name a real key (schema-enforced since the 2026-08-26 ghost purge).
+Fallback rule (`getAliasCommands`): **removed** — unknown alias now throws at dispatch, naming the bad alias and the known set (loud > masked). The old silent fallback to `default_alias` is exactly what hid the ghost aliases below.
 
 ## D. Profile → alias bindings
 
@@ -50,12 +50,12 @@ Fallback rule (`getAliasCommands`): unknown alias → silently falls back to `de
 
 | Profile | Bound alias | Status |
 |---|---|---|
-| developer | `minimax-build` | ⚠️ **GHOST** — not in config.json; falls back to `planning` |
-| triage | `minimax-build` | ⚠️ **GHOST** — same |
-| admin | `minimax-build` | ⚠️ **GHOST** — same |
-| director | `opus-max` | ⚠️ **GHOST** — not in config.json; falls back to `planning` |
-| sprint | `opus-max` | ⚠️ **GHOST** — same |
+| developer | `hard` | ✅ real key (rebound 2026-08-26) |
+| triage | `easy` | ✅ real key (rebound 2026-08-26) |
+| admin | `easy` | ✅ real key (rebound 2026-08-26) |
+| director | `planning` | ✅ real key (rebound 2026-08-26) |
+| sprint | `planning` | ✅ real key (rebound 2026-08-26) |
 
 **Ghost-alias ledger:** `minimax-build` (historically `claude --model minimax-m2.7 --effort high`, later `pi -p --provider minimax --model MiniMax-M2.7`) and `opus-max` were removed from config.json when the alias set moved to arc-llm-proxy, but profiles were never updated. Every ledger event reporting `engine-alias-no-work:minimax-build` is actually `engine-alias-no-work:planning` (the fallback) mislabeled — the named alias never existed at dispatch time. The minimax API itself was live (probed 2026-08-25); the failure was the fallback alias's dead local lane (103:1234).
 
-**Fix (pending):** point profiles at real aliases (`developer`/`triage`/`admin` → `easy` or `hard`; `director`/`sprint` → `planning`), and make `getAliasCommands` throw on unknown alias instead of silent fallback (loud > masked).
+**Fix (applied 2026-08-26, task `llm-routing-purge-ghost-aliases-loud-fal`):** profiles rebound to real aliases (table above); `getAliasCommands` throws on unknown alias instead of silently falling back; `default_alias` must name a real key (schema). Recovery sweep treats rows blocked on a ghost alias as unblockable-by-wait: it flips them `blocked→ready` for re-dispatch under current bindings (the dead engine can no longer recur), with an audit event naming the ghost.
