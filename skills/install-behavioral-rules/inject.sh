@@ -16,6 +16,7 @@ mkdir -p "$TRASH"
 TARGETS=(
   "$HOME/.claude/CLAUDE.md"
   "$HOME/.pi/pi.md"
+  "$HOME/.pi/agent/AGENTS.md"
   "$HOME/AGENTS.md"
 )
 
