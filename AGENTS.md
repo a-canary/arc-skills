@@ -23,6 +23,10 @@ preferences, project constraints. USER.md overrides this file on conflict.
   Includes pager dumps. `grep -n` to find values.
 - **Never Read `tool-results/<id>.txt`** — already in context.
 - **Grep large unseen files** (>~300 lines) before reading.
+- **List before you Read a guessed path.** If a path is remembered from an
+  earlier session, `ls`/glob it once and Read only what the listing confirmed —
+  one `ls` settles existence; guessing repeats ENOENT with a false premise
+  (file may have moved, not vanished).
 - **Don't load what you won't cite.** Name the fact before pulling.
 - **Measure before you change.** Baseline + delta. State both.
 - **Read tool output literally before hypothesizing.** Dates outside query
