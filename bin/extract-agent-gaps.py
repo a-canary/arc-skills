@@ -149,6 +149,10 @@ RECITED_DOCTRINE = [
     re.compile(r"\bcreated_at\b", re.I),
     re.compile(r"\btsx\b .*\bbun\b|\bbun\b .*\btsx\b|"
                r"bun:sqlite|new Database\(\) instead of \.open\(\)", re.I),
+    # 2026-08-26: "JSON parsing on state.json" family (~9 lines 8-07..8-16)
+    # verified collector artifact — no cited session ever failed a parse;
+    # live ~/vault/oversight/state.json is single-line {"next":"..."}.
+    re.compile(r"\bstate\.json\b", re.I),
 ]
 
 
