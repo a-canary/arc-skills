@@ -5,7 +5,7 @@ description: Route LLM calls for long-running, non-user-facing work (cron, pipel
 
 # slow-lane
 
-`arc-llm-proxy` runs on the operator box (LAN `192.168.1.159`, local `127.0.0.1`) on port `8091`, fronting the model box's llama-server (192.168.1.103:1234, Bonsai-27B). One endpoint, six role aliases — `/v1/models` is the whole model surface:
+`arc-llm-proxy` runs on the operator box (LAN `192.168.1.159`, local `127.0.0.1`) on port `8091`, fronting two upstream endpoints: the model box's llama-server (192.168.1.103:1234, Bonsai-27B) and the Veles cloud GPU (Qwen3.8-27B-GGUF via trycloudflare tunnel). One port, six role aliases — `/v1/models` is the whole model surface:
 
 | alias | lane | use |
 |---|---|---|
@@ -38,6 +38,15 @@ curl -s http://192.168.1.159:8091/v1/chat/completions \
 - The model is a thinking model: reasoning consumes `max_tokens` before `content`. Budget accordingly (20 tokens ≈ empty content).
 - Set generous client timeouts — slow-lane requests block in the queue until a slot frees.
 - Ops: `GET /__queue` (key required) → `{"queue":N,"inflight":N,"lastIdle":N}`; `GET /health` (open) → `{"ok":true}`.
+
+## Upstream endpoints
+
+| endpoint | host | model | auth |
+|---|---|---|---|
+| `e103` | llama-server 192.168.1.103:1234 (model box) | Bonsai-27B-Q1_0.gguf | none |
+| `eVeles` | Veles cloud GPU, trycloudflare tunnel | unsloth/Qwen3.8-27B-GGUF | Bearer key in `deploy/veles.key` |
+
+Dispatch ladder per alias: e103 first, eVeles failover on all six aliases (see `deploy/switchboard.local.json`). When e103 is down, slow-lane traffic runs entirely on Veles — still queued by the proxy, just no local interactive slots to protect. The tunnel URL is ephemeral (`*.trycloudflare.com`): if the Veles box re-exposes, update `eVeles.url` in the switchboard and restart the proxy.
 
 ## Proxy ops
 
