@@ -67,3 +67,11 @@ At session start, load these files into the system prompt:
   file may only be created if the human explicitly requested it or a skill
   defines it as output; everything else goes to /tmp and is trashed when its
   referencing task completes.
+- **File layout: overlays nest, registries don't (operator ruling
+  2026-08-27).** Context overlays (AGENTS.md, CONTEXT.md) are
+  path-inherited — they apply to their folder + subfolders, nearest wins.
+  Identity registries (root CHOICES.md; docs/adr/, docs/ontology/,
+  docs/codemap/) are single-per-project, never nested; sub-scope via
+  metadata fields inside the artifact. Repos with docs/ content carry a
+  Map section in root AGENTS.md. Full rule: arc-skills
+  docs/proposals/map-ontology.md §5d B.
