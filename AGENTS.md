@@ -63,3 +63,7 @@ At session start, load these files into the system prompt:
   Any other path — new home dirs, `~/bin`, `~/agents`, other vault subtrees —
   requires captain approval before the first write. Check the target path
   before writing, not after.
+- **Docs are earn-or-tmp (operator ruling 2026-08-27).** A persistent .md
+  file may only be created if the human explicitly requested it or a skill
+  defines it as output; everything else goes to /tmp and is trashed when its
+  referencing task completes.
