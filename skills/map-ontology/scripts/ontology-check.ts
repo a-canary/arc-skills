@@ -36,14 +36,15 @@ export interface CheckResult {
 
 export interface Options {
   crontab?: string; // raw crontab text (default: `crontab -l`)
-  aliases?: string; // arc-agents config.json text (default: ~/repos/arc-agents/config.json)
+  aliases?: string; // llm-proxy switchboard JSON text (default: ~/repos/arc-llm-proxy/deploy/switchboard.local.json)
 }
 
 const ONTOLOGY_DIR = "docs/ontology/";
 // Backticked token that looks like a filesystem path: has a slash, no spaces,
-// no scheme, no globs. Deliberately strict — prose `a/b` ratios will false-stale;
+// no scheme, no globs, must end in a filename char (trailing-slash dir refs
+// are NOT claims — they'd false-stale on untracked dirs). Deliberately strict;
 // ponytail: only backtick real paths in ontology docs (documented in SKILL.md).
-const PATH_RE = /^[~/]?[A-Za-z0-9_.\-]+(\/[A-Za-z0-9_.\-]+)+\/?$/;
+const PATH_RE = /^[~/]?[A-Za-z0-9_.\-]+(\/[A-Za-z0-9_.\-]+)+$/;
 
 interface Frontmatter {
   surveyed_at_sha?: string;
@@ -119,7 +120,7 @@ export function checkClaims(
       out.push({
         claim: tok,
         ok: !!(known || isDefault),
-        detail: known || isDefault ? undefined : "alias not in arc-agents config",
+        detail: known || isDefault ? undefined : "alias not in llm-proxy switchboard",
       });
     } else if (PATH_RE.test(tok) && !tok.includes("://")) {
       const abs = resolve(root, expandHome(tok));
@@ -141,7 +142,8 @@ function scopedDiff(root: string, fromSha: string, scope: string[]): string[] {
 
 export function classify(root: string, opts: Options = {}): CheckResult {
   const crontab = opts.crontab ?? safeCrontab();
-  const aliasesPath = join(homedir(), "repos/arc-agents/config.json");
+  // arc-proxy aliases live in the llm-proxy switchboard (deploy/switchboard.local.json)
+  const aliasesPath = join(homedir(), "repos/arc-llm-proxy/deploy/switchboard.local.json");
   const aliases = opts.aliases ?? (existsSync(aliasesPath) ? readFileSync(aliasesPath, "utf8") : "{}");
   const dir = join(root, "docs", "ontology");
   if (!existsSync(dir)) return { fresh: true, docs: [] };

@@ -18,8 +18,9 @@ checks against live reality:
   prose ratios like `a/b` will false-stale the doc (strict by design).
 - **Crontab lines** — `` `cron: <5-field schedule> <command fragment>` ``.
   A non-comment crontab line must match both schedule and fragment.
-- **Aliases** — `` `alias: planning` ``. Must resolve in
-  `~/repos/arc-agents/config.json` (aliases keys or default_alias).
+- **Aliases** — `` `alias: planning` ``. Must be a key under `aliases` in
+  `~/repos/arc-llm-proxy/deploy/switchboard.local.json` (the arc-proxy alias
+  registry).
 
 Everything else in a doc is prose — unverified, reader's risk.
 

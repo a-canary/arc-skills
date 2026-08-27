@@ -26,8 +26,8 @@ idempotently.
   does nothing until re-mirrored to `/home/aaron/.config/arc-hygiene/`.
 - **PATH pinning is per-entry and inconsistent** across the ~50-line crontab.
   A bun script in cron needs an explicit PATH (recovery-sweep rc=127 incident,
-  2026-08). `cron: 0 */6 * * * recovery-sweep-tick.sh` lives in arc-agents'
-  crontab block with a pinned PATH — the pattern to copy.
+  2026-08). The recovery-sweep tick (arc-agents block, see below) is the
+  pinned-PATH pattern to copy.
 - LLM access from cron goes through `pi -p --model arc-proxy/<alias>` (e.g.
   `alias: planning`, `alias: hygiene`) → arc-llm-proxy :8091 → e103
   Bonsai-27B. Never `claude` directly in new cron entries (cutover stranding,
