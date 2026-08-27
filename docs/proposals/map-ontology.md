@@ -143,7 +143,22 @@ Blocking semantics:
 
 **A. Staleness oracle: certification SHA + scoped git diff.** Each ontology doc is stamped `surveyed_at_sha` — the commit it was verified against — so the reader can assert exactly what has changed since the map was written (`git diff <sha>..HEAD -- <scope>`). Non-empty scoped diff = stale, and the diff output targets the refresh at precisely the sections that moved. This **refines §5b Part 2 without contradicting it**: POLICY rejected a per-claim invalidation *index* and the premise that git auto-invalidates claims — both still hold. The stamp is one certification anchor per doc plus reader-facing change context, not an index; claim checks against live reality (dead daemons, missing crons) remain the sweep's job because runtime rot produces no commits. Staleness is now change-based, not time-based: a quiet repo stays fresh indefinitely; a hot repo gets small precise diffs.
 
-**B. Canonical doc layout.** `docs/{ontology/, codemap/, CONTEXT.md, adr/}` with root `AGENTS.md` as the entry point referencing them (operator notation: `docs/{ontology,codemap,CONTEXT.md,ADRs,CHOICES.md} <-AGENTS.md`). Existing repos migrate opportunistically; no mass move. Open flag: tooling (apply-mission, estate-hygiene, director skills) reads root `CHOICES.md` — kept at root until the operator rules otherwise.
+**B. Canonical doc layout + inheritance (refined 2026-08-27 after captain's in-path-inheritance question).** Two artifact classes, one deterministic rule each:
+
+1. **Context overlays** (AGENTS.md, CONTEXT.md): path-inherited — a file applies to its folder + subfolders; nearest wins on conflict; parent still applies as base. Free placement at any subtree root (src/, skills/vast-*/). AGENTS.md stays at repo root for harness auto-load.
+2. **Identity registries** (root CHOICES.md, docs/adr/, docs/ontology/, docs/codemap/): exactly one per project, never nested — sub-scope granularity lives in metadata inside the artifact (ADR scope field, ontology doc `scope:` paths), not in path position. Rationale: nesting forks identity (duplicate ADR numbering, shadowed charters, non-deterministic sweep composition).
+
+Canonical shape:
+```
+<repo>/AGENTS.md        # root; harness auto-load; carries a Map section pointing into docs/
+<repo>/CHOICES.md       # root; project charter; tooling contract (apply-mission, estate-hygiene, director)
+<repo>/CONTEXT.md       # root = repo-wide vocabulary; nestable in subtrees (nearest wins)
+<repo>/docs/adr/        # flat, globally numbered per repo
+<repo>/docs/ontology/   # OVERVIEW.md + topic files; per-doc scope: paths
+<repo>/docs/codemap/    # generated whole-repo snapshot; filter by path, don't nest
+```
+
+Discoverability: root files are the index — every repo with docs/ content carries a Map section in its root AGENTS.md (one hop from what is always loaded). Moving registries into docs/ costs nothing on discovery because no harness auto-loads them anyway; skills read them by convention, and the convention is now single-valued. The earlier "CHOICES.md root-vs-docs" flag is resolved: root, per rule 2. Estate cutover ticketed separately (quality row, arc-skills).
 
 **B-companion (doc hygiene, always-on):** a persistent .md file may only be created if the human explicitly requested it or a skill defines it as output; everything else goes to /tmp and is trashed when its referencing task completes. Recorded in AGENTS.md (always-on, all harnesses).
 
@@ -152,7 +167,7 @@ Blocking semantics:
 ## 6. Open questions (one at a time in HITL)
 
 1. ~~Staleness regime~~ — **resolved by POLICY ruling §5a**: sweep-only, Option 3 primary; no pre-commit path.
-2. ~~Repo layout~~ — **resolved by operator ruling §5d B**: `docs/` dir layout; CHOICES.md root-vs-docs still open (default: root).
+2. ~~Repo layout~~ — **resolved by operator ruling §5d B** (refined 2026-08-27): overlays nest by path; registries single-per-project under docs/; CHOICES.md at root. Estate cutover ticketed separately.
 3. ~~Pilot target~~ — **resolved by operator ruling §5d C**: arc-skills, HTML render gate before merge.
 4. ~~Pre-planning enforcement strength~~ — **resolved by operator decision 2026-08-25**: blocking (§5c).
 
