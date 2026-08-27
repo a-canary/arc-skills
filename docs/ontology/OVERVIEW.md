@@ -1,5 +1,5 @@
 ---
-surveyed_at_sha: 0ee383652a56756f1883ceef75f25985eec30120
+surveyed_at_sha: 81e0fa0699c6d68aec233870601f62a1c334df0c
 scope: [skills/, bin/, docs/, AGENTS.md]
 status: stable
 ---
