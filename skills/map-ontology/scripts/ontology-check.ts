@@ -8,7 +8,8 @@
 //   2. git diff --name-only <surveyed_at_sha>..HEAD -- <scope> is empty
 //      (docs/ontology/** excluded — a map editing itself does not go stale)
 // Missing scope = whole repo (fail-closed). Checker error = stale (fail-closed).
-// Exit: 0 fresh, 1 stale. No LLM.
+// Nonexistent root = exit 2 (fail-closed — a typo'd path must not pass the gate).
+// Exit: 0 fresh, 1 stale, 2 bad path. No LLM.
 
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -188,9 +189,13 @@ function safeCrontab(): string {
 /** CLI entry. Returns process exit code (0 fresh / 1 stale). */
 export function run(argv: string[], opts: Options = {}): number {
   const root = resolve(argv[0] ?? ".");
+  if (!existsSync(root)) {
+    console.error(`ontology-check: no such path ${root} (fail-closed)`);
+    return 2;
+  }
   const res = classify(root, opts);
   if (res.docs.length === 0) {
-    console.log(`ontology-check: no docs/ontology/ in ${root} — nothing to check (fresh)`);
+    console.log(`ontology-check: no docs/ontology/ in ${root} — no ontology to check (fresh)`);
     return 0;
   }
   for (const d of res.docs) {

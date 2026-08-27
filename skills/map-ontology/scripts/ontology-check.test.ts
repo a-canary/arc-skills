@@ -166,6 +166,10 @@ describe("ontology-check classifier", () => {
     });
   }
 
+  test("nonexistent root -> exit 2 (fail-closed, not silent fresh)", () => {
+    expect(run(["/nonexistent/path/ontology-check-test"], { crontab: "", aliases: "{}" })).toBe(2);
+  });
+
   test("no ontology dir -> fresh (nothing to check)", () => {
     const root = makeRepo();
     const res = classify(root, { crontab: "", aliases: "{}" });
