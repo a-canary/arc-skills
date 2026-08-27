@@ -8,6 +8,10 @@ A loose idea has arrived — too big for one agent session, and wrapped in fog: 
 
 The destination varies per effort, and naming it is the first act of charting — it shapes every ticket. It might be a spec to hand off and iterate on, a decision to lock before planning starts, or a change made in place like a data-structure migration. The map is domain-agnostic — engineering work, course content, whatever fits the shape.
 
+## Ontology gate (intake)
+
+Before charting, if the repo has `docs/ontology/`: run `bun <arc-skills>/skills/map-ontology/scripts/ontology-check.ts <repo>` — a fresh ontology is a cheap survey starting point; verify any claim you act on against live reality first. If stale → verify-first refresh per the map-ontology skill before using any claim. No ontology → just survey normally.
+
 ## Plan, don't do
 
 Wayfinder is **planning** by default: each ticket resolves a decision, and the map is done when the way is clear — nothing left to decide before someone goes and does the thing. The pull to just do the work is usually the signal you've reached the edge of the map and it's time to hand off. An effort can override this in its **Notes** — carrying execution into the map itself — but absent that, produce decisions, not deliverables.
