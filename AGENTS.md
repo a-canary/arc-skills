@@ -35,6 +35,9 @@ At session start, load these files into the system prompt:
   Includes pager dumps. `grep -n` to find values.
 - **Never Read `tool-results/<id>.txt`** — already in context.
 - **Grep large unseen files** (>~300 lines) before reading.
+- **Never `Read` a session `.jsonl` transcript into context.** It is a raw
+  conversation dump — extract only what you need via `jq`/`grep` piped to a file,
+  or read the specific line range. (Was ~56% of 2026-08-26 measured token waste.)
 - **Don't load what you won't cite.** Name the fact before pulling.
 - **Measure before you change.** Baseline + delta. State both.
 - **Read tool output literally before hypothesizing.** Dates outside query
