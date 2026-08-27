@@ -41,10 +41,15 @@ Provider smoke result lands as a `> chat smoke:` line in PROVIDERS.md. If smoke 
 
 For **cli-proxy** specifically, set `base: http://127.0.0.1:7890/v1` with `probe_model: "smart"` — that exercises the full failover chain. A green smoke on `smart` doesn't prove each alias is live (one might be silently masked by another), but a red smoke means the whole pool is unusable. arc-skills deliberately knows nothing about cli-proxy internals — it's just another OpenAI-compat endpoint that happens to be local.
 
-## Routing
+## Routing (captain standing plan 2026-08-27)
+
+Three tiers, cheapest-first for routine work, escalation only when warranted:
+
+1. **veles/qwen3.8-27b** — PRIMARY WORKHORSE: wayfinder, planning, grilling, driver, bench. Cloudflare tunnel (URL in `~/.pi/agent/models.json` provider `Veles`, model `unsloth/Qwen3.8-27B-GGUF`; key `api/veles/api-key`). Factory aliases: `planning` / `minimax-build` / `driver` / `bench`.
+2. **llama-103/bonsai** — LITE REASONING: extraction, websearch, routing, hygiene. http://192.168.1.103:1234/v1, model `Bonsai-27B-Q1_0.gguf` (pi provider `llama-103`). Factory aliases: `easy` / `hygiene`.
+3. **Opus-Medium** — defense and really difficult escalations ONLY. `claude` CLI in tmux|herdr (`claude-afk --model opus --effort medium`, OAuth key `api/claude/oauth-token`). Factory aliases: `hard` / `opus-max` (with Veles fallback candidate).
+
+The factory lane encodes this table in `arc-agents/config.json` `exec_cli_alias` (direct providers, no proxy hop). Supersedes the 2026-08-24 "veles as last-resort fallback" policy — veles is now tier 1. Cloud endpoints (anthropic/minimax/openrouter/chutes/cerebras) stay available for explicit one-off use; they are not on default factory routing.
 
 - **Short-context model** → route through pipeliner (`/pipeliner`): decompose into chained small modules instead of one long prompt — cheap short-context models stay usable.
-- Interactive / frontier work → cli-proxy pool aliases `smart`/`fast` (Max quota) or anthropic/minimax direct.
-- Bulk cheap tokens on hot open models → chutes. Long-tail model variety → openrouter.
 - No LiteLLM / multi-key proxies — direct API only, route via pipeliner/config (USER.md doctrine).
-- **Last-resort fallback** (captain policy 2026-08-24): when ALL other endpoints fail, resort to `veles/qwen3.8-27b` — safe unless the project|work restricts otherwise (per-project carve-out via switchboard `projects.<name>.mask`).
