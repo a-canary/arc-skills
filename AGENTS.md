@@ -75,3 +75,9 @@ At session start, load these files into the system prompt:
   metadata fields inside the artifact. Repos with docs/ content carry a
   Map section in root AGENTS.md. Full rule: arc-skills
   docs/proposals/map-ontology.md §5d B.
+- **Operator review goes to arc-webui as HTML (operator ruling
+  2026-08-27).** Anything requiring captain review is presented as a
+  self-contained HTML page under /review/<file> on arc-webui
+  (http://home-lab-1:8080/review/<file>; artifacts in
+  ~/vault/director/reviews/), linked from a human-gate ledger row
+  (bookie create --kind task --type HITL). Never "open this file path".
