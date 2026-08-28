@@ -94,6 +94,14 @@ REPEAT_INSTRUCTION_MIN_WASTED = 2000
 # Cap instruction content-quality review requests per session (they carry excerpts
 # to the LLM, same bounded-cost discipline as MAX_QUALITY_REVIEW).
 MAX_INSTRUCTION_REVIEW = 8
+# Session-wide ceiling on total excerpt BYTES written to the per-session JSON.
+# The caps above bound excerpt COUNT, not size: ~20 reviews x 1100 chars put ~14k
+# of the largest 2026-08-02 file's 28k into excerpts alone, and the analyst reads
+# that file WHOLE by design. Excerpts are spent largest-result-first; once the
+# budget is gone the tail keeps its metadata but drops the snippet, so every
+# high-impact judgement keeps context and the waste-hunter stops being the day's
+# own top bleed.
+MAX_EXCERPT_BYTES_PER_SESSION = 6000
 
 
 def est_tokens(text: str, chars_per_token: float) -> int:
@@ -580,6 +588,24 @@ def detect(filepath: Path, project: str, chars_per_token: float) -> dict:
     # reports the pre-trim total and `candidates_truncated` flags any drop.
     full_count = len(candidates)
     kept = candidates[:MAX_CANDIDATES]
+
+    # Spend the session excerpt budget largest-result-first (kept is size-ordered).
+    # Past the budget a candidate keeps every field the analyst scores on — tokens,
+    # pattern, target, note — and loses only the snippet, so the trim costs recall
+    # on content-quality judgements for small results, never a missed big hit.
+    excerpt_budget = MAX_EXCERPT_BYTES_PER_SESSION
+    excerpts_stripped = 0
+    for c in kept:
+        ex = c.get("excerpt")
+        if ex is None:
+            continue
+        if len(ex) <= excerpt_budget:
+            excerpt_budget -= len(ex)
+        else:
+            del c["excerpt"]
+            c["excerpt_omitted"] = True
+            excerpts_stripped += 1
+
     return {
         "session_id": filepath.stem,
         "project": project,
@@ -589,6 +615,7 @@ def detect(filepath: Path, project: str, chars_per_token: float) -> dict:
         "candidate_wasted_tokens": wasted_tokens,
         "candidate_count": full_count,
         "candidates_truncated": full_count - len(kept),
+        "excerpts_stripped": excerpts_stripped,
         "candidates": kept,
     }
 

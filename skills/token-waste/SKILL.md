@@ -1,6 +1,6 @@
 ---
 name: token-waste
-description: Audit the day's sessions for token waste (context loaded but unused or loaded badly) and make one surgical system change to stop the worst recurring pattern. Companion to /dream — /dream fixes agent effectiveness, this fixes context-window economy. Use when the user wants to find token waste, audit context usage, identify confusing/obvious/repeated instructions, or tally what was loaded but not used.
+description: Audit the day's sessions for token waste (context loaded but unused or loaded badly) and make one surgical system change to stop the worst recurring pattern. Companion to /dream. Use to find token waste, audit context usage, identify confusing/obvious/repeated instructions, or tally what was loaded but not used.
 allowed-tools: Read, Write, Glob, Task, Bash
 ---
 
@@ -129,10 +129,25 @@ python "$DETECT" "<session.jsonl>" --project "<project>" \
 Skip any session whose candidate JSON has `"candidate_count": 0` — no point spending
 an analyst on a clean session.
 
+Also skip any session whose `"candidate_wasted_tokens"` is under **3000**. The analyst
+must read its candidate JSON whole (excerpts make these ~2-5k tokens), so on a low-yield
+session the read costs more than the waste it could ever confirm — and those reads are
+exactly what later gets flagged `unreferenced`. Gate deterministically here; never spawn
+an analyst to discover whether a session was worth scoring:
+
+```bash
+find "$WORK" -maxdepth 1 -name '*.json' | while read -r f; do
+  jq -e '(.candidate_wasted_tokens // 0) >= 3000' "$f" >/dev/null 2>&1 && printf '%s\n' "$f"
+done > "$WORK/worth-scoring.txt"
+wc -l < "$WORK/worth-scoring.txt"   # count only; Step 4 iterates this file, not stdout
+```
+
 ### Step 4 — Score candidates (waste-analyst agent, parallel)
 
-For EACH candidate JSON with candidates, spawn the analyst. Run up to 3 in parallel
-(haiku is cheap; cap concurrency to keep output orderly):
+For EACH candidate JSON listed in `$WORK/worth-scoring.txt`, spawn the analyst — one
+session per analyst, never a batch. A batched analyst reads every JSON in its batch
+whole, so a single low-yield file in the batch is a guaranteed unreferenced read. Run up
+to 3 in parallel (haiku is cheap; cap concurrency to keep output orderly):
 
 ```
 Task: Score waste in <session>
