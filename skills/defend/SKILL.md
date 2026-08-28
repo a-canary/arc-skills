@@ -1,6 +1,6 @@
 ---
 name: defend
-description: The Defend* gate family — named critical junctions where an independent model attacks the artifact before it crosses the seam. DefendPlan (opus, wayfinder→build), DefendMerge (workhorse, worker→git merge = /hard-merge), DefendRelease (opus, qa-passed→public deploy). Use when a plan is about to be dispatched to build, a diff is about to merge, or anything is about to go public.
+description: The Defend* gate family — named critical junctions where an independent model attacks the artifact before it crosses the seam. DefendPlan (opus, wayfinder→build), DefendMerge (workhorse, worker→git merge = /hard-merge), DefendRelease (opus, qa-passed→public deploy), DefendConviction (opus, conviction change touching a held position → apply). Use when a plan is about to be dispatched to build, a diff is about to merge, anything is about to go public, or a conviction change is about to move/exit a held position.
 ---
 
 # defend — critical-junction gate family
@@ -23,11 +23,12 @@ RELEASE  Driver(prototype) ⇄ QA.qwen ► User(webui review)
 | **DefendPlan** | wayfinder result → build dispatch | Opus (ask-claude) | [plan.md](plan.md) |
 | **DefendMerge** | worker diff → git merge | workhorse, fresh context (= /hard-merge) | [merge.md](merge.md) |
 | **DefendRelease** | qa-passed artifact → public deploy | Opus (ask-claude) | [release.md](release.md) |
+| **DefendConviction** | conviction change touching a held position → apply | Opus (ask-claude) | [conviction.md](conviction.md) |
 
 ## Why this tiering
 
 Opus only where the outcome is expensive AND hard to reverse: a bad plan burns
-a whole sprint; a bad release is public. Merges are frequent and git-reversible,
+a whole sprint; a bad release is public; a wrong exit realizes a loss and abandons a live thesis. Merges are frequent and git-reversible,
 so fresh-context workhorse independence is proportionate there. Opus budget =
 junction count, bounded by construction.
 
@@ -52,3 +53,6 @@ checkable claims against source.
 - DefendMerge: /hard-merge IS this gate — same procedure, named here.
 - DefendRelease: after QA pass + human webui review, before public deploy
   (app version, YT video, X post, website content) — see release.md.
+- DefendConviction: trading nightly grade → apply seam — when a conviction change
+  exits or drops a held slot below floor (on-demand), plus the weekly audit of all
+  held positions. Not in the hot path (that is the same-model layer) — see conviction.md.
