@@ -19,6 +19,11 @@ QA findings written to `.arc/director/qa/<ref>.md`. Screenshots to `.arc/directo
 - `--version` — pins the build/version under test (required for reproducibility)
 - `--feedback-batch` — when dispatched from batched user feedback, lists source `user.feedback` event IDs
 
+**Before any public release** (app version, YT video, X post, website content):
+QA pass + human webui review are not the last step — run **DefendRelease**
+(`defend` skill, release.md; Opus via ask-claude) after both, before the Driver
+deploys. Its drift lens can force a refreshed human approval.
+
 ## QA dimensions
 
 Assess each dimension that applies. Flag `critical-failure` or `security` findings immediately — these trigger the director's budget bypass.

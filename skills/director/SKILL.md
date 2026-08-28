@@ -112,3 +112,10 @@ idle · paused (sentinel) · budget-exceeded (critical-only until reset/raised).
 - Feedback injection (owned by `/feedback`)
 - Ledger tracking (owned by `arc-agents` if installed)
 - Dashboard display (owned by `arc-webui` if installed)
+
+## Defense gates (Defend* family)
+
+Before dispatching an approved wayfinder plan to build, run **DefendPlan**
+(`defend` skill, plan.md; Opus via ask-claude) on the plan + its supporting
+evidence. ATTACKS go back to the user/Director loop; build dispatch happens on
+CLEAR or a recorded human override.

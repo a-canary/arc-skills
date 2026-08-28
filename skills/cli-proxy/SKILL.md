@@ -1,6 +1,6 @@
 ---
 name: cli-proxy
-description: Local OpenAI-compatible LLM endpoint http://127.0.0.1:7890/v1 routing to claude/gemini/qwen/kilo/opencode CLIs + minimax API. Use whenever code or a pipeline needs an LLM API endpoint.
+description: Local OpenAI-compatible LLM endpoint http://127.0.0.1:7890/v1 routing to claude/gemini/qwen/kilo/opencode CLIs + minimax API. Use when code or a pipeline needs an LLM API endpoint AND the service is running — verify `curl -s -m 2 http://127.0.0.1:7890/v1/models` responds first; it is not installed on every host.
 ---
 
 # cli-proxy

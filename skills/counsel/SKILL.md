@@ -103,3 +103,27 @@ opinion on its own work — counsel is the replacement for that single
 reviewer. Same trigger as /hard-merge's §4 panel escalation; same 5-expert
 shape; same outcome (judgment breadth + audit trail, NOT a mechanical
 unlock — a merge classifier still sees only the diff and may block).
+
+## Opus escalation — cross-model attack/verdict
+
+Any agent or user may invoke counsel when facing a **very complex problem** or a
+**repeating blockage**. When either applies, do not stop at the panel:
+
+1. Collect fresh data from many angles first — the panel rounds are the debate;
+   if the question is under-evidenced, gather evidence before debating it.
+2. Pipe the full report + the raw round-1/round-2 arguments to Opus via the
+   **ask-claude** skill (no tools, no context, one turn):
+
+   ```sh
+   : "${CLAUDE_CODE_OAUTH_TOKEN:=$(pass show api/claude/oauth-token)}"; export CLAUDE_CODE_OAUTH_TOKEN
+   cat /tmp/counsel-<slug>.md | claude -p --model opus --max-turns 1 --allowedTools "" \
+     "You are a cross-model attacker. Attack this counsel report: find the load-bearing assumption the panel missed, the strongest counter to the recommended action, and any false consensus (experts agreeing because the frame was wrong, not because the answer is right). Respond in the ask-claude verdict contract: CLEAR | ATTACKS, ranked, each attack with what would satisfy it."
+   ```
+
+3. Append Opus's output as `### Cross-Model Attack (Opus)` at the end of the
+   report. Where Opus and panel consensus conflict, **flag the conflict
+   explicitly** — do not silently let either side win. Opus is still an
+   untrusted report: verify checkable claims before acting.
+
+Skip this step for routine decisions — five same-model experts are proportionate
+there; Opus is spent on complexity/blockage, per the ask-claude cost rule.
