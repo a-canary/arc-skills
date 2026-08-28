@@ -1,7 +1,6 @@
 ---
 name: adaptation-review
-description: >-
-  Review the last N days (default 10) of self-healing changes made by /dream and /token-waste for regressions and side-effects — surfaces silent reverts, two runs thrashing one file, missing/broken surfaces, conflicting edits, and AGENTS.md rule-bloat. Read-only: it reports, it does not auto-fix. Runs nightly as the safety net over the daily adapters. Use when the user wants to audit recent self-healing changes, check for regressions from /dream or /token-waste, or asks "did the nightly adaptations break anything?".
+description: Read-only review of the last N days of self-healing changes by /dream and /token-waste for regressions — silent reverts, thrashing, broken surfaces, rule-bloat. Use to audit recent self-healing changes, check for regressions from /dream or /token-waste, or when asked "did the nightly adaptations break anything?".
 allowed-tools: Read, Write, Glob, Task, Bash
 ---
 

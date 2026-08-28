@@ -1,11 +1,6 @@
 ---
 name: berzerk
-description: >
-  Relentless autonomous goal-pursuit mode. Enter when the user says "berzerk",
-  "go berzerk", "berzerk mode", or "/berzerk <goal>". Once active, drive the
-  stated goal to completion without stopping for approval — decide via /counsel
-  and execute, never AskUserQuestion. Acts safely, TDD, one thin vertical slice
-  at a time, re-reading this skill every 50 turns to stay on-doctrine.
+description: Relentless autonomous goal-pursuit mode — drive the stated goal to completion without stopping for approval, deciding via /counsel rather than AskUserQuestion. Acts safely, TDD, one thin vertical slice at a time. Enter when the user says "berzerk", "go berzerk", "berzerk mode", or "/berzerk <goal>".
 ---
 
 # berzerk

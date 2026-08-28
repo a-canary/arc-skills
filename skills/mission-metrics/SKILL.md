@@ -1,6 +1,6 @@
 ---
 name: mission-metrics
-description: Intense HITL grilling session — one question at a time, interleaved with repo reads, session mining, and web research — that converges on a project/module's mission, audience, the value delivered, metrics that actually measure that value (direct where possible, nearest proxy where speed-to-value demands), a phase order for those metrics, and one hillclimb(scope, metric, gate) eval per phase. Use when starting a project/module/feature, when a dashboard is dead or verdict-less, or when the user says "define the mission", "what are we optimizing", "add metrics", or "set up hillclimbing".
+description: Intense HITL grilling session that converges on a project's mission, audience, value delivered, metrics that measure that value, and a phase order with one hillclimb(scope, metric, gate) eval per phase. Use when starting a project/module/feature, when a dashboard is dead or verdict-less, or when the user says "define the mission", "what are we optimizing", "add metrics", or "set up hillclimbing".
 ---
 
 # Mission-Metrics Grilling

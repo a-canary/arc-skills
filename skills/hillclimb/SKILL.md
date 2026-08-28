@@ -1,6 +1,6 @@
 ---
 name: hillclimb
-description: Self-directed improvement loop that drives a repo's current phase gate green while holding all previous gates — parse hillclimb(scope, metric, gate) from CHOICES.md, measure baseline, run challenger changes via /task, promote only on pre-registered gate wins, advance the phase when green. Use when a repo has unmet metric gates, when the user says "hillclimb", "climb the metric", "drive the gate green", or on a scheduled climb tick.
+description: Self-directed improvement loop that drives a repo's current phase gate green while holding all previous gates, promoting only on pre-registered gate wins. Use when a repo has unmet metric gates, on a scheduled climb tick, or when the user says "hillclimb", "climb the metric", or "drive the gate green".
 ---
 
 # Hillclimb (phase-gate climbing)

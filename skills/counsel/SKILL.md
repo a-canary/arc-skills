@@ -1,6 +1,6 @@
 ---
 name: counsel
-description: "Run an adversarial counsel session with 5 experts along 5 unique axes (advocate | critic | pragmatist | historian | futurist). Each expert runs queries (read files, ke-recall) and presents arguments across 2 rounds, then synthesize into a concise report or course of action. Use when user says 'counsel', 'get expert advice', 'adversarial review', or wants multiple perspectives on a decision."
+description: Adversarial counsel session with 5 experts on 5 axes (advocate | critic | pragmatist | historian | futurist) across 2 rounds, synthesized into one report or course of action. Use when the user says "counsel", "get expert advice", "adversarial review", or wants multiple perspectives on a decision.
 ---
 
 # Counsel — Adversarial Expert Panel

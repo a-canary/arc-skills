@@ -1,6 +1,6 @@
 ---
 name: champion-challenger
-description: Design and run a champion/challenger self-improvement loop — continuously A/B a known-good "champion" against a new "challenger" and promote only when it clears a pre-registered gate. Use when building or reviewing a promotion gate, deploy ladder, model-promotion rule, A/B/experiment harness, backtest-before-deploy flow, or any "is this new version actually better, and safe to ship?" decision.
+description: Design and run a champion/challenger loop — continuously A/B a known-good champion against a challenger, promoting only on a pre-registered gate. Use when building or reviewing a promotion gate, deploy ladder, model-promotion rule, A/B harness, backtest-before-deploy flow, or any "is this new version actually better, and safe to ship?" decision.
 ---
 
 # Champion / Challenger

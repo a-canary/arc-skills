@@ -11,6 +11,7 @@ OpenAI-compatible `/v1/chat/completions` at `http://127.0.0.1:7890/v1`. Routes M
 
 - `cli/<tool>[/<model>]` — tools: `claude`, `gemini`, `qwen`, `kilo`, `opencode`. E.g. `cli/claude/sonnet`, `cli/claude/haiku`, `cli/gemini`.
 - `minimax[/<model>]` — direct MiniMax API (default MiniMax-M2.7).
+  - HTTP providers: `chutes`, `openrouter`, `cerebras`, `tokenrouter[/<model>]`, `stdcmpt[/<model>]` (tokenrouter is OpenAI-compat at `api.tokenrouter.com`; no verified default model — caller must name one. stdcmpt is OpenAI-compat at `api.stdcmpt.com/v1`; default model `StandardCompute`).
 - `pi/<alias>[/<effort>]` — pi CLI multi-provider. Current alias: `minimax-m3` → `minimax/MiniMax-M3`.
 - `smart` — pool alias (priority failover, first success wins): `cli/claude/fable/high` → `cli/claude/opus/high` → `pi/minimax-m3/high`.
 - `fast` — pool alias (priority failover): `pi/minimax-m3/no-think` → `cli/claude/sonnet/no-think`.

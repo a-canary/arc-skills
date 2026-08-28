@@ -1,6 +1,6 @@
 ---
 name: codemap
-description: Generate a deterministic PlantUML map + snapshot report of a project using static analysis (no LLM) — module shapes, seams, dead code, untested code, redundancy, configs, docs. Use when the user wants a fast codebase snapshot, a dependency/architecture diagram, to spot dead or untested or redundant code, to understand an unfamiliar repo, or to diff structure before vs after a change. Lightweight quick-look companion to improve-codebase-architecture.
+description: Generate a deterministic PlantUML map + snapshot report of a project via static analysis (no LLM) — module shapes, seams, dead code, untested code, redundancy. Use for a fast codebase snapshot, a dependency/architecture diagram, spotting dead/untested/redundant code, understanding an unfamiliar repo, or diffing structure before vs after a change.
 ---
 
 # Codemap
