@@ -33,7 +33,8 @@ skills/img-collapse/img-collapse --selftest
 - A row/col is kept iff it differs from the last KEPT neighbor; each maximal run of identical neighbors keeps exactly its first member.
 - Rows collapse first, then columns on the row-collapsed grid (order matters for the sidecar shape).
 - Pixel-exact: collapsed output and crops are straight pixel subsets of the original — no resampling, mode preserved.
-- `--box` is inclusive on both ends; out-of-bounds boxes are rejected with the collapsed dimensions printed.
+- Palette (P-mode) images compare by palette index, not resolved color — two indices mapping to the same RGB value are treated as distinct. Rare in screenshots; convert to RGB first if it matters.
+- `--box` is inclusive on both ends; out-of-bounds or reversed boxes (x0>x1, y0>y1) are rejected with the collapsed dimensions printed.
 - Distortion caveat: distances are compressed, relative alignment preserved. For metric-accurate reads (graphs, diagrams where distance is language) view the collapsed image, then request a raw crop for the region in question.
 
 ## Selftest
