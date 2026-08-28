@@ -77,7 +77,24 @@ file (`~/.claude/dream/journal/YYYY-MM-DD.md`).
    searched instead of the given `~/.pi/agent/sessions/` path).
    Absence is proven by the single
    failed page; nothing further to page.
-2. Read the window. Look for:
+2. Read the window. **Check `role:` on each message BEFORE classifying it.**
+   Only text the *live assistant* produced is evidence. `page.py` prints `role:`
+   on every message — read it. Attribute a finding ONLY to `role: assistant`
+   text. **Never mine `role: user` text for mistakes/hallucinations/indirections**
+   — that turn is the brief handed *to* the agent, not its output.
+   This matters most for retry-loop harnesses (`~/.pi/agent/sessions/`), which
+   replay the PRIOR attempt's failure verbatim into the first `role: user`
+   message. If the text contains any of these markers it is replayed history from
+   a different agent — skip it, do not log it:
+   `[Prior failures]` · `You attempted step '<N>'` · `and the verify step did not pass` ·
+   `Verify output:` · `Result output:`
+   A quoted API error, stack trace, or code snippet inside such a block is
+   somebody else's past failure; logging it fabricates a finding about an agent
+   that never ran (UM-0500). On 2026-08-11 this produced 11 false entries across
+   9 `pi` sessions — every one traced to a `role: user` replay block read as live
+   assistant output. When a real failure and its replay both appear, log the
+   `role: assistant` occurrence once, never the echo.
+   Then look for:
    - **mistake** — Claude did something wrong (wrong file, wrong command, bad assumption).
    - **correction** — the user pushed back ("no", "not that", "actually", "should be"), or Claude redid an action.
    - **hallucination** — Claude claimed a path/function/fact/API that did not exist or was false.
