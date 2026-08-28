@@ -34,6 +34,7 @@ skills/img-collapse/img-collapse --selftest
 - Rows collapse first, then columns on the row-collapsed grid (order matters for the sidecar shape).
 - Pixel-exact: collapsed output and crops are straight pixel subsets of the original — no resampling, mode preserved.
 - `--box` is inclusive on both ends; out-of-bounds boxes are rejected with the collapsed dimensions printed.
+- Distortion caveat: distances are compressed, relative alignment preserved. For metric-accurate reads (graphs, diagrams where distance is language) view the collapsed image, then request a raw crop for the region in question.
 
 ## Selftest
 
