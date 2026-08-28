@@ -14,11 +14,12 @@
 # swap). Review output via the daily journal (~/.claude/dream/journal/YYYY-MM-DD.md)
 # and ~/.cache/arc-hygiene/*.log.
 #
-# Canonical copy: ~/repos/arc-skills/bin/nightly-self-improve.sh
-# Deployed via symlink from ~/.config/arc-hygiene/nightly-self-improve.sh —
-# edit here, never the symlink target's directory.
+# Canonical + live copy: ~/repos/arc-skills/bin/nightly-self-improve.sh
+# Cron invokes this repo path directly (no ~/.config mirror — the old symlink
+# mirror was a drift trap and was removed 2026-08-27).
 set -uo pipefail
-_lib="$(dirname "$(readlink -f "$0")")/lib/log-event.sh"
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+_lib="$SCRIPT_DIR/lib/log-event.sh"
 . "$_lib" || { echo "FATAL: cannot source $_lib" >&2; exit 1; }
 LOG_DIR="${LOG_DIR:-$HOME/.cache/arc-hygiene}"   # overridable for stub tests
 mkdir -p "$LOG_DIR"
@@ -66,7 +67,7 @@ run adaptation-review adaptation-review.log
 #   stage 2+3 (adaptor, hygiene alias): /gap-remediate ranks the log by
 #     severity×frequency, picks the top gap, checks AGENTS.md/MEMORY.md/ke, and
 #     makes ONE add-or-clarify edit, logging the decision back. Runs via run().
-GAPS="${GAPS:-$HOME/.config/arc-hygiene/extract-agent-gaps.py}"
+GAPS="${GAPS:-$SCRIPT_DIR/extract-agent-gaps.py}"
 echo "== $(date -Is) agent-gaps (slow lane)" >> "$LOG_DIR/agent-gaps.log"
 timeout 120m python3 "$GAPS" >> "$LOG_DIR/agent-gaps.log" 2>&1
 gc=$?
