@@ -34,9 +34,9 @@ validate_template() {
   if [[ "$cmd" =~ ^claude[[:space:]] ]]; then
     claude_model="$(grep -oP -- '--model[= ]+\K\S+' <<<"$cmd" | head -1)"
     case "$claude_model" in
-      opus|sonnet|haiku) : ;;
+      opus|sonnet|haiku|fable) : ;;
       "") echo "write-config: alias '$name' invokes claude but is missing --model" >&2; exit 2 ;;
-      *) echo "write-config: alias '$name' uses 'claude --model $claude_model'; only opus|sonnet|haiku allowed. Route provider models via 'pi -p --provider ...'" >&2; exit 2 ;;
+      *) echo "write-config: alias '$name' uses 'claude --model $claude_model'; only opus|sonnet|haiku|fable allowed (must match arc-agents CLAUDE_MODELS). Route provider models via 'pi -p --provider ...'" >&2; exit 2 ;;
     esac
   fi
 }

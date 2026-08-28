@@ -3,7 +3,11 @@ name: hard-merge
 description: Adversarial pre-merge review gate for merge-on-clear — the author drives it but dispatches a freshly spawned reviewer agent for independence (never reviews own work inline). Use before merging any PR you own, or when the user says "hard-merge", "merge-on-clear", or "adversarial review before merge".
 ---
 
-# hard-merge
+# hard-merge — DefendMerge
+
+This gate **is DefendMerge**, gate 2 of the Defend* family (see the `defend`
+skill, merge.md): Worker(qwen|bonsai) → git merge. Workhorse tier,
+fresh-context independence — no Opus; merges are frequent and git-reversible.
 
 Adversarial review before a merge-on-clear. **Assume the diff is wrong; try to prove it; merge only when you fail.**
 
