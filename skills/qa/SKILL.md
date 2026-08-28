@@ -1,6 +1,6 @@
 ---
 name: qa
-description: Spawns a QA agent to test a feature or fix from a user perspective — screenshots, friction points, content truthfulness, functional correctness, presentation quality. Emits structured feedback to the director event bus. Use when the director needs to verify a completed task before closing a gap, or when batched user feedback crosses the verification threshold. Do NOT use for code review or adversarial logic review — use /task's adversarial review step instead.
+description: Spawns a QA agent to test a feature or fix from a user perspective — screenshots, friction, content truthfulness, functional correctness, presentation. Use to verify a completed task before closing a gap, or when batched user feedback crosses the verification threshold. Do NOT use for code review — use /task's adversarial review instead.
 ---
 
 # qa

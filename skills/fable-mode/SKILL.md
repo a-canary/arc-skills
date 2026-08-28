@@ -1,13 +1,6 @@
 ---
 name: fable-mode
-description: >
-  Portable senior-engineer operating discipline for any thinking model
-  (Opus-4.8, GLM-5.2, MiniMax-M3, Sonnet, Qwen, DeepSeek, …). Installs the
-  judgment, planning, verification, and reasoning habits of a careful operator:
-  verify before trusting, measure before changing, prove before scaling, escalate
-  forks instead of guessing. Use when the user says "fable mode", "senior mode",
-  "operator mode", "be rigorous", "think like a senior", or invokes /fable-mode.
-  Especially for cheaper/other models that need the discipline made explicit.
+description: Portable senior-engineer operating discipline for any thinking model — verify before trusting, measure before changing, prove before scaling, escalate forks instead of guessing. Use when the user says "fable mode", "senior mode", "operator mode", "be rigorous", "think like a senior", or invokes /fable-mode.
 ---
 
 # fable-mode

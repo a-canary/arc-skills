@@ -1,6 +1,6 @@
 ---
 name: craft-defaults
-description: Default engineering posture for AI agents — weight quality, modularity, and maintainability far above implementation time/effort (agent effort is cheap, so aim higher); never auto-add an agent/model co-author trailer to commits; never hand-edit auto-generated files; put one sentence per line in long markdown; reproduce a bug E2E before fixing it; scrutinise UI to pixel-perfection. Use when making an engineering trade-off, writing a commit message, editing files, writing docs/markdown, fixing a bug, or E2E-testing a UI.
+description: Default engineering posture for AI agents — weight quality and maintainability far above agent effort, no co-author trailers, never hand-edit generated files, one sentence per line in markdown, reproduce bugs E2E before fixing, scrutinise UI to pixel-perfection. Use when making an engineering trade-off, writing a commit message, editing files, writing docs/markdown, fixing a bug, or E2E-testing a UI.
 ---
 
 # craft-defaults

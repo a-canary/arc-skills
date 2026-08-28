@@ -1,7 +1,6 @@
 ---
 name: objective-counsel-approval
-description: >-
-  Adjudicate ONE planner-proposed objective per run via a /counsel panel — research the proposal, review it against the general context AND every axis in ~/vault/missions.md (missions + ranked principles), then write exactly one verdict: revise (with notes) | approve | reject | human-gate. Expensive, so hard-throttled to 1 counsel/hour: each cron run gathers all OPEN proposals, prioritizes, and adjudicates only the single top one. Use for the hourly proposal-adjudication cron, or when the user says "run objective counsel", "adjudicate proposals", or "counsel-approve an objective".
+description: 'Adjudicate ONE planner-proposed objective per run via a /counsel panel against ~/vault/missions.md, writing exactly one verdict: revise | approve | reject | human-gate. Hard-throttled to 1/hour. Use for the hourly proposal-adjudication cron, or when the user says "run objective counsel", "adjudicate proposals", or "counsel-approve an objective".'
 ---
 
 # Objective-Counsel-Approval

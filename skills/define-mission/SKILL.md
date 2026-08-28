@@ -1,6 +1,6 @@
 ---
 name: define-mission
-description: HITL interview that defines or refines a global mission section in ~/vault/missions.md — abstract goal-mission, bounded/unbounded type, values applied to all projects — then walks candidate repos dispatching /apply-mission per repo. Use when a new mission/global mission is proposed or detected undefined, when an existing mission needs refinement, or when the user says "define the mission", "new mission", "new mission", or "refine the mission".
+description: HITL interview that defines or refines a global mission section in ~/vault/missions.md, then walks candidate repos dispatching /apply-mission. Use when a mission is proposed or undefined, needs refinement, or when the user says "define the mission", "new mission", or "refine the mission".
 ---
 
 # Define-Mission (global level)

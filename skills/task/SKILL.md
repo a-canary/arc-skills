@@ -1,6 +1,6 @@
 ---
 name: task
-description: Isolated thin-vertical-slice execution unit. Creates an isolated workspace (worktree by default), defines a TDD contract, runs implementation, gates on independent adversarial review, and merges or drafts a PR only on clear. Use when the director (or a developer) has identified a gap and needs it executed in isolation with a verifiable outcome. Do NOT use for exploration or research — use /prototype or /diagnose instead.
+description: Isolated thin-vertical-slice execution unit — isolated workspace, TDD contract, implementation, independent adversarial review gate, then merge or draft PR only on clear. Use when a gap needs execution in isolation with a verifiable outcome. Do NOT use for exploration or research — use /prototype or /diagnose instead.
 ---
 
 # task

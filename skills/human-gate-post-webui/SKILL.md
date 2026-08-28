@@ -1,7 +1,6 @@
 ---
 name: human-gate-post-webui
-description: >-
-  Surface a genuine human-gate or taste choice to the developer via the webui Feed (an OPEN feedback row) — WITHOUT blocking on the reply. Post concisely (request + scope/evidence + why it's gated), then keep working other tasks. Rare by design; most uncertainty self-resolves via docs/ke/counsel (ADR-0011). Use only when a decision is genuinely the human's AND the wait can't be dodged. Triggers: "surface this to the developer", "post a human-gate", "this needs Aaron's call", "flag a taste choice".
+description: 'Surface a genuine human-gate or taste choice to the developer via the webui Feed without blocking on the reply. Rare by design; most uncertainty self-resolves via docs/ke/counsel. Use only when a decision is genuinely the human''s. Triggers: "surface this to the developer", "post a human-gate", "this needs Aaron''s call", "flag a taste choice".'
 ---
 
 # Human-Gate-Post-Webui

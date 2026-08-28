@@ -1,6 +1,6 @@
 ---
 name: director
-description: AFK-capable mission driver that reads MISSION.md / AGENTS.md / CHOICES.md, restates the objective, runs a gap-analysis loop, delegates work to worker agents via the event bus, and gates progress on verified evidence. Use when you want an autonomous agent to drive a repo toward mission completion without constant human steering. Do NOT use for single-task execution — use /task instead.
+description: AFK-capable mission driver that reads MISSION.md / AGENTS.md / CHOICES.md, runs a gap-analysis loop, delegates to worker agents via the event bus, and gates progress on verified evidence. Use to drive a repo toward mission completion without constant human steering. Do NOT use for single-task execution — use /task instead.
 ---
 
 # director

@@ -1,6 +1,6 @@
 ---
 name: capacity
-description: Shared-capacity ledger + advisory router for directors racing the same provider quotas (one Claude 5h window, one MiniMax weekly cap, one vast wallet). Passive estimator (P-EST) recovers hidden window/cap from organic 429s; lane arbitration (P-CRIT) says run/park/escalate per dispatch. ADVISORY + FAIL-OPEN always — a capacity failure may never block a dispatch. Use via the director `capacity` binding or the CLI directly.
+description: Shared-capacity ledger + advisory router for directors racing the same provider quotas (Claude window, MiniMax cap, vast wallet) — recovers hidden caps from organic 429s and says run/park/escalate per dispatch. ADVISORY + FAIL-OPEN; never blocks a dispatch. Use via the director `capacity` binding or the CLI directly.
 ---
 
 # capacity

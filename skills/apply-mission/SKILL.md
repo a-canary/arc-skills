@@ -1,6 +1,6 @@
 ---
 name: apply-mission
-description: Gap-analyse ALL axes in ~/vault/missions.md — UM-xxxx missions AND the ranked AGENTS.md principles — against ONE repo's CHOICES.md Objectives, then propose the missing interpretations for user approval. Emits a coverage matrix (covered / n/a / gap / veto-binds per axis) plus a "## Mission:" section, phase-ordered objectives, and one hillclimb(scope, metric, gate) eval per phase for each gap, landed via the apply-on-approve CHOICES.md PR lane. Use for a full mission-coverage sweep of a repo, after /define-mission's repo walk, or when the user says "apply the mission(s) to this repo", "gap-analyse axes", "propose objectives", or "add metric gates".
+description: Gap-analyse all axes in ~/vault/missions.md against one repo's CHOICES.md Objectives and propose the missing objectives for approval. Use for a repo mission-coverage sweep, after /define-mission, or when the user says "apply the mission(s) to this repo", "gap-analyse axes", "propose objectives", or "add metric gates".
 ---
 
 # Apply-Mission (repo-level, all-axis gap analysis)
