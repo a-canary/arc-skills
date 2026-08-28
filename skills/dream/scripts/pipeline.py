@@ -158,7 +158,13 @@ def sessions_to_process(processed: dict, force: bool = False, limit: int = 0) ->
                 _maybe_add(jsonl, out, processed, force)
     out.sort(key=lambda p: p.stat().st_mtime)
     if limit > 0:
-        out = out[:limit]
+        # ponytail: strict oldest-first starves recent sessions. With an ~18k
+        # backlog the capped window never leaves the oldest sliver of history
+        # (dense machine-generated worker stubs, ~0 findings), so interactive
+        # sessions where real mistakes live are never reached. Split the window:
+        # newest half mines where findings are, oldest half still drains backlog.
+        fresh = limit // 2
+        out = (out[-fresh:] + out[:limit - fresh]) if fresh else out[:limit]
     return out
 
 
