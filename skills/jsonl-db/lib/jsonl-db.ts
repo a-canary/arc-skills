@@ -77,3 +77,30 @@ export class JsonlDb {
     return events
   }
 }
+
+// --- self-check: `bun skills/jsonl-db/lib/jsonl-db.ts` (stdlib only, no fixtures) ---
+if ((import.meta as { main?: boolean }).main) {
+  const { default: assert } = await import('node:assert/strict')
+  const dir = `/tmp/jsonl-db-selfcheck-${process.pid}`
+  fsSync.mkdirSync(dir, { recursive: true })
+  try {
+    const db = new JsonlDb(`${dir}/tasks.jsonl`)
+    const archive = `${dir}/archive.jsonl`
+    await db.append({ id: 'evt_01', type: 'task.created', status: 'open', ts: 1 })
+    await db.append({ id: 'evt_02', type: 'task.created', status: 'resolved', ts: 2 })
+    assert.equal((await db.query(e => e.status === 'open')).length, 1)
+    await db.update('evt_01', { status: 'resolved' })
+    assert.deepEqual(await db.gc(e => e.status === 'resolved', archive), { kept: 0, archived: 2 })
+    assert.equal((await fs.readFile(archive, 'utf8')).trim().split('\n').length, 2)
+    const seen: string[] = []
+    const stop = db.watch(e => seen.push(e.id))
+    await db.append({ id: 'evt_03', type: 'task.created', status: 'open', ts: 3 })
+    const t0 = Date.now()
+    while (seen.length === 0 && Date.now() - t0 < 5000) await new Promise(r => setTimeout(r, 20))
+    stop()
+    assert.deepEqual(seen, ['evt_03'])
+    console.log('jsonl-db self-check OK')
+  } finally {
+    fsSync.rmSync(dir, { recursive: true, force: true })
+  }
+}

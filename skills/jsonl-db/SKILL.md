@@ -53,3 +53,5 @@ Rewrites `tasks.jsonl` with only unresolved events; appends resolved ones to `ar
 ## Implementation
 
 See [`lib/jsonl-db.ts`](lib/jsonl-db.ts) — zero dependencies, ~80 lines, copy into any project.
+
+Self-check: `bun skills/jsonl-db/lib/jsonl-db.ts` — exercises append/query/update/gc + watch() against a temp file, asserts, prints OK.
