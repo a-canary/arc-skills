@@ -16,8 +16,9 @@ The live rotation:
   repo list + per-(repo,skill) cooldown), skips a repo with an open hygiene
   task (skip-not-stack), creates a ledger task. The factory dispatches it to
   a worker; nothing here calls `claude -p` directly.
-- **`~/.config/arc-hygiene/nightly-self-improve.sh`** — runs nightly at 03:00,
-  drives `/dream` + `/token-waste` + `/adaptation-review` via `claude -p`
+- **`~/repos/arc-skills/bin/nightly-self-improve.sh`** — runs nightly at 03:00
+  (cron invokes the repo path directly; no `~/.config` mirror), drives
+  `/dream` + `/token-waste` + `/adaptation-review` via `pi -p`
   (headless, one-shot, output to `~/.cache/arc-hygiene/`).
 
 To change the schedule or rotation, edit the crontab or
