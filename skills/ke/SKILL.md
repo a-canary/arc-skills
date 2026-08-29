@@ -29,6 +29,8 @@ About to WebSearch a **durable** question (library tuning, method comparison, ar
 
 Reserve raw WebSearch/WebFetch for **volatile** facts a cached copy would make *worse* (an agent quotes the stale value) — see *What KE never stores* below.
 
+KE's web egress runs on the local `free-search` CLI (multi-engine, no API key). Never curl search engines directly — they block datacenter clients; use `free-search search|fetch` or the `websearch` skill.
+
 ## What KE stores / never stores
 
 KE is permanent memory. Store: decisions + trade-offs, fixes + root cause, failure modes, architectural patterns, conceptual explanations, cached facts with provenance.
