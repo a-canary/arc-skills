@@ -1,14 +1,19 @@
 # Agent behavioral rules (always-on)
 
-Canonical source of always-on agent rules. Git-tracked; each harness config
-symlinks back here.
+Canonical source of always-on agent rules. Git-tracked. Loaded once per
+session via each harness's user-level config symlink (`~/.pi/agent/AGENTS.md`,
+`~/.claude/CLAUDE.md`, … → this file; see skills/install-behavioral-rules).
+Deliberately NOT named AGENTS.md/CLAUDE.md: any walk-up context file carrying
+this content would double-inject it. Repo-level AGENTS.md files are thin
+pointers or repo-scoped rules only — never copies of this file.
 
 **Before acting you MUST read `~/vault/user.md`** — operator identity, infra,
 preferences, project constraints. `~/vault/USER.md` overrides this file on conflict.
 
 ## File boundaries
 
-- **AGENTS.md (public)** — HOW globally: rules every agent needs every turn.
+- **GLOBAL-RULES.md (public, this file)** — HOW globally: rules every agent needs every turn.
+  Symlinked as each harness's user-level AGENTS.md/CLAUDE.md; one copy per session.
 - **`~/vault/user.md` (private)** — WHO: operator identity, missions, communication style.
 - **`~/vault/USER.md` (private)** — WHO override: infra, secrets, preferences. Overrides user.md on conflict.
 - **`~/vault/missions.md` (private)** — WHY: global axis ranking (UM-IDs + principles).

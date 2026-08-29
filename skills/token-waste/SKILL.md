@@ -191,7 +191,8 @@ Task: Adapt away the top token-waste pattern for <DAY>
 Agent: waste-adapter    # unnamespaced -- the Task `subagent_type` is the bare agent name, NOT `token-waste:waste-adapter`
 Prompt: Read /tmp/session-waste-examples-<DAY>.json. Group examples by root cause,
         pick the single highest-impact group, and make ONE surgical change to an
-        agent / skill / tool / ~/AGENTS.md rule so that pattern stops recurring.
+        agent / skill / tool / global-rules (~/repos/arc-skills/GLOBAL-RULES.md)
+        change so that pattern stops recurring.
         Then append a `## adaptation` block (tagged `source: token-waste`) to today's
         dream journal. One change only.
 ```

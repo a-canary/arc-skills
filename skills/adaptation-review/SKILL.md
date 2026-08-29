@@ -14,8 +14,8 @@ independent daily edits can rot the system in ways no single run can see:
 - a later edit **silently reverts** an earlier one;
 - an adaptation claims a surface it **never actually wrote** (or wrote the wrong path);
 - a script gets edited into a **syntax error**;
-- every waste fix dumps another "remember not to" rule into `~/AGENTS.md` until
-  the rules **contradict** each other.
+- every waste fix dumps another "remember not to" rule into the global rules
+  (`~/repos/arc-skills/GLOBAL-RULES.md`) until they **contradict** each other.
 
 This skill is the **safety net over the daily adapters**. It reviews the trailing
 window of adaptations for regressions and side-effects, then **reports** — it is
@@ -69,7 +69,8 @@ best-effort identifies the **surface file** each one touched, and runs
 deterministic checks: `missing` (surface gone), `broken` (`.py`/`.sh`/`.json`
 fails a parse check), `reverted` (a revert-like commit touched the surface in the
 window), `thrash` (same surface edited by ≥2 adaptations), `conflict` (opposing
-intent keywords on one surface), and window-level `rule_bloat` on `~/AGENTS.md`.
+intent keywords on one surface), and window-level `rule_bloat` on the global
+rules file (`~/repos/arc-skills/GLOBAL-RULES.md`).
 
 Inspect the summary before spending an agent:
 
@@ -115,8 +116,8 @@ Relay the reviewer's report:
    named (un-applied) fix. If clean, say "no regressions found" plainly.
 3. **Dismissed flags** — deterministic false positives, one line each, so the
    run is auditable.
-4. **Watch items** — trending-wrong-but-not-yet-broken (e.g. `~/AGENTS.md`
-   nearing rule bloat).
+4. **Watch items** — trending-wrong-but-not-yet-broken (e.g. the global rules
+   file nearing rule bloat).
 
 This skill **does not fix** anything. If it surfaces a real regression, the user
 (or a follow-up `/dream` / `/token-waste` run, or a manual revert) acts on it.

@@ -21,8 +21,9 @@ write. If nothing is worth changing, log a no-op — never force an edit.
 
 ## The knowledge surfaces (check all three before deciding)
 
-1. **AGENTS.md** — `~/repos/arc-skills/AGENTS.md` (canonical; `~/.claude/CLAUDE.md`
-   & `~/CLAUDE.md` symlink to it). Always-on behavioral rules as `- **Rule.**`
+1. **Global rules** — `~/repos/arc-skills/GLOBAL-RULES.md` (canonical; each
+   harness's user-level config — `~/.claude/CLAUDE.md`, `~/.pi/agent/AGENTS.md`,
+   … — symlinks to it). Always-on behavioral rules as `- **Rule.**`
    bullets. **Tightly curated — 56 lines. Adding here is expensive.** Only durable,
    universal *behavioral* doctrine belongs. Rule-bloat is a watched regression
    (`/adaptation-review`), so bias hard toward clarifying an existing bullet over
