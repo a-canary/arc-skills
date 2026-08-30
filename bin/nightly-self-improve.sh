@@ -10,12 +10,15 @@
 # The two adapters each make ONE edit; adaptation-review makes none (reports only).
 # Unattended: runs via `pi -p` (print mode auto-approves tools) with a scoped
 # --tools allowlist. Operational structure (captain 2026-08-28): Driver.Qwen +
-# Defense Gate — the adapters (driver/workers) run on Veles/Qwen3.8-27B, and
-# after each editing stage an independent fresh-context model (DefendMerge tier,
-# defend skill) attacks the stage's diff; ATTACKS => reset to pre-stage HEAD.
-# Direct provider routing per arc-agents/config.json standing plan 2026-08-27
-# (no arc-proxy hop; opus defense lane is dead machine-wide, so the gate runs
-# on workhorse Qwen in a fresh session — GATE_MODEL overrides when opus returns).
+# Defense Gate — the adapters (driver/workers) run via arc-llm-proxy
+# (arc-proxy/driver alias: local Bonsai-27B on e103, Qwen3.8 on eVeles as
+# failover), and after each editing stage an independent fresh-context model
+# (DefendMerge tier, defend skill) attacks the stage's diff; ATTACKS => reset
+# to pre-stage HEAD. Proxy routing per standing plan 2026-08-30 (replaces the
+# 2026-08-27 direct-provider plan; the proxy hop is now mandatory for the
+# factory lane so slots + audit logging are enforced). opus defense lane is
+# dead machine-wide, so the gate runs on the same workhorse in a fresh session
+# — GATE_MODEL overrides when opus returns.
 # Review output via the daily journal (~/.claude/dream/journal/YYYY-MM-DD.md)
 # and ~/.cache/arc-hygiene/*.log.
 #
@@ -29,8 +32,8 @@ LOG_DIR="${LOG_DIR:-$HOME/.cache/arc-hygiene}"   # overridable for stub tests
 mkdir -p "$LOG_DIR"
 NIGHTLY_LOG="$LOG_DIR/nightly.log"
 PI="${PI:-/usr/local/lib/node_modules/node/bin/pi}"  # overridable for stub tests
-HYGIENE_MODEL="${HYGIENE_MODEL:-Veles/unsloth/Qwen3.8-27B-GGUF}"  # Driver.Qwen (direct routing)
-GATE_MODEL="${GATE_MODEL:-Veles/unsloth/Qwen3.8-27B-GGUF}"        # DefendMerge tier: fresh context
+HYGIENE_MODEL="${HYGIENE_MODEL:-arc-proxy/driver}"  # Driver: proxy route (e103 Bonsai > eVeles Qwen)
+GATE_MODEL="${GATE_MODEL:-arc-proxy/driver}"        # DefendMerge tier: fresh context, proxy route
 GATE_REPOS="${GATE_REPOS:-$HOME/repos/arc-skills $HOME/repos/arc-agents $HOME/.pi/agent $HOME/vault}"
 TOOLS="read,bash,edit,write"
 
