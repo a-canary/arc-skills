@@ -13,7 +13,7 @@ Evidence: experiments E1–E9 (job c2eafe37, 2026-05-28/29); Veracode 2025 AI-co
 ## Universal rules (F and W)
 
 ### U-1 — TDD is mandatory
-Test before implementation; gate on test presence AND green. Strongest guardrail evidence in the review (TDAD: 70% lower regression rate, 72% fewer pass-to-pass failures). Vertical slices, one test → one impl → repeat (see the `tdd` skill). Override only with explicit user sign-off for throwaway spikes.
+Test before implementation; gate on test presence AND green. Strongest guardrail evidence in the review (TDAD: 70% lower regression rate, 72% fewer pass-to-pass failures). Vertical slices, one test → one impl → repeat. Override only with explicit user sign-off for throwaway spikes.
 
 ### U-2 — Strict-by-default
 Make the type system catch the bug before the model has to. Per-language strict settings in §W-7 / §F-1. Strict caught real None-deref crashes that loose mode shipped silently, at ~zero added agent cost (E2/E7). The trade is asymmetric in favor of strict.

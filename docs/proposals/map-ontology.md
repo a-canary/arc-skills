@@ -45,7 +45,7 @@ Placement is the operator policy from the pilot, not a per-run choice.
 ### Process
 1. **Survey** (read-only): repos, configs, crons, daemons, ledger shape, existing CONTEXT.md / ADRs / codemap/. For `--meta`: also read each repo's ontology OVERVIEW if present — meta composes from the parts.
 2. **Draft**: `OVERVIEW.md` = low-res index (GraphRAG community-summary shape): one line per concept + link to its topic file, nothing restated in both places. Topic files = C4 zoom levels: components, contracts/edges, roles, data flows, scheduling — sized ~2–5KB each, split when a topic outgrows that.
-3. **Term pass**: every term either exists in CONTEXT.md (repo scope) or gets added there with the grill-with-docs discipline; cross-cutting terms checked against ref 4/5 taxonomies first.
+3. **Term pass**: every term either exists in CONTEXT.md (repo scope) or gets added there with a docs-grounded review discipline; cross-cutting terms checked against ref 4/5 taxonomies first.
 4. **Findings pass**: overlaps, conflicts, gaps, stale claims → ledger tickets via bookie (kind=task, class per severity), exactly like the pilot's findings.md. Findings file is written, then its tickets filed, then it links them.
 5. **Register**: one-line reference from the scope's agents.md/AGENTS.md so sessions actually load it ("referenced from the global agents.md" was in the original request).
 
@@ -64,14 +64,14 @@ Reader rule (written into the skill and agents.md): **an ontology is a hint to v
 
 ### 4.1 codemap — interlock, do NOT supersede
 Different axes: codemap is **structural** (modules, seams, dead/untested/redundant — deterministic, no LLM, git-tracked IR). map-ontology is **semantic** (concepts, roles, contracts, why-things-exist — judgment-based). This is exactly refs 2 and 8's two-layer shape: deterministic substrate below, meaning above.
-Mechanics: codemap output is an *input* to the repo survey (module shapes ground the components topic file); the ontology names what codemap can't see (ownership, role, contract intent). Codemap's own SKILL.md already draws this line ("codemap = shape, improve-codebase-architecture = deepening") — map-ontology slots in as the semantic sibling. Neither regenerates the other; both git-track their artifacts so drift is diffable.
+Mechanics: codemap output is an *input* to the repo survey (module shapes ground the components topic file); the ontology names what codemap can't see (ownership, role, contract intent). Codemap's own SKILL.md already draws this line ("codemap = shape, improve-architecture (arc-agents) = deepening") — map-ontology slots in as the semantic sibling. Neither regenerates the other; both git-track their artifacts so drift is diffable.
 
-### 4.2 improve-codebase-architecture — consumer + updater
+### 4.2 improve-architecture (arc-agents) — consumer + updater
 It reads CONTEXT.md vocabulary + ADRs and proposes deepening refactors. The repo ontology is its richer input: concept map + seams + contracts tell it *where* friction lives before the Explore subagent walks code.
 Reverse edge: when a deepening refactor merges, the components/contracts topic files get updated in the same PR (same discipline as "regenerate codemap with the change"). The skill states both edges explicitly.
 
 ### 4.3 CONTEXT.md — stays the term authority, untouched
-CONTEXT.md's discipline (definitions only, no implementation, no decisions) is exactly right and already load-bearing (interviewer intake, improve-codebase-architecture, grill-with-docs all read it). Merging it into an ontology file would couple a fast-changing glossary to a slower survey artifact.
+CONTEXT.md's discipline (definitions only, no implementation, no decisions) is exactly right and already load-bearing (interviewer intake and improve-architecture (arc-agents) both read it). Merging it into an ontology file would couple a fast-changing glossary to a slower survey artifact.
 Instead: the repo ontology *references* CONTEXT.md as its term source; the skill's term pass (§3.4) writes new terms back into CONTEXT.md. One definition per term, one home.
 
 ### 4.4 wayfinder — process vs artifact, delegate when foggy
@@ -131,7 +131,7 @@ The sweep certifies the ontology (write side), but nothing forced consumers to s
 
 Mechanism (no hook machinery):
 1. `ontology-check <scope>` — on-demand verb over the SAME claim classifier the drift sweep uses (one shared module, two entry points). Exit 0 fresh / 1 stale, per-claim report.
-2. Intake line in every planning consumer — map-ontology refresh, wayfinder intake, improve-codebase-architecture step 0, director's plan step: "run `ontology-check` on your scope; stale → verify-first refresh per §5b before using any claim."
+2. Intake line in every planning consumer — map-ontology refresh, wayfinder intake, improve-architecture (arc-agents) step 0, director's plan step: "run `ontology-check` on your scope; stale → verify-first refresh per §5b before using any claim."
 
 Blocking semantics:
 - Stale verdict (claim check fails OR scoped diff since `surveyed_at_sha` non-empty) = **block**: the planning skill halts and runs a verify-first refresh; resumes only when the re-check passes. Refresh re-stamps `surveyed_at_sha: HEAD` after patching.

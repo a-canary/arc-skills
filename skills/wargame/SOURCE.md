@@ -16,5 +16,5 @@ assumptions.md) is from the video's demo.
 Adaptations for this environment:
 - Output rooted at `<repo>/.wargame/` with a `main.md` index (video used a
   free-form `Fables last week/` folder + `wargames/*.markdown`).
-- Wired to run standalone on a repo or as a follow-on to `/grill-me`.
+- Wired to run standalone on a repo or as a follow-on to a grilling session.
 - Executor-model tailoring routed through the local `claude-code-guide` agent.

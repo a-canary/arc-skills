@@ -62,8 +62,8 @@ The absolute path to today's waste file
      trim its `SKILL.md` or move rarely-needed bulk into a sub-file the model loads
      on demand (progressive disclosure); for `obvious_instruction`, cut the
      extreme-obvious filler; for `confusing_instruction`, disambiguate the directive.
-     The tally's `target` names the block (e.g. `skill:prototype` →
-     `~/.claude/skills/prototype/SKILL.md`); `injections` shows the multiplier.
+     The tally's `target` names the block (e.g. `skill:wayfinder` →
+     `~/.claude/skills/wayfinder/SKILL.md`); `injections` shows the multiplier.
      A 1k-token line cut from a body re-injected 180× saves ~180k tokens — usually
      the highest-leverage fix available, so weight these by `tokens_wasted`, which
      already reflects the multiplier. Do NOT cut load-bearing steps to save tokens;

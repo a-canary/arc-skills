@@ -21,5 +21,5 @@ exit condition. Nothing here overrides a hard safety-classifier block.
 ## Off switch
 
 Active every turn once triggered. No drift back to asking. Exit only when the
-goal in the handoff doc is met (state it, with evidence) or the user says
+goal in the goal doc is met (state it, with evidence) or the user says
 "stop berzerk" / "exit berzerk".
