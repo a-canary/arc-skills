@@ -31,8 +31,8 @@ for md in skills/*/SKILL.md skills/*/SETUP.md; do
 done
 
 # Rule 2 — 'claude --bg' in any SKILL.md / SETUP.md. The live install is
-# 'claude -p' (see bin/nightly-self-improve.sh, run from the repo by cron).
-# SKILL.md
+# 'claude -p' (see bin/nightly-self-improve.sh, run from the repo by cron,
+# which drives stages via `pi -p`). SKILL.md
 # claiming --bg is a falsified invocation shape — there is no such flag in
 # current `claude`; the real flag is `-p` / `--print` for headless mode.
 if matches=$(grep -rln 'claude --bg' skills/*/SKILL.md skills/*/SETUP.md 2>/dev/null) && [[ -n "$matches" ]]; then
