@@ -1,6 +1,6 @@
 ---
 name: schedule-hygiene
-description: Write cron / systemd-timer entries that fire hygiene skills on a schedule via `claude -p`. Detects scheduler, idempotent install.
+description: Pointer to the live hygiene rotation — the arc-agents hygiene-tick cron and the arc-skills nightly self-improve script. There is no installer to run.
 ---
 
 # schedule-hygiene

@@ -30,13 +30,13 @@ for md in skills/*/SKILL.md skills/*/SETUP.md; do
   fi
 done
 
-# Rule 2 — 'claude --bg' in any SKILL.md / SETUP.md. The live install is
-# 'claude -p' (see bin/nightly-self-improve.sh, run from the repo by cron).
-# SKILL.md
-# claiming --bg is a falsified invocation shape — there is no such flag in
-# current `claude`; the real flag is `-p` / `--print` for headless mode.
+# Rule 2 — 'claude --bg' in any SKILL.md / SETUP.md. SKILL.md claiming --bg is
+# a falsified invocation shape: there is no such flag in current `claude`; the
+# real headless flag is `-p` / `--print`. (The nightly rotation itself runs
+# `pi -p`, not claude — see bin/nightly-self-improve.sh, run from the repo by
+# cron.)
 if matches=$(grep -rln 'claude --bg' skills/*/SKILL.md skills/*/SETUP.md 2>/dev/null) && [[ -n "$matches" ]]; then
-  echo "FAIL: SKILL.md / SETUP.md contains 'claude --bg' but live install uses 'claude -p':" >&2
+  echo "FAIL: SKILL.md / SETUP.md contains 'claude --bg' — no such flag; headless is 'claude -p':" >&2
   echo "$matches" >&2
   fail=1
 fi
