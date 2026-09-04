@@ -43,7 +43,12 @@ Skills, plans, and designs share a small vocabulary of leading words — pattern
 - `task-priority` — UX > quality > security > scale > efficiency
 - `codemap` — deterministic (no-LLM) static-analysis snapshot → PlantUML + report: module shapes, seams, dead/untested/redundant code; diff before vs after a change
 
-**Engineering workflow** (matt-pocock)
+**Engineering workflow**
+- `to-spec`, `to-tickets` — conversation → spec → tracer-bullet tickets
+- `implement` — build from a spec or set of tickets
+- `paper-prototype` — hand-execute a design on live data before writing code
+- `wayfinder` — chart work too big for one session as a map of investigation tickets
+- `codebase-design` — deep-module vocabulary; deepening passes
 - `zoom-out`, `diagnose`
 - `write-a-skill`, `counsel`
 - `coding-standards` — default language-routing, strictness, diagnostics, and TDD rules for the arc software factory (explicit user/project instructions override)

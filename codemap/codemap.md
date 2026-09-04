@@ -1,5 +1,5 @@
 ---
-generated: 2026-08-25T09:52:59.884Z @73baa98
+generated: 2026-08-31T22:18:47.322Z @22f8031
 project: arc-skills
 ecosystems: [unknown]
 source_files: 21
@@ -19,7 +19,7 @@ tool: codemap
 ## Module shapes (LOC by module)
 _Modules = import communities (Louvain over the import graph)._
 
-- `skills` — 3954 LOC
+- `skills` — 3981 LOC
 - `bin` — 252 LOC
 - `arc-agents` — 12 LOC
 
@@ -83,9 +83,9 @@ _none detected_
 - `typing` — 1 imports
 - `pipeline` — 1 imports
 - `readline` — 1 imports
-- `path` — 1 imports
+- `node:assert` — 1 imports
 
-## Docs with frontmatter (89)
+## Docs with frontmatter (90)
 
 - `skills/adaptation-review/SKILL.md` — name=adaptation-review, description=>-, allowed-tools=Read, Write, Glob, Task, Bash
 - `skills/adaptation-review/agents/regression-reviewer.md` — name=regression-reviewer, description=Review the last N days of dream/token-wa, tools=Read, Glob, Grep, Bash, model=opus

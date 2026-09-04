@@ -52,7 +52,7 @@ repetitive context in a session (a 1k-token skill body re-injected 180× is ~180
 tokens) and the result-only passes are blind to it. Patterns: `repeated_instruction`,
 `instruction_review`. Each carries `kind` (skill_body / skill_listing / memory /
 system_reminder), `injections` (how many times it appeared), and `target` (the block
-label, e.g. `skill:prototype`).
+label, e.g. `skill:wayfinder`).
 
 The content-quality patterns (`repeated`, `low_value_content`, `instruction_review`):
 
@@ -185,10 +185,10 @@ adapter sees how often the block recurs. Examples:
 {
   "session_id": "...", "project": "...", "line": 12,
   "pattern": "repeated_instruction", "tool": "instruction",
-  "target": "skill:prototype", "injections": 179,
+  "target": "skill:wayfinder", "injections": 179,
   "tokens_wasted": 184586, "severity": "high",
-  "what_happened": "The prototype skill body (~1k tok) was re-injected 179x = ~185k tok.",
-  "cheaper": "Trim ~/.claude/skills/prototype/SKILL.md; move its bulk to a sub-file loaded on demand.",
+  "what_happened": "The wayfinder skill body (~1k tok) was re-injected 179x = ~185k tok.",
+  "cheaper": "Trim ~/.claude/skills/wayfinder/SKILL.md; move its bulk to a sub-file loaded on demand.",
   "estimated_tokens_saved": 120000
 }
 ```
