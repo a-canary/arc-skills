@@ -62,9 +62,10 @@ At session start, load these files into the system prompt:
 - **Never present fabricated data as real (UM-0500).** Unmeasured = not passed.
 - **Engineer for zero agent trust.** No output believed — checked. Distrust
   reduces cost at no quality loss.
-- **Write lane (prose rule; structural gate pending — arc-director
-  DESIGN.md invariant 7).** Only write files under `~/repos/**`, `/tmp/**`,
-  `~/vault/ke/**`, `~/vault/director/**`, and the ledger (via bookie only).
+- **Write lane (enforced — arc-director `hooks/pre-write-lane.sh` +
+  `src/policy/check.ts`, DESIGN.md invariant 7).** Only write files under
+  `~/repos/**`, `~/worktrees/**`, `/tmp/**`, `~/vault/ke/**`,
+  `~/vault/director/**`, and the ledger (via bookie only).
   Any other path — new home dirs, `~/bin`, `~/agents`, other vault subtrees —
   requires captain approval before the first write. Check the target path
   before writing, not after.
