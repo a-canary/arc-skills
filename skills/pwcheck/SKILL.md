@@ -1,6 +1,6 @@
 ---
 name: pwcheck
-description: Headless-Chromium page probe at ~/lib/e2e/pwcheck.mjs — goto a URL, optionally click through (tabs) and log in, print final URL + body sample. Use for E2E verification of client-side behavior curl can't see: SPA redirects, auth flows, post-login landing pages. Machine-local; verify `test -x ~/lib/e2e/pwcheck.mjs` first, bootstrap per §Bootstrap if absent.
+description: Headless-Chromium page probe — goto a URL, optionally click through (tabs) and log in, print final URL + body sample. Use for E2E verification of client-side behavior curl can't see: SPA redirects, auth flows, post-login landing pages. Script ships at scripts/pwcheck.mjs; needs a local playwright install (see §Bootstrap).
 ---
 
 # pwcheck
@@ -13,7 +13,7 @@ test in the target repo instead.
 ## Usage
 
 ```sh
-node ~/lib/e2e/pwcheck.mjs <url> [--wait ms] [--click "selector"] \
+node scripts/pwcheck.mjs <url> [--wait ms] [--click "selector"] \
   [--login EMAIL PASS] [--screenshot /tmp/shot.png]
 ```
 
@@ -29,23 +29,26 @@ node ~/lib/e2e/pwcheck.mjs <url> [--wait ms] [--click "selector"] \
 
 ```sh
 # Does a guest hit the sign-in page?
-node ~/lib/e2e/pwcheck.mjs https://app.ndivisible.com/ --wait 4000
+node scripts/pwcheck.mjs https://app.example.com/ --wait 4000
 
-# Full login journey (ndivisible QA creds live in pass)
-QEMAIL=$(pass ndivisible/qa-journey-login | grep email: | cut -d' ' -f2)
-QPASS=$(pass ndivisible/qa-journey-login | sed -n 1p)
-node ~/lib/e2e/pwcheck.mjs https://app.ndivisible.com/setup --wait 6000 \
-  --click 'button:has-text("Sign In")' --login "$QEMAIL" "$QPASS"
+# Full login journey. Pull credentials from your own secret store — never
+# inline them. Any command that prints the value to stdout works.
+EMAIL=$(your-secret-tool read qa/login-email)
+PASS=$(your-secret-tool read qa/login-password)
+node scripts/pwcheck.mjs https://app.example.com/setup --wait 6000 \
+  --click 'button:has-text("Sign In")' --login "$EMAIL" "$PASS"
 ```
 
 ## Gotchas
 
-- **`[Cloudflare Turnstile] Error: 600010` in the console is EXPECTED on this
-  host** — headless Chromium can't resolve `*.challenges.cloudflare.com` (shell
-  `getent` resolves fine; it's a browser-DNS quirk). It does NOT mean the flow
-  is broken: ndivisible sign-in returns 200 without a challenge (Turnstile is
-  register-only). Judge by final URL + API status, not console noise. Use a
-  real browser for genuine Turnstile verification.
+- **Bot-challenge console errors are often expected in headless.** Headless
+  Chromium frequently can't resolve challenge-provider hosts (e.g. Cloudflare
+  Turnstile's `[Cloudflare Turnstile] Error: 600010` when
+  `*.challenges.cloudflare.com` fails browser-side DNS, even though shell
+  `getent` resolves it). If the site only challenges on some routes, an
+  unchallenged route still returns 200 and the flow is fine. Judge by final URL
+  + API status, not console noise. Use a real browser to verify a challenge
+  genuinely works.
 - **Re-render race**: after `--click` switches a tab, React remounts the form.
   The tool waits 1200ms and fills `:visible` inputs to avoid writing into a
   stale hidden twin. If a fill silently no-ops, screenshot and look for an
@@ -54,15 +57,16 @@ node ~/lib/e2e/pwcheck.mjs https://app.ndivisible.com/setup --wait 6000 \
   `domcontentloaded` + fixed settle; don't "fix" it to networkidle.
 - Credentials via env/args only; never hardcode into scripts or commits.
 
-## Bootstrap (new host)
+## Bootstrap
+
+`scripts/pwcheck.mjs` ships with this skill and needs playwright resolvable at
+runtime. If it isn't already installed:
 
 ```sh
-mkdir -p ~/lib/e2e && cd ~/lib/e2e
-printf '{"name":"ndv-e2e","private":true,"type":"module","dependencies":{"playwright":"1.61.1"}}' > package.json
-npm i --no-fund --no-audit          # browsers: npx playwright install chromium (or reuse ~/.cache/ms-playwright)
-# copy pwcheck.mjs from this skill's host, or see the Usage section — it is ~60 lines
-chmod +x pwcheck.mjs
+printf '{"private":true,"type":"module","dependencies":{"playwright":"1.61.1"}}' > package.json
+npm i --no-fund --no-audit
+npx playwright install chromium   # skip if the browser cache is already populated
 ```
 
-Pin the playwright version to whatever `~/.cache/ms-playwright` build the host
-already has (mismatched versions trigger a full browser re-download).
+Pin the playwright version to whatever browser build the host's playwright
+cache already has — mismatched versions trigger a full browser re-download.
