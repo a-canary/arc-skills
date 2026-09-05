@@ -63,10 +63,15 @@ node scripts/pwcheck.mjs https://app.example.com/setup --wait 6000 \
 runtime. If it isn't already installed:
 
 ```sh
+cd skills/pwcheck/scripts   # from the repo root; deps must sit beside the script
 printf '{"private":true,"type":"module","dependencies":{"playwright":"1.61.1"}}' > package.json
 npm i --no-fund --no-audit
 npx playwright install chromium   # skip if the browser cache is already populated
 ```
+
+The bare `import "playwright"` resolves upward from the *script's* directory, not
+your working directory — installing into the CWD you happen to be in gives
+`ERR_MODULE_NOT_FOUND` when you later run the probe from anywhere else.
 
 Pin the playwright version to whatever browser build the host's playwright
 cache already has — mismatched versions trigger a full browser re-download.
