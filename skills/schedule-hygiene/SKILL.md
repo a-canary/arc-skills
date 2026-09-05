@@ -1,6 +1,6 @@
 ---
 name: schedule-hygiene
-description: Write cron / systemd-timer entries that fire hygiene skills on a schedule via `claude -p`. Detects scheduler, idempotent install.
+description: Pointer to the live hygiene rotation — the arc-agents hygiene-tick cron and the arc-skills nightly self-improve script. There is no installer to run.
 ---
 
 # schedule-hygiene
@@ -18,8 +18,8 @@ The live rotation:
   a worker; nothing here calls `claude -p` directly.
 - **`~/repos/arc-skills/bin/nightly-self-improve.sh`** — runs nightly at 03:00
   (cron invokes the repo path directly; no `~/.config` mirror), drives
-  `/dream` + `/token-waste` + `/adaptation-review` via `pi -p`
-  (headless, one-shot, output to `~/.cache/arc-hygiene/`).
+  `/dream` + `/token-waste` + `/gap-remediate` + `/adaptation-review` via
+  `pi -p` (headless, one-shot, output to `~/.cache/arc-hygiene/`).
 
 To change the schedule or rotation, edit the crontab or
 `~/.config/arc/hygiene.yaml` directly — there is no `schedule-hygiene`
