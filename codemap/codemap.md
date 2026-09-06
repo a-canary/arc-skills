@@ -1,8 +1,8 @@
 ---
-generated: 2026-08-25T09:52:59.884Z @73baa98
+generated: 2026-09-06T22:07:57.233Z @b719d2b
 project: arc-skills
 ecosystems: [unknown]
-source_files: 21
+source_files: 23
 test_files: 1
 graph_source: madge
 graph_analyzed: true
@@ -19,7 +19,7 @@ tool: codemap
 ## Module shapes (LOC by module)
 _Modules = import communities (Louvain over the import graph)._
 
-- `skills` — 3954 LOC
+- `skills` — 4268 LOC
 - `bin` — 252 LOC
 - `arc-agents` — 12 LOC
 
@@ -59,16 +59,16 @@ _none detected_
 
 ## Top external deps
 
+- `sys` — 9 imports
 - `pathlib` — 8 imports
-- `sys` — 8 imports
 - `json` — 7 imports
 - `argparse` — 5 imports
+- `re` — 5 imports
 - `datetime` — 4 imports
-- `re` — 4 imports
+- `tempfile` — 3 imports
+- `os` — 3 imports
 - `node:fs` — 3 imports
 - `fs` — 3 imports
-- `tempfile` — 2 imports
-- `os` — 2 imports
 - `node:child_process` — 2 imports
 - `node:os` — 2 imports
 - `node:path` — 2 imports
@@ -77,15 +77,15 @@ _none detected_
 - `extract` — 2 imports
 - `importlib.util` — 1 imports
 - `subprocess` — 1 imports
+- `html.parser` — 1 imports
 - `bun:test` — 1 imports
 - `node:url` — 1 imports
 - `pkg` — 1 imports
 - `typing` — 1 imports
 - `pipeline` — 1 imports
 - `readline` — 1 imports
-- `path` — 1 imports
 
-## Docs with frontmatter (89)
+## Docs with frontmatter (92)
 
 - `skills/adaptation-review/SKILL.md` — name=adaptation-review, description=>-, allowed-tools=Read, Write, Glob, Task, Bash
 - `skills/adaptation-review/agents/regression-reviewer.md` — name=regression-reviewer, description=Review the last N days of dream/token-wa, tools=Read, Glob, Grep, Bash, model=opus
@@ -94,6 +94,7 @@ _none detected_
 - `skills/apply-mission/SKILL.md` — name=apply-mission, description=Gap-analyse ALL axes in ~/vault/missions
 - `skills/auto-oversight/SKILL.md` — name=auto-oversight, description=One headless oversight pass over the NEX
 - `skills/berzerk/SKILL.md` — name=berzerk, description=>
+- `skills/blockdoc/SKILL.md` — name=blockdoc, description=Edit long nested files (HTML, JSON, YAML
 - `skills/blog/SKILL.md` — name=blog, description=Pre-PR. Draft a blog entry and write it 
 - `skills/cam/SKILL.md` — name=cam, description=>-
 - `skills/capacity/SKILL.md` — name=capacity, description=Shared-capacity ledger + advisory router
@@ -126,4 +127,3 @@ _none detected_
 - `skills/fable-mode/SKILL.md` — name=fable-mode, description=>
 - `skills/feedback/SKILL.md` — name=feedback, description=Injects structured user feedback into a 
 - `skills/fresh-deploy-friction/SKILL.md` — name=fresh-deploy-friction, description=Spin up a throwaway fresh-user container
-- `skills/gap-remediate/SKILL.md` — name=gap-remediate, description=Nightly CAM adaptor over the agent knowl, allowed-tools=Read, Write, Edit, Glob, Grep, Bash
