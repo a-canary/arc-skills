@@ -61,6 +61,18 @@ if [[ -d .claude/worktrees ]] && compgen -G '.claude/worktrees/*/.git' >/dev/nul
   fail=1
 fi
 
+# Rule 5 — schedule-hygiene's frontmatter description still advertising the
+# installer that its own body says does not exist. Pattern source: 122d2c0
+# rewrote the body to a pointer but left the description selling "systemd-timer
+# entries / Detects scheduler, idempotent install". The description is what the
+# skill loader lists, so the fiction stayed live in the most-read field.
+if desc=$(sed -n '/^description:/p' skills/schedule-hygiene/SKILL.md 2>/dev/null) \
+   && grep -qiE 'systemd-timer entries|idempotent install|detects scheduler' <<<"$desc"; then
+  echo "FAIL: skills/schedule-hygiene/SKILL.md description advertises an installer, but the body says there is none:" >&2
+  echo "  $desc" >&2
+  fail=1
+fi
+
 if [[ $fail -eq 0 ]]; then
   echo "ok: no doc-drift patterns found in skills/*/SKILL.md / SETUP.md"
 fi
