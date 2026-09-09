@@ -1,6 +1,6 @@
 ---
 name: pwcheck
-description: Headless-Chromium page probe at ~/lib/e2e/pwcheck.mjs — goto a URL, optionally click through (tabs) and log in, print final URL + body sample. Use for E2E verification of client-side behavior curl can't see: SPA redirects, auth flows, post-login landing pages. Machine-local; verify `test -x ~/lib/e2e/pwcheck.mjs` first, bootstrap per §Bootstrap if absent.
+description: "Headless-Chromium page probe at ~/lib/e2e/pwcheck.mjs — goto a URL, optionally click through (tabs) and log in, print final URL + body sample. Use for E2E verification of client-side behavior curl can't see: SPA redirects, auth flows, post-login landing pages. Machine-local; verify `test -x ~/lib/e2e/pwcheck.mjs` first, bootstrap per §Bootstrap if absent."
 ---
 
 # pwcheck
