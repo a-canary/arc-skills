@@ -24,9 +24,9 @@ Keys live in the GPG `pass` store. Never inline; pull at use: `pass show api/<pr
 
 All chat providers are OpenAI-compatible (`POST <base>/chat/completions`) except anthropic (native Messages API).
 
-## Live doc (refreshed hourly by cron)
+## Live doc (refreshed every 2 hours by cron)
 
-`~/vault/api/PROVIDERS.md` — per-provider model tables: availability, warm status, context length, intelligence score, memory-notes, plus a chat-smoke line per provider. Refreshed hourly by cron running `refresh.ts` (this skill dir); see `SETUP.md`.
+`~/vault/api/PROVIDERS.md` — per-provider model tables: availability, warm status, context length, intelligence score, memory-notes, plus a chat-smoke line per provider. Refreshed every 2 hours by cron running `refresh.ts` (this skill dir); see `SETUP.md`.
 
 The doc is GENERATED. Source of truth is `~/vault/api/models.json` (watchlist, intel scores, notes, optional `probe_model`). To add a model, bank a note, or record a score: edit `models.json`, then `bun ~/repos/arc-skills/skills/api-providers/refresh.ts`. Intel = curated score (Artificial Analysis index or internal ProgramBench) — filled by hand when measured, never guessed.
 

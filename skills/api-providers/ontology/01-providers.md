@@ -18,5 +18,5 @@ Public API providers. Keys live in the GPG `pass` store — never inline; pull a
 
 - All chat providers are OpenAI-compatible (`POST <base>/chat/completions`) **except anthropic** (native Messages API).
 - No LiteLLM / multi-key proxies for public providers — direct API only; route via pipeliner/config (USER.md doctrine).
-- Live per-model status: `~/vault/api/PROVIDERS.md` (generated hourly by `refresh.ts`; SoT = `~/vault/api/models.json`).
+- Live per-model status: `~/vault/api/PROVIDERS.md` (generated every 2 hours by `refresh.ts`; SoT = `~/vault/api/models.json`).
 - A provider's `chat smoke` line in PROVIDERS.md is the trust signal: red smoke ⇒ every model in that provider is unusable, regardless of list-endpoint status.
