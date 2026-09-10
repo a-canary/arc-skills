@@ -95,11 +95,11 @@ Skills, plans, and designs share a small vocabulary of leading words — pattern
 ## Install
 
 ```bash
-# global (all skills)
-npx skills add a-canary/arc-skills
+# global (all skills) — non-interactive (bare command prompts; non-TTY cancels)
+npx skills add a-canary/arc-skills -g -y --agent "*"
 
 # project-scoped
-npx skills add a-canary/arc-skills --project
+npx skills add a-canary/arc-skills --project -y --agent "*"
 ```
 
 Skills with a `SETUP.md` have opt-in side-effects (hooks, cron). Run each skill interactively to trigger those — or skip `SETUP.md` entirely and use the skill as pure markdown.
