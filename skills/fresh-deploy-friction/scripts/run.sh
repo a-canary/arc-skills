@@ -37,7 +37,9 @@ case "$cmd" in
       b="$(basename "$repo")"
       docker exec -u dev "$NAME" git config --global --add safe.directory "/src/$b" || true
     done
-    echo "up: $NAME  (repos at /src, env: ${envs[*]:-none})"
+    # never echo forwarded secret values — names only
+    masked=(); for e in "${envs[@]}"; do masked+=( "${e%%=*}=***" ); done
+    echo "up: $NAME  (repos at /src, env: ${masked[*]:-none})"
     ;;
 
   exec)
