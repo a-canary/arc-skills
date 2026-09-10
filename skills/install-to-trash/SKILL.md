@@ -87,7 +87,8 @@ install-to-trash uninstall
 ## Install procedure
 
 ```
-1. Verify `to-trash` is on PATH (install if missing — see trash-retired-files skill)
+1. Verify `to-trash` is on PATH; install if missing:
+   `install -m755 bin/to-trash ~/.local/bin/to-trash` (arc-skills repo)
 2. Write intercept-rm.sh; chmod +x
 3. Back up settings.json → settings.json.bak.<ts>
 4. Merge PreToolUse entry (dedupe by command path)

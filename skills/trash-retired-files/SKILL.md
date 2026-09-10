@@ -5,7 +5,24 @@ description: Safe, reversible file GC. A semantic reason drives scope — what c
 
 # trash-retired-files
 
-Reversible garbage collection for codebases. Files go to `~/trash/`, not `/dev/null`.
+Reversible garbage collection for codebases. Files go to a trash root, not `/dev/null`.
+
+## Trash root (write-lane aware)
+
+```
+<repo-root>/.trash/    # when the path being trashed is inside a git repo or worktree
+/tmp/trash/            # otherwise
+```
+
+**Not the home trash dir.** The arc write-lane gate (arc-director
+`src/policy/check.ts`, allowlist `~/repos/**`, `~/worktrees/**`, `/tmp/**`,
+`~/vault/ke/**`, `~/vault/director/**`) rejects every `mv` into a home-level
+trash dir, which made this skill unrunnable for workers. Both roots above are
+inside the lane, so no human-gate approval is needed. Add `.trash/` to the
+repo's `.gitignore` on first use.
+
+Trashing from inside a worktree lands in that worktree's `.trash/`; the worktree
+outliving the trash is fine — restore reads the recorded original path.
 
 ## Core principle
 
@@ -34,7 +51,7 @@ basename collisions (e.g. two `CONTEXT.md` files in different dirs) stay
 distinguishable and restores stay traceable:
 
 ```
-~/trash/<unix-ts>__<relative-path>/
+<trash-root>/<unix-ts>__<relative-path>/
 ```
 
 `<relative-path>` is the path of the trashed file relative to the repo root
@@ -42,9 +59,9 @@ distinguishable and restores stay traceable:
 with `/` rewritten to `--`. Examples:
 
 ```
-~/trash/1782317031__contexts--encounters--CONTEXT.md/
-~/trash/1782317031__contexts--tavern--CONTEXT.md/
-~/trash/1782317031__PRD-v1.md/
+.trash/1782317031__contexts--encounters--CONTEXT.md/
+.trash/1782317031__contexts--tavern--CONTEXT.md/
+.trash/1782317031__PRD-v1.md/
 ```
 
 `__` separates the timestamp from the path; `--` separates path components.
@@ -83,15 +100,15 @@ first — losing recoverable content. Observed in
 
 ## Retention
 
-Default: **30 days** in `~/trash/`. After that, a separate cron (see `schedule-hygiene`) hard-deletes if disk pressure exists.
+Default: **30 days** in the trash root. After that, a separate cron (see `schedule-hygiene`) hard-deletes if disk pressure exists.
 
 
 ## Log format
 
-Append a JSONL record per move to `~/trash/.log.jsonl`:
+Append a JSONL record per move to `<trash-root>/.log.jsonl`:
 
 ```json
-{"ts":"2026-05-22T20:59:00Z","action":"trash","path":"src/legacy/old.ts","reason":"replaced by src/new.ts","trashed_to":"~/trash/1779389812__src--legacy--old.ts","refs_updated":3}
+{"ts":"2026-05-22T20:59:00Z","action":"trash","path":"src/legacy/old.ts","reason":"replaced by src/new.ts","trashed_to":".trash/1779389812__src--legacy--old.ts","refs_updated":3}
 ```
 
 Sweep summaries get their own line:
@@ -105,7 +122,7 @@ Sweep summaries get their own line:
 - Refuse `--reason ""` or missing reason
 - Refuse paths inside `.git/`, `node_modules/`, or matching `LICENSE*`
 - Check `lsof` on the path before moving (skip with `--force`)
-- Never recurse into `~/trash/` itself
+- Never recurse into the trash root itself
 
 ## Reference implementation
 
@@ -141,13 +158,16 @@ done
 # Sanitize: / → -- so the trash dir name is a single valid filesystem component
 rel_sanitized="${rel//\//--}"
 
-mkdir -p ~/trash
+# Trash root: repo-local (inside the write-lane) when the path is in a repo,
+# else /tmp. $dir is the repo root found above, or "/" when outside any repo.
+if [[ "$dir" != "/" ]]; then trash="$dir/.trash"; else trash=/tmp/trash; fi
+mkdir -p "$trash"
 ts=$(date +%s)
-dest=~/trash/${ts}__${rel_sanitized}
+dest=$trash/${ts}__${rel_sanitized}
 # Collision-guard for identical full paths (hardlink duplicates)
 n=2
 while [[ -e "$dest" ]]; do
-  dest=~/trash/${ts}__${rel_sanitized}-${n}
+  dest=$trash/${ts}__${rel_sanitized}-${n}
   n=$((n+1))
 done
 
@@ -159,7 +179,7 @@ if $dry; then
 fi
 $force || ! lsof "$path" >/dev/null 2>&1 || { echo "in use" >&2; exit 1; }
 mv "$path" "$dest"
-echo "{\"ts\":\"$(date -u +%FT%TZ)\",\"action\":\"trash\",\"path\":\"$path\",\"reason\":\"$reason\",\"trashed_to\":\"$dest\"}" >> ~/trash/.log.jsonl
+echo "{\"ts\":\"$(date -u +%FT%TZ)\",\"action\":\"trash\",\"path\":\"$path\",\"reason\":\"$reason\",\"trashed_to\":\"$dest\"}" >> "$trash/.log.jsonl"
 echo "trashed: $dest"
 ```
 
@@ -167,14 +187,14 @@ echo "trashed: $dest"
 
 ```bash
 # 1. Find it
-ls ~/trash/ | grep <name-fragment>
+ls .trash/ | grep <name-fragment>      # or /tmp/trash/
 
 # 2. Move it back. <rel-path> is the original relative path
 #    (trash dir name with __<ts>__ prefix stripped and -- restored to /):
-mv ~/trash/<ts>__<rel-with-double-dashes> <rel-path>
+mv .trash/<ts>__<rel-with-double-dashes> <rel-path>
 
 # Example: 1782317031__contexts--encounters--CONTEXT.md -> contexts/encounters/CONTEXT.md
-mv ~/trash/1782317031__contexts--encounters--CONTEXT.md contexts/encounters/CONTEXT.md
+mv .trash/1782317031__contexts--encounters--CONTEXT.md contexts/encounters/CONTEXT.md
 
 # 3. Revert doc updates if needed
 git diff HEAD~ -- '<doc>'
