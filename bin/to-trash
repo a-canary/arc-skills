@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# to-trash — reversible single-item trash with reason sidecar.
+# Spec: skills/to-trash/SKILL.md
+#   to-trash <path> --reason "<why>"
+#   to-trash <trash-dir-name> --restore   [--root <trash-root>]
+#
+# Trash root is write-lane aware (arc-director src/policy/check.ts): the repo's
+# own .trash/ when the path is inside a git repo or worktree, else /tmp/trash.
+# A home-level trash dir is OUTSIDE the lane and blocks every worker.
+set -euo pipefail
+
+# Repo root for $1, or "" when outside any repo.
+# -e not -d: in git worktrees .git is a *file* pointing at the real gitdir.
+repo_root() {
+  local dir; dir="$(cd "$(dirname "$1")" && pwd)"
+  while [[ "$dir" != "/" ]]; do
+    [[ -e "$dir/.git" ]] && { printf '%s' "$dir"; return; }
+    dir="$(dirname "$dir")"
+  done
+}
+
+trash_root_for() {
+  local r; r="$(repo_root "$1")"
+  if [[ -n "$r" ]]; then printf '%s' "$r/.trash"; else printf '/tmp/trash'; fi
+}
+
+if [[ "${2:-}" == "--restore" ]]; then
+  root="${4:-$(trash_root_for "$PWD/x")}"
+  src="$root/$1"
+  [[ -d "$src" ]] || { echo "no trash dir: $src" >&2; exit 1; }
+  from=$(sed -n 's/^from: //p' "$src/reason.md" | head -1)
+  [[ -n "$from" ]] || { echo "reason.md missing 'from:' line" >&2; exit 1; }
+  item="$(ls -A "$src" | grep -v '^reason\.md$')"
+  [[ -n "$item" && -e "$src/$item" ]] || { echo "trash dir has no item" >&2; exit 1; }
+  mkdir -p "$(dirname "$from")"
+  mv "$src/$item" "$from"
+  rm -rf "$src"
+  echo "restored: $src/$item -> $from"
+  exit 0
+fi
+
+path="${1:?usage: to-trash <path> --reason \"<why>\"}"; shift
+reason=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --reason) reason="${2:?--reason needs a value}"; shift 2 ;;
+    *) echo "unknown arg: $1" >&2; exit 1 ;;
+  esac
+done
+
+[[ -e "$path" ]] || { echo "no such path: $path" >&2; exit 1; }
+ap="$(realpath "$path")"
+case "$ap" in
+  "$HOME"/vault/*) echo "refusing: under ~/vault/" >&2; exit 1 ;;
+  */.git|*/.git/*) echo "refusing: inside .git" >&2; exit 1 ;;
+esac
+
+TRASH="$(trash_root_for "$ap")"
+name="$(basename "$ap")"
+ts=$(date +%s)
+dest="$TRASH/${ts}_${name}"
+n=1
+while [[ -e "$dest" ]]; do dest="$TRASH/${ts}_${name}_${n}"; n=$((n+1)); done
+mkdir -p "$dest"
+mv "$ap" "$dest/$name"
+{
+  echo "# to-trash"
+  echo "from: $ap"
+  echo "when: $(date -Iseconds)"
+  echo "by: $(whoami)@$(hostname)"
+  echo "reason: ${reason:-<none>}"
+} > "$dest/reason.md"
+echo "trashed: $ap -> $dest"
