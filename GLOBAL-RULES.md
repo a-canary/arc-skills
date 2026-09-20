@@ -89,3 +89,10 @@ At session start, load these files into the system prompt:
   (http://home-lab-1:8080/review/<file>; artifacts in
   ~/vault/director/reviews/), linked from a human-gate ledger row
   (bookie create --kind task --type HITL). Never "open this file path".
+- **Push early, push often.** Local divergence from origin creates merge
+  conflicts and feature regression risk. Push feature branches to origin
+  immediately, not at the end of development.
+- **Check branches before building.** Before starting new development,
+  check `gh branch list` and local worktrees for in-progress work that
+  might overlap or collide. Never build in isolation from the team's
+  active branches.

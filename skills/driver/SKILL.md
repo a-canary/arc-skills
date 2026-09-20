@@ -37,6 +37,8 @@ For multi-repo specs, the driver creates worktrees for each affected repo and sp
 
 Each tick: **gap-analysis** (query beads for open/in_progress issues; open → delegate via harness task system; none + inflight → sleep; none at all → idle) → **await harness task notifications** → **heartbeat** (5 min; backstop cron wakes idle).
 
+**Idle backstop:** Driver is event-driven, not polling — `idle` sleeps until the next task notification. A cron backstop (overseer) wakes a fresh tick regardless, so a dropped notification can't silently stall the mission.
+
 **Communication:** Delegate via bg_delegate or bg_run_pi_attested. Workers are ephemeral — report status on completion. No file-based event bus. Update beads issue status based on task results.
 
 **Worker crash handling:** If worker crashes/infinite-loops/stalls, overseer detects and notifies driver. Driver spawns fresh worker (tasks are idempotent — safe to re-run from scratch).
@@ -49,9 +51,10 @@ Each tick: **gap-analysis** (query beads for open/in_progress issues; open → d
 
 **Task result handling (never relax):**
 - Task completed → evidence paths must exist, else reject + re-queue → dispatch `/qa`
-- QA passed (non-production) → close beads issue. **Production → do NOT close at merge**: deploy, re-dispatch `/qa` against LIVE surface; only post-deploy pass closes the issue
+- QA passed (non-production) → close beads issue. **Production → do NOT close at merge**: merge per on-task-verified binding, deploy, re-dispatch `/qa` against LIVE surface (hard-merge §6) with `phase:post-deploy`; only that post-deploy pass closes the issue (critical/truthfulness finding → rollback, re-gap)
 - QA failed → check bypass triggers; retry or new slice
 - Task failed → mark beads issue blocked; re-gap or surface to director via beads
+- User feedback → batch by (feature, version, resource); at threshold → `/qa`, never a direct task
 
 State (beads issue status): open · in_progress · blocked · deferred · closed
 
