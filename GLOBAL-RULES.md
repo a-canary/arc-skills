@@ -50,6 +50,9 @@ At session start, load these files into the system prompt:
 - **Subagents return distilled findings only** — conclusion + refs, under
   ~500 tokens.
 - **Never print secret values.** Test presence only: `[ -n "$KEY" ] && echo set`.
+  When forwarding env vars to subprocesses, echo the variable **name** only,
+  never the value. Never log, echo, or write secret values to pane output,
+  logs, beads issues, or tool results — names only.
 - **Never bake operator identity into shared artifacts.** Generic roles only.
 - **Install only first-party + self-authored.** Reject UGC plugins.
 - **Configs and rules live in a git repo, symlinked into place.**

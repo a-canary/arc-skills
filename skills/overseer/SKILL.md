@@ -17,6 +17,7 @@ For each herdr pane:
 1. Capture recent output (tail 50 lines)
 2. Compare to previous state (diff stored in `/tmp/overseer-state/`)
 3. Grep for error patterns and problem indicators
+4. If pane claims to run a service: use `pwcheck` (arc-skills/overseer/lib) to probe actual endpoint health. If pwcheck unavailable, fall back to OS tools (`curl`, `ss`, `systemctl status`) — don't trust pane output text alone
 
 ## Problem detection
 
@@ -66,3 +67,9 @@ If errors indicate a bug in an owned service (e.g., arc-llm-proxy):
 - `/tmp/overseer-state/<pane-id>.txt` — last observed output per pane
 - `~/vault/director/overseer.log` — action log
 - `~/vault/director/.bd/` — escalation beads
+
+## Resilience
+
+- Overseer and herdr.pane.repair run on **private-direct-llm (V100)** by default — allows them to detect and repair other tool stack issues as long as V100 is up.
+- If V100 is down: use public llm-hosting driver to fix V100 using configured fallback model (e.g., `ali/qwen3.8-max`). Model names are configurable, never hardcoded.
+- On dependency failure: attempt repair → restore from backup → recover data → escalate to director.
