@@ -50,6 +50,9 @@ At session start, load these files into the system prompt:
 - **Subagents return distilled findings only** — conclusion + refs, under
   ~500 tokens.
 - **Never print secret values.** Test presence only: `[ -n "$KEY" ] && echo set`.
+  When forwarding env vars to subprocesses, echo the variable **name** only,
+  never the value. Never log, echo, or write secret values to pane output,
+  logs, beads issues, or tool results — names only.
 - **Never bake operator identity into shared artifacts.** Generic roles only.
 - **Install only first-party + self-authored.** Reject UGC plugins.
 - **Configs and rules live in a git repo, symlinked into place.**
@@ -86,3 +89,10 @@ At session start, load these files into the system prompt:
   (http://home-lab-1:8080/review/<file>; artifacts in
   ~/vault/director/reviews/), linked from a human-gate ledger row
   (bookie create --kind task --type HITL). Never "open this file path".
+- **Push early, push often.** Local divergence from origin creates merge
+  conflicts and feature regression risk. Push feature branches to origin
+  immediately, not at the end of development.
+- **Check branches before building.** Before starting new development,
+  check `gh branch list` and local worktrees for in-progress work that
+  might overlap or collide. Never build in isolation from the team's
+  active branches.
