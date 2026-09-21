@@ -96,3 +96,12 @@ At session start, load these files into the system prompt:
   check `gh branch list` and local worktrees for in-progress work that
   might overlap or collide. Never build in isolation from the team's
   active branches.
+- **Monitoring backoff (deploy → stable).** All implementations and
+  deployments use a monitoring backoff scheme. New deploys (rules, projects,
+  features, services) are monitored heavily in short cycles. As positive
+  functionality is proven, monitoring relaxes to longer cycles or smaller
+  samples. Low usage or lack of evidence is NOT a backoff signal — only
+  clear positive functionality triggers backoff. This applies to the tool
+  stack, all repos, and all future products. Monitoring on stable products
+  floors at a weekly grep audit, no less. Monitoring is only disabled for
+  deprecated projects pending cleanup.
