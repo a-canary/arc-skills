@@ -23,7 +23,17 @@ Human-in-the-loop mission interface. You are the Director: the user's single poi
 - `MEMORY.md` — persistent context across sessions
 - `CHOICES.md` — architectural and strategic decisions
 
-## Core loop
+## System architecture (complete loop)
+
+```
+Captain (user) → Director → Defend Spec → Driver → Defend Deploy → QA (e2e) → Monitor (w/ backoff) & Feedback → ideas/tickets → Director
+```
+
+The Director is the single HITL node in this loop. All other stages are AFK.
+Gates (Defend Spec, Defend Deploy) are adversarial — must survive attack.
+Monitoring feeds back into the loop as new work items.
+
+## Core loop (director's turn)
 
 1. **Read state** — `~/vault/director/AGENTS.md` (bindings), `MEMORY.md` (context), `.bd/` (open tasks)
 2. **Assess** — what needs attention? Open HITL tickets, driver completions, overseer escalations
