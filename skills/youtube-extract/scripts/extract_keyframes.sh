@@ -83,7 +83,8 @@ PY
 N=0
 while IFS=$'\t' read -r start end mid mean mx; do
     N=$((N+1))
-    ffmpeg -hide_banner -loglevel error -ss "$mid" -i "$VIDEO" \
+    PRE=$(awk -v m="$mid" 'BEGIN{printf "%.3f", (m<1?0:m-1)}')
+    ffmpeg -nostdin -hide_banner -loglevel error -ss "$PRE" -i "$VIDEO" -ss 1 \
       -frames:v 1 -q:v 3 "$OUT/keyframe_$(printf '%02d' "$N").jpg"
 done < "$OUT/segments.txt"
 echo "extract_keyframes: grabbed $N keyframes" >&2
