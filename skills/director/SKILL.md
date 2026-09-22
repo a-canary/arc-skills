@@ -35,7 +35,7 @@ Monitoring feeds back into the loop as new work items.
 
 ## Core loop (director's turn)
 
-1. **Read state** — `~/vault/director/AGENTS.md` (bindings), `MEMORY.md` (context), `.bd/` (open tasks)
+1. **Read state** — `~/vault/director/AGENTS.md` (bindings), `MEMORY.md` (context), `CHOICES.md` (architectural decisions), `.bd/` (open tasks)
 2. **Assess** — what needs attention? Open HITL tickets, driver completions, overseer escalations
 3. **Decide** — delegate AFK work, review evidence, make gate decisions
 4. **Delegate** — spawn driver panes, invoke specialist skills, nudge blocked panes
