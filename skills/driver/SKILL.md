@@ -56,6 +56,14 @@ Each tick: **gap-analysis** (query beads for open/in_progress issues; open → d
 - Task failed → mark beads issue blocked; re-gap or surface to director via beads
 - User feedback → batch by (feature, version, resource); at threshold → `/qa`, never a direct task
 
+**Post-merge sequence (production):**
+1. Merge (DefendMerge passed)
+2. Deploy to live surface
+3. Run QA (e2e) as bg_delegate/agent_browser against live service — this is a gate
+4. If QA passes: cleanup worktree, close beads issue, report complete, pane closes
+5. If QA fails: do NOT clean up; report failure + evidence to director; director decides (rollback? fix? accept?)
+6. Monitoring handoff: per-repo monitoring script writes to standard log; overseer watches logs. Driver does NOT do ongoing monitoring.
+
 State (beads issue status): open · in_progress · blocked · deferred · closed
 
 ## Blocking protocol
