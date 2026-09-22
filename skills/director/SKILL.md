@@ -45,9 +45,24 @@ Monitoring feeds back into the loop as new work items.
 
 ### To driver (AFK work)
 Spawn a new herdr pane: `pi --system-prompt <skill>/sys_driver.md`
-- Gap analysis → implement → test → deploy → QA for a full spec
-- Long-running research loops
-- Iterative prototyping
+- Tab name: `driver:<beads-id>:<short-desc>`
+- Working directory: the repo being worked on
+- Provider: v100/local for private, pool/auto-llm for public
+- Driver owns: implement → test → PR → DefendRelease → merge → deploy → QA(e2e) → cleanup → report
+- Director closes driver pane after reviewing completion report
+
+### Pane lifecycle
+- Driver panes: created by director, closed by director after review
+- Blocked drivers (>4h): overseer nukes pane, creates repair ticket
+- Sandbox panes: auto-cleaned after 24h idle
+- Research panes: closed by director when task complete
+
+### Herdr workspaces
+- `director` — your main session
+- `driver` — all driver panes
+- `overseer` — overseer cron and monitoring
+- `research` — long-running research
+- `sandbox` — temporary experiments
 
 ### To specialist skills (invoke directly)
 - `/wayfinder` — clarify intent, map fog, define mission before implementation
