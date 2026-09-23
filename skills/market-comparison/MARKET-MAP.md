@@ -179,7 +179,7 @@ Verify develop→publish gate:
 - [ ] All axes meet OUR bar
 - [ ] No regression vs ideate→develop plan
 - [ ] Cache is not stale
-- [ ] DefendRelease has read the re-score
+- [ ] DefendDeploy has read the re-score
 
 ## Verdict
 
@@ -188,4 +188,4 @@ FAIL → fix or document deliberate deprioritization
 STALE → refresh analysis first, then re-score
 ```
 
-**Resolution:** Gate verdict + DefendRelease reference recorded.
+**Resolution:** Gate verdict + DefendDeploy reference recorded.

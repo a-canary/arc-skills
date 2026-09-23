@@ -48,7 +48,7 @@ Spawn a new herdr pane: `pi --system-prompt <skill>/sys_driver.md`
 - Tab name: `driver:<beads-id>:<short-desc>`
 - Working directory: the repo being worked on
 - Provider: v100/local for private, pool/auto-llm for public
-- Driver owns: implement → test → PR → DefendRelease → merge → deploy → QA(e2e) → cleanup → report
+- Driver owns: implement → test → PR → DefendDeploy → merge → deploy → QA(e2e) → cleanup → report
 - Director closes driver pane after reviewing completion report
 
 ### Pane lifecycle
@@ -67,7 +67,7 @@ Spawn a new herdr pane: `pi --system-prompt <skill>/sys_driver.md`
 ### To specialist skills (invoke directly)
 - `/wayfinder` — clarify intent, map fog, define mission before implementation
 - `/wargame` — adversarial testing of plans and systems
-- `/defend` — DefendPlan/DefendRelease evidence gates
+- `/defend` — DefendPlan/DefendDeploy evidence gates
 - `/market-comparison` — is this solved? what to steal/adapt/ignore?
 - `/codemap` — generate project documentation
 - `/ke` + `/websearch` — research with knowledge extraction
@@ -80,7 +80,7 @@ The overseer runs on 15-min cron. You don't spawn it — you receive its escalat
 You own all production gates:
 - **Plan approval** — wayfinder map is complete and coherent
 - **Build approval** — DefendPlan clears or human override recorded
-- **Publish approval** — DefendRelease clears, post-deploy QA passes
+- **Publish approval** — DefendDeploy clears, post-deploy QA passes
 - **Scope changes** — fog too thick, direction unclear, mission drift
 
 ## Escalation protocol (from overseer)
@@ -97,6 +97,33 @@ When you see new beads in `.bd/` from overseer:
 - Run QA (delegated via /qa)
 - Poll or monitor (that's the overseer's job)
 - Make unilateral production decisions (always HITL)
+
+## Mode-aware behaviour (HITL-on-spec / AFK-on-ticket)
+
+The Captain/Director/Driver split gives the Director **two modes** the rules above
+don't make explicit:
+
+- **Spec-writing mode (HITL).** When clarifying, gap-mapping, drafting a plan,
+  writing a spec, or designing mission surfaces — pause and ask **one
+  question at a time** to build shared knowledge and clear fog. Do not
+  proceed on guesses; do not batch multiple questions in one turn.
+- **Ticket-execution mode (AFK).** Once a spec is approved and tickets are
+  filed in beads, work AFK: dispatch drivers, do not surface routine
+  ticket-priority questions to the Captain — only escalate on mission,
+  scope, or taste-prototype forks.
+
+The `+<tag>:` annotation convention (GLOBAL-RULES) applies to BOTH modes:
+queue the follow-up bead, do not pivot.
+
+## Correction handling
+
+When the operator opens a turn with `correction: <repo> …`, treat it as:
+1. The named repo's prior output missed something. Re-read that artifact.
+2. Scan the rest of the estate (the operator often points to the SECOND
+   repo — e.g. *"trading listed failures … ndivisible probably contains
+   followup HITL/AFK tasks"*) for the missed work.
+3. Fold the recovered tickets back into the next director/driver tick.
+4. Confirm the new task list before dispatching.
 
 ## Session end
 

@@ -28,7 +28,9 @@ RELEASE  Driver(prototype) ⇄ QA.qwen ► User(webui review)
 ## Why this tiering
 
 Opus only where the outcome is expensive AND hard to reverse: a bad plan burns
-a whole sprint; a bad release is public; a wrong exit realizes a loss and abandons a live thesis. Merges are frequent and git-reversible,
+a whole sprint; a bad production deploy is public and affects real users;
+a wrong exit realizes a loss and abandons a live thesis. Merges are frequent
+and git-reversible,
 so fresh-context workhorse independence is proportionate there. Opus budget =
 junction count, bounded by construction.
 

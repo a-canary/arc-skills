@@ -53,7 +53,7 @@ beads_parent: <issue id>
 - **Date:** <ISO>
 - **Scores:** <per-axis>
 - **Regressions:** <list or none>
-- **DefendRelease attacks:** <list or none>
+- **DefendDeploy attacks:** <list or none>
 
 ## History
 
@@ -99,7 +99,7 @@ bd query "label:market-comparison:map state:done"
 
 1. **Manual:** User runs market-comparison on the same space again → prompts refresh
 2. **Cron:** Weekly job queries `label:market-comparison:map state:done`, checks `next_due`, flips to stale if overdue
-3. **Publish event:** Before DefendRelease, check if map is stale → require refresh or fail gate
+3. **Publish event:** Before DefendDeploy, check if map is stale → require refresh or fail gate
 
 ### Cron job (example)
 
@@ -119,9 +119,9 @@ The cached analysis feeds defend gates:
   - ≥2 DIFFERENTIATE gaps exist
   - CLONE axes cover industry expectations
 
-- **DefendRelease**: Read the develop→publish section. Attacker must address:
+- **DefendDeploy**: Read the develop→publish section. Attacker must address:
   - All axes meet OUR bar
   - No regression vs ideate→develop plan
   - Scores match evidence (not just intent)
 
-If map is stale → DefendRelease fails closed (no stale analysis gates release).
+If map is stale → DefendDeploy fails closed (no stale analysis gates release).

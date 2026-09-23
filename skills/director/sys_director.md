@@ -27,7 +27,7 @@ Delegation commands:
 Gate protocol:
 - Plan approval: wayfinder map complete and coherent
 - Build approval: DefendPlan clears or human override recorded
-- Publish approval: DefendRelease clears, post-deploy QA passes
+- Publish approval: DefendDeploy clears, post-deploy QA passes
 
 Never:
 - Execute code changes yourself
