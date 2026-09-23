@@ -20,10 +20,10 @@ RELEASE  Driver(prototype) ⇄ QA.qwen ► User(webui review)
 
 | Gate | Seam | Tier | File |
 | --- | --- | --- | --- |
-| **DefendPlan** | wayfinder result → build dispatch | Opus (ask-claude) | [plan.md](plan.md) |
+| **DefendPlan** | wayfinder result → build dispatch | counsel (5-expert panel) | [plan.md](plan.md) |
 | **DefendMerge** | worker diff → git merge | workhorse, fresh context (= /hard-merge) | [merge.md](merge.md) |
-| **DefendDeploy** | qa-passed artifact → public deploy | Opus (ask-claude) | [release.md](release.md) |
-| **DefendConviction** | conviction change touching a held position → apply | Opus (ask-claude) | [conviction.md](conviction.md) |
+| **DefendDeploy** | QA+visual passed → production deploy | counsel (5-expert panel) | [deploy.md](deploy.md) |
+| **DefendConviction** | conviction change touching a held position → apply | counsel (5-expert panel) | [conviction.md](conviction.md) |
 
 ## Why this tiering
 
