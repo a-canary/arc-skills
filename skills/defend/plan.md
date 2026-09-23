@@ -1,10 +1,10 @@
-# DefendPlan — wayfinder result → build dispatch (Opus)
+# DefendPlan — wayfinder result → build dispatch (counsel)
 
 Fires when the Director (qwen wayfinder) has a plan ready and the User is about
 to release it to the Driver for build. The gate sits **between user and
 Director** — its verdict reaches the user directly.
 
-## Input to Opus (pipe all of it)
+## Input to counsel (pipe all of it)
 
 1. The wayfinder result (plan, objectives, chosen strategy).
 2. Supporting evidence the plan rests on (data, links, prior results) — not
@@ -30,5 +30,5 @@ Director** — its verdict reaches the user directly.
 ## Verdict routing
 
 `CLEAR | ATTACKS` → user. On ATTACKS the Director iterates with the user and
-re-submits; re-runs are allowed but each re-run is another Opus call — converge
+re-submits; re-runs are allowed but each re-run is another counsel call — converge
 or escalate to a human decision, don't loop.

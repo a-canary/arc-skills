@@ -1,4 +1,4 @@
-# DefendConviction — conviction change touching a held position → apply (Opus)
+# DefendConviction — conviction change touching a held position → apply (counsel)
 
 Fires when a nightly grade produces a conviction change that would **exit a
 held slot or drop it below floor**, before that change is applied and traded by
@@ -8,10 +8,10 @@ same-model multi-perspective layer. This gate sits between the grade module and
 the apply step; its verdict blocks the weight change from being applied.
 
 The point is cross-family independence: the model under attack (the one that
-made the conviction call) must not be the attacker. Default attacker = Opus via
-ask-claude, a different family than the Qwen/bonsai grade path.
+made the conviction call) must not be the attacker. Default attacker = counsel via
+counsel, a different family than the Qwen/bonsai grade path.
 
-## Input to Opus (pipe all of it)
+## Input to counsel (pipe all of it)
 
 1. The changed wind(s): name, thesis statement, conviction before → after,
    target weight before → after.
@@ -68,5 +68,5 @@ attack it files:
 
 So: `CLEAR` = survives → apply (address notes if cheap); `ATTACKS` = at least one
 blocking attack → do not apply pending more evidence or override (override = ledger
-event: gate, attacks overridden, why). A CLEAR from Opus is still an untrusted
+event: gate, attacks overridden, why). A CLEAR from counsel is still an untrusted
 report — verify checkable claims against source before applying.

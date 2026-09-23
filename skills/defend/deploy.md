@@ -1,10 +1,10 @@
-# DefendDeploy — QA+visual passed → production deploy (Opus)
+# DefendDeploy — QA+visual passed → production deploy (counsel)
 
 Fires after full QA **and** visual capture & analysis, before production
 deploy: app version, YT video, X post, website content update. Production =
 un-revocable in practice; this is the last model check before it crosses.
 
-## Input to Opus (pipe all of it)
+## Input to counsel (pipe all of it)
 
 1. The artifact (or its full text / release notes + what changed).
 2. QA report: dimensions covered, findings, coverage gaps.

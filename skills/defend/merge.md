@@ -6,7 +6,7 @@ complete: the gate between Worker (qwen|bonsai thin tasks) and `git merge`.
 ## Tier + independence
 
 - Reviewer = freshly spawned agent, disjoint context (hard-merge's existing
-  rule). Workhorse tier — no Opus: merges are frequent and git-reversible.
+  rule). Workhorse tier — no counsel: merges are frequent and git-reversible.
 - Cross-*model* independence only when the worker tier ≠ reviewer model
   (e.g. bonsai worker → qwen reviewer). Qwen worker → qwen reviewer is
   context-independence only. Accepted trade-off, recorded here on purpose.
