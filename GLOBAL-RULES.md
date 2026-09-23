@@ -44,6 +44,7 @@ At session start, load these files into the system prompt:
   conversation dump — extract only what you need via `jq`/`grep` piped to a file,
   or read the specific line range. (Was ~56% of 2026-08-26 measured token waste.)
 - **Don't load what you won't cite.** Name the fact before pulling.
+- **Collapse screenshots before VLM ingestion.** Use `arc-skills/skills/img-collapse/img-collapse` for screenshots >500px tall or with large uniform regions. Measure before/after; use collapsed if it saves tokens without losing detail.
 - **Measure before you change.** Baseline + delta. State both.
 - **Read tool output literally before hypothesizing.** Dates outside query
   window = nothing newer.
@@ -105,3 +106,31 @@ At session start, load these files into the system prompt:
   stack, all repos, and all future products. Monitoring on stable products
   floors at a weekly grep audit, no less. Monitoring is only disabled for
   deprecated projects pending cleanup.
+- **Confirm before changing policy, CHOICES, scope, or mission.** Never
+  enact a change to GLOBAL-RULES.md, any CHOICES.md (mission/objectives/decisions),
+  project scope, or a mission in ~/vault/missions.md without explicit
+  operator approval first. For these constitutional changes, counsel provides
+  arguments against only (if any) plus confirmation of understanding — not a
+  full debate. The operator renders the final verdict. Other design and
+  architecture decisions use full counsel with evidence as the basis for
+  approval. Always present via arc-webui human-gate, wait for confirmation,
+  then act.
+- **Trust nothing without convincing evidence (UM-tier 1).** A claim,
+  judgement, plan, request, or idea is a hypothesis until backed by evidence —
+  from any source: the model itself, the user, the internet, whitepapers,
+  other agents, prior sessions. Cite the evidence (file:line, URL, command
+  output, commit sha) before treating it as basis for action. If asked to
+  act on a claim without evidence, surface the gap and request evidence
+  first; do not paper over it.
+- **`+<tag>:` is annotation, not directive.** Lines of the form
+  `+todo: …`, `+policy: …`, `+bd: …`, `+rule: …`, `+feedback: …`, or any
+  other `+<tag>:` token are the operator's way of QUEUING a follow-up, not
+  steering the current task. File a bead (`bd create` or `beads_create`),
+  mark it queued for the appropriate session, then resume the in-flight
+  task without distraction. Do NOT re-plan, re-scope, or pivot the current
+  work to act on a `+<tag>:` line.
+- **Heredr-spawned agents must use `bg_run` (non-blocking).** Long-running
+  agent processes started in a herdr pane must be launched via `bg_run` so
+  the spawning session is not blocked. Synchronous forks that hold the
+  pane hostage are a violation; if you find yourself reaching for a
+  blocking spawn, switch to `bg_run` or `bg_delegate` first.
