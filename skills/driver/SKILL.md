@@ -35,7 +35,7 @@ For multi-repo specs, the driver creates worktrees for each affected repo and sp
 
 ## Driver loop
 
-Each tick: **gap-analysis** (query beads for open/in_progress issues; open → delegate via harness task system; none + inflight → sleep; none at all → idle) → **await harness task notifications** → **heartbeat** (5 min; backstop cron wakes idle).
+Each tick: **gap-analysis** (query central beads DB `~/vault/director/.bd/` for open/in_progress issues assigned to this repo; open → delegate via harness task system; none + inflight → sleep; none at all → idle) → **await harness task notifications** → **heartbeat** (5 min; backstop cron wakes idle).
 
 **Idle backstop:** Driver is event-driven, not polling — `idle` sleeps until the next task notification. A cron backstop (overseer) wakes a fresh tick regardless, so a dropped notification can't silently stall the mission.
 
@@ -47,7 +47,17 @@ Each tick: **gap-analysis** (query beads for open/in_progress issues; open → d
 
 **Compute allocation is the scheduler's job**, not the driver's. Director sets policy (priority, timebox); scheduler enforces rate limits, subscription windows, local GPU throughput (V100/P600), and provider contention. Driver runs when scheduled, stops when timebox expires.
 
-**State discipline:** Beads is the single source of truth for task state. Never maintain parallel state files (gaps.md, blocked.md, events.jsonl). Query beads via CLI; never dump beads DB into context.
+**State discipline:** The central beads DB (`~/vault/director/.bd/`) is the single source of truth for task state. Never maintain parallel state files (gaps.md, blocked.md, events.jsonl). Query beads via CLI; never dump beads DB into context.
+
+**Cross-repo decomposition:** When decomposing an epic into tasks, create task tickets in the central DB with attribution fields:
+- `repo:` — target repository
+- `worktree:` — leave blank (worker sets at claim time)
+- `assigned_to:` — target agent or "unassigned"
+
+**Single-writer state transitions:**
+- Driver: `epic` → decomposes into `task` tickets, `task` → `blocked`/`deferred`
+- Driver validates worker evidence before closing `task` tickets
+- Driver never transitions `task` to `in_progress` (worker does that)
 
 **Task result handling (never relax):**
 - Task completed → evidence paths must exist, else reject + re-queue → dispatch `/qa`
@@ -69,8 +79,8 @@ State (beads issue status): open · in_progress · blocked · deferred · closed
 ## Blocking protocol
 
 When blocked:
-1. Write block reason to `blocked.md`
-2. Create beads issue in repo `.bd/` describing the block
+1. Mark relevant task ticket `blocked` in central beads DB with block reason in description
+2. Create escalation ticket if director attention needed
 3. Sleep and wait for unblock (director or overseer will handle)
 
 ## Defense gates (Defend* family)
