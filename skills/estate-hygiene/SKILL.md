@@ -35,6 +35,13 @@ referenced cannot be trashed.
 
 - **Never trash a repo with unpushed commits or a dirty tree** — flag Aaron-gated.
 - **Never trash without the ~/trash export** (retire pattern). No exceptions.
+- **Ask before discarding any repo.** Per the operator: anything that
+  looks deletable was created for a reason. Before recording a
+  `trash` verdict, fully understand the original purpose, map it to what
+  has (or hasn't) superseded it, analyse the gap from old to new, and
+  only then decide: trash / ask-user / keep. Permission/clarification
+  before action is the default; "retain" is the safe fallback while
+  the gap analysis runs.
 - **Merging two live repos** = Aaron-gated verdict (`retain-pending-merge`);
   record, don't execute.
 - Ledger rows: cancel, never DELETE.

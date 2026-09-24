@@ -58,3 +58,14 @@ cat ~/.cache/ke-plugin/jobs/<id>/evidence.md
 ```
 
 States: `running` · `done` (awaiting relevance check) · `delivered` · `stale` (>30min or no match) · `failed`. Cleanup old jobs: `find ~/.cache/ke-plugin/jobs -mindepth 1 -maxdepth 1 -type d -mtime +1 -exec rm -rf {} \;`.
+
+## Multi-topic research batches
+
+Operator often dispatches several `ke research` lines in one turn (typical
+pattern from `+bd:` style annotations and `/director` HITL). Each line is a
+**separate** topic — fan them out as **independent** background jobs (or
+sequential `ke research "<topic>"` invocations), not one combined query.
+Don't synthesize-across-topics in one shot: each topic gets its own
+recall+gap+ingest pass; the operator synthesizes the answers in the
+following turn. If a turn arrives with N topics, run N `ke research` calls,
+then report per-topic status.

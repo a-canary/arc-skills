@@ -76,6 +76,18 @@ Each tick: **gap-analysis** (query central beads DB `~/vault/director/.bd/` for 
 
 State (beads issue status): open · in_progress · blocked · deferred · closed
 
+## Completion notification
+
+When the driver finishes an epic (all child tasks closed) or blocks, notify the director:
+
+```bash
+~/vault/director/scripts/wake-director.sh "Epic <epic-id> complete. All tasks closed."
+# or on block:
+~/vault/director/scripts/wake-director.sh "Epic <epic-id> blocked: <reason>."
+```
+
+This ensures the director is aware of driver results without requiring active monitoring. The director may not be running — the script spawns or wakes it.
+
 ## Blocking protocol
 
 When blocked:

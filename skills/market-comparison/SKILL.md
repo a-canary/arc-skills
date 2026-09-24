@@ -1,6 +1,6 @@
 ---
 name: market-comparison
-description: Wayfinder chart-template for public-facing output — cache market analysis (8 neighbors scored on industry-informed rubric, clone vs differentiate axes), gate ideate→develop and develop→publish, feed DefendPlan and DefendRelease. Use when about to publish anything public (open-source repo, blog post, YouTube content, product launch, feature release, social post) or when the user says "market comparison", "neighbor analysis", "competitive landscape", "compare to what's out there", "is this worth building", "is this worth shipping". Inspired by the pi-vcc fork-and-upgrade flow.
+description: Wayfinder chart-template for public-facing output — cache market analysis (8 neighbors scored on industry-informed rubric, clone vs differentiate axes), gate ideate→develop and develop→publish, feed DefendPlan and DefendDeploy. Use when about to publish anything public (open-source repo, blog post, YouTube content, product launch, feature release, social post) or when the user says "market comparison", "neighbor analysis", "competitive landscape", "compare to what's out there", "is this worth building", "is this worth shipping". Inspired by the pi-vcc fork-and-upgrade flow.
 ---
 
 # Market Comparison
@@ -71,7 +71,7 @@ A pre-publish hook + weekly cron check `next_due` and flip `done → stale` when
 The cached analysis is not decorative — it feeds the defend gates as a mandatory lens:
 
 - **DefendPlan** (wayfinder→build): attacker must address the rubric + clone/differentiate plan. "Your DIFFERENTIATE claim for axis X has no mechanism" is a valid attack.
-- **DefendRelease** (qa-passed→public): the develop→publish re-score is one artifact under attack. Any axis that regressed from plan = ATTACK.
+- **DefendDeploy** (qa-passed→public): the develop→publish re-score is one artifact under attack. Any axis that regressed from plan = ATTACK.
 
 See [defend/SKILL.md](../defend/SKILL.md) for gate mechanics; market-comparison's outputs are inputs to those gates, not replacements.
 
