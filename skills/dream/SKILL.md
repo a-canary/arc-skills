@@ -62,12 +62,33 @@ one edit to an agent | skill | tool | pipeline | script
    skipped-but-marked-done session is silently lost from the pipeline forever
    (journal 2026-07-20).
 
+## Phase 1c — Beads scanning (systemic process failure detection)
+
+Scan the central beads DB (`~/vault/director/.bd/`) alongside session transcripts.
+Detect workflow-level patterns that session mining alone misses:
+
+| Pattern | Query | Meaning |
+|---------|-------|---------|
+| Long-blocked tasks | Tasks `blocked` >24h | Process stuck, needs structural fix |
+| Thrashing | `open`→`blocked`→`open` cycles | Spec unclear or worker mismatch |
+| Undecomposed specs | `spec`/`epic` open >48h with no children | Director bottleneck |
+| Unbalanced epics | Epic with >10 children or all same repo | Decomposition granularity wrong |
+| QA rejection patterns | Tasks rejected by QA 2+ times | Test criteria or implementation pattern broken |
+
+For each pattern detected, create an improvement ticket in the central beads DB
+(type `task`, label `workflow-improvement`) targeting the process, not just the
+agent. These feed Phase 2 as adaptation candidates.
+
 ## Phase 2 — Adapt (opus)
 
 Before adapting, check `~/.claude/dream/state/watches.md` (standing watches —
 multi-day sample-collection items). Update sample counts; when a watch's
 criteria are met, its action is eligible as the day's adaptation. Mark CLOSED
 when done.
+
+Consider both session-mined findings (Phase 1) and beads-scanned findings
+(Phase 1c) when selecting the day's adaptation. Workflow improvements (beads)
+are prioritized when they affect multiple agents/repos.
 
 Once collection is done, spawn one `adapter` agent with today's journal path. It
 groups journal entries by root cause, picks the single highest-impact group

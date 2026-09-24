@@ -44,17 +44,23 @@ For each herdr pane:
 
 1. **Nudge** — send enter or wake signal to stalled pane
 2. **Notify** — send text to pane with relevant context
-3. **Beads** — create issue in repo `.bd/` or `~/vault/director/.bd/`
-4. **Spawn** — start new driver pane if bug is in an owned repo
-5. **Escalate** — create director beads issue for HITL attention
+3. **Report to driver** — create bug ticket in central beads DB (`~/vault/director/.bd/`) with attribution fields (`repo:`, `assigned_to:`)
+4. **Escalate** — create director beads issue for HITL attention if driver doesn't resolve within 2 hours
+
+The overseer **never mutates task state directly** — it creates bug tickets and lets the driver assign and transition them.
 
 ## Bug routing
 
 If errors indicate a bug in an owned service (e.g., arc-llm-proxy):
-1. Create beads issue in that repo's `.bd/`
+1. Create bug ticket in central beads DB (`~/vault/director/.bd/`) with attribution (`repo:`, `assigned_to:`, `created_by: overseer`)
 2. Check if driver pane is running for that repo
-3. If not running: spawn new driver pane with the bug report
+3. If not running: spawn new driver pane with the bug ticket ID
 4. Log the action in `~/vault/director/overseer.log`
+
+**Block resolution protocol:**
+1. Nudge stalled pane (up to 2 nudges)
+2. If still stalled: create bug ticket in central DB, report to driver
+3. If driver doesn't resolve within 2 hours: escalate to director via beads
 
 ## Hygiene
 
