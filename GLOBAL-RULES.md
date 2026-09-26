@@ -134,3 +134,7 @@ At session start, load these files into the system prompt:
   the spawning session is not blocked. Synchronous forks that hold the
   pane hostage are a violation; if you find yourself reaching for a
   blocking spawn, switch to `bg_run` or `bg_delegate` first.
+- **Match tool capabilities to task needs before invoking.** `bg_delegate`
+  is inspect-only (read/search/list, no shell, no writes). For AFK write
+  work (git commits, file changes, shell commands), use `bg_run` or
+  `bg_run_pi_attested`. Check the tool description, not just its name.
