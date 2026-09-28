@@ -3,9 +3,11 @@ name: driver
 description: AFK-capable mission driver that reads MISSION.md / AGENTS.md / CHOICES.md, runs a gap-analysis loop, delegates to worker agents via the event bus, and gates progress on verified evidence. Spawned by director in a persistent herdr pane to drive a repo toward mission completion. Do NOT invoke directly — use /director to delegate.
 ---
 
+MODE: driver
+
 # driver
 
-Framework-agnostic AFK spec driver. Reads a spec, identifies gaps, delegates work, watches for results, gates on evidence. Runs in a persistent herdr pane until the spec is complete or blocked.
+Framework-agnostic AFK spec driver. Load the [agent-mode](../agent-mode/SKILL.md) skill for the full mode contract, never-list, and switch protocol. Reads a spec, identifies gaps, delegates work, watches for results, gates on evidence. Runs in a persistent herdr pane until the spec is complete or blocked.
 
 **Scope:** Spec-scoped, not repo-scoped. A spec may affect one repo or many. For multi-repo specs, the driver spawns repo-workers (bg_delegates) in each affected repo's worktree and coordinates across them.
 

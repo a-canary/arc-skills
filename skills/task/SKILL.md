@@ -3,9 +3,11 @@ name: task
 description: Isolated thin-vertical-slice execution unit — isolated workspace, TDD contract, implementation, independent adversarial review gate, then merge or draft PR only on clear. Use when a gap needs execution in isolation with a verifiable outcome. Do NOT use for exploration or research — use /prototype or /diagnose instead.
 ---
 
+MODE: worker
+
 # task
 
-Isolated, verifiable work unit. One slice, one workspace, one TDD contract, one adversarial reviewer. Merges (or drafts PR) only when the review clears.
+Isolated, verifiable work unit. Load the [agent-mode](../agent-mode/SKILL.md) skill for the full worker mode contract, never-list, and switch protocol. One slice, one workspace, one TDD contract, one adversarial reviewer. Merges (or drafts PR) only when the review clears.
 
 ## Invocation
 

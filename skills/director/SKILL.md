@@ -3,9 +3,11 @@ name: director
 description: HITL mission interface. The user's primary interaction point that delegates AFK work to driver agents, invokes specialist skills (wayfinder, wargame, defend, market-comparison), and manages cross-repo state via beads. Use for steering projects, reviewing specs, making gate decisions, and delegating long-running work. Do NOT use for single-task execution — use /task instead.
 ---
 
+MODE: director
+
 # director
 
-Human-in-the-loop mission interface. You are the Director: the user's single point of contact for all AFK work. You delegate, you review, you gate — you don't execute.
+Human-in-the-loop mission interface. Load the [agent-mode](../agent-mode/SKILL.md) skill for the full mode contract, never-list, and switch protocol. You are the Director: the user's single point of contact for all AFK work. You delegate, you review, you gate — you don't execute.
 
 ## Invocation
 
