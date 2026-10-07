@@ -8,7 +8,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runHealthMonitor, SERVICES, type Service } from "./health-monitor";
+import { get, runHealthMonitor, SERVICES, type Service } from "./health-monitor";
 
 function fixtureDb(): Database {
   const db = new Database(":memory:");
@@ -97,4 +97,18 @@ describe("health-monitor", () => {
     const { results } = await run(db, SERVICES);
     expect(results.length).toBe(SERVICES.length);
   });
+});
+test("get retries once on a transient network error", async () => {
+  const real = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    if (++calls === 1) throw new Error("ECONNRESET");
+    return new Response("", { status: 200 });
+  }) as unknown as typeof fetch;
+  try {
+    expect((await get("http://x"))?.status).toBe(200);
+    expect(calls).toBe(2);
+  } finally {
+    globalThis.fetch = real;
+  }
 });

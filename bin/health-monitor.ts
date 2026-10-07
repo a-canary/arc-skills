@@ -43,11 +43,13 @@ const fail = (msg: string): never => {
 
 // ---- native probe helpers -------------------------------------------------
 
-async function get(url: string, init?: RequestInit): Promise<Response | null> {
+// One retry on network error: a single reset/timeout (~2% of public probes)
+// otherwise flips state and pages, since dedupe only suppresses repeats.
+export async function get(url: string, init?: RequestInit, retries = 1): Promise<Response | null> {
   try {
     return await fetch(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
   } catch {
-    return null;
+    return retries > 0 ? get(url, init, retries - 1) : null;
   }
 }
 
