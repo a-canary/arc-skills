@@ -37,6 +37,20 @@ on-task-verified: <skill>    # custom action
 > **Primary checkout = production:** never edit/commit dev work there. All dev in worktrees. Merge back via PR to origin, then local main `pull --ff-only`.
 ```
 
+## Background delegation
+
+When spawning a background task worker, use `bg_run "pi -p ..."` with `isAgent: true`.
+Do NOT use `bg_run_pi_attested` — it hard-requires OAuth subscription providers
+(openai-codex/anthropic only) and fails on all other providers including v100.
+
+```json
+{
+  "name": "task-slice-name",
+  "command": "cd /path/to/repo && pi -p 'prompt' --provider v100 --model queue",
+  "isAgent": true
+}
+```
+
 ## Execution sequence
 
 1. **Parse gap** — extract slice path, acceptance criteria, and beads ticket ID from description

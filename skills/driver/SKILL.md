@@ -9,7 +9,7 @@ MODE: driver
 
 Framework-agnostic AFK spec driver. Load the [agent-mode](../agent-mode/SKILL.md) skill for the full mode contract, never-list, and switch protocol. Reads a spec, identifies gaps, delegates work, watches for results, gates on evidence. Runs in a persistent herdr pane until the spec is complete or blocked.
 
-**Scope:** Spec-scoped, not repo-scoped. A spec may affect one repo or many. For multi-repo specs, the driver spawns repo-workers (bg_delegates) in each affected repo's worktree and coordinates across them.
+**Scope:** Spec-scoped, not repo-scoped. A spec may affect one repo or many. For multi-repo specs, the driver spawns repo-workers (bg_pi) in each affected repo's worktree and coordinates across them.
 
 ## Invocation
 
@@ -41,7 +41,7 @@ Each tick: **gap-analysis** (query central beads DB `~/vault/director/.bd/` for 
 
 **Idle backstop:** Driver is event-driven, not polling — `idle` sleeps until the next task notification. A cron backstop (overseer) wakes a fresh tick regardless, so a dropped notification can't silently stall the mission.
 
-**Communication:** Delegate via bg_delegate or bg_run_pi_attested. Workers are ephemeral — report status on completion. No file-based event bus. Update beads issue status based on task results.
+**Communication:** Delegate via bg_pi or bg_run_pi_attested. Workers are ephemeral — report status on completion. No file-based event bus. Update beads issue status based on task results.
 
 **Worker crash handling:** If worker crashes/infinite-loops/stalls, overseer detects and notifies driver. Driver spawns fresh worker (tasks are idempotent — safe to re-run from scratch).
 
@@ -71,7 +71,7 @@ Each tick: **gap-analysis** (query central beads DB `~/vault/director/.bd/` for 
 **Post-merge sequence (production):**
 1. Merge (DefendMerge passed)
 2. Deploy to live surface
-3. Run QA (e2e) as bg_delegate/agent_browser against live service — this is a gate
+3. Run QA (e2e) as bg_pi/agent_browser against live service — this is a gate
 4. If QA passes: cleanup worktree, close beads issue, report complete, pane closes
 5. If QA fails: do NOT clean up; report failure + evidence to director; director decides (rollback? fix? accept?)
 6. Monitoring handoff: per-repo monitoring script writes to standard log; overseer watches logs. Driver does NOT do ongoing monitoring.

@@ -1,6 +1,6 @@
 ---
 name: agent-mode
-description: Declares an explicit role mode (director | driver | worker) for herdr pane agents to prevent role confusion. Announces MODE: X at pane start, MODE: X → Y (reason) on switch, and updates the pane session header. Use when spawning or switching roles in herdr panes; every pane agent must declare its mode.
+description: "Declares an explicit role mode (director | driver | worker) for herdr pane agents to prevent role confusion. Announces MODE: X at pane start, MODE: X → Y (reason) on switch, and updates the pane session header. Use when spawning or switching roles in herdr panes; every pane agent must declare its mode."
 ---
 
 # agent-mode
