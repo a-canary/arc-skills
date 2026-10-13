@@ -61,6 +61,20 @@ At session start, load these files into the system prompt:
   git-clean after fs-sharing.
 - **/counsel over asking.** Decision fork → run /counsel, execute verdict.
   No AskUserQuestion.
+- **Don't ask to do work.** Idle time > wasted effort. If a next step aligns
+  with mission/instructions, take it — don't ask permission. Prefer reversible
+  paths (git branch over rebase, trash over rm, new file over in-place edit,
+  local over remote). Ask permission before irreversible actions: remote push
+  of force/rebase, production deploy, destructive deletes, account/security
+  changes, purchases. File a bead for work branches and follow-up explorations.
+  Use DefendGates (DefendPlan, DefendMerge, etc.) to reject or defer low-value
+  changes, not human confirmation prompts. "Do you want me to do X?" is a
+  violation when X is reversible and obvious from context.
+- **Defense steps require receipts.** Before any DefendGate (DefendPlan,
+  DefendMerge, DefendDeploy, DefendConviction) proceeds, present clear
+  Before → After evidence of the work and its improvements: diff summary,
+  test results, metric deltas, screenshots for UI. No receipts = gate cannot
+  clear, regardless of how good the work sounds.
 - **Commit with identity from `~/vault/USER.md`** —
   `-c user.name -c user.email` per-commit.
 - **Never present fabricated data as real (UM-0500).** Unmeasured = not passed.
@@ -133,8 +147,36 @@ At session start, load these files into the system prompt:
   agent processes started in a herdr pane must be launched via `bg_run` so
   the spawning session is not blocked. Synchronous forks that hold the
   pane hostage are a violation; if you find yourself reaching for a
-  blocking spawn, switch to `bg_run` or `bg_delegate` first.
-- **Match tool capabilities to task needs before invoking.** `bg_delegate`
-  is inspect-only (read/search/list, no shell, no writes). For AFK write
-  work (git commits, file changes, shell commands), use `bg_run` or
-  `bg_run_pi_attested`. Check the tool description, not just its name.
+  blocking spawn, switch to `bg_run` or `bg_pi` first.
+- **Match tool capabilities to task needs before invoking.** `bg_pi`
+  spawns a pi sub-agent with a specific role (e.g. scout for read-only
+  research, worker for code changes). For AFK write work (git commits,
+  file changes, shell commands), use `bg_run` or `bg_run_pi_attested`.
+  Check the tool description, not just its name.
+- **No uncommitted code changes on main.** All code changes must go
+  through: Worker (feature branch) → DefendMerge → Driver publishes to
+  main → DefendPublish → Deploy → QA. Direct edits or commits on main/
+  master are a violation. Use a feature branch or worktree, never edit
+  main in place. Reject write/edit calls targeting main repo source files;
+  redirect to Worker.
+- **No long code blocks in bash commands.** Write code to files, then
+  execute the files. Bash is for commands, not multi-line programs.
+- **Director/Driver: bg_run for anything >30s.** Any subtask or action
+  expected to exceed 30 seconds must be launched via `bg_run` (non-blocking).
+  Synchronous execution of long-running work blocks the mission loop.
+
+## Workbench Request Protocol
+
+Private workspace agents (aaron's estate) requesting new tools or skill
+improvements must file a GitHub issue at
+https://github.com/a-canary/workbench/issues/new rather than forking or
+developing locally. Issues must include: **what** is needed (specific
+feature or fix), **why** it is needed (problem it solves), and **use case**
+(concrete scenario where it applies). This keeps the workbench as the single
+source of truth for shared tooling and prevents fork drift.
+
+Local development is permitted only when: (a) a relevant workbench issue has
+been filed and received no response after 48 hours, or (b) the tool is
+private-specific (e.g., trading strategies, personal automations) and not
+suitable for the shared workbench. In case (a), note the issue URL in your
+local implementation for future reconciliation.
