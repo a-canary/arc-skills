@@ -12,6 +12,7 @@
 #   misparse; a quoted `gh pr merge` outside a git command (sh -c, --body) fails closed.
 set -uo pipefail
 payload="$(cat)"
+p=${payload//[\"\'\\]/}; [[ $p == *merge* ]] || exit 0   # hot path: most Bash calls never mention merge
 command -v jq >/dev/null 2>&1 && command -v perl >/dev/null 2>&1 \
   || { grep -Eq 'gh.*merge' <<<"$payload" && { echo "defend-merge-guard: jq/perl missing — refusing merge" >&2; exit 2; }; exit 0; }
 [ "$(jq -r '.tool_name // empty' <<<"$payload")" = Bash ] || exit 0
@@ -35,44 +36,58 @@ Run DefendMerge (/hard-merge) with an independent reviewer; on CLEAR post:
   skills/defend/bin/defend-receipt CLEAR <pr> <reviewed-sha> -R $p \"<summary>\""
 }
 
-# join line continuations; collapse each quoted string to one inert token so quoted text
-# (commit messages, --body, paths) can't split a segment or pose as a merge
-norm=$(perl -0pe 's/\\\n/ /g; s/"([^"]*)"|\x27([^\x27]*)\x27/my $s = ($1 \/\/ "") . ($2 \/\/ ""); $s =~ m#gh\s+pr\s+merge# ? " __QUOTED_MERGE__ " : ($s =~ s#[\s;&|()`]##gr)/ge' <<<"$cmd")
+# tokenize left→right like bash: \x escape | $'ansi' | 'single' | "double" (with \ escapes).
+# Escapes join continuations and can't desync quote pairing; each quoted string collapses to
+# one inert token so quoted text (commit messages, --body, paths) can't split a segment or
+# pose as a merge. "$(…)" runs even inside a git command, so a mention there blocks outright.
+norm=$(perl -0pe 's{\\(.)|\$\x27((?:[^\x27\\]|\\.)*)\x27|\x27([^\x27]*)\x27|"((?:[^"\\]|\\.)*)"}{
+  defined $1 ? ($1 eq "\n" ? " " : $1 =~ m#[\s;&|()`"\x27\\]# ? "_" : $1)
+  : do { my $s = $2 // $3 // $4;
+         defined $4 && $s =~ m#\$\(|`# && $s =~ m#gh|merge# ? " __SUBST_MERGE__ "
+         : $s =~ m#gh\s+pr\s+merge# ? " __QUOTED_MERGE__ " : ($s =~ s#[\s;&|()`]##gr) }
+}gse' <<<"$cmd")
+[[ $norm == *__SUBST_MERGE__* ]] && block "gh/merge inside \"\$(…)\" — run gh pr merge directly so it can be checked"
 
 # segments split on ; & | ( ) ` and newlines; track `cd` so a bare `gh pr merge 5` resolves in the right repo
+xrepo=
 while IFS= read -r seg; do
   read -ra w <<<"$seg"
-  if [ "${w[0]:-}" = cd ]; then
-    d=${w[1]:-$HOME}; d=${d/#\~/$HOME}; d=${d/#\$HOME/$HOME}
-    case $d in /*) dir=$d ;; *) dir=$dir/$d ;; esac
-    continue
-  fi
+  case ${w[0]:-} in
+    cd) d=${w[1]:-$HOME}; d=${d/#\~/$HOME}; d=${d/#\$HOME/$HOME}
+        case $d in /*) dir=$d ;; *) dir=$dir/$d ;; esac
+        continue ;;
+    export) for a in "${w[@]:1}"; do [[ $a == GH_REPO=* ]] && xrepo=${a#GH_REPO=}; done
+        continue ;;   # export GH_REPO=… sticks for later segments
+  esac
   [[ " ${w[*]} " == *" __QUOTED_MERGE__ "* && ${w[0]:-} != git ]] \
     && block "quoted 'gh pr merge' (sh -c / eval / body?) — run gh pr merge directly so it can be checked"
-  # gh may follow keywords/wrappers (do, then, timeout, env, {, !, command, /abs/gh)
+  # gh may follow keywords/wrappers (do, then, timeout, env, {, !, command, /abs/gh).
+  # One scan after `pr`: 1st bare word = subcommand, 2nd = selector; -R may sit either side.
   g=-1
   for ((i = 0; i + 2 < ${#w[@]}; i++)); do
-    [[ ${w[i]##*/} = gh && ${w[i+1]} = pr && ${w[i+2]} = merge ]] && { g=$i; break; }
+    [[ ${w[i]##*/} = gh && ${w[i+1]} = pr ]] || continue
+    sub= sel= flagrepo= j=$((i + 2))
+    while [ $j -lt ${#w[@]} ]; do
+      a=${w[j]}
+      case $a in
+        -R|--repo) flagrepo=${w[j+1]:-}; j=$((j + 2)) ;;
+        --repo=*) flagrepo=${a#*=}; j=$((j + 1)) ;;
+        -b|--body|-F|--body-file|-t|--subject|-A|--author-email|--match-head-commit) j=$((j + 2)) ;;
+        -*) j=$((j + 1)) ;;
+        *) if [ -z "$sub" ]; then sub=$a; elif [ -z "$sel" ]; then sel=$a; fi; j=$((j + 1)) ;;
+      esac
+    done
+    [ "$sub" = merge ] && { g=$i; break; }
   done
   [ $g -ge 0 ] || continue
-  envrepo=
+  prefixrepo=
   for ((i = 0; i < g; i++)); do
     case ${w[i]} in
-      GH_REPO=*) envrepo=${w[i]#GH_REPO=} ;;
+      GH_REPO=*) prefixrepo=${w[i]#GH_REPO=} ;;
       xargs) block "gh pr merge via xargs — PR comes from stdin and can't be checked; merge one PR per command" ;;
     esac
   done
-  sel= repo=$envrepo i=$((g + 3))
-  while [ $i -lt ${#w[@]} ]; do
-    a=${w[$i]}
-    case $a in
-      -R|--repo) repo=${w[$((i+1))]:-}; i=$((i+2)) ;;
-      --repo=*) repo=${a#*=}; i=$((i+1)) ;;
-      -b|--body|-F|--body-file|-t|--subject|-A|--author-email|--match-head-commit) i=$((i+2)) ;;
-      -*) i=$((i+1)) ;;
-      *) [ -n "$sel" ] || sel=$a; i=$((i+1)) ;;
-    esac
-  done
+  repo=${flagrepo:-${prefixrepo:-$xrepo}}   # gh precedence: -R > inline GH_REPO= > exported
   [[ $sel$repo == *[\$\`]* ]] && block "non-literal PR/repo ('$sel' '$repo') — merge one literal PR per command"
   check "$sel" "$repo" "$dir"
 done < <(printf '%s\n' "$norm" | sed 's/[;&|()`]/\n/g')
