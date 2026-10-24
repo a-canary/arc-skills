@@ -112,6 +112,8 @@ const QUIET = process.argv.includes("--quiet");
 
 /** pgrep ERE for a running `python3 .../bin/v100idle exec <job>` (not a shell quoting it). */
 export const V100IDLE_JOB = "^[^ ]*python[^ ]* [^ ]*/v100idle exec [^ ]+$";
+// ponytail: fixed ceiling; per-job budgets if v100idle ever publishes them.
+const V100IDLE_MAX_H = Number(process.env.V100IDLE_MAX_H ?? 12);
 
 export const SERVICES: Service[] = [
   {
@@ -133,7 +135,15 @@ export const SERVICES: Service[] = [
     // inference fails to return once the job exits, the next tick alerts.
     probe: async () => {
       const lease = sh("pgrep", ["-af", V100IDLE_JOB]);
-      if (lease.rc === 0) return `GPU leased to v100idle job ${lease.out.split("\n")[0].split(" ").pop()}`;
+      if (lease.rc === 0) {
+        const line = lease.out.split("\n")[0];
+        const job = line.split(" ").pop();
+        // A hung job must not mask an outage forever.
+        const ageH = Number(sh("ps", ["-o", "etimes=", "-p", line.split(" ")[0]]).out) / 3600;
+        return ageH < V100IDLE_MAX_H
+          ? `GPU leased to v100idle job ${job} (${ageH.toFixed(1)}h)`
+          : fail(`v100idle job ${job} has held the GPU ${ageH.toFixed(1)}h (over ${V100IDLE_MAX_H}h, hung?)`);
+      }
       const proc = sh("pgrep", ["-f", "llama-server|vllm|sglang"]);
       if (proc.rc !== 0) return fail("no llama-server/vllm/sglang process");
       const url = await firstOk([
