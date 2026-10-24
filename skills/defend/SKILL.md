@@ -9,9 +9,6 @@ One seam concept, three named gates. At each gate an **independent** model
 attacks the artifact before it crosses into the next phase. The name marks the
 junction; the tier marks the cost.
 
-**Virtue (defender mode):** comprehensive — **needs:** confidence.
-Checks evidence and gates specs, merges, and deployments for quality, coherence, completeness, and risk mitigation. See [agent-mode](../agent-mode/SKILL.md).
-
 ## The pipeline
 
 ```

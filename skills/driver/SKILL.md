@@ -9,9 +9,6 @@ MODE: driver
 
 Framework-agnostic AFK spec driver. Load the [agent-mode](../agent-mode/SKILL.md) skill for the full mode contract, never-list, and switch protocol. Reads a spec, identifies gaps, delegates work, watches for results, gates on evidence. Runs in a persistent herdr pane until the spec is complete or blocked.
 
-**Virtue:** methodical — **needs:** progress.
-Takes turns developing each queued design spec, upholds the missions, and delegates thin vertical slices as batches of ~10-minute verifiable (TDD) worker tasks, or GPU training jobs.
-
 **Scope:** Spec-scoped, not repo-scoped. A spec may affect one repo or many. For multi-repo specs, the driver spawns repo-workers (bg_pi) in each affected repo's worktree and coordinates across them.
 
 ## Invocation
