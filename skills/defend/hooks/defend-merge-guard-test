@@ -12,13 +12,13 @@ cat > "$tmp/bin/gh" <<'EOF'
 echo "$*" >> "$STUB_LOG"
 case "$1 $2" in
   "pr view") [ -n "${STUB_PR:-}" ] || exit 1; echo "$STUB_PR" ;;
-  "api "*) echo "${STUB_STATUS:-{\"statuses\":[]\}}" ;;
+  "api "*) [ "$2" = repos/o/r/commits/abc1234/status ] && echo "$STUB_STATUS" || echo '{"statuses":[]}' ;;
   *) exit 1 ;;
 esac
 EOF
 chmod +x "$tmp/bin/gh"
 export PATH="$tmp/bin:$PATH" STUB_LOG="$tmp/log"
-pr='{"headRefOid":"abc123","url":"https://github.com/o/r/pull/5"}'
+pr='{"headRefOid":"abc1234","url":"https://github.com/o/r/pull/5"}'
 st() { printf '{"statuses":[{"context":"defend/merge","state":"%s"}]}' "$1"; }
 
 # $1 name, $2 command, $3 expected exit, env STUB_PR/STUB_STATUS set by caller
@@ -41,6 +41,22 @@ STUB_PR=$pr STUB_STATUS='{"statuses":[]}'  guard "merge on later line checked" $
 STUB_PR=                                   guard "unresolvable PR fails closed" 'gh pr merge 5 --squash' 2
 STUB_PR=$pr STUB_STATUS='{"statuses":[]}'  guard "non-merge command ignored" 'gh pr view 5' 0
 STUB_PR=$pr STUB_STATUS='{"statuses":[]}'  guard "mention in commit msg ignored" 'git commit -m "then gh pr merge 5"' 0
+STUB_PR=$pr STUB_STATUS='{"statuses":[]}'  guard "separator in commit msg ignored" 'git commit -m "wip; gh pr merge 5 later"' 0
+# gh after keywords/wrappers is still found
+STUB_PR=$pr STUB_STATUS=$(st success)      guard "for-loop variable selector fails closed" 'for p in 5; do gh pr merge $p -R o/r; done' 2
+STUB_PR=$pr STUB_STATUS='{"statuses":[]}'  guard "merge after then checked" 'if gh pr checks 5 --watch; then gh pr merge 5 -R o/r; fi' 2
+STUB_PR=$pr STUB_STATUS='{"statuses":[]}'  guard "timeout wrapper checked" 'timeout 300 gh pr merge 5 -R o/r' 2
+STUB_PR=$pr STUB_STATUS='{"statuses":[]}'  guard "env wrapper checked" 'env GH_TOKEN=x gh pr merge 5 -R o/r' 2
+STUB_PR=$pr STUB_STATUS='{"statuses":[]}'  guard "brace group checked" '{ gh pr merge 5 -R o/r; }' 2
+STUB_PR=$pr STUB_STATUS='{"statuses":[]}'  guard "line continuation checked" $'gh \\\n  pr merge 5 -R o/r' 2
+STUB_PR=$pr STUB_STATUS='{"statuses":[]}'  guard "absolute gh path checked" '/usr/bin/gh pr merge 5 -R o/r' 2
+STUB_PR=$pr STUB_STATUS=$(st success)      guard "xargs merge fails closed" 'echo 5 | xargs gh pr merge' 2
+STUB_PR=$pr STUB_STATUS=$(st success)      guard "sh -c merge fails closed" 'sh -c "gh pr merge 5"' 2
+STUB_PR=$pr STUB_STATUS=$(st success)      guard "failed quoted cd ok with -R" 'cd "/nonexistent" && gh pr merge 5 -R o/r' 0
+STUB_PR=$pr STUB_STATUS=$(st success)      guard "cd \$HOME tracked" 'cd $HOME && gh pr merge 5 -R o/r' 0
+STUB_PR=$pr STUB_STATUS=$(st success)      guard "quoted body with #N allows" 'gh pr merge --squash --body "see #12 for context" 5 -R o/r' 0
+if grep -q '^pr view 5 ' "$STUB_LOG"; then echo "PASS  body text not taken as selector"
+else echo "FAIL  body text not taken as selector"; cat "$STUB_LOG"; fail=1; fi
 
 # non-Bash tool payload is ignored
 : > "$STUB_LOG"
@@ -49,10 +65,17 @@ if echo '{"tool_name":"Read","tool_input":{"file_path":"x"}}' | "$here/defend-me
 
 # receipt posts a SHA-bound status on the reviewed commit
 : > "$STUB_LOG"
-STUB_PR=$pr "$here/../bin/defend-receipt" CLEAR 5 abc123 -R o/r "no blockers" >/dev/null 2>&1
-if grep -q 'api -X POST repos/o/r/statuses/abc123 -f state=success -f context=defend/merge -f description=no blockers' "$STUB_LOG"; then
+STUB_PR=$pr "$here/../bin/defend-receipt" CLEAR 5 abc1234 -R o/r "no blockers" >/dev/null 2>&1
+if grep -q 'api -X POST repos/o/r/statuses/abc1234 -f state=success -f context=defend/merge -f description=no blockers' "$STUB_LOG"; then
   echo "PASS  receipt CLEAR posts success"; else echo "FAIL  receipt CLEAR posts success"; cat "$STUB_LOG"; fail=1; fi
 : > "$STUB_LOG"
-if STUB_PR=$pr "$here/../bin/defend-receipt" MAYBE 5 abc123 "x" >/dev/null 2>&1; then
+if STUB_PR=$pr "$here/../bin/defend-receipt" MAYBE 5 abc1234 "x" >/dev/null 2>&1; then
   echo "FAIL  receipt rejects bad verdict"; fail=1; else echo "PASS  receipt rejects bad verdict"; fi
+if STUB_PR=$pr "$here/../bin/defend-receipt" CLEAR 5 a -R o/r "x" >/dev/null 2>&1; then
+  echo "FAIL  receipt rejects 1-char sha"; fail=1; else echo "PASS  receipt rejects 1-char sha"; fi
+: > "$STUB_LOG"
+out=$(STUB_PR=$pr "$here/../bin/defend-receipt" CLEAR 5 abc1234 "no blockers" -R o/r 2>/dev/null)
+if grep -q '^pr view 5 -R o/r' "$STUB_LOG"; then echo "PASS  receipt -R after summary honored"
+else echo "FAIL  receipt -R after summary honored"; cat "$STUB_LOG"; fail=1; fi
+if [[ $out == *CLEAR* ]]; then echo "PASS  receipt output names verdict"; else echo "FAIL  receipt output names verdict: $out"; fail=1; fi
 exit $fail

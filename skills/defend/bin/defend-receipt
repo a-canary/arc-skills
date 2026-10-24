@@ -9,10 +9,15 @@ set -euo pipefail
 die() { echo "defend-receipt: $*" >&2; exit 2; }
 usage='usage: defend-receipt CLEAR|BLOCK <pr> <reviewed-sha> [-R owner/repo] "<summary>"'
 [ $# -ge 4 ] || die "$usage"
-case $1 in CLEAR) state=success ;; BLOCK) state=failure ;; *) die "$usage" ;; esac
+verdict=$1
+case $verdict in CLEAR) state=success ;; BLOCK) state=failure ;; *) die "$usage" ;; esac
 pr=$2 sha=$3; shift 3
-repo=; if [ "$1" = -R ]; then repo=${2:-}; shift 2 || die "$usage"; fi
-summary=${1:-}; [ -n "$summary" ] || die "$usage"
+repo= summary=
+while [ $# -gt 0 ]; do
+  case $1 in -R) [ $# -ge 2 ] || die "$usage"; repo=$2; shift 2 ;; *) summary=$1; shift ;; esac
+done
+[ -n "$summary" ] || die "$usage"
+[[ $sha =~ ^[0-9a-f]{7,40}$ ]] || die "reviewed sha must be 7-40 hex chars, got '$sha'"
 
 info=$(gh pr view "$pr" ${repo:+-R "$repo"} --json headRefOid,url) || die "cannot resolve PR $pr"
 head=$(jq -r '.headRefOid' <<<"$info"); url=$(jq -r '.url' <<<"$info")
@@ -21,4 +26,4 @@ if [ "${head#"$sha"}" != "$head" ]; then sha=$head   # short sha of current head
 else echo "defend-receipt: warning: head ${head:0:7} != reviewed ${sha:0:7}; merge stays blocked until head is reviewed" >&2; fi
 
 gh api -X POST "repos/$p/statuses/$sha" -f state=$state -f context=defend/merge -f "description=${summary:0:140}" >/dev/null
-echo "defend-receipt: $1 → defend/merge=$state on $p@${sha:0:7}"
+echo "defend-receipt: $verdict → defend/merge=$state on $p@${sha:0:7}"
