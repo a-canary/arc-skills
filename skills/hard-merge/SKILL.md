@@ -54,7 +54,7 @@ Decide the merge target first: is it a **production surface** — a branch with 
 ### 5. Verdict
 - [ ] Every checkable claim in the author's PR text verified against source — grep the constant, don't trust prose.
 - [ ] Findings ranked most-severe first. Blocker -> back to author, not merged with a footnote (red gate = one obligation).
-- [ ] Merge ONLY when the required reviewer(s) return CLEAR and their checkable claims verify against source: one reviewer for a non-production small diff, **two disjoint reviewers** for a production surface, and — whenever §4 required it (non-small radius, or a not-CLEAR reviewer on a production surface) — `/counsel` cleared too. The author merges after verifying the verdict — reviewers and the panel advise, they do not merge. Reversible path preferred; export-to-trash before any delete.
+- [ ] Merge ONLY when the required reviewer(s) return CLEAR and their checkable claims verify against source: one reviewer for a non-production small diff, **two disjoint reviewers** for a production surface, and — whenever §4 required it (non-small radius, or a not-CLEAR reviewer on a production surface) — `/counsel` cleared too. The author merges after verifying the verdict — reviewers and the panel advise, they do not merge. Before merging, post the receipt on the reviewed SHA (`skills/defend/bin/defend-receipt CLEAR <pr> <sha> -R owner/repo "<summary>"`); the `defend-merge-guard` hook blocks `gh pr merge` without it, and a push after review voids it — re-review the new head. Reversible path preferred; export-to-trash before any delete.
 
 ### 6. Post-deploy verification (production surface only)
 

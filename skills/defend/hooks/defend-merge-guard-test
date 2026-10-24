@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# defend-merge-guard-test — guard + receipt against a stub gh, no network.
+# Stub gh: `pr view` prints $STUB_PR (exit 1 if unset); `api` logs args and prints $STUB_STATUS.
+set -uo pipefail
+here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+fail=0
+
+mkdir "$tmp/bin"
+cat > "$tmp/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >> "$STUB_LOG"
+case "$1 $2" in
+  "pr view") [ -n "${STUB_PR:-}" ] || exit 1; echo "$STUB_PR" ;;
+  "api "*) echo "${STUB_STATUS:-{\"statuses\":[]\}}" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$tmp/bin/gh"
+export PATH="$tmp/bin:$PATH" STUB_LOG="$tmp/log"
+pr='{"headRefOid":"abc123","url":"https://github.com/o/r/pull/5"}'
+st() { printf '{"statuses":[{"context":"defend/merge","state":"%s"}]}' "$1"; }
+
+# $1 name, $2 command, $3 expected exit, env STUB_PR/STUB_STATUS set by caller
+guard() {
+  local name=$1 cmd=$2 want=$3
+  : > "$STUB_LOG"
+  jq -n --arg c "$cmd" '{tool_name:"Bash",tool_input:{command:$c},cwd:"/tmp"}' \
+    | "$here/defend-merge-guard.sh" >/dev/null 2>&1
+  local rc=$?
+  if [ $rc -eq "$want" ]; then echo "PASS  $name"; else echo "FAIL  $name (rc=$rc want=$want)"; fail=1; fi
+}
+
+STUB_PR=$pr STUB_STATUS='{"statuses":[]}' guard "no receipt blocks" 'gh pr merge 5 -R o/r --squash' 2
+STUB_PR=$pr STUB_STATUS=$(st failure)      guard "BLOCK receipt blocks" 'gh pr merge 5 -R o/r --squash' 2
+STUB_PR=$pr STUB_STATUS=$(st pending)      guard "pending receipt blocks" 'gh pr merge 5 -R o/r' 2
+STUB_PR=$pr STUB_STATUS=$(st success)      guard "CLEAR receipt allows" 'gh pr merge 5 -R o/r --squash' 0
+STUB_PR=$pr STUB_STATUS=$(st success)      guard "chained after cd allows" 'cd /tmp && gh pr merge 5 --squash' 0
+STUB_PR=$pr STUB_STATUS='{"statuses":[]}'  guard "second merge in chain checked" 'echo hi; gh pr merge 5 -R o/r' 2
+STUB_PR=$pr STUB_STATUS='{"statuses":[]}'  guard "merge on later line checked" $'echo hi\ngh pr merge 5 -R o/r' 2
+STUB_PR=                                   guard "unresolvable PR fails closed" 'gh pr merge 5 --squash' 2
+STUB_PR=$pr STUB_STATUS='{"statuses":[]}'  guard "non-merge command ignored" 'gh pr view 5' 0
+STUB_PR=$pr STUB_STATUS='{"statuses":[]}'  guard "mention in commit msg ignored" 'git commit -m "then gh pr merge 5"' 0
+
+# non-Bash tool payload is ignored
+: > "$STUB_LOG"
+if echo '{"tool_name":"Read","tool_input":{"file_path":"x"}}' | "$here/defend-merge-guard.sh" >/dev/null 2>&1; then
+  echo "PASS  non-Bash tool ignored"; else echo "FAIL  non-Bash tool ignored"; fail=1; fi
+
+# receipt posts a SHA-bound status on the reviewed commit
+: > "$STUB_LOG"
+STUB_PR=$pr "$here/../bin/defend-receipt" CLEAR 5 abc123 -R o/r "no blockers" >/dev/null 2>&1
+if grep -q 'api -X POST repos/o/r/statuses/abc123 -f state=success -f context=defend/merge -f description=no blockers' "$STUB_LOG"; then
+  echo "PASS  receipt CLEAR posts success"; else echo "FAIL  receipt CLEAR posts success"; cat "$STUB_LOG"; fail=1; fi
+: > "$STUB_LOG"
+if STUB_PR=$pr "$here/../bin/defend-receipt" MAYBE 5 abc123 "x" >/dev/null 2>&1; then
+  echo "FAIL  receipt rejects bad verdict"; fail=1; else echo "PASS  receipt rejects bad verdict"; fi
+exit $fail

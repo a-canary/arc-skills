@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# defend-receipt — record a DefendMerge verdict as a `defend/merge` commit status.
+#
+#   defend-receipt CLEAR|BLOCK <pr> <reviewed-sha> [-R owner/repo] "<summary>"
+#
+# The status lands on the REVIEWED sha, not the current head: if the branch moved after
+# review, head has no receipt and hooks/defend-merge-guard.sh blocks the merge until re-review.
+set -euo pipefail
+die() { echo "defend-receipt: $*" >&2; exit 2; }
+usage='usage: defend-receipt CLEAR|BLOCK <pr> <reviewed-sha> [-R owner/repo] "<summary>"'
+[ $# -ge 4 ] || die "$usage"
+case $1 in CLEAR) state=success ;; BLOCK) state=failure ;; *) die "$usage" ;; esac
+pr=$2 sha=$3; shift 3
+repo=; if [ "$1" = -R ]; then repo=${2:-}; shift 2 || die "$usage"; fi
+summary=${1:-}; [ -n "$summary" ] || die "$usage"
+
+info=$(gh pr view "$pr" ${repo:+-R "$repo"} --json headRefOid,url) || die "cannot resolve PR $pr"
+head=$(jq -r '.headRefOid' <<<"$info"); url=$(jq -r '.url' <<<"$info")
+p=${url#https://github.com/}; p=${p%/pull/*}
+if [ "${head#"$sha"}" != "$head" ]; then sha=$head   # short sha of current head → full
+else echo "defend-receipt: warning: head ${head:0:7} != reviewed ${sha:0:7}; merge stays blocked until head is reviewed" >&2; fi
+
+gh api -X POST "repos/$p/statuses/$sha" -f state=$state -f context=defend/merge -f "description=${summary:0:140}" >/dev/null
+echo "defend-receipt: $1 → defend/merge=$state on $p@${sha:0:7}"

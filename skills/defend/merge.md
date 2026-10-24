@@ -30,3 +30,8 @@ complete: the gate between Worker (qwen|bonsai thin tasks) and `git merge`.
 
 `CLEAR | BLOCK + findings` → author (Driver). Production surfaces keep
 hard-merge's second-disjoint-reviewer rule. Override = ledger note row.
+
+**Receipt (mechanical).** After verifying the verdict, the author posts it on the
+*reviewed* SHA: `skills/defend/bin/defend-receipt CLEAR|BLOCK <pr> <sha> -R owner/repo "<summary>"`
+(a `defend/merge` commit status). `hooks/defend-merge-guard.sh` (PreToolUse Bash) blocks
+`gh pr merge` unless head carries a `defend/merge` success — a push after review voids it.
