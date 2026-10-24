@@ -24,7 +24,7 @@ preferences, project constraints. `~/vault/USER.md` overrides this file on confl
   harnesses, ledger/factory, LLM routing, knowledge, scheduling, roles).
   Placement policy: project-scoped maps live in the repo; meta maps in vault.
   Read the topic file when touching that subsystem; `findings.md` tracks
-  open overlaps/conflicts/gaps (each ticketed in the ledger).
+  open overlaps/conflicts/gaps (each ticketed as a bead).
 
 ## Context loading
 
@@ -82,7 +82,7 @@ At session start, load these files into the system prompt:
   reduces cost at no quality loss.
 - **Write lane (prose rule; structural gate pending — arc-director
   DESIGN.md invariant 7).** Only write files under `~/repos/**`, `/tmp/**`,
-  `~/vault/ke/**`, `~/vault/director/**`, and the ledger (via bookie only).
+  `~/vault/ke/**`, `~/vault/director/**`, and beads (via `bd`).
   Any other path — new home dirs, `~/bin`, `~/agents`, other vault subtrees —
   requires captain approval before the first write. Check the target path
   before writing, not after.
@@ -102,8 +102,9 @@ At session start, load these files into the system prompt:
   2026-08-27).** Anything requiring captain review is presented as a
   self-contained HTML page under /review/<file> on arc-webui
   (http://home-lab-1:8080/review/<file>; artifacts in
-  ~/vault/director/reviews/), linked from a human-gate ledger row
-  (bookie create --kind task --type HITL). Never "open this file path".
+  ~/vault/director/reviews/). Approval and decision items are beads
+  labelled `human` (`bd human list`); review pages link the bead id.
+  Never "open this file path".
 - **Push early, push often.** Local divergence from origin creates merge
   conflicts and feature regression risk. Push feature branches to origin
   immediately, not at the end of development.
