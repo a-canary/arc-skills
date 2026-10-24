@@ -8,7 +8,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { get, runHealthMonitor, SERVICES, type Service } from "./health-monitor";
+import { get, runHealthMonitor, SERVICES, V100IDLE_JOB, type Service } from "./health-monitor";
 
 function fixtureDb(): Database {
   const db = new Database(":memory:");
@@ -111,4 +111,11 @@ test("get retries once on a transient network error", async () => {
   } finally {
     globalThis.fetch = real;
   }
+});
+
+test("v100idle lease pattern matches the job process, not a shell quoting it", () => {
+  const re = new RegExp(V100IDLE_JOB);
+  expect(re.test("/usr/bin/python3 /home/agent-pub/repos/rd-director/bin/v100idle exec rrdm-g10p7d-lr3e4")).toBe(true);
+  expect(re.test("python3 bin/v100idle loop")).toBe(false);
+  expect(re.test("/bin/bash -c eval 'pgrep -af \"bin/v100idle exec x\"'")).toBe(false);
 });

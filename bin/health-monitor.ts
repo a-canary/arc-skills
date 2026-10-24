@@ -110,6 +110,9 @@ export async function sendAlert(state: "down" | "up", serviceId: string, detail:
 
 const QUIET = process.argv.includes("--quiet");
 
+/** pgrep ERE for a running `python3 .../bin/v100idle exec <job>` (not a shell quoting it). */
+export const V100IDLE_JOB = "^[^ ]*python[^ ]* [^ ]*/v100idle exec [^ ]+$";
+
 export const SERVICES: Service[] = [
   {
     id: "auto-llm",
@@ -125,7 +128,12 @@ export const SERVICES: Service[] = [
     id: "v100",
     project: "llm-hosting",
     // Local GPU inference (llama-server / vllm / sglang) behind provider `v100`.
+    // agent-pub's rd-director `v100idle` scheduler deliberately stops inference
+    // to run training jobs on the idle GPU; that lease is not an outage. If
+    // inference fails to return once the job exits, the next tick alerts.
     probe: async () => {
+      const lease = sh("pgrep", ["-af", V100IDLE_JOB]);
+      if (lease.rc === 0) return `GPU leased to v100idle job ${lease.out.split("\n")[0].split(" ").pop()}`;
       const proc = sh("pgrep", ["-f", "llama-server|vllm|sglang"]);
       if (proc.rc !== 0) return fail("no llama-server/vllm/sglang process");
       const url = await firstOk([
