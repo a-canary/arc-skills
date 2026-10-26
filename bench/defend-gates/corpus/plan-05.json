@@ -1,0 +1,27 @@
+{
+  "id": "plan-05",
+  "gate": "plan",
+  "title": "Pantry Match: recipe suggestions from what's in your pantry",
+  "context": "Simmer is a consumer recipe app (iOS, Android, web; Rails API on a single Postgres 15 primary with two read replicas) with 2.1M monthly active users, ~78% of them in US time zones. Mission: help home cooks decide what to cook tonight with as little effort as possible. This plan is about to be dispatched to a 4-engineer squad for a 6-week build.",
+  "artifact": "# Pantry Match — build plan\n\nSquad: Discovery (3 eng + 1 mobile) | 6 weeks | PM: Discovery PM\n\n## 1. Problem\nChurned-user exit survey, Q2 (n = 3,800), top reasons:\n1. \"Too much setup / typing to get useful suggestions\" — 38%\n2. \"Recipes need ingredients I don't have\" — 22%\n3. \"Same recipes keep showing up\" — 15%\nPantry Match targets reason #2: suggest recipes that use what the user already has.\n\n## 2. User experience\n- New Pantry tab. Users add items with a form: ingredient (autocomplete over our 9,400-ingredient catalog), quantity, unit, expiry date.\n- To keep match quality high, Pantry Match unlocks once a user has entered at least 15 items with expiry dates. Until then the tab shows a progress bar (\"7 of 15 items added\").\n- Users are asked to update quantities after cooking (prompt on the recipe \"I made this\" screen).\n- Home feed gains a \"Cook from your pantry\" carousel (top 10 matches) once unlocked.\n\n## 3. Matching\n- Score = (pantry ingredients used / recipe ingredients) weighted by expiry proximity, with pantry staples (salt, oil, water, pepper) always counted as present.\n- Ingredient normalization reuses the existing ingredient_aliases table (e.g. \"scallion\" = \"green onion\").\n\n## 4. Compute\n- New table pantry_matches(user_id, recipe_id, score, computed_at), top 50 per user.\n- PantryMatchJob (Sidekiq, nightly 02:00 UTC): for each user with a pantry, score every recipe in the catalog (340k recipes) in a single SQL statement joining pantry_items x recipe_ingredients on the primary, then upsert the top 50 into pantry_matches.\n- Staging run: 12,000 synthetic pantry users completed in 41 minutes.\n- Adoption assumption for sizing: 30% of MAU create a pantry within 90 days.\n\n## 5. Notifications\n- Optional \"use it before it goes bad\" push when a pantry item is 2 days from expiry.\n- Opt-in only (off by default), max 1 push per user per day, respects existing quiet hours (21:00-08:00 local).\n\n## 6. Timeline\n- Weeks 1-2: pantry data model, Pantry tab + item form (iOS/Android/web).\n- Week 3: scoring, PantryMatchJob.\n- Week 4: home carousel, \"I made this\" quantity prompt.\n- Week 5: notifications, analytics events.\n- Week 6: beta to 5% of users, then 100%.\n\n## 7. Success metrics\n- 25% of MAU unlock Pantry Match within 60 days.\n- +3 pts 30-day retention for users who unlock vs. matched control.\n",
+  "expected_verdict": "ATTACKS",
+  "defects": [
+    {
+      "id": "d1",
+      "lens": "ux-value",
+      "severity": "major",
+      "description": "Cross-reference §1 vs §2: the #1 churn reason (38%) is too much setup/typing, yet the feature is locked behind manually entering 15 items with quantity, unit and expiry, plus post-cooking quantity updates. The design trades churn reason #2 for amplifying reason #1, so it will likely fail its own unlock and retention metrics.",
+      "evidence": "Pantry Match unlocks once a user has entered at least 15 items with expiry dates"
+    },
+    {
+      "id": "d2",
+      "lens": "scale",
+      "severity": "blocker",
+      "description": "At the 30% adoption assumption (~630k users) the nightly job scores ~2x10^11 user-recipe pairs in single SQL statements on the primary; extrapolating the 12k-user staging run (41 min) linearly gives ~36 hours per nightly run. It also runs at 02:00 UTC, which is US evening dinner-planning peak for a 78%-US user base, so it loads the primary at peak traffic.",
+      "evidence": "score every recipe in the catalog (340k recipes) in a single SQL statement joining pantry_items x recipe_ingredients on the primary"
+    }
+  ],
+  "decoys": [
+    "Push-notification spam: handled in §5 — opt-in, off by default, 1/day cap, honours quiet hours."
+  ]
+}

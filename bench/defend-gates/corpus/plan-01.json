@@ -1,0 +1,35 @@
+{
+  "id": "plan-01",
+  "gate": "plan",
+  "title": "Covered-call auto-roller v2: intraday roll engine",
+  "context": "Small family-office trading system (Python 3.12, Postgres 16, one VPS) that sells covered calls on ~40 held equities through an existing broker API client. Mission: steady option-premium income with capped drawdown. This plan is about to be handed to two engineers for a 4-week build. Agreed constraints: total monthly data + infra spend must stay under $250; position sizing rules are out of scope and must not change.",
+  "artifact": "# Plan: Auto-Roller v2 — intraday roll decisions\n\nOwner: trading-infra | Build: 4 weeks, 2 engineers | Status: ready for dispatch\n\n## Summary\nReplace the end-of-day roll script (roll_eod.py) with an intraday engine that rolls short calls the moment a roll trigger fires, instead of waiting for the 15:45 ET batch.\nExpected impact: +3.8% net APR vs. EOD rolling (see §2).\n\n## 1. Roll triggers (unchanged semantics, new timing)\n- Short call delta >= 0.70, or\n- DTE <= 5 and extrinsic value < $0.10, or\n- Underlying gaps > 4% through strike within the session.\nRoll target: same strike +1 expiry, or next strike up if the credit is >= $0.05. No change to contract counts (position sizing is out of scope).\n\n## 2. Rationale\nRolling at the close means we routinely roll after the intraday mean-reversion has already happened. On high-volatility days the short leg is often cheapest to buy back mid-morning, after the opening spike fades. Desk notes from the last two quarters list several days where a mid-session roll \"would have been better\". Capturing those windows systematically, plus avoiding the wide closing spreads we see after 15:30, is where the improvement comes from. Intraday rolling is also standard practice among the option-income funds we follow.\n\n## 3. Architecture\n- chain_poller (new): every 15 s, fetch a real-time option chain snapshot for each held underlying (front expiry + next expiry). 40 underlyings => 160 requests/min during RTH.\n- roll_engine (new): consumes snapshots, evaluates §1 triggers, emits RollIntent rows.\n- order_router (existing broker client, extended): turns RollIntent into a single combo order (buy-to-close + sell-to-open) with a limit at mid minus 1 tick, re-priced every 20 s up to 3 times, then cancelled.\n- Postgres: new tables roll_intents, rolls; positions table changes in §5.\n\n## 4. Market data vendor\nCurrent vendor: Optiq Data. Plan tiers:\n\n| Tier    | Price/mo | Rate limit   | Option quotes   |\n|---------|----------|--------------|-----------------|\n| Starter | $79      | 5 req/min    | 15-min delayed  |\n| Growth  | $199     | 100 req/min  | real-time       |\n| Pro     | $499     | unlimited    | real-time       |\n\nWe stay on Starter. Monthly run cost: Optiq Starter $79 + existing VPS $60 = $139, comfortably inside the $250 cap.\n\n## 5. Data model migration (week 1)\npositions.roll_history (JSONB array of every roll since account inception) is replaced by a normalized rolls table.\n- Migration 0042 runs in-place against prod Monday 08:00 ET (pre-market).\n- Backfill copies roll_history entries from the last 90 days into rolls; older entries are not needed by roll_engine.\n- In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.\n- roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4.\n\n## 6. Rollout\n- Week 1: migration, chain_poller, roll_engine skeleton.\n- Week 2-3: paper mode (RollIntent written, no orders) alongside roll_eod.py; compare intents vs. EOD decisions daily.\n- Week 4: ROLLER_V2=true on 5 underlyings, then all 40.\n- Success criterion: realized net APR over the first 30 live days >= EOD baseline + 3.8%.\n\n## 7. Risks and mitigations\n- Runaway order loop: order_router enforces max 1 roll per contract per day and max 8 roll orders per account per day; both are hard limits checked before submit, plus a ROLLER_KILL env switch read on every loop.\n- Partial fills on combo: combo orders are all-or-none at the broker; a rejected combo leaves the original short call untouched.\n- Broker API outage: roll_engine stops emitting intents when the last successful broker heartbeat is > 60 s old.\n",
+  "expected_verdict": "ATTACKS",
+  "defects": [
+    {
+      "id": "d1",
+      "lens": "evidence",
+      "severity": "major",
+      "description": "The headline +3.8% net APR uplift is load-bearing (it is the success criterion in §6) but §2 offers only anecdote and analogy; there is no backtest or replay of historical chains comparing intraday vs EOD rolls. A multi-week build is being justified by an unmeasured number.",
+      "evidence": "Expected impact: +3.8% net APR vs. EOD rolling (see §2)."
+    },
+    {
+      "id": "d2",
+      "lens": "cost",
+      "severity": "blocker",
+      "description": "Cross-reference §3 vs §4: the poller needs 160 real-time requests/min, but the budgeted Starter tier allows 5 req/min with 15-min delayed quotes. Only Pro ($499/mo) satisfies the load, which breaks the agreed $250 cap; on Starter the engine would be rate-limited and trade on stale prices.",
+      "evidence": "We stay on Starter. Monthly run cost: Optiq Starter $79 + existing VPS $60 = $139"
+    },
+    {
+      "id": "d3",
+      "lens": "reversibility",
+      "severity": "blocker",
+      "description": "Migration 0042 permanently drops roll_history after backfilling only 90 days, with no backup/export step, destroying the full roll audit trail (cost-basis/tax history). It also breaks the stated fallback: roll_eod.py reads the dropped column, so ROLLER_V2=false no longer works.",
+      "evidence": "In the same transaction, ALTER TABLE positions DROP COLUMN roll_history."
+    }
+  ],
+  "decoys": [
+    "Runaway order loop / order spam risk: handled in §7 by hard per-contract and per-account daily roll limits checked before submit plus a kill switch.",
+    "Leg risk on rolls: handled in §7 — combo orders are all-or-none, a rejected combo leaves the original position untouched."
+  ]
+}
