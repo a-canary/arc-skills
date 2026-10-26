@@ -47,6 +47,11 @@ const RUBRIC = `Mandatory lenses — address every one (silently skipping is not
 ${lensList()}
 After the lenses, free-attack anything else gate-worthy (lens "other").`;
 
+const CALIBRATION = `Blocking test — apply to EVERY attack before grading it blocker/major:
+1. Name the concrete failure that WILL happen if the artifact crosses as-is (who/what breaks, how).
+2. Confirm the artifact does not already address it (re-read the relevant section).
+If either fails — hypothetical risk, missing nice-to-have, documentation gap, risk the artifact mitigates — grade it minor.`;
+
 const norm = (v: Verdict): Verdict => {
   const attacks = Array.isArray(v.attacks) ? v.attacks : [];
   // Verdict follows the contract, not the model's label (some models label CLEAR while listing majors).
@@ -176,6 +181,34 @@ STOP at the FIRST blocker or major finding and output immediately with that sing
         `${sys(n, d)}\n\nROUND 2: rebut the weakest argument from another expert, update your position, give your refined attack list.\n${OUT}`,
         `${input(c)}\n\nROUND 1 PANEL:\n${JSON.stringify(panel, null, 1)}`)));
       return { ...(await compile(u, c, Object.fromEntries(axes.map(([n], i) => [n, r2[i]])))), usage: u };
+    },
+  },
+  // Phase-2 deconfounders: is calibration about the verdict seat's tier, or fixable by prompt alone?
+  "rubric-calibrated": {
+    desc: "rubric-single + strict blocking test (blocker/major only with a concrete, unaddressed failure)",
+    fn: async (c) => {
+      const u = zero();
+      const [v] = await stage(u, [() => callJson<Verdict>(u, W, `${BASE}\n\n${RUBRIC}\n\n${CALIBRATION}\n\n${VERDICT_OUT}`, input(c))]);
+      return { ...norm(v), usage: u };
+    },
+  },
+  "clustered-panel-sc": {
+    desc: "clustered-panel with a strong-tier (sonnet) compiler",
+    fn: async (c) => {
+      const u = zero();
+      const reports = await stage(u, Object.entries(CLUSTERS).map(([name, ls]) => specialist(u, c,
+        `You are the ${name} reviewer. Cover ONLY these lenses (others are covered by colleagues):\n${lensList(ls)}\nThen free-attack anything gate-worthy nobody else would catch (lens "other").`)));
+      return { ...(await compile(u, c, Object.fromEntries(Object.keys(CLUSTERS).map((k, i) => [k, reports[i]])), S)), usage: u };
+    },
+  },
+  "elephant-gold-sc": {
+    desc: "elephant-gold with a strong-tier (sonnet) compiler",
+    fn: async (c) => {
+      const u = zero();
+      const roles = [...slugs.map((l) => [l, `You are the ${l} specialist. Review ONLY through this lens: ${LENSES[l]}. Other specialists cover every other concern — stay in your lane.`]),
+        ["free", `You are the free-attack generalist. Specialists already cover: ${slugs.join(", ")}. Find gate-worthy problems that fall between or outside those lenses (lens "other").`]];
+      const reports = await stage(u, roles.map(([, r]) => specialist(u, c, r)));
+      return { ...(await compile(u, c, Object.fromEntries(roles.map(([k], i) => [k, reports[i]])), S)), usage: u };
     },
   },
   "single-strong": {

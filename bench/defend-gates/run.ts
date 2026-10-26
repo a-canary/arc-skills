@@ -64,19 +64,24 @@ await pool(judgeJobs, 4, async ({ k, r }) => {
   const order = subs.map((s) => ({ s, x: rnd() })).sort((p, q) => p.x - q.x).map((p) => p.s);
   const letters = order.map((_, i) => String.fromCharCode(65 + i));
   const withAttacks = order.map((s, i) => ({ L: letters[i], s })).filter((o) => o.s.res.attacks.length);
-  let labels: Record<string, string[]> = {};
+  let labels: Record<string, (string | undefined)[]> = {};
   const u = zero();
   if (withAttacks.length) {
     const body = withAttacks.map(({ L, s }) => `### Submission ${L}\n` + s.res.attacks.map((x, j) => `${j}. [${x.severity}] (${x.lens}) ${x.claim} — evidence: ${x.evidence}`).join("\n")).join("\n\n");
     const key = { expected_verdict: k.expected_verdict, defects: k.defects.map(({ id, lens, description, evidence }) => ({ id, lens, description, evidence })), decoys: k.decoys };
-    const { data } = await callJson<Record<string, string[]>>(u, a.judge!,
-      `You are a meticulous benchmark judge. You score gate-review submissions against a hidden answer key. Be strict and consistent; judge each attack on its content only.\n\n${LABELS}\n\nReturn ONLY JSON: {"<submission letter>":["label for attack 0","label for attack 1",...], ...} with one label per attack, in order, for every submission listed.`,
-      `CASE:\nCONTEXT:\n${k.context}\n\nARTIFACT:\n${k.artifact}\n\nANSWER KEY:\n${JSON.stringify(key, null, 1)}\n\nSUBMISSIONS:\n${body}`);
-    labels = data;
+    // Index-keyed labels: a positional list silently shifts every later label when the judge skips one.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const { data } = await callJson<Record<string, Record<string, string>>>(u, a.judge!,
+        `You are a meticulous benchmark judge. You score gate-review submissions against a hidden answer key. Be strict and consistent; judge each attack on its content only.\n\n${LABELS}\n\nReturn ONLY JSON: {"<submission letter>":{"0":"<label>","1":"<label>",...}, ...} with a label for EVERY attack index of every submission listed.`,
+        `CASE:\nCONTEXT:\n${k.context}\n\nARTIFACT:\n${k.artifact}\n\nANSWER KEY:\n${JSON.stringify(key, null, 1)}\n\nSUBMISSIONS:\n${body}`);
+      labels = Object.fromEntries(withAttacks.map(({ L, s }) => [L, s.res.attacks.map((_, j) => data[L]?.[String(j)])]));
+      if (Object.values(labels).every((l) => l.every(Boolean))) break;
+      log(`judge missing labels ${k.id} r${r} attempt ${attempt}`);
+    }
   }
   const out = Object.fromEntries(order.map((s, i) => {
     const l = labels[letters[i]] ?? [];
-    if (l.length !== s.res.attacks.length) log(`WARN judge label count ${k.id} r${r} ${s.n}: ${l.length} vs ${s.res.attacks.length}`);
+    if (l.filter(Boolean).length !== s.res.attacks.length) log(`WARN judge unlabeled attacks ${k.id} r${r} ${s.n}: ${l.filter(Boolean).length}/${s.res.attacks.length}`);
     return [s.n, { letter: letters[i], labels: l }];
   }));
   await Bun.write(`${OUT}/judged/${k.id}__r${r}.json`, JSON.stringify({ case: k.id, rep: r, judgeUsage: u, judged: out }, null, 1));
