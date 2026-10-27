@@ -2,8 +2,8 @@
 // S appears only where escalation to a stronger tier IS the strategy (cascade, single-strong reference).
 import { type Usage, callJson, stage, zero } from "./lib";
 
-export const W = "haiku";
-export const S = "sonnet";
+export const W = process.env.BENCH_W ?? "haiku"; // e.g. v100:qwen3.8-27b for the sovereign tier
+export const S = process.env.BENCH_S ?? "sonnet";
 
 export type Attack = { lens: string; severity: "blocker" | "major" | "minor"; claim: string; evidence: string };
 export type Verdict = { verdict: "CLEAR" | "ATTACKS"; confidence?: number; attacks: Attack[] };

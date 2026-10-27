@@ -3,7 +3,7 @@
 import { parseArgs } from "util";
 import { mkdirSync, existsSync, readdirSync, appendFileSync } from "fs";
 import { APPROACHES, type Case, type Result } from "./approaches";
-import { callJson, pool, zero } from "./lib";
+import { callJson, pool, zero, loadCorpus } from "./lib";
 
 const { values: a } = parseArgs({ options: {
   run: { type: "string", default: "dev" }, approaches: { type: "string" }, cases: { type: "string" },
@@ -16,8 +16,7 @@ mkdirSync(`${OUT}/raw`, { recursive: true });
 mkdirSync(`${OUT}/judged`, { recursive: true });
 
 type Key = Case & { expected_verdict: string; defects: { id: string; lens: string; severity: string; description: string; evidence: string }[]; decoys: string[] };
-const corpus: Key[] = readdirSync(`${DIR}/corpus`).filter((f) => f.endsWith(".json")).sort()
-  .map((f) => JSON.parse(require("fs").readFileSync(`${DIR}/corpus/${f}`, "utf8")))
+const corpus: Key[] = Object.values(loadCorpus(DIR))
   .filter((k: Key) => !a.cases || a.cases.split(",").includes(k.id));
 const names = a.approaches ? a.approaches.split(",") : Object.keys(APPROACHES);
 const reps = Array.from({ length: Number(a.reps) }, (_, i) => i + 1);

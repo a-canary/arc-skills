@@ -12,7 +12,7 @@ for (const f of readdirSync(`${OUT}/judged`)) {
     if (a.approach && n !== a.approach) continue;
     const r = read(`${OUT}/raw/${n}__${j.case}__r${j.rep}.json`);
     labels.forEach((l: string, i: number) => {
-      const want = a.label ? l === a.label : /^d\d+$/.test(l);
+      const want = a.label ? l === a.label : isDefectLabel(l);
       if (!want) return;
       const d = k.defects.find((d: any) => d.id === l);
       pairs.push(`## ${j.case} r${j.rep} ${n} → ${l}\nKEY: ${d ? d.description : "(not a defect)"}\nATTACK [${r.attacks[i].severity}]: ${r.attacks[i].claim}`);

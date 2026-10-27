@@ -2,15 +2,16 @@
 import { parseArgs } from "util";
 import { readdirSync, readFileSync, existsSync } from "fs";
 import { APPROACHES } from "./approaches";
+import { loadCorpus, isDefectLabel } from "./lib";
 
 const { values: a } = parseArgs({ options: { run: { type: "string", default: "dev" } } });
 const DIR = import.meta.dir, OUT = `${DIR}/results/${a.run}`;
 const read = (p: string) => JSON.parse(readFileSync(p, "utf8"));
-const corpus = Object.fromEntries(readdirSync(`${DIR}/corpus`).filter((f) => f.endsWith(".json")).map((f) => { const k = read(`${DIR}/corpus/${f}`); return [k.id, k]; }));
+const corpus = loadCorpus(DIR);
 const judged = readdirSync(`${OUT}/judged`).map((f) => read(`${OUT}/judged/${f}`));
 const blocking = (s: string) => s === "blocker" || s === "major";
 
-type Row = { approach: string; case: string; gate: string; rep: number; expected: string; got: string; defects: any[];
+type Row = { approach: string; case: string; gate: string; rep: number; expected: string; orig: string; got: string; defects: any[];
   caughtGated: Set<string>; caughtAny: Set<string>; caughtTop3: Set<string>; extraBlocking: number; bogus: number; wrong: number; decoyBlocking: number; decoy: number; nit: number; extra: number; attacks: number;
   tok: number; usd: number; calls: number; critMs: number };
 const rows: Row[] = [];
@@ -18,7 +19,7 @@ for (const j of judged) {
   const k = corpus[j.case];
   for (const [n, { labels }] of Object.entries<any>(j.judged)) {
     const r = read(`${OUT}/raw/${n}__${j.case}__r${j.rep}.json`);
-    const row: Row = { approach: n, case: j.case, gate: k.gate, rep: j.rep, expected: k.expected_verdict, got: r.verdict, defects: k.defects,
+    const row: Row = { approach: n, case: j.case, gate: k.gate, rep: j.rep, expected: k.expected_verdict, orig: k.originalVerdict, got: r.verdict, defects: k.defects,
       caughtGated: new Set(), caughtAny: new Set(), caughtTop3: new Set(), extraBlocking: 0, bogus: 0, wrong: 0, decoyBlocking: 0, decoy: 0, nit: 0, extra: 0, attacks: r.attacks.length,
       tok: r.usage.tokIn + r.usage.tokOut, usd: r.usage.usd, calls: r.usage.calls, critMs: r.usage.critMs };
     // Top-3 by severity (stable): what a consumer reading only the head of the verdict sees.
@@ -28,8 +29,8 @@ for (const j of judged) {
       const l = String(labels[i] ?? "wrong");
       if (["wrong", "decoy", "nit"].includes(l) && blocking(x.severity)) row.bogus++;
       if (l === "extra" && blocking(x.severity)) row.extraBlocking++;
-      if (/^d\d+$/.test(l) && top3.has(i) && blocking(x.severity)) row.caughtTop3.add(l);
-      if (/^d\d+$/.test(l)) { row.caughtAny.add(l); if (blocking(x.severity)) row.caughtGated.add(l); }
+      if (isDefectLabel(l) && top3.has(i) && blocking(x.severity)) row.caughtTop3.add(l);
+      if (isDefectLabel(l)) { row.caughtAny.add(l); if (blocking(x.severity)) row.caughtGated.add(l); }
       else if (l === "decoy") { row.decoy++; if (blocking(x.severity)) row.decoyBlocking++; }
       else if (l === "wrong") row.wrong++;
       else if (l === "nit") row.nit++;
@@ -53,24 +54,10 @@ const recall = (rs: Row[], gated = true, sev?: string, set: "caughtGated" | "cau
   for (const r of rs) for (const d of r.defects) if (!sev || d.severity === sev) { t++; if (r[set].has(d.id)) c++; }
   return t ? c / t : NaN;
 };
-// Disputed control: a "clean" case where, in ANY judging pass, ≥2/3 of approaches raise a blocking attack the judge rates a real,
-// unkeyed problem ("extra"). Its key is likely wrong, so headline TNR excludes it; raw-key TNR is shown alongside (grey).
-// Any-pass because the judge flips borderline extra↔nit between passes (measured: see judge-agreement.ts).
-const extraApproaches = (judgedRows: { case: string; approach: string; extraBlocking: number }[]) =>
-  Object.entries(Object.groupBy(judgedRows, (r) => r.case)).filter(([, rs]) =>
-    new Set(rs!.filter((r) => r.extraBlocking > 0).map((r) => r.approach)).size >= (2 / 3) * new Set(rs!.map((r) => r.approach)).size).map(([c]) => c);
-const pass1Rows = existsSync(`${OUT}/judged-pass1`) ? readdirSync(`${OUT}/judged-pass1`).flatMap((f) => {
-  const j = read(`${OUT}/judged-pass1/${f}`);
-  return Object.entries<any>(j.judged).map(([n, { labels }]) => {
-    const r = read(`${OUT}/raw/${n}__${j.case}__r${j.rep}.json`);
-    return { case: j.case, approach: n, extraBlocking: r.attacks.filter((x: any, i: number) => labels[i] === "extra" && blocking(x.severity)).length };
-  });
-}) : [];
-const cleanIds = new Set(Object.values<any>(corpus).filter((k) => k.expected_verdict === "CLEAR").map((k) => k.id));
-const contested = new Set([...extraApproaches(rows), ...extraApproaches(pass1Rows)].filter((c) => cleanIds.has(c)));
+// Headline TPR/TNR use the adjudicated key (adjudicate.ts → corpus-amend/); grey TNR = original authoring key.
 const tpr = (rs: Row[]) => mean(rs.filter((r) => r.expected === "ATTACKS").map((r) => +(r.got === "ATTACKS")));
-const tnrRaw = (rs: Row[]) => mean(rs.filter((r) => r.expected === "CLEAR").map((r) => +(r.got === "CLEAR")));
-const tnr = (rs: Row[]) => tnrRaw(rs.filter((r) => !contested.has(r.case)));
+const tnr = (rs: Row[]) => mean(rs.filter((r) => r.expected === "CLEAR").map((r) => +(r.got === "CLEAR")));
+const tnrRaw = (rs: Row[]) => mean(rs.filter((r) => r.orig === "CLEAR").map((r) => +(r.got === "CLEAR")));
 const bacc = (rs: Row[]) => (tpr(rs) + tnr(rs)) / 2;
 
 const names = Object.keys(APPROACHES).filter((n) => rows.some((r) => r.approach === n));
@@ -99,7 +86,7 @@ const summary = names.map((n) => {
 });
 const judgeUsd = judged.reduce((s, j) => s + j.judgeUsage.usd, 0);
 const approachUsd = rows.reduce((s, r) => s + r.usd, 0);
-await Bun.write(`${OUT}/summary.json`, JSON.stringify({ run: a.run, cases: Object.keys(corpus).length, judgedCaseReps: judged.length, judgeUsd, approachUsd, contested: [...contested], summary }, null, 1));
+await Bun.write(`${OUT}/summary.json`, JSON.stringify({ run: a.run, cases: Object.keys(corpus).length, judgedCaseReps: judged.length, judgeUsd, approachUsd, amended: Object.values<any>(corpus).filter((k) => k.amended).map((k) => k.id), summary }, null, 1));
 
 // ---------- HTML
 const pct = (x: number) => isNaN(x) ? "–" : (100 * x).toFixed(0) + "%";
@@ -161,7 +148,7 @@ th{font-size:12px;color:var(--mute);font-weight:600}.small td,.small th{font-siz
 <p class=ci>run <code>${a.run}</code> · ${Object.keys(corpus).length} cases (${nDef} seeded defects, ${nClean} clean controls) · ${judged.length} judged case-reps · worker tier = haiku, strong tier = sonnet, judge = opus (blind, shuffled) · judge spend ${usd(judgeUsd)} · generated ${new Date().toISOString().slice(0, 16)}Z</p>
 ${analysis}
 <h2>Scoreboard</h2><div class=wrap>${table}</div>
-<p class=ci>gated recall = seeded defect caught by a blocker/major attack · TPR = defective artifact → ATTACKS · TNR = clean artifact → CLEAR, contested controls excluded (grey = raw key) · recall@3 = defect caught by a blocking attack ranked in the top 3 · bogus blockers = blocker/major attacks the judge labelled wrong, decoy or nit · precision = (seeded+valid extra)/(non-dup attacks) · $ = Claude list price reported by the CLI (subscription seat in practice) · crit-path = sum over stages of the slowest call (parallel fan-out assumed) · CIs = case-level bootstrap.</p>
+<p class=ci>gated recall = seeded defect caught by a blocker/major attack · TPR = defective artifact → ATTACKS · TNR = clean artifact → CLEAR, adjudicated key (grey = original authoring key) · recall@3 = defect caught by a blocking attack ranked in the top 3 · bogus blockers = blocker/major attacks the judge labelled wrong, decoy or nit · precision = (seeded+valid extra)/(non-dup attacks) · $ = Claude list price reported by the CLI (subscription seat in practice) · crit-path = sum over stages of the slowest call (parallel fan-out assumed) · CIs = case-level bootstrap.</p>
 <h2>Cost vs effectiveness</h2>${scatter}
 <h2>Recall by lens</h2><div class=wrap>${lensTable}</div>
 <h2>By gate type</h2><div class=wrap>${gateTable}</div>
