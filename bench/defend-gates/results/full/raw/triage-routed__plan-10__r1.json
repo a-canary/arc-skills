@@ -1,0 +1,143 @@
+{
+ "approach": "triage-routed",
+ "case": "plan-10",
+ "rep": 1,
+ "wallMs": 565850,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Processor erasure (Amplitude, Customer.io, Zendesk, Stripe, Apple revoke) runs only after the DB transaction commits, with retries. The plan does not say where pending processor work, external IDs or revocation tokens are persisted, so a crash or deploy after commit can leave processor data unerased with no retry source and no idempotency or resume marker.",
+   "evidence": "\"each account is one DB transaction across `users` and the 23 tables that reference it.\" / \"After the DB transaction commits: Amplitude... Customer.io: DELETE /customers/{id}... Sign in with Apple users: POST /auth/revoke\" / ABSENT: a persisted outbox or queue of pending processor calls, their IDs and tokens, and idempotency keys."
+  },
+  {
+   "lens": "data-inventory-completeness",
+   "severity": "major",
+   "claim": "The claim that no other system holds user-level data is contradicted by the plan's own text. The transactional email provider (which receives the confirmation and purge-date emails), push providers (device tokens), Zendesk ticket bodies, and Sentry and application logs (kept 30 days after purge) are not in the purge list. The Google sign-in path has no token revocation.",
+   "evidence": "\"No other system holds user-level data beyond the processors below (data inventory DPI-2026, reviewed Sep 2026).\" / \"Application logs and Sentry error reports have 30-day retention\" / ABSENT: email delivery, push (APNs/FCM) and Google token handling in §4."
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "When the 7-day retry window is exhausted, the failure path is a ticket to the privacy lead with no SLA or hard deadline. The plan says worst case stays within one month, but nothing forces erasure to complete before the Art. 17 limit, and the 14+7 day ceiling leaves little margin.",
+   "evidence": "\"anything still failing opens a `purge-failed` ticket for the privacy lead. Worst case (14 + 7 days) stays inside the one-month Art. 17 deadline.\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "The Art. 17 clock runs from the request, but the success measure runs from confirmation. Web users who cannot log in confirm only by clicking an emailed link, and the plan sets no expiry for that link, so the one-month deadline can pass without being measured.",
+   "evidence": "\"100% of purges complete within 21 days of confirmation (dashboard)\" / \"we email a confirmation link to the account address, and clicking it counts as re-auth\" / ABSENT: link expiry and the request timestamp used for the Art. 17 clock."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Purge is irreversible and the plan has no kill switch or pause for it. The purge job ignores the feature flag, and dry-run applies only to the first live batch, which the privacy lead reviews. The registry's nullify-vs-delete semantics could then destroy data at scale in a later batch with no control to halt it.",
+   "evidence": "\"Requests already confirmed are still purged on schedule (the purge job ignores the flag)\" / \"The first real purge batch (14 days after launch) runs in dry-run mode first\" / ABSENT: a purge-specific pause control, its owner, and checks for later batches."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Failure handling covers only processor calls. A failure of the nightly 23-table DB transaction (lock timeout, large account) has no stated retry, escalation or alert, so one account can block the job indefinitely unnoticed. The only monitoring is a dashboard, with no alerts on job liveness, backlog age or purge-failed volume, so the 21-day guarantee depends on someone watching a screen.",
+   "evidence": "\"Each call retries with exponential backoff for up to 7 days\" / \"A dashboard shows pending, completed and failed per processor.\" / ABSENT: handling for AccountPurgeJob transaction failures and alerts on job liveness, backlog age or ticket volume."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "On confirm, sessions are revoked and the account deactivated before the Stripe call that stops renewal. If that call fails, the user is locked out and believes deletion is underway while the subscription still renews, and no retry, rollback or alert is described.",
+   "evidence": "\"On confirm: All sessions and refresh tokens are revoked. The account is deactivated...\" / \"Web (Stripe): at confirm, the subscription is set to `cancel_at_period_end`\" / ABSENT: retry, rollback or alerting on Stripe update failure."
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Web subscribers get no specified disclosure on the deletion screen about their paid period and renewal. The only web-related text is a conditional notice, and the refund policy link does not state what happens to the current period, so the consequences are not clear before confirmation.",
+   "evidence": "\"Subscription notice, only when relevant (§3)\" / \"Refunds follow the existing refund policy, linked from screen 1; nothing changes there.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The restore guarantee depends on deleted_accounts, which lives in the same Postgres database that is restored from a snapshot. Purges that ran after the snapshot are lost from that table, so a restore can bring back accounts already deleted. The protection is also a human runbook, and the drill is only planned on staging.",
+   "evidence": "\"Table `deleted_accounts` keeps only purged user IDs and dates (no PII); the restore runbook re-applies purges from it after any restore, so a restore cannot resurrect a deleted account.\" / \"restore-runbook drill on a staging snapshot\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "deleted_accounts stores a stable user ID linked to a deletion date. Under GDPR this is pseudonymous personal data, not 'no PII', and it has no stated retention limit. It is also carried through every backup and restore.",
+   "evidence": "\"Table `deleted_accounts` keeps only purged user IDs and dates (no PII)\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Stripe purge only detaches payment methods and redacts metadata. The Stripe customer object, which likely still holds email and name, remains, so 'Nothing else is kept' is not accurate for Stripe.",
+   "evidence": "\"Stripe: detach payment methods and redact customer metadata; invoices stay as required.\""
+  },
+  {
+   "lens": "oauth-revocation",
+   "severity": "minor",
+   "claim": "Only Sign in with Apple tokens are revoked at purge. Google sign-in grants and provider-side access are not addressed.",
+   "evidence": "\"Sign in with Apple users: `POST /auth/revoke` for their refresh token.\" / ABSENT: an equivalent Google revocation step."
+  },
+  {
+   "lens": "backup-restore",
+   "severity": "minor",
+   "claim": "The restore runbook re-applies only database purges. It does not say whether processor-side deletions are re-triggered, so data erased at Amplitude, Customer.io, Zendesk or Stripe could be recreated by replaying backup state.",
+   "evidence": "\"the restore runbook re-applies purges from it after any restore\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "The invoice retention period is not stated numerically and relies on an existing job that is not verified. The plan also applies German §147 AO retention without saying how it applies to users outside Germany.",
+   "evidence": "\"for the statutory retention period under §147 AO, then removed by the existing invoice retention job\""
+  },
+  {
+   "lens": "registry-coverage",
+   "severity": "minor",
+   "claim": "The CI check only catches columns named user_id or *_user_id. Personal data under other keys, such as device tokens, IP addresses or email-keyed records, would not be flagged.",
+   "evidence": "\"A CI test fails if any such column in `db/schema.rb` is missing from the registry\""
+  },
+  {
+   "lens": "export-retention",
+   "severity": "minor",
+   "claim": "The data export ZIP emailed after confirmation has no stated storage location, link expiry or deletion schedule, so a personal data copy may persist outside the purge.",
+   "evidence": "\"An export requested here is still delivered after you confirm deletion.\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "The 14-day grace period before erasure is not justified against the requirement for erasure without undue delay. The plan needs a documented basis for it.",
+   "evidence": "\"permanently deleted 14 days after you confirm\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "The plan has no standalone web subscription cancellation path outside account deletion. Given the agreed no-dark-patterns cancellation constraint, the existing cancel path should be confirmed as compliant.",
+   "evidence": "ABSENT: a standalone subscription cancellation path; cancellation appears only as a side effect of deletion in §3."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Keep-my-account and the day-14 purge can interleave. The plan does not say the purge re-checks state inside its transaction or how restore is blocked once purge has started.",
+   "evidence": "\"Logging in during the 14 days shows ... 'Keep my account', which restores the account exactly as it was\" / ABSENT: a state check or lock making restore and purge mutually exclusive."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "If the confirmation email fails or bounces, the user has no visible fallback and no retry is described, which weakens the 14-day cancel window the abuse controls depend on.",
+   "evidence": "\"The confirmation email gives the real owner 14 days to cancel even if their password was used.\" / ABSENT: email send failure handling or an in-app notice."
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Tests do not cover the Apple revoke failure path or processor outages during the 7-day retry, which are the failure modes the plan depends on.",
+   "evidence": "\"Tests: request spec per registry table; staging run with 500 synthetic accounts... Apple sandbox revoke; restore-runbook drill\""
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 30494,
+  "tokOut": 29804,
+  "usd": 0.020890150000000003,
+  "critMs": 85688
+ }
+}

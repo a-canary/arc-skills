@@ -1,0 +1,89 @@
+{
+ "approach": "clustered-panel",
+ "case": "deploy-03",
+ "rep": 2,
+ "wallMs": 176389,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Rollback to 2.14 is described as safe, but 2.14 does not write streak_events. Completions and saver repairs made on 3.2 clients while 2.15 was live will be missing from streak_count, which 3.1 clients read. Streaks silently diverge for affected users until the flag is also reverted. The rollback QA case only ran briefly in staging, so the drift and the saver state after a long live window are untested, and 'sync silently disabled' hides the divergence rather than reconciling it.",
+   "evidence": "\"redeploy streaks-svc 2.14; schema is additive and `streak_count` remains authoritative-compatible, so 2.14 runs against the migrated database unchanged (verified in staging).\" / \"3.2 client against 2.14 API (server rollback scenario) | staging | Pass (sync silently disabled, local streak shown)\" ABSENT: resync or reconciliation step for events written during the 2.15 window."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The backfill runs on the live database and is sequenced after full deploy, while 2.15 already dual-writes from the 10% canary. The artifact does not say whether backfill inserts are idempotent or upserts against the (user_id, habit_id, day) key, so concurrent live completions can conflict with backfilled rows. It also does not gate flag step 1% on backfill completion, so users could see streaks computed from partial events.",
+   "evidence": "\"Backfill job starts after full deploy.\" / \"1% → 10% → 50% → 100% of 3.2 users, 24h between steps.\" ABSENT: backfill completion gate before flag step 1 and description of backfill-vs-live-write ordering."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The backfill's only correctness evidence is circular. Events are derived from streak_count, and the dry-run checks for mismatches against streak_count, so 0 mismatches largely confirms the derivation rather than validating the new streak computation. The dry-run also does not exercise the live dual-write path or the timezone/DST day-boundary logic that QA flagged.",
+   "evidence": "\"dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches vs `streak_count`\" / \"Backfill: one `streak_events` row per day of each habit's current streak\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "streak_events is a per-day, per-habit behavioral log with no stated retention period or deletion path on account deletion, and the backfill copies historical per-day data for existing users. The privacy claim that disclosures are unchanged rests on a data inventory that is not referenced or attached, so it cannot be checked from the artifact.",
+   "evidence": "\"New table `streak_events (user_id, habit_id, day, source_device, created_at)`\" / \"Privacy nutrition label and Play data-safety form unchanged (verified against the updated data inventory).\" ABSENT: retention period and account-deletion handling for streak_events."
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The backfill of 18.4M rows runs on the live streaks-svc database at Monday 10:00 UTC with no stated headroom for growth since the snapshot, and no DB load, lock, or replication-lag impact is assessed. Batching and checkpointing mitigate this but do not replace a load check.",
+   "evidence": "\"dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches vs `streak_count`\" ABSENT: production load/lock impact and growth headroom."
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "Crash-free evidence comes from a 1,900-user internal beta over 6 days, which does not represent the 400k MAU population or the new Android 13+ permission and deep-link paths. The gate itself is applied per rollout step, so this beta figure is supporting evidence rather than proof the gate will hold.",
+   "evidence": "\"Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The streak saver repair write is not described as authenticated or as checked for habit ownership. QA says the 1-per-30-days limit is enforced server-side, but the artifact does not state the ownership check on the repair write, and the dual-write to streak_count is not protected against stale clients during rollback.",
+   "evidence": "\"Streak saver: limit 1 per 30 days enforced server-side\" ABSENT: authz check that the habit belongs to the authenticated user on the repair write."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The advancement gate depends on streak_mismatch_total < 0.1% of synced users, but the denominator is undefined at the 1% step, and no alert, on-call owner, or automated halt is defined when the gate fails. Advancement is a manual check at 24h intervals.",
+   "evidence": "\"`streak_mismatch_total` (server vs client recompute) < 0.1% of synced users\" ABSENT: alert, owner, and halt action on breach."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The timezone basis for 'yesterday' in the repair action and for the 'available again on Nov 28' date is not specified, which matters for users who change timezone mid-streak.",
+   "evidence": "\"Repair yesterday\" / \"Streak saver available again on Nov 28\" ABSENT: timezone rule for day boundaries."
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "The QA accessibility pass covers the streak screen and pre-prompt, but the saver button's disabled-state announcement and the Android 'Turn on in system settings' deep-link path are not listed as verified.",
+   "evidence": "\"VoiceOver / TalkBack on streak screen and pre-prompt | device lab | Pass\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Two sources of truth, streak_count and streak_events, coexist until STR-1244. The artifact does not state which one the 3.2 client reads or which wins on conflict, and the reminder 'Not now' 30-day suppression state has no stated storage location, so reinstall or multi-device users may see it repeatedly.",
+   "evidence": "\"`habits.streak_count` is **kept** and dual-written by 2.15\" / \"only once per 30 days if they choose \\\"Not now\\\"\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Store rollouts (iOS 7-day phased, Play 10%) run in parallel with the backend deploy and flag steps. Halting a store rollout does not stop users who already updated, and no store-side crash gate is defined separately from the flag gate.",
+   "evidence": "\"iOS phased release (7 days) and Play staged rollout 10% → 50% → 100% in parallel; the flag gates the feature independently of store rollout.\""
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 21136,
+  "tokOut": 11736,
+  "usd": 0.0078674,
+  "critMs": 33609
+ }
+}

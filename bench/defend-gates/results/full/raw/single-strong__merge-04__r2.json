@@ -1,0 +1,53 @@
+{
+ "approach": "single-strong",
+ "case": "merge-04",
+ "rep": 2,
+ "wallMs": 99413,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The migration adds a new empty column and drops the old `notes` column, which permanently destroys all user-written notes across ~140M rows. It is not a rename and no data is copied. The down migration re-adds an empty `notes` column, so rollback cannot restore the data. Migrations run automatically on deploy.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;  /  'Pure rename, no data change; the down migration restores the old name.'"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The PR description says 'pure rename', but the SQL does no RENAME and no backfill. After deploy every `private_notes` value is NULL. The down migration likewise does not restore the name or the data. The description contradicts the code.",
+   "evidence": "ADD COLUMN private_notes text; DROP COLUMN notes; (no UPDATE/RENAME COLUMN)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The migration runs automatically on deploy, but old app instances still SELECT `ur.notes` during a rolling deploy. Those queries fail the moment the column is dropped. Code and schema are not decoupled by an expand/contract sequence. DROP COLUMN also takes an ACCESS EXCLUSIVE lock on a 140M-row table, which is risky for blocking traffic.",
+   "evidence": "Migrations run automatically on deploy after merge to main; DROP COLUMN notes in the same transaction as the code change"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The 'cursor pagination' fetches all of a user's saved recipes (200k+ for heavy users) with a JOIN and no LIMIT, then paginates in memory with findIndex/slice. Each page request is O(N) in rows, memory and transfer. That defeats the purpose of pagination and will blow the 300ms p99 budget and pressure the DB and Node heap.",
+   "evidence": "ORDER BY ur.saved_at DESC, ur.id DESC`,\n    [userId],\n  );\n\n  const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "If the cursor is unknown (the row was deleted, or the value is malformed), findIndex returns -1 and start becomes 0, so the client silently restarts from page one. That can loop forever in infinite scroll. The cursor is also just an id, not a (saved_at, id) keyset, so it is not a real keyset cursor. When the page is empty (start >= rows.length), `page[page.length - 1]` is only avoided because of the guard condition, which is fragile.",
+   "evidence": "rows.findIndex((r) => r.id === cursor) + 1 : 0"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Two unrelated risky changes are bundled in one PR, so the schema change cannot be reverted independently of the API change. The test covers only the happy path, with no invalid-cursor case and no migration or data-preservation test.",
+   "evidence": "Two small changes bundled because they touch the same table."
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3455,
+  "tokOut": 1120,
+  "usd": 0.011549299999999998,
+  "critMs": 7900
+ }
+}

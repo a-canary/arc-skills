@@ -1,0 +1,71 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "deploy-08",
+ "rep": 1,
+ "wallMs": 238826,
+ "verdict": "ATTACKS",
+ "confidence": 0.93,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "On any SES error the worker records every recipient in the batch as a permanent failure in send_failures, which excludes them from the issue and shows them as 'Not delivered'. The loop then `continue`s with no retry, requeue or throttle/transient vs permanent distinction, so a throttle or 5xx silently drops whole batches of subscribers.",
+   "evidence": "if err != nil { for _, r := range batch.Recipients { failures.Record(ctx, batch.IssueID, r.SubscriberID, errCode(err)) } ... continue }; \"those recipients are excluded from the issue's remaining sends\""
+  },
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "Production runs 48 workers at ~25 msg/s each (~1200 msg/s) against a 300 msg/s SES limit, so throttling is near-certain, and throttling feeds the drop-on-error path. QA never validated this: staging ran with 4 workers and SES throttling simulated off via a sandbox mock.",
+   "evidence": "SEND_WORKERS=48; SES production account limits: 300 messages/second; \"QA ran with SES throttling simulated off via the sandbox mock\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "blocker",
+   "claim": "Smart Send Time is default-on for all publications and can hold issues up to 18 hours, with no exemption for time-critical sends. 40% of publications are news outlets whose content (breaking news, election results, weather alerts) is time-sensitive, so default-on delay can cause real harm.",
+   "evidence": "SMART_SEND_DEFAULT=on; \"Issues are held for at most 18 hours\"; \"4,480 of them (40%) are news or local-news outlets whose issues are time-sensitive (breaking news, election results, weather alerts)\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The production config and launch post turn Smart Send Time on for every publication on day one, contradicting the 5%/25%/100% gated cohort ramp. Both the gating and the rollback are undermined, and the public announcement to all publishers cannot be retracted.",
+   "evidence": "SMART_SEND_DEFAULT=on; \"Smart Send Time is live for every publication today ... Nothing to set up; it's already on.\" vs \"ramp SMART_SEND_DEFAULT by publication cohort: 5% (week 1), 25% (week 2), 100% (week 3)\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The 'up to 5× faster' public claim is unsupported. QA showed 11 min for 50k with 4 workers and throttling disabled, and the under-3-minute figure is only a goal. The post also says 'every issue', which is broader than the goal and conflicts with Smart Send holds of up to 18 hours.",
+   "evidence": "\"Pass, 0 failures, 11 min\" vs \"every Inkwell issue reaches inboxes up to 5× faster\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Results are indexed into batch.Recipients by position without a length or order check, so a mismatch could panic or attribute failures to the wrong subscribers. Observability is also weak: the pager has no alarm on send.batch_failed or send_failures volume, which is the signal that would catch dropped sends, and the SES call has no timeout.",
+   "evidence": "batch.Recipients[i].SubscriberID; \"On-call pager: queue lag > 10 min, complaint rate > 0.1%\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Smart Send Time builds a per-subscriber behavioral profile from 90 days of open data, on by default. Only publishers can opt out, and there is no subscriber notice or consent, and no privacy review is described.",
+   "evidence": "\"predicts each subscriber's most likely open hour from their last 90 days of opens\"; \"publishers can turn it off in Settings → Delivery\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Rollback is asserted without testing or specification. The under-2-minute drain and the immediate release of held issues have no QA evidence, and nothing says what happens to batches already recorded in send_failures or to publisher-level setting overrides. Sidekiq is kept idle with no check that it still works.",
+   "evidence": "\"in-flight batches drain in < 2 min\"; \"held issues are released immediately\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "Smart Send validation is weak. 71% within ±1h, with no baseline comparison, is the only quality data, and the ramp gate of ≥3% open-rate lift vs control has no defined control group or sample size.",
+   "evidence": "\"71%\"; \"gated on open-rate lift ≥ 3% vs control\""
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 23031,
+  "tokOut": 10010,
+  "usd": 0.06815794,
+  "critMs": 21211
+ }
+}

@@ -1,0 +1,107 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-09",
+ "rep": 1,
+ "wallMs": 267116,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "Acceptance depends entirely on PlugCloud's exact signing scheme (header names, v1= prefix, HMAC over timestamp.raw body), but nothing shows a vendor spec, captured delivery, or known-good vector. The test vectors come from the same code's own sign() helper, so they cannot confirm the vendor format. If any detail is wrong, every real delivery is rejected.",
+   "evidence": "ABSENT: vendor spec link, sample signed delivery, or fixed known-answer test vector. test_signing.py sign() re-implements the production HMAC."
+  },
+  {
+   "lens": "rollback",
+   "severity": "major",
+   "claim": "plugcloud_secret is a required field with no default, and the PR claims startup fails when it is missing. The diff shows only Depends(get_settings) per request and no eager construction at boot, so the claim is unverified. Either way, upgrading without the secret breaks ingestion, and the PR gives no deploy-ordering, vendor cutover, or rollback guidance.",
+   "evidence": "plugcloud_secret: SecretStr (no default); \"startup fails if it is missing or short\"; settings: Settings = Depends(get_settings); ABSENT: deploy ordering, vendor coordination, rollback steps."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Every rejection (wrong or rotated secret, or host clock drift beyond 5 minutes) returns 401 and is recorded only as a warning log. No metric, counter, or alert exists, so readings can be dropped silently for a long time.",
+   "evidence": "log.warning(\"plugcloud webhook rejected: %s\", exc); ABSENT: any metric, counter, or alert on rejections."
+  },
+  {
+   "lens": "partial failure / retries",
+   "severity": "major",
+   "claim": "Deliveries older than 5 minutes are rejected permanently. The PR does not state whether the vendor replays or retries with original timestamps after an outage, so a backlog could be lost with no backfill path.",
+   "evidence": "\"rejects deliveries more than 5 minutes old or in the future, and returns a bare 401\"; ABSENT: vendor retry or replay behavior and any recovery path."
+  },
+  {
+   "lens": "spec mismatch",
+   "severity": "minor",
+   "claim": "The PR says failures return a bare 401, but the route returns a JSON body with a detail field. Signed but malformed payloads return 422, which the PR does not mention.",
+   "evidence": "PR text: \"returns a bare 401 on any failure\"; routes.py: raise HTTPException(status_code=401, detail=\"invalid signature\") and raise HTTPException(status_code=422, detail=\"invalid payload\")"
+  },
+  {
+   "lens": "testing",
+   "severity": "minor",
+   "claim": "The 422 path after successful verification has no test. The route test only covers unsigned and validly signed requests.",
+   "evidence": "ABSENT: a test posting a validly signed invalid body; test_route_rejects_unsigned_and_accepts_signed asserts only 401 and 202."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The test comment says the 5000-digit timestamp would overflow int(), but the fullmatch regex rejects it before int() is called. The case passes, but the comment describes an unreachable path.",
+   "evidence": "(BODY, \"9\" * 5000, \"v1=00\", 1700000000),  # would overflow int() digit limit"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The full unauthenticated body is buffered and HMAC is computed synchronously in the async handler before any check. The app enforces no size limit of its own and relies on the external 1 MB proxy cap. Under a forged-request flood this adds per-request memory and event-loop cost.",
+   "evidence": "body = await request.body(); signing.verify(...) is sync CPU work inside async def; CONTEXT: \"the reverse proxy caps request bodies at 1 MB\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "get_db resolves before authentication, so every unauthenticated request opens a database session. This widens the pre-auth attack surface the PR is meant to close.",
+   "evidence": "async def plugcloud_webhook(request: Request, db: Database = Depends(get_db), settings: Settings = Depends(get_settings))"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Every rejected request writes a WARNING line with no rate limit or sampling. A flood of forged requests on this public endpoint can grow logs and disk use without bound on a self-hosted box.",
+   "evidence": "log.warning(\"plugcloud webhook rejected: %s\", exc)"
+  },
+  {
+   "lens": "ops burden",
+   "severity": "minor",
+   "claim": "The secret is a single value with no overlap window. Rotating it requires vendor and operator to switch at the same moment, or all deliveries fail until both agree. The PR gives no rotation procedure.",
+   "evidence": "plugcloud_secret: SecretStr (single value); ABSENT: rotation procedure or accepted-secrets list."
+  },
+  {
+   "lens": "hidden coupling",
+   "severity": "minor",
+   "claim": "plugcloud_secret is now required on the shared Settings model. Only the test fixture is updated, so other Settings construction sites (CLI, migrations, workers) may fail. The diff does not show whether any exist.",
+   "evidence": "return Settings(database_url=TEST_DB_URL, plugcloud_secret=\"t\" * 32); ABSENT: search of other Settings(...) call sites."
+  },
+  {
+   "lens": "scope drift",
+   "severity": "minor",
+   "claim": "The typed batch parameter is replaced with a raw Request. This is needed to verify raw bytes, but it removes the request schema from the OpenAPI docs and changes the 422 body shape. The PR does not mention either effect.",
+   "evidence": "async def plugcloud_webhook(request: Request, ...) replaces batch: PlugCloudBatch"
+  },
+  {
+   "lens": "testability",
+   "severity": "minor",
+   "claim": "Unit tests inject now, but the route test uses real time.time(), so its outcome depends on wall-clock timing. The signature helper is also a copy of the production algorithm, so a shared mistake would pass every test.",
+   "evidence": "ts = str(int(time.time())); def sign(...): return \"v1=\" + hmac.new(...)"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The 300-second tolerance is a hard-coded module constant. Operators with clock skew cannot adjust it without a code change.",
+   "evidence": "TOLERANCE_SECONDS = 300"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 72071,
+  "tokOut": 25413,
+  "usd": 0.027117299999999997,
+  "critMs": 35801
+ }
+}

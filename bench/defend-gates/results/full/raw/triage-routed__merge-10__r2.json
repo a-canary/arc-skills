@@ -1,0 +1,77 @@
+{
+ "approach": "triage-routed",
+ "case": "merge-10",
+ "rep": 2,
+ "wallMs": 446065,
+ "verdict": "CLEAR",
+ "confidence": 0.7,
+ "attacks": [
+  {
+   "lens": "lease-safety",
+   "severity": "minor",
+   "claim": "The claim that a live worker never outlives its lease rests on render honoring jobCtx, which the PR does not show. If render ignores cancellation, a reclaimed job can be rendered twice. The object key is derived from the job, so the overlap should be harmless apart from wasted work and a lost Complete, but the safety argument is unverified.",
+   "evidence": "\"the job context is cancelled at jobTimeout, so a live worker never outlives its lease\" and \"jobCtx, cancel := context.WithTimeout(ctx, w.jobTimeout)\"; ABSENT: evidence that render stops promptly on cancellation."
+  },
+  {
+   "lens": "deploy-shutdown",
+   "severity": "minor",
+   "claim": "On shutdown the worker returns nil without completing or releasing the job, and it logs nothing. The in-flight job stays 'running' until its lease expires, and removing ResetRunning means the recovery delay after a deploy is up to jobTimeout+1m. The PR does not mention this latency change.",
+   "evidence": "\"if ctx.Err() != nil {\\n\\t\\t\\treturn nil // shutting down: leave the lease to expire so another worker retries the job\"; \"Startup ResetRunning is removed.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A render that finishes just before shutdown is discarded and re-rendered after the lease expires, which also increments attempts.",
+   "evidence": "if ctx.Err() != nil { return nil } runs before Complete is called."
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The claim subquery filters on status and locked_until and sorts by created_at, id, but the migration adds no index for these columns. Each poll may scan and sort the whole table. At about 20k rows this is a modest cost, and an index is cheap to add.",
+   "evidence": "ABSENT: no CREATE INDEX in 0042_thumbnail_job_leases.sql; \"WHERE status = 'queued' OR (status = 'running' AND (locked_until IS NULL OR locked_until < now())) ORDER BY created_at, id\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Claim and Complete run on the long-lived Run context with no per-call deadline, so a hung database connection can block the worker with no timeout or alert. This predates the PR, and the PR does not make it worse.",
+   "evidence": "ABSENT: context.WithTimeout around store calls; \"err := s.db.QueryRow(ctx, `UPDATE thumbnail_jobs\""
+  },
+  {
+   "lens": "observability",
+   "severity": "minor",
+   "claim": "Lease reclaims are silent. Nothing logs or counts a reclaim, so repeated crashes on the same job are visible only through the attempts column.",
+   "evidence": "ABSENT: a log line or metric in Claim for reclaimed expired leases; \"Expired leases (crashed/shut-down worker, or NULL from the old worker) are reclaimed\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The lease-loss and shutdown branches in worker.Run have no tests. Only the store-level behavior is covered.",
+   "evidence": "ABSENT: tests for the ctx.Err() early return or the errors.Is(err, jobs.ErrLeaseLost) warning path in worker.Run"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The concurrency test checks only the total claim count. It does not assert that every claimed job ID is distinct, so a double handout is caught only indirectly.",
+   "evidence": "\"if n := claims.Load(); n != 40 { t.Fatalf(\"got %d claims for 40 jobs\", n) }\" with no per-ID uniqueness check"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The title says the change lets more than one worker run, but the PR keeps replicas at 1 and defers scale-out, so the multi-worker benefit is not demonstrated here.",
+   "evidence": "TITLE: \"lease-based job claiming so more than one worker can run\" vs. \"Replica count stays 1 here; scale-out and a poison-job attempts cap (#215) are separate changes.\""
+  },
+  {
+   "lens": "lease-semantics",
+   "severity": "minor",
+   "claim": "The description says Complete requires the caller to still hold the lease, but the SQL checks locked_by and status, not locked_until > now(). A worker whose lease has expired but has not been reclaimed can still complete. This is probably acceptable, but the stated contract does not match the code.",
+   "evidence": "\"Complete requires the caller to still hold the lease.\" vs. \"WHERE id = $1 AND locked_by = $2 AND status = 'running'\""
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 33615,
+  "tokOut": 22117,
+  "usd": 0.01379048,
+  "critMs": 40086
+ }
+}

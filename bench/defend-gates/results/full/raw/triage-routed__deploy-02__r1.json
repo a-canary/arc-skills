@@ -1,0 +1,125 @@
+{
+ "approach": "triage-routed",
+ "case": "deploy-02",
+ "rep": 1,
+ "wallMs": 291492,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "fair-and-balanced / FINRA 2210 (launch announcement)",
+   "severity": "blocker",
+   "claim": "The launch announcement says options trades carry zero commissions and zero fees with no fine print, but the release notes state a $0.50/contract options fee and that SEC and FINRA TAF fees still apply to sells. The public claim is false and misleading and must not be published as written.",
+   "evidence": "\"trade stocks, ETFs **and options** with zero commissions and zero fees. No catches, no fine print.\" vs. release notes: \"options contract fee lowered to $0.50 per contract ... Regulatory fees (SEC, FINRA TAF) still apply to sells.\""
+  },
+  {
+   "lens": "irreversible-public-action",
+   "severity": "blocker",
+   "claim": "The launch announcement publishes publicly at 09:00 ET on blog and X with the false zero-fee claim. Once posted it cannot be recalled, and the gate has no review step for it.",
+   "evidence": "\"Launch announcement (blog + X, scheduled 09:00 ET)\" with the zero-fee options copy"
+  },
+  {
+   "lens": "rollback / correctness",
+   "severity": "blocker",
+   "claim": "Migration 0148 irreversibly drops legacy_legs and the conversion function at 06:00, but the rollback is kubectl rollout undo to v4.18.2, whose template endpoints read legacy_legs. After 0148, rollback cannot restore a working 4.x template path, so the 30-minute rollback commitment is not met. The artifact also says migrations are forward-only.",
+   "evidence": "\"ALTER TABLE order_templates DROP COLUMN legacy_legs; DROP FUNCTION legacy_legs_to_json(text);\" with \"Migrations are forward-only; no down migrations are needed for this release.\""
+  },
+  {
+   "lens": "one-way-door / reliability",
+   "severity": "blocker",
+   "claim": "The destructive column drop is bundled with the additive step in the same 06:00 window, before the new backend is deployed or validated, with no backup, snapshot, soak, or contract-phase gate between them. A failed 5.0 deploy has no reversible path back to 4.x.",
+   "evidence": "\"1. 06:00 ET apply migrations 0147, 0148.\" with \"BEGIN; ALTER TABLE order_templates DROP COLUMN legacy_legs; ... COMMIT;\" and smoke test only at \"06:30 ET\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Migration 0147 sets legs_json NOT NULL with no default, but 4.18.2 pods keep serving until the 06:10 rolling deploy finishes. Template inserts or updates from those pods write only legacy_legs and will violate the constraint, so old-client template saves fail during the window and after any rollback.",
+   "evidence": "\"ALTER TABLE order_templates ALTER COLUMN legs_json SET NOT NULL;\" with \"06:10 ET deploy orders-svc v5.0.0 (rolling, 12 pods).\" and no dual-write or trigger in the artifact"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The 0147 conversion has no stated handling for NULL or empty legacy_legs. If legacy_legs_to_json returns NULL for any row, SET NOT NULL aborts the migration. The reported 0 conversion errors does not show these cases were covered.",
+   "evidence": "\"UPDATE order_templates SET legs_json = legacy_legs_to_json(legacy_legs);\" and \"Migration 0147 dry run against a prod snapshot (2.9M templates): 41s, 0 conversion errors.\""
+  },
+  {
+   "lens": "fair-and-balanced / FINRA 2210 (launch announcement)",
+   "severity": "major",
+   "claim": "The announcement promotes options trading with no risk statement, no Options Disclosure Document reference, and no fee-schedule link. Options promotions require these disclosures.",
+   "evidence": "ABSENT: no risk statement, ODD reference, or fee-schedule link in the launch announcement; the only options text is \"we just made options cheaper ... zero commissions and zero fees.\""
+  },
+  {
+   "lens": "fair-and-balanced / FINRA 2210 (launch announcement)",
+   "severity": "major",
+   "claim": "\"Rebuy your winners in one tap\" frames past gains as a reason to trade and implies a favorable outcome, with no balancing risk context. It also overstates the feature, since Reorder only prefills a ticket that requires review and slide-to-submit.",
+   "evidence": "\"Rebuy your winners in one tap with Quick Reorder.\" vs. release notes: \"prefill a new ticket ... you still slide to submit.\""
+  },
+  {
+   "lens": "options account approval (FINRA 2360)",
+   "severity": "major",
+   "claim": "Quick Reorder and multi-leg options templates can prefill and submit options orders, but the artifact does not state that options-level or account-approval checks are enforced on the prefill or submit path.",
+   "evidence": "ABSENT: no mention of options approval level or entitlement checks; \"Saved order templates now support multi-leg options strategies\" and \"Reorder from History reuses the template prefill path.\""
+  },
+  {
+   "lens": "rollback",
+   "severity": "major",
+   "claim": "Data written by 5.0 as multi-leg templates existing only in legs_json has no representation in legacy_legs, so rollback to 4.x silently loses or mis-reads those templates. The rollback plan does not mention this.",
+   "evidence": "\"Saved templates move from `order_templates.legacy_legs` ... to `order_templates.legs_json` ... which is what enables multi-leg templates.\" and \"no down migrations are needed for this release.\""
+  },
+  {
+   "lens": "rollback",
+   "severity": "major",
+   "claim": "The mobile rollback is 'halt phased release,' which stops new installs but does not revert devices already on 5.0. Those clients rely on /v5/templates, and the 404 fallback may never trigger after a backend rollback to v4.18.2. Clients that save multi-leg templates after rollback also write data that 4.x cannot read.",
+   "evidence": "\"Mobile: halt phased release; 5.0 clients fall back to hiding Reorder if `/v5/templates` returns 404.\""
+  },
+  {
+   "lens": "one-way-door",
+   "severity": "major",
+   "claim": "The 06:30 smoke test places a real order on a live house account during pre-market. Live trades cannot be rolled back, and no limits or cancel path are specified for that test order.",
+   "evidence": "\"06:30 ET smoke test with house accounts in the paper environment and one live house account.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The migration rewrites every row of a 2.9M-row table, takes ACCESS EXCLUSIVE locks for ADD COLUMN and SET NOT NULL, and sets no lock_timeout or statement_timeout. A lock queue could block all template reads and writes, and the only evidence is a 41s dry run on a snapshot.",
+   "evidence": "\"Migration 0147 dry run against a prod snapshot (2.9M templates): 41s, 0 conversion errors.\" ABSENT: lock_timeout, statement_timeout, snapshot age"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The rolling deploy creates a mixed-version window in which v4.18.2 and v5.0.0 pods serve traffic against a schema already changed by 0147/0148, with no compatibility check or gate for that state.",
+   "evidence": "\"deploy orders-svc v5.0.0 (rolling, 12 pods)\" after \"apply migrations 0147, 0148\" at 06:00"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "QA covers only the forward migration and forward feature. Rollback, mixed-version traffic, and old-client writes against the NOT NULL column are untested, so the claimed rollback safety is unverified.",
+   "evidence": "QA summary lists only \"Regression suite (1,284 cases) on staging: pass\" and \"Migration 0147 dry run\"; no rollback or mixed-version test is listed."
+  },
+  {
+   "lens": "recordkeeping (SEA 17a-4 / FINRA 4511)",
+   "severity": "minor",
+   "claim": "Migration 0148 irreversibly drops legacy_legs with no archive, export, or retention step for pre-migration template data. If that data is subject to books-and-records retention, it is lost.",
+   "evidence": "\"ALTER TABLE order_templates DROP COLUMN legacy_legs;\" / ABSENT: no archive, export, or retention statement for legacy template data"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Rollback monitoring is underspecified. There is no alert owner, paging path, or monitor on migration success or 5.0-specific writes. The reject-rate trigger has no defined baseline source.",
+   "evidence": "\"Trigger: orders-svc 5xx > 1% for 5 min, or order reject rate +50% over baseline.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Closed-market Reorder silently converts market orders to limit at last close. The release notes say Reorder prefills the same order type and do not disclose this change, which matters for pre-market customers.",
+   "evidence": "\"defaults market orders to limit at last close (unchanged behavior from 4.x)\" vs. release notes: \"same symbol, side, quantity and order type\""
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 25889,
+  "tokOut": 17209,
+  "usd": 0.01367165,
+  "critMs": 28758
+ }
+}

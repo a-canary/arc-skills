@@ -1,0 +1,71 @@
+{
+ "approach": "rubric-single",
+ "case": "merge-06",
+ "rep": 2,
+ "wallMs": 108267,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The log fingerprint is an unsalted, truncated SHA-256 of the raw tenant API key. The artifact requires keys to never appear in logs, and a deterministic hash of the secret is still derived from it. Anyone with log access can confirm a guessed key or link log lines to a tenant across time, and the 40-bit truncation adds collision risk for debugging use.",
+   "evidence": "\"key: keyFingerprint(tenant.apiKey)\" and \"createHash(\\\"sha256\\\").update(apiKey).digest(\\\"hex\\\").slice(0, 10)\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "On upstream 429 the handler sleeps up to 5s while holding the connection and then retries once, with no jitter and no shared backoff. When upstream is saturated, every in-flight request retries in lockstep, which doubles upstream load exactly when it is most stressed and piles up held connections.",
+   "evidence": "\"await new Promise((r) => setTimeout(r, delay));\" followed by \"res = await upstream.chat(req.body, { signal: req.signal });\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The retry sleep is a plain setTimeout that ignores client disconnects. If the client aborts during the wait, the gateway still sleeps and then issues a second upstream request that is only canceled by a signal which may already be aborted, wasting upstream quota and holding resources.",
+   "evidence": "\"await new Promise((r) => setTimeout(r, delay));\" (no check of req.signal) before \"upstream.chat(req.body, { signal: req.signal })\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The 20 rps / burst 40 default applies to all ~120 tenants on deploy with no feature flag or staged rollout. Any tenant whose legitimate traffic already exceeds 20 rps will start receiving 429s immediately, and the artifact shows no check of current per-tenant usage to size the default.",
+   "evidence": "\"limits from tenant config, default 20 rps / burst 40\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The stated fix assumes that per-tenant caps stop starvation, but the artifact does not establish that the default caps keep aggregate load under the upstream quota. With 120 tenants at 20 rps the theoretical total is 2400 rps, and the retry path adds more on top of that.",
+   "evidence": "ABSENT: any calculation or measurement of aggregate upstream capacity versus sum of per-tenant limits"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The bucket uses Date.now(), which can move backwards on clock adjustment. A negative elapsed time drives tokens negative, which can block a tenant for a long period. A monotonic clock would avoid this.",
+   "evidence": "\"constructor(private now: () => number = Date.now) {}\" and \"const elapsedSec = (nowMs - b.updatedMs) / 1000;\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "retryAfterMs only parses delta-seconds. An HTTP-date Retry-After yields NaN and silently falls back to 1s, so the upstream's requested wait is ignored.",
+   "evidence": "\"const secs = Number(header);\" with \"if (!Number.isFinite(secs) || secs < 0) return 1_000;\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Every rejected request logs at info level with the tenant and key fingerprint. Under the batch-job scenario described in the context, this produces a log line per rejected request, which can flood logs and obscure real incidents. Nothing alerts on rate-limit rejections.",
+   "evidence": "\"req.log.info(\\n        { tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs },\\n        \\\"tenant rate limited\\\",\"  + ABSENT: sampling, aggregate metrics, or alerting"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The tests cover only the bucket class. There are no tests for the 429 tenant path, the upstream retry and Retry-After parsing, the 5s cap, or LRU eviction behavior, so the route-level behavior that the PR actually changes is unverified.",
+   "evidence": "ABSENT: tests in completions route or for retryAfterMs; bucket.test.ts only has \"admits burst, then rate-limits, then refills\" and \"tenants are isolated\""
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3679,
+  "tokOut": 3929,
+  "usd": 0.0020014700000000004,
+  "critMs": 19325
+ }
+}

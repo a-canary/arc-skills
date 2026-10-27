@@ -1,0 +1,143 @@
+{
+ "approach": "triage-routed",
+ "case": "plan-11",
+ "rep": 2,
+ "wallMs": 561523,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "STOP handling and the delivery-failure fallback depend entirely on provider callbacks reaching one rate-limited receiver. If the receiver is down, throttles a burst, or a callback is lost, the patron stays on SMS with no notice and no alert, which breaks the agreed 'no patron may lose hold notices' constraint silently.",
+   "evidence": "\"A webhook receiver (~150 lines, on the existing Koha app server behind the existing nginx/TLS) exposes a single rate-limited POST path\"; ABSENT: fallback when callbacks are missing, callback retry or durable buffer, rate-limit value."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "New sign-ups who pick SMS get NOTICE_PREV=phone, so the rollback and fallback do not return them to their prior channel. The phone channel is discontinued on 2027-03-31, so these patrons would lose notices after that date.",
+   "evidence": "\"new sign-ups who pick SMS get `phone`\" vs \"Patrons who enrolled after launch end up on exactly the channel they had before.\" and \"The CallNotify contract ends 2027-03-31 and will not be renewed\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "STOP and fallback route SMS-only sign-ups to automated calls on a mobile number, although they never consented to calls. The plan does not establish call consent for this path.",
+   "evidence": "\"new sign-ups who pick SMS get `phone`; every SMS patron has a mobile number\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "A STOP from one person switches every patron sharing that number, changing their preferences and adding staff-visible circulation notes without any action by them. Those notes can expose a household member's hold activity, and the plan does not say who can view them.",
+   "evidence": "\"switches every patron whose SMS number matches (family members can share a phone) from SMS back to their own `NOTICE_PREV` ... adds a circulation note visible to staff.\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "The week-3 staff pilot sends live A2P texts, but only public launch is gated on 10DLC campaign approval. Pilot traffic could go out unregistered, and pilot delivery checks would fail for reasons unrelated to the code.",
+   "evidence": "\"Public launch is gated on approval.\" / \"Week 3: staff pilot. 40 staff cardholders opt in; we verify delivery...\" / \"typical approval is 1–3 weeks\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The receiver's DB grants are too narrow. Matching patrons by SMS number needs SELECT, re-queuing the same notice needs to read the original message_queue row, and the staff circulation note needs a write to a notes table that is not granted.",
+   "evidence": "\"The receiver uses a dedicated DB user with UPDATE only on `borrower_message_transport_preferences` and `borrower_attributes`, and INSERT only on `message_queue` and `messages`.\""
+  },
+  {
+   "lens": "partial-failure",
+   "severity": "major",
+   "claim": "The failure-counting logic has no defined idempotency or dedupe key. 'Consecutive' is never defined as resetting on success, and the fallback is queued on the first failure while the patron stays on SMS. Retried or duplicate callbacks can double-count failures, switch patrons off SMS early, and double-queue notices.",
+   "evidence": "\"on an `undelivered`/`failed` status callback, the receiver queues the same notice on the patron's `NOTICE_PREV` channel. After 2 consecutive failures it switches the patron back\"; ABSENT: idempotency key, dedupe rule, reset-on-success rule."
+  },
+  {
+   "lens": "partial-failure",
+   "severity": "major",
+   "claim": "Send-time errors from process_message_queue.pl --type sms (provider API timeout, auth failure, driver exception) have no defined retry, backoff, or fallback. A provider API outage would leave hold-ready notices stuck in message_queue until they are purged.",
+   "evidence": "ABSENT: retry, timeout, or fallback for errors at submission; the only failure path described is \"`undelivered`/`failed` status callback\"."
+  },
+  {
+   "lens": "observability",
+   "severity": "major",
+   "claim": "Alerting covers only provider spend and a 90-day delivery-rate measure. Receiver health, callback lag, pending SMS queue depth, and delivery-rate drops during pilot and early rollout are not monitored, so silent notice loss would go unnoticed.",
+   "evidence": "\"a provider spend alert fires at $450\" and \"Measures (90 days after launch)\"; ABSENT: alerts on webhook availability, callback lag, queue depth, delivery-rate thresholds before day 90."
+  },
+  {
+   "lens": "budget",
+   "severity": "major",
+   "claim": "The $600/month approved cap is not enforced. Only a $450 alert is specified with no action at the cap, and the uptake figures are assumptions. Spend would exceed $600 at roughly 54,500 texts/month.",
+   "evidence": "\"Approved notices budget allows up to $600/month for SMS (finance memo FIN-2026-117); a provider spend alert fires at $450.\" and \"Assumed uptake: 50% of phone patrons + 10% of email patrons ≈ 30,500 texts/month\""
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The cost model assumes every text is one GSM-7 segment, but the Spanish template is not shown. Accented Spanish characters are outside GSM-7 and would force UCS-2 multi-segment sends, which could roughly double per-text cost.",
+   "evidence": "\"Template (English, plus Spanish for patrons whose preferred language is Spanish, via `TranslateNotices`), GSM-7, one segment\" with ABSENT Spanish text; cost uses \"~$0.011 per text\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The claim that the message reveals nothing about what the patron requested is overstated. The body confirms a hold exists for a named person, branch, and pickup deadline, which is request-related information under a records-confidentiality statute. No legal review of the message content is shown.",
+   "evidence": "\"A reassigned number or shared phone reveals nothing about what the patron requested.\" / \"Riverbend Library: 1 item is ready for pickup at Eastside Branch until Nov 4.\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "SMS_CONSENT, NOTICE_PREV and the STOP and failure circulation notes link a phone number to hold-notice behaviour and are kept indefinitely. The plan sets no retention period or purge rule for them.",
+   "evidence": "\"Consent and opt-out records are kept, so re-enabling later never texts anyone who sent STOP.\"; ABSENT: retention period or purge rule for SMS_CONSENT, NOTICE_PREV, circulation notes."
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Provider delivery metadata (phone number and timestamp) is kept 90 days. Read together with the Koha message ids, this creates a third-party record linking a phone number to library notice activity.",
+   "evidence": "\"delivery metadata is kept 90 days per contract.\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "No check confirms current ownership of a number before SMS is sent. Consent is recorded per patron, so a reassigned number could receive hold notices meant for a prior subscriber.",
+   "evidence": "ABSENT: reassigned-number verification before sends; \"Patron attribute `SMS_CONSENT` records the date and source (opac/desk).\""
+  },
+  {
+   "lens": "ops-burden",
+   "severity": "minor",
+   "claim": "The rollback has no trigger criteria, decision owner, or time-to-execute target. It is tested only on a staging copy and does not cover provider-side state such as the campaign, live webhook, or driver configuration.",
+   "evidence": "\"`sms_rollback.pl`, written and tested in week 2 against a staging copy of the patron database\"; ABSENT: rollback triggers, owner, provider-side revert steps."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Rollback step order can duplicate notices. Pending SMS rows are re-queued on the restored channel before the SMS driver is cleared, so a row could still go out by SMS and also on the restored channel.",
+   "evidence": "\"2. Re-queue any pending SMS rows in `message_queue` on the restored channel\" then \"3. Clear `SMSSendDriver`.\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The 'provider switch is config only' claim conflicts with the design. The receiver verifies the provider's signature and parses its callbacks, so switching providers means rewriting it.",
+   "evidence": "\"switching providers later is a config change, not a code change\" vs \"verifies the provider's request signature\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The template is a fixed string, and wording for plural counts and for zero counts or a missing date is not defined.",
+   "evidence": "\"Riverbend Library: 1 item is ready for pickup at Eastside Branch until Nov 4.\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The STOP wording differs between the message and the HELP text, which matters for carrier keyword compliance.",
+   "evidence": "\"Reply STOP to opt out, HELP for help.\" vs \"Reply STOP to cancel, HELP for help.\""
+  },
+  {
+   "lens": "measurement",
+   "severity": "minor",
+   "claim": "The success measure compares a self-selected SMS group against the phone baseline with no control group. The 5.5% target is also above the email baseline of 5.1%, so the target does not show SMS matches the existing channel.",
+   "evidence": "\"Uncollected-hold expiry rate for SMS patrons ≤ 5.5% (phone today: 9.2%)\" and \"email 71%\" with \"5.1% for email\""
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 31808,
+  "tokOut": 37445,
+  "usd": 0.022382609999999997,
+  "critMs": 83282
+ }
+}

@@ -1,0 +1,125 @@
+{
+ "approach": "counsel-5x2",
+ "case": "deploy-03",
+ "rep": 1,
+ "wallMs": 337417,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Nothing gates flag step 1 on backfill completion, but streak is computed from streak_events. Users enabled at 1% whose events are not yet backfilled would see short or wrong streaks.",
+   "evidence": "\"Backfill job starts after full deploy.\" / \"Remote config streak_sync_v2: 1% → 10% → 50% → 100%\" ABSENT: backfill-complete or row-count reconciliation gate before step 1"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The artifact does not define which value wins when streak_count and the event-derived streak disagree, and it does not clearly state that 3.1 completion writes produce streak_events rows. Two sources of truth persist until 3.4 with no precedence rule.",
+   "evidence": "\"habits.streak_count is kept and dual-written by 2.15 so 3.1 clients ... keep working unchanged\" / \"streak is computed from events\" ABSENT: conflict precedence rule and 3.1 write path under 2.15"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The 18.4M-row backfill runs against the live primary right after the 10:00 UTC deploy, with no stated throttle, lock analysis, or replica-lag guard. The only evidence is a 22-minute dry run on a snapshot, which does not model concurrent writes or the p95 < 250ms gate.",
+   "evidence": "\"batches of 5k, checkpointed\" / \"dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches\" ABSENT: live-load, replica-lag, or lock behaviour during backfill"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The advancement gates have no automated halt on streaks-svc error rate, backfill failure, or row-count mismatch. With 24h between steps, a bad state can reach a larger cohort before a human reviews it.",
+   "evidence": "\"Gates to advance each step: crash-free sessions ≥ 99.5%, streak_mismatch_total ... streaks-svc p95 < 250ms, support tickets\" ABSENT: error-rate and backfill-failure halt criteria"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "When 3.2 runs against 2.14, sync is silently disabled and devices show local-only streaks that can differ across devices. No alert fires, and the mismatch metric covers only synced users, so this divergence is not detected. Support tickets are a lagging signal.",
+   "evidence": "\"3.2 client against 2.14 API (server rollback scenario) | staging | Pass (sync silently disabled, local streak shown)\""
+  },
+  {
+   "lens": "ui",
+   "severity": "major",
+   "claim": "The disabled saver label hard-codes 'Nov 28', but the saver limit is one repair per 30 days, which is per-user. Almost every user would see an incorrect date in all five locales, and the copy is marked final.",
+   "evidence": "\"Streak saver available again on Nov 28\" (disabled state label, \"copy (final, localized en/es/de/fr/pt-BR)\")"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The artifact does not describe server-side checks on streak_events writes that bind habit_id to the authenticated user_id or bound the client-supplied day. Without them, a client could write events against another user's habit or inflate streaks.",
+   "evidence": "ABSENT: authorization binding habit_id to authenticated user_id, and day-range validation, on streak_events writes (table keyed on user_id, habit_id, day)"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Rollback to 2.14 is declared safe, but the artifact gives no cleanup or reconciliation for streak_events written during the 2.15 window or for a backfill halted mid-run. If the feature is re-enabled later, partial and divergent data is used as-is.",
+   "evidence": "\"schema is additive and streak_count remains authoritative-compatible, so 2.14 runs against the migrated database unchanged (verified in staging).\" ABSENT: treatment of events written in the 2.15 window or of a halted backfill"
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "'Repair yesterday' may not match the rule that any one missed day in 30 days can be repaired. Copy and behaviour should be confirmed to agree.",
+   "evidence": "\"Saver button: 'Repair yesterday'\" vs \"one missed day per 30 days can be repaired from the streak screen\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The server enforces the one-per-30-days saver limit, but no concurrency test covers two repairs from different devices syncing offline. The user-facing outcome of a rejected second repair is also undefined.",
+   "evidence": "\"Streak saver: limit 1 per 30 days enforced server-side | staging | Pass\" ABSENT: concurrent or cross-device repair test"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "streak_events grows one row per habit per day with no stated retention or partitioning policy, and the streak is recomputed from events. The p95 < 250ms gate has no load test or long-streak measurement behind it.",
+   "evidence": "\"New table `streak_events (...)`\" / \"streaks-svc p95 < 250ms\" ABSENT: retention, partitioning, or load test"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Per-install source_device is stored per event alongside user_id, and the artifact does not state streak_events retention or deletion on account deletion. The 'unchanged' data-safety claim cites an inventory that is not linked.",
+   "evidence": "\"source_device stores a per-install random ID\" / \"verified against the updated data inventory\" ABSENT: streak_events deletion policy and inventory link"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The ≤15-minute kill-switch bound assumes a config fetch happens in that window. Backgrounded or offline clients may not refetch, and no push or forced refresh is described. The fallback when remote config is unreachable is also unstated.",
+   "evidence": "\"3.2 clients revert to local-only streaks within one config fetch (≤ 15 min)\" ABSENT: forced refresh or push, and default flag value when remote config is unreachable"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The 99.87% crash-free figure comes from a 1,900-user, 6-day beta. It meets the 99.5% gate but cannot bound rare crashes in the new sync and notification paths. Each rollout step's crash-free gate is the real control.",
+   "evidence": "\"Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "Staging differed from prod only in the flag under test, so prod percentage targeting was not exercised in QA.",
+   "evidence": "\"only `streak_sync_v2` differed (on in staging)\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "No cost or quota estimate covers backfill compute, the doubled write path, or reminder push volume at 50% and 100%.",
+   "evidence": "ABSENT: cost or quota estimate for backfill, dual-write, and notification sends"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Store phased rollouts run in parallel with the flag, and the artifact does not say what happens if store exposure outpaces the flag gate. Binaries already on devices cannot be recalled, so store rollback is partial.",
+   "evidence": "\"the flag gates the feature independently of store rollout\" / \"Store builds: halt phased/staged rollout\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Dual-write persists until 3.4, which depends on STR-1244 with no committed date, so the duplicate write path may persist indefinitely.",
+   "evidence": "\"scheduled for 3.4, after the minimum supported app version is raised past 3.1 (tracked in STR-1244)\""
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 111195,
+  "tokOut": 44863,
+  "usd": 0.04290719,
+  "critMs": 108367
+ }
+}

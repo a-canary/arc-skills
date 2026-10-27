@@ -53,10 +53,21 @@ const recall = (rs: Row[], gated = true, sev?: string, set: "caughtGated" | "cau
   for (const r of rs) for (const d of r.defects) if (!sev || d.severity === sev) { t++; if (r[set].has(d.id)) c++; }
   return t ? c / t : NaN;
 };
-// Disputed control: plan-03's rollback never carries Ghost-side unsubscribes back to MailPoet. All 9 phase-1 approaches flagged it
-// and judge pass 1 rated it a real unkeyed problem ("extra"); pass 2 rated the same attacks "nit". The key may be wrong, so TNR is
-// reported excluding it (headline) and on the raw key (grey). A judge-derived rule was tried first and was unstable across passes.
-const contested = new Set(["plan-03"]);
+// Disputed control: a "clean" case where, in ANY judging pass, ≥2/3 of approaches raise a blocking attack the judge rates a real,
+// unkeyed problem ("extra"). Its key is likely wrong, so headline TNR excludes it; raw-key TNR is shown alongside (grey).
+// Any-pass because the judge flips borderline extra↔nit between passes (measured: see judge-agreement.ts).
+const extraApproaches = (judgedRows: { case: string; approach: string; extraBlocking: number }[]) =>
+  Object.entries(Object.groupBy(judgedRows, (r) => r.case)).filter(([, rs]) =>
+    new Set(rs!.filter((r) => r.extraBlocking > 0).map((r) => r.approach)).size >= (2 / 3) * new Set(rs!.map((r) => r.approach)).size).map(([c]) => c);
+const pass1Rows = existsSync(`${OUT}/judged-pass1`) ? readdirSync(`${OUT}/judged-pass1`).flatMap((f) => {
+  const j = read(`${OUT}/judged-pass1/${f}`);
+  return Object.entries<any>(j.judged).map(([n, { labels }]) => {
+    const r = read(`${OUT}/raw/${n}__${j.case}__r${j.rep}.json`);
+    return { case: j.case, approach: n, extraBlocking: r.attacks.filter((x: any, i: number) => labels[i] === "extra" && blocking(x.severity)).length };
+  });
+}) : [];
+const cleanIds = new Set(Object.values<any>(corpus).filter((k) => k.expected_verdict === "CLEAR").map((k) => k.id));
+const contested = new Set([...extraApproaches(rows), ...extraApproaches(pass1Rows)].filter((c) => cleanIds.has(c)));
 const tpr = (rs: Row[]) => mean(rs.filter((r) => r.expected === "ATTACKS").map((r) => +(r.got === "ATTACKS")));
 const tnrRaw = (rs: Row[]) => mean(rs.filter((r) => r.expected === "CLEAR").map((r) => +(r.got === "CLEAR")));
 const tnr = (rs: Row[]) => tnrRaw(rs.filter((r) => !contested.has(r.case)));
@@ -81,7 +92,7 @@ const summary = names.map((n) => {
     bogusPerRun: mean(rs.map((r) => r.bogus)), wrongPerRun: mean(rs.map((r) => r.wrong)), nitPerRun: mean(rs.map((r) => r.nit)), extraPerRun: mean(rs.map((r) => r.extra)), attacksPerRun: mean(rs.map((r) => r.attacks)),
     precision: nonDupAttacks ? rs.reduce((s, r) => s + r.caughtAny.size + r.extra, 0) / nonDupAttacks : NaN,
     tokPerRun: mean(rs.map((r) => r.tok)), usdPerRun: mean(rs.map((r) => r.usd)), callsPerRun: mean(rs.map((r) => r.calls)),
-    critMsMedian: median(rs.map((r) => r.critMs)), repAgreement: agree, infraFaults: faults.filter((x) => x.n === n).length,
+    critMsMedian: median(rs.map((r) => r.critMs)), repAgreement: agree, infraFaults: faults.filter((x) => x.n === n && x.err.includes("unparseable")).length, // seat rate-limits are capacity, not approach robustness
     byGate: Object.fromEntries(gates.map((g) => { const x = rs.filter((r) => r.gate === g); return [g, { recall: recall(x), bacc: bacc(x) }]; })),
     byLens: Object.fromEntries(lenses.map((l) => { let c = 0, t = 0; for (const r of rs) for (const d of r.defects) if (d.lens === l) { t++; if (r.caughtGated.has(d.id)) c++; } return [l, { c, t }]; })),
   };
@@ -113,14 +124,24 @@ ${gates.map((g) => `<tr><td>${g}</td>${summary.map((s) => `<td>${pct(s.byGate[g]
 // Scatter: cost (log x) vs gated recall.
 const W = 640, H = 360, P = 48;
 const xs = summary.map((s) => Math.log10(s.usdPerRun)), xmin = Math.min(...xs) - 0.15, xmax = Math.max(...xs) + 0.15;
-const X = (v: number) => P + ((Math.log10(v) - xmin) / (xmax - xmin)) * (W - 2 * P), Y = (v: number) => H - P - v * (H - 2 * P);
+const X = (v: number) => P + ((Math.log10(v) - xmin) / (xmax - xmin)) * (W - 2 * P), Y = (v: number) => H - P - ((v - 0.5) / 0.5) * (H - 2 * P); // bAcc floor is 0.5 (always-ATTACKS)
 const ticks = [0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1].filter((t) => Math.log10(t) >= xmin && Math.log10(t) <= xmax);
-const scatter = `<svg viewBox="0 0 ${W} ${H}" role=img aria-label="cost per run vs balanced verdict accuracy">
-<g class=axis>${[0, 0.25, 0.5, 0.75, 1].map((v) => `<line x1=${P} x2=${W - P} y1=${Y(v)} y2=${Y(v)} /><text x=${P - 6} y=${Y(v) + 4} text-anchor=end>${pct(v)}</text>`).join("")}
+// ponytail: greedy nudge (0, -13, +13, -26, …) inside the plot for label collisions (6.3px/char at 11px); force layout if the plot gets denser.
+const placed = summary.map((s) => ({ x: X(s.usdPerRun) - 9, y: Y(s.bacc) + 4, w: 18 })); // dots are obstacles too
+const labels = [...summary].sort((a, b) => b.bacc - a.bacc || a.usdPerRun - b.usdPerRun).map((s) => {
+  const w = s.approach.length * 6.3, lx = X(s.usdPerRun) + 9 + w > W ? X(s.usdPerRun) - 9 - w : X(s.usdPerRun) + 9;
+  const hit = (y: number) => y < P || y > H - P - 4 || placed.some((p) => lx < p.x + p.w && p.x < lx + w && Math.abs(y - p.y) < 13);
+  let ly = Y(s.bacc) + 4;
+  for (let k = 1; hit(ly) && k < 40; k++) ly = Y(s.bacc) + 4 + (k % 2 ? -1 : 1) * 13 * Math.ceil(k / 2);
+  placed.push({ x: lx, y: ly, w });
+  return { s, lx, ly, w };
+});
+const scatter = `<div class=wrap><svg viewBox="0 0 ${W} ${H}" role=img aria-label="cost per run vs balanced verdict accuracy">
+<g class=axis>${[0.5, 0.6, 0.7, 0.8, 0.9, 1].map((v) => `<line x1=${P} x2=${W - P} y1=${Y(v)} y2=${Y(v)} /><text x=${P - 6} y=${Y(v) + 4} text-anchor=end>${pct(v)}</text>`).join("")}
 ${ticks.map((t) => `<text x=${X(t)} y=${H - P + 16} text-anchor=middle>$${t}</text>`).join("")}
 <text x=${W / 2} y=${H - 8} text-anchor=middle>list $ per gate run (log)</text><text x=12 y=${H / 2} transform="rotate(-90 12 ${H / 2})" text-anchor=middle>balanced verdict accuracy</text></g>
-${summary.map((s) => `<g class=pt><circle cx=${X(s.usdPerRun)} cy=${Y(s.bacc)} r=${3 + 6 * s.recallTop3} /><text x=${X(s.usdPerRun) + 9} y=${Y(s.bacc) + 4}>${s.approach}</text></g>`).join("")}
-</svg><p class=ci>dot size ∝ recall@3</p>`;
+${labels.map(({ s, lx, ly, w }) => `<g class=pt><circle cx=${X(s.usdPerRun)} cy=${Y(s.bacc)} r=${3 + 6 * s.recallTop3} />${ly !== Y(s.bacc) + 4 ? `<line x1=${X(s.usdPerRun)} y1=${Y(s.bacc)} x2=${lx > X(s.usdPerRun) ? lx - 2 : lx + w + 2} y2=${ly - 4} />` : ""}<text x=${lx} y=${ly}>${s.approach}</text></g>`).join("")}
+</svg></div><p class=ci>dot size ∝ recall@3</p>`;
 
 const analysis = existsSync(`${OUT}/analysis.html`) ? readFileSync(`${OUT}/analysis.html`, "utf8") : "<p><i>analysis pending</i></p>";
 const nDef = Object.values<any>(corpus).reduce((s, k) => s + k.defects.length, 0), nClean = Object.values<any>(corpus).filter((k) => k.expected_verdict === "CLEAR").length;
@@ -133,8 +154,8 @@ body{background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;mar
 h1{font-size:26px;margin:0 0 4px}h2{margin-top:36px;border-bottom:1px solid var(--line);padding-bottom:4px}
 .wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
 th{font-size:12px;color:var(--mute);font-weight:600}.small td,.small th{font-size:12.5px;padding:4px 6px}td.best{background:var(--best);font-weight:600}
-.desc,.ci{color:var(--mute);font-size:12px}svg{width:100%;max-width:720px}.axis line{stroke:var(--line)}.axis text,.pt text{fill:var(--mute);font-size:11px}
-.pt circle{fill:var(--accent);opacity:.75}.pt text{fill:var(--fg)}code{font-size:13px}
+.desc,.ci{color:var(--mute);font-size:12px}svg{width:100%;max-width:720px;min-width:560px}.axis line{stroke:var(--line)}.axis text,.pt text{fill:var(--mute);font-size:11px}
+.pt circle{fill:var(--accent);opacity:.75}.pt line{stroke:var(--mute);stroke-width:.6}.pt text{fill:var(--fg)}code{font-size:13px}
 </style></head><body>
 <h1>Defend Gate Bench — how to run multi-perspective phase gates</h1>
 <p class=ci>run <code>${a.run}</code> · ${Object.keys(corpus).length} cases (${nDef} seeded defects, ${nClean} clean controls) · ${judged.length} judged case-reps · worker tier = haiku, strong tier = sonnet, judge = opus (blind, shuffled) · judge spend ${usd(judgeUsd)} · generated ${new Date().toISOString().slice(0, 16)}Z</p>

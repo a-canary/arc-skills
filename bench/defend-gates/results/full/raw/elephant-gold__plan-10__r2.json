@@ -1,0 +1,179 @@
+{
+ "approach": "elephant-gold",
+ "case": "plan-10",
+ "rep": 2,
+ "wallMs": 399831,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Processor deletions run only after the per-account DB transaction commits, and the retries need identifiers (Stripe customer, Apple refresh token, Amplitude/Customer.io/Zendesk user IDs) that live in the rows that transaction deletes. The plan does not say where pending processor calls are persisted, so a failed or interrupted call can leave third-party personal data with no record that it needs erasing.",
+   "evidence": "\"each account is one DB transaction across `users` and the 23 tables that reference it.\" / \"After the DB transaction commits: Amplitude: user deletion API ... Sign in with Apple users: `POST /auth/revoke` for their refresh token.\" (ABSENT: where pending processor-call state is stored and whether it survives the purge)"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "There is no kill switch or pause for AccountPurgeJob. The purge ignores the feature flag, and the only safeguard before an irreversible live run is a one-time manual count check. A bug in the purge registry, such as a wrong delete vs nullify action, cannot be halted once it starts.",
+   "evidence": "\"Requests already confirmed are still purged on schedule (the purge job ignores the flag)\" / \"the privacy lead checks the account list and per-table row counts before it runs live.\" (ABSENT: pause control or halt threshold for AccountPurgeJob)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "No alert is defined for the nightly job not running or for the age of the oldest pending deletion, so a stalled job could breach the one-month Art. 17 deadline unnoticed. The purge-failed tickets also have no owner, SLA or escalation path beyond the privacy lead.",
+   "evidence": "\"A dashboard shows pending, completed and failed per processor.\" / \"anything still failing opens a `purge-failed` ticket for the privacy lead.\" (ABSENT: alert thresholds, job heartbeat, backlog-age alert, ticket SLA)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Nothing prevents a race between 'Keep my account' and the nightly purge. The job selects by grace-period end and runs a multi-table transaction, with no row lock or state re-check, so a restore during the run could leave a half-restored or half-purged account.",
+   "evidence": "\"Nightly `AccountPurgeJob` processes accounts whose grace period has ended; each account is one DB transaction across `users` and the 23 tables\" / \"'Keep my account', which restores the account exactly as it was\" (ABSENT: locking, status re-check, or cancellation of a pending purge)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Confirm applies several side effects with no stated ordering, atomicity or compensation. If the Stripe call or the email send fails after sessions are revoked and the account is deactivated, the user can be locked out with no notice while still billed.",
+   "evidence": "\"On confirm: All sessions and refresh tokens are revoked. The account is deactivated ... Email to the account address\" / \"at confirm, the subscription is set to `cancel_at_period_end`\" (ABSENT: failure handling or compensation for these steps)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "'Restores the account exactly as it was' cannot hold for subscriptions. If the billing period ends inside the 14-day grace window, the cancel_at_period_end flag lets the Stripe subscription lapse, and unsetting the flag on Keep will not restore it. The plan does not address this case.",
+   "evidence": "\"the subscription is set to `cancel_at_period_end`, so it never renews during the grace period. 'Keep my account' unsets it.\" alongside \"restores the account exactly as it was\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The invoice retention path is undefined. The registry supports only delete or nullify, yet invoices must survive with billing name and country, and the plan does not say how those rows are kept without the user link required for the retention rule.",
+   "evidence": "\"lists every table ... and its action (delete, or nullify for rows owned by someone else).\" vs. \"Kept: invoice records (amount, date, VAT, billing name and country) ... then removed by the existing invoice retention job\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "A nullify that violates NOT NULL, foreign-key or ownership constraints would roll back the whole per-account transaction. The CI test checks only that a column is listed, not that the action is valid, and the plan gives no per-account error isolation, so one bad account could stall the nightly batch on retry.",
+   "evidence": "\"A CI test fails if any such column in `db/schema.rb` is missing from the registry\" / \"Nightly `AccountPurgeJob` processes accounts whose grace period has ended\" (ABSENT: nullify validity check, per-account isolation, batch size)"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "Restore protection is incomplete. The runbook re-applies only purges recorded in deleted_accounts, so accounts still in the grace period are not covered; a restore from a pre-confirm snapshot would revive them with sessions that were revoked at confirm. The plan also does not say whether deleted_accounts survives a restore, or whether pending processor calls are re-run.",
+   "evidence": "\"Table `deleted_accounts` keeps only purged user IDs and dates (no PII); the restore runbook re-applies purges from it after any restore, so a restore cannot resurrect a deleted account.\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The 'nothing else is kept' and 'no other system holds user-level data' claims are contradicted by the plan's own text. Backups kept 35 days, Sentry and application logs kept 30 days, and push tokens or device identifiers are not in the purge scope, and the inventory is not included to check the claim.",
+   "evidence": "\"Nothing else is kept.\" / \"No other system holds user-level data beyond the processors below (data inventory DPI-2026, reviewed Sep 2026).\" / \"Application logs and Sentry error reports have 30-day retention\" / \"Postgres snapshots roll off after 35 days\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The Stripe step detaches payment methods and redacts metadata, but leaves the customer object and its identifiers in place. The plan does not address whether those identifiers link retained invoices to the deleted user, or whether a new account registered with the same email can be linked to the old identity.",
+   "evidence": "\"Stripe: detach payment methods and redact customer metadata; invoices stay as required.\" / \"After purge the email address can be used to register a new, empty account.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The 'new tables cannot be forgotten' guarantee is overstated. The CI check matches only columns named user_id or *_user_id, so differently named references, polymorphic references or JSON fields are not caught.",
+   "evidence": "\"A CI test fails if any such column in `db/schema.rb` is missing from the registry, so new tables cannot be forgotten.\""
+  },
+  {
+   "lens": "authn",
+   "severity": "minor",
+   "claim": "A stolen password alone can start an irreversible deletion on the password path. The only control is the confirmation email giving the owner 14 days to notice, and the plan does not add a second factor for this destructive action.",
+   "evidence": "\"The confirmation email gives the real owner 14 days to cancel even if their password was used.\""
+  },
+  {
+   "lens": "authn",
+   "severity": "minor",
+   "claim": "The cancel link is a bearer credential valid until purge, and it restores the account without a login. Anyone with the email (forwarding, mail scanning, log exposure) can use it, and the plan does not bind it to the requesting session or device.",
+   "evidence": "\"The link is single-use, signed, valid until the purge.\""
+  },
+  {
+   "lens": "secrets",
+   "severity": "minor",
+   "claim": "Only Sign in with Apple tokens are revoked at purge. The plan does not say whether Google sign-in grants or tokens are revoked, so third-party access tied to the deleted account may persist.",
+   "evidence": "\"Sign in with Apple users: `POST /auth/revoke` for their refresh token.\" (no Google equivalent listed)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Processor calls have no stated idempotency keys, rate-limit handling or per-vendor concurrency cap. A nightly burst can trip vendor throttling, and retries for up to 7 days can multiply load for the whole backlog.",
+   "evidence": "\"Each call retries with exponential backoff for up to 7 days; anything still failing opens a `purge-failed` ticket\" (ABSENT: idempotency, throttling, concurrency limits)"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The nightly job has no stated batch size, per-run cap or lock-footprint bound, and the staging test uses only 500 accounts with no soak or load test for the purge or confirmation-email volume.",
+   "evidence": "\"staging run with 500 synthetic accounts across password / Apple / Google sign-in and Stripe test-mode subscriptions\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "A 14-day grace period before erasure is a retention choice that needs justification under Art. 17's 'without undue delay'. The plan does not state the purpose limitation during the window, and marketing and push are only paused.",
+   "evidence": "\"permanently deleted 14 days after you confirm\" and \"push and marketing email are paused\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "App Store and Google Play renewal or cancellation notifications that arrive after purge are not addressed. Unmatched events could fail or create a stray account.",
+   "evidence": "\"Deleting your account does not cancel your App Store subscription\" (ABSENT: handling for store notifications after purge)"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "The plan does not state the transfer mechanism or processor hosting regions for EU account data sent to Amplitude, Customer.io, Zendesk and Stripe during deletion.",
+   "evidence": "ABSENT: processor hosting regions, DPAs or transfer safeguards. Only: \"the processors below (data inventory DPI-2026...)\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The unauthenticated web endpoint has per-IP and per-address limits but no global cap on outbound confirmation emails, and processor retries have no spend cap. A distributed client or a multi-day outage could drive unbounded email or API cost.",
+   "evidence": "\"Web requests are rate-limited to 5/hour per IP and 3/day per email address.\" / \"Each call retries with exponential backoff for up to 7 days\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Club messages and leaderboard references shared with other members are not addressed. Deletion and nullification of shared state may be inconsistent and cannot be undone on rollback.",
+   "evidence": "\"club messages and leaderboard history are permanently deleted\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The test plan does not cover the 'Keep my account' restore path, including reversal of cancel_at_period_end, club or friend removal and push pausing. The claim of exact restoration is therefore unverified.",
+   "evidence": "\"restores the account exactly as it was, including notification and marketing preferences.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The success measure '100% of purges complete within 21 days' cannot be met by design, since failures after the 7-day retry window open a ticket rather than completing the purge.",
+   "evidence": "\"100% of purges complete within 21 days of confirmation (dashboard).\" vs. \"anything still failing opens a `purge-failed` ticket for the privacy lead.\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The epic bundles the iOS 5.1.1(v) unblock with subscription logic, four processor integrations, a dashboard, abuse limits and an unauthenticated web flow for 2 engineers in 3 weeks, with no split between blocking and deferrable work.",
+   "evidence": "\"Owners: 2 engineers (1 backend, 1 web/mobile) · 3 weeks · Epic PAR-2207\""
+  },
+  {
+   "lens": "duplication",
+   "severity": "minor",
+   "claim": "Re-authentication is specified separately for the in-app flow (10-minute validity) and the logged-out web flow (email link counts as re-auth), which invites two implementations of the same security gate.",
+   "evidence": "\"Re-auth is valid for 10 minutes\" / \"clicking it counts as re-auth.\""
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "Accessibility requirements are not stated for the confirmation email, the scheduled-deletion banner or the web page's status message after submission.",
+   "evidence": "ABSENT: accessibility requirements for the confirmation email, the \"scheduled for deletion\" banner and the post-submit status message"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 71889,
+  "tokOut": 42391,
+  "usd": 0.025477859999999998,
+  "critMs": 81708
+ }
+}

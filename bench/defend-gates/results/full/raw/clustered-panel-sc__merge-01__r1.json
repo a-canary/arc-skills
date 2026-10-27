@@ -1,0 +1,59 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "merge-01",
+ "rep": 1,
+ "wallMs": 225647,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The retry loop generates a fresh randomUUID() client_order_id on every attempt, so the broker cannot dedupe retries. If attempt 1 timed out or got a 502/503/504 after the broker accepted the order, attempt 2 submits a new order under a different ID and can double-fill. This contradicts the PR's claim and the agreed constraint that retries must be safe.",
+   "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { const clientOrderId = randomUUID(); try { ... client_order_id: clientOrderId"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Changing sizeBuy from Math.floor to Math.ceil rounds the quantity up, so the order can exceed the per-symbol maxNotional cap that sizing must never exceed. For example, maxNotional 10000, price 333, lotSize 1 gives 31 shares, or $10,323.",
+   "evidence": "const lots = headroom / price / lotSize; return Math.ceil(lots) * lotSize;"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Timeouts and 502/503/504 are ambiguous outcomes where the broker may have accepted the order. The code resubmits without reconciling, such as looking up the prior client_order_id first, so a duplicate live order is possible even with a stable ID.",
+   "evidence": "const RETRYABLE_STATUS = new Set([502, 503, 504]); ... || (err as Error).name === \"TimeoutError\" ... no lookup of prior order before resubmit"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "No test covers the retry path (retry, 4xx non-retry, ID reuse). The new sizing tests use only exact divisions, so they pass while the cap is breached. This is untested live-money code deploying before the open.",
+   "evidence": "ABSENT: tests for submitOrder; sizing tests 10_000/100/lot 1 and 10_000/50/lot 10 divide evenly, with no remainder case"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The diff does not show that BrokerClient.post accepts a third options argument with timeoutMs, or that timeouts surface as an error named exactly \"TimeoutError\". If either is wrong, hangs are unbounded or the timeout retry never fires.",
+   "evidence": "{ timeoutMs: 4000 } and (err as Error).name === \"TimeoutError\"; ABSENT: BrokerClient signature and timeout error class"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "When retries are exhausted, the error is thrown with no error-level log, metric, or alert. Only a warn is logged per retry, so a dropped order at the open, the incident this PR targets, could go unnoticed. Rollout is also all-at-once with no flag or rollback plan.",
+   "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, attempt }); with no log or metric on exhaustion; no flag or rollback described"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The PR bundles an unrelated sizing change, described as a 'tidy', with the risky retry change. The sizing change actually alters order quantities, and the bundling makes review and rollback harder.",
+   "evidence": "Also tidies the sizing helper so quantities are rounded to the broker's lot size before submit."
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 19072,
+  "tokOut": 10105,
+  "usd": 0.04624004,
+  "critMs": 24586
+ }
+}

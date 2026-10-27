@@ -1,0 +1,155 @@
+{
+ "approach": "elephant-gold",
+ "case": "deploy-02",
+ "rep": 2,
+ "wallMs": 209317,
+ "verdict": "ATTACKS",
+ "confidence": 0.96,
+ "attacks": [
+  {
+   "lens": "fair-and-balanced-2210",
+   "severity": "blocker",
+   "claim": "The scheduled public launch post says options trade with zero commissions and zero fees and 'no fine print', but the release notes say the options contract fee is $0.50 and regulatory fees still apply to sells. The post would publish automatically at 09:00 ET and cannot be recalled, so it is a materially misleading fee claim under FINRA Rule 2210 and it could cause customers to be charged amounts the post said they would not pay.",
+   "evidence": "Announcement: 'trade stocks, ETFs **and options** with zero commissions and zero fees. No catches, no fine print.' vs. release notes: 'options contract fee lowered to $0.50 per contract (was $0.65)... Regulatory fees (SEC, FINRA TAF) still apply to sells.'"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "Migration 0148 irreversibly drops legacy_legs and legacy_legs_to_json at 06:00, in the same window as the deploy and with no backup or restore step. The 4.x template endpoints read legacy_legs, so the 15-minute rollback to v4.18.2 cannot restore working template reads, and it breaks the agreed 30-minute rollback requirement. Old pods still serving during the rolling deploy are also affected.",
+   "evidence": "'Migrations are forward-only; no down migrations are needed for this release.' and 'ALTER TABLE order_templates DROP COLUMN legacy_legs; DROP FUNCTION legacy_legs_to_json(text);' vs. 'Saved templates move from order_templates.legacy_legs ... read by the 4.x orders-svc template endpoints'"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Migration 0147 runs ADD COLUMN, a full-table UPDATE over about 2.9M rows, and SET NOT NULL in one transaction on a live table with no batching, lock_timeout, or concurrent-write test. SET NOT NULL requires a full-table validation under an exclusive lock, so template reads and writes could stall. The 41s snapshot dry run does not show production behavior, and the lock window is not stated. Scaling to 10–100x rows is not addressed.",
+   "evidence": "BEGIN; ALTER TABLE order_templates ADD COLUMN legs_json jsonb; UPDATE order_templates SET legs_json = legacy_legs_to_json(legacy_legs); ALTER TABLE order_templates ALTER COLUMN legs_json SET NOT NULL; COMMIT; — 'Migration 0147 dry run against a prod snapshot (2.9M templates): 41s, 0 conversion errors.'"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Adding NOT NULL to legs_json while v4.18.2 pods still serve writes means any template saved by an old pod, which writes only legacy_legs, will fail on insert during the 06:00–06:10 window and during any rollback. The snapshot dry run does not cover rows written after the snapshot or during the migration.",
+   "evidence": "'ALTER TABLE order_templates ALTER COLUMN legs_json SET NOT NULL;' with 'Migration 0147 dry run against a prod snapshot (2.9M templates): 41s, 0 conversion errors.'"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Migration 0148 is applied at 06:00 before any app rollout, with no gate, soak period, or health check on 5.0 or orders-svc v5.0.0. The destructive drop therefore happens before any health signal exists and before the 5.0 release is verified.",
+   "evidence": "'1. 06:00 ET apply migrations 0147, 0148.' and 'DROP COLUMN legacy_legs;'"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The 30-minute rollback claim is not evidenced. There is no rollback rehearsal and no v5-to-v4.18.2 test against migrated data, and the 15-minute target has no verification, timeout, or health check. Detection time (5 minutes of 5xx, a human decision, and an unwindowed reject-rate trigger) is not counted against the SLO. No on-call owner or paging path is named.",
+   "evidence": "'target: complete within 15 min, well inside the 30-minute rollback SLO' vs. QA summary listing no rollback test; 'order reject rate +50% over baseline' with no window"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Templates created in 5.0 are stored only in legs_json, including multi-leg options templates. The plan does not say how they are handled after orders-svc is reverted, so the rollback loses or breaks user data.",
+   "evidence": "'Saved order templates now support multi-leg options strategies.' with 'Migrations are forward-only; no down migrations are needed for this release.'"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The mobile fallback is untested and does not match what the backend returns after rollback. Clients are told to hide Reorder on a 404 from /v5/templates, but after rollback the v4 endpoints fail on the dropped column and return 500s, so the fallback never triggers. No fallback test appears in QA.",
+   "evidence": "'5.0 clients fall back to hiding Reorder if /v5/templates returns 404.' vs. QA: 'Reorder: equities, ETFs, single-leg and 2/3/4-leg options ... pass' (no fallback test)"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The helper function legacy_legs_to_json converts untrusted user-entered template text into executable order legs, but the artifact defines no validation, parsing rules, or ownership check. Malformed legs could be coerced into order legs, and the function is defined outside this artifact and dropped in 0148, so the conversion cannot be reviewed or tested.",
+   "evidence": "'UPDATE order_templates SET legs_json = legacy_legs_to_json(legacy_legs);' and 'DROP FUNCTION legacy_legs_to_json(text);' with no definition or tests given"
+  },
+  {
+   "lens": "authz",
+   "severity": "major",
+   "claim": "Reorder from History and the new /v5/templates endpoints prefill order entry, but the artifact states no check that a template or History order belongs to the requesting account. A reorder could reference another account's data or submit orders on the wrong account.",
+   "evidence": "ABSENT: any ownership or account-binding requirement for template or History reads. 'Reorder from History reuses the template prefill path; no new order-entry endpoint.'"
+  },
+  {
+   "lens": "options-approval-2360",
+   "severity": "major",
+   "claim": "Quick Reorder prefills options orders, including multi-leg strategies, and the artifact says nothing about checking the customer's options approval level before prefill or submit. This is a compliance exposure at launch.",
+   "evidence": "ABSENT: any options approval or strategy-level permission check. Present: 'Saved order templates now support multi-leg options strategies.'"
+  },
+  {
+   "lens": "communications-approval-2210",
+   "severity": "major",
+   "claim": "The blog and X launch post is retail communication that needs documented principal approval before use. The proposal has no approval reference, and the final copy is scheduled to publish automatically.",
+   "evidence": "ABSENT: principal approval or sign-off reference. Present: 'Launch announcement (blog + X, scheduled 09:00 ET)' with final copy."
+  },
+  {
+   "lens": "fair-and-balanced-2210",
+   "severity": "major",
+   "claim": "The post is promotional and profit-framed ('Rebuy your winners in one tap'), with no risk context for options trading and no balancing language. The copy omits the review-and-slide step described in the release notes.",
+   "evidence": "'Rebuy your winners in one tap with Quick Reorder.' ... 'No catches, no fine print. Update the app today.'"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The release notes say Reorder keeps the same order type and always shows a live quote, but when the market is closed, market orders default to limit at last close. The customer-facing description is inaccurate for a material pricing behavior.",
+   "evidence": "'prefill a new ticket with the same symbol, side, quantity and order type' and 'You always land on the review sheet with the live quote' vs. 'defaults market orders to limit at last close'"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "major",
+   "claim": "The post says 'update today' and promises the feature at 09:00 ET, but the mobile rollout is a 7-day App Store ramp and a 6-day Play ramp starting at 5%. Most readers will not have 5.0 or the feature when the post goes live.",
+   "evidence": "'Update the app today.' vs. 'App Store phased release (7-day ramp) and Play staged rollout 5% → 20% → 50% → 100% over 6 days.'"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The smoke test runs against one live house account in production with no pass/fail criteria, no abort condition, and no owner. There is also no stated scoping, logging, or authorization for live account activity.",
+   "evidence": "'06:30 ET smoke test with house accounts in the paper environment and one live house account.'"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The options fee cut has no revenue or volume impact estimate, so the business case cannot be evaluated against targets. This is not a safety gate item.",
+   "evidence": "ABSENT: revenue or per-contract fee impact estimate for 'options contract fee lowered to $0.50 per contract (was $0.65)'"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Rollback and scaling compute have no capacity ceiling or cost cap, and no budget is given for a Reorder traffic spike or a retried migration transaction.",
+   "evidence": "ABSENT: capacity, autoscaling limit, or cost ceiling for 'deploy orders-svc v5.0.0 (rolling, 12 pods)'"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "Accessibility QA covers only VoiceOver and TalkBack. Keyboard, switch control, and voice-control paths for the slide-to-submit step are not shown as tested.",
+   "evidence": "ABSENT: 'Accessibility: VoiceOver/TalkBack pass on History and Reorder review sheet.' vs. 'you still slide to submit.'"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "The Reorder flow surfaces filled-order details, but the artifact does not say whether its analytics events carry account identifiers or whether the screen is gated by app lock or biometrics.",
+   "evidence": "ABSENT: telemetry and identifier handling for Reorder; device-lock gating of prefilled order data"
+  },
+  {
+   "lens": "fee-change-notice",
+   "severity": "minor",
+   "claim": "The options fee reduction is a customer pricing change, but there is no evidence of customer notice under the customer agreement or fee schedule update.",
+   "evidence": "ABSENT: customer notice or fee-schedule update. Present: 'Options pricing update: options contract fee lowered to $0.50 per contract (was $0.65).'"
+  },
+  {
+   "lens": "recordkeeping-17a-4",
+   "severity": "minor",
+   "claim": "The blog/X posts and in-app release notes are communications that must be archived, and the proposal does not mention archival. The permanent drop of legacy template data also has no retention review.",
+   "evidence": "ABSENT: archival of the blog/X posts and retention review for dropped data. Present: 'ALTER TABLE order_templates DROP COLUMN legacy_legs;'"
+  },
+  {
+   "lens": "scope drift",
+   "severity": "minor",
+   "claim": "The release bundles the options fee change, multi-leg templates, and unrelated fixes with Quick Reorder under one gate and one rollout, so Reorder cannot be rolled back or tested independently of the pricing and schema changes.",
+   "evidence": "'Options pricing update...' and 'Saved order templates now support multi-leg options strategies.' in the same release"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 58254,
+  "tokOut": 31171,
+  "usd": 0.0194239,
+  "critMs": 49073
+ }
+}

@@ -1,0 +1,137 @@
+{
+ "approach": "rubric-calibrated",
+ "case": "plan-09",
+ "rep": 1,
+ "wallMs": 244384,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Erasure is only repaired if a partition is later rewritten. Today's nightly full refresh heals a missed fact-side delete within a day, but after the change a partition is rebuilt only when a new late row lands in it. If the second delete (fact table) fails, the erased user's rows persist in the fact table indefinitely, and the plan specifies no retry or verification.",
+   "evidence": "\"privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`. Rebuilds read only `raw.events`\" (no retry or fact-side verification described; the staging test only covers the success path)"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Rollback does not restore a gap-free table. The legacy table is only as fresh as its last nightly run, so copying it back mid-day serves dashboards and the customer export without events ingested since that run, until the next full refresh at 02:20. That violates the hard constraint of no gaps.",
+   "evidence": "\"Rollback: `bq cp -f fct_page_events_legacy fct_page_events`, then revert the PR; the next run is a full refresh ... No gap, no lost events.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The watermark only looks back 2 hours and is justified by a p99.9 visibility figure with no tail bound. A row that becomes visible after the window is never selected and is never reconciled. The plan also does not say what sets `ingested_at`, so a backlog upstream of insertion could exceed the window. This is a hypothetical gap, not a demonstrated one.",
+   "evidence": "\"every `event_date` that appears in raw rows with `ingested_at` > (max `ingested_at` already in the table − 2 h)\" and \"p99.9 measured at 4 min\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Post-cutover detection is weak. The v1-vs-v2 parity alert stops after 30 days, and no completeness or freshness test is defined for the incremental table. The weekly `unique_event_id` test only alerts, so any double count reaches dashboards for up to a week.",
+   "evidence": "\"New dbt test `unique_event_id` runs weekly on the full table ... and alerts #data-oncall on failure.\" and \"After 30 clean parity nights: drop the legacy model and table (DATA-431).\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The Looker saving is extrapolated from a top-20 subset compared against the September total for all Looker queries, so the ~$54 figure is not supported. The customer usage export's cost is absent from the table, and the saving still holds at the pessimistic $383 baseline.",
+   "evidence": "\"dry runs of September's top 20 queries by bytes against v2: 61.2 → 8.7 TiB\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The 8.7 TiB figure compares a top-20 subset against the 61.2 TiB total, so the reduction for the full Looker workload is unmeasured. The Looker row should be flagged as an estimate.",
+   "evidence": "\"dry runs of September's top 20 queries by bytes against v2: 61.2 → 8.7 TiB\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "BigQuery time travel and the legacy copy can retain erased rows beyond the erasure event. The plan does not say whether this is acceptable under the privacy policy.",
+   "evidence": "ABSENT: no mention of time-travel window, snapshots, or copies in the erasure procedure"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Rollback has no ordering guard. If the table is copied back before the PR is reverted and the nightly incremental run lands in between, it runs insert_overwrite against an unpartitioned table, which should fail loudly. This is a sequencing risk, not silent corruption.",
+   "evidence": "\"`bq cp -f fct_page_events_legacy fct_page_events`, then revert the PR\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Two parallel models and tables coexist for 30 days, with cutover done by manual `bq cp` steps outside dbt. This is tracked in DATA-431 but adds coupling.",
+   "evidence": "\"`bq cp -f fct_page_events_v2 fct_page_events`\" and \"keeps the old full-refresh SQL as model `fct_page_events_legacy`\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "`bq cp -f` replaces the destination table, and the plan does not verify that table-level IAM, policy tags, or row-access policies on `fct_page_events` survive the swap. If they do not, the export or Looker could lose access.",
+   "evidence": "ABSENT: no check of destination table access controls before or after `bq cp -f`"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "No attack on this lens: no new trust boundary, external input path, or secret handling is introduced. The existing `analytics_write` lock is reused.",
+   "evidence": "\"privacy-svc and the dbt jobs already share the `analytics_write` lock (unchanged)\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Dedup-by-event_id is per partition and relies on a historical check; cross-partition duplicates are caught only by the weekly test, not prevented.",
+   "evidence": "\"Checked over all 4.2B rows: 0 such `event_id`s\""
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "No attack on this lens: the plan stays on BigQuery, which is the existing dependency, and does not add lock-in or change residency.",
+   "evidence": "ABSENT: no change to vendor, region, or data location"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Worst-case nightly cost grows linearly with per-day raw volume (about 30 days re-read each night), so 10x data means about 10x the $72/month steady state, which is still well under today's build cost.",
+   "evidence": "\"budget for the worst case every night: ~390 GiB ≈ $2.40/run\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "No attack beyond the Looker and export estimates above: the nightly and parity budget math checks out (388 GiB at $6.25/TiB ≈ $2.40).",
+   "evidence": "\"~390 GiB ≈ $2.40/run\""
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "No attack on this lens: the plan changes no rendered output; dashboards are unchanged.",
+   "evidence": "\"Looker and the customer usage export query `analytics.fct_page_events` by name; neither needs a change.\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "No attack on this lens: the plan addresses the stated cost and SLA problems and keeps the same columns and grain.",
+   "evidence": "\"no change to the model's columns or grain\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "No attack on this lens: dashboard latency should improve with partition pruning, and the 05:00 refresh is isolated from the legacy job.",
+   "evidence": "\"It runs as a separate dbt Cloud job after the main job ... so it cannot delay the 05:00 refresh.\""
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "No attack on this lens: the change has no user-facing interface.",
+   "evidence": "ABSENT: no UI change described"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The 12:00 UTC cutover is justified as the lowest Looker traffic window, but no traffic data is cited. The three-step swap is not atomic across steps, though the 02:20 job timing makes an interleaved run unlikely.",
+   "evidence": "\"Swap at 12:00 UTC (lowest Looker traffic; ...)\""
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 4073,
+  "tokOut": 23636,
+  "usd": 0.012437080000000001,
+  "critMs": 109741
+ }
+}

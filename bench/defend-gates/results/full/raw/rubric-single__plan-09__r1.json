@@ -1,0 +1,83 @@
+{
+ "approach": "rubric-single",
+ "case": "plan-09",
+ "rep": 1,
+ "wallMs": 138766,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "After the swap, the backfilled `fct_page_events_v2` table is never dropped, and the PR removes the v2 model. The table holds a full copy of user events but is in neither the retention nor the erasure job lists, so it is orphaned and outside the 25-month policy and erasure path.",
+   "evidence": "\"`bq cp -f fct_page_events_v2 fct_page_events`\" ... \"Merge the PR that points model `fct_page_events` at the incremental SQL and keeps the old full-refresh SQL as model `fct_page_events_legacy`.\" Retention covers only \"`raw.events` and `fct_page_events`\". ABSENT: any drop step or list entry for `fct_page_events_v2`."
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Erasure relies on the next rebuild to clear residue, but rebuilds only touch partitions with new rows. If the privacy-svc delete from `fct_page_events` fails after the raw delete succeeds, the user's rows can persist in untouched partitions indefinitely. The old nightly full refresh did not have this gap.",
+   "evidence": "\"privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`. Rebuilds read only `raw.events`\" and \"Each selected partition is rebuilt\" (only partitions with new rows). The erasure test covers only the case where a rebuild runs."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The 'no cross-partition duplicate event_id' check is vacuous. It runs on `fct_page_events`, which is already globally deduplicated, so event_id is unique there by construction. It cannot detect the duplicates that per-partition dedup would miss, which sit in raw.",
+   "evidence": "\"Checked over all 4.2B rows: 0 such `event_id`s (query linked in DATA-412).\" The plan's own dedup is \"`qualify row_number() over (partition by event_id ...)`\", so the table cannot show a mapping to two event_dates."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The requirement that dashboards and the export never see double counts is not enforced at publish time. Duplicates produced by per-partition dedup would be visible to readers until the weekly test runs and alerts.",
+   "evidence": "\"dashboards and the export must never see gaps or double counts\" vs \"New dbt test `unique_event_id` runs weekly on the full table ... and alerts #data-oncall on failure.\""
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The nightly parity test is not priced. A fingerprint over all columns on the full table reads roughly 2 × 1.9 TiB each night, about $24/night, or ~$710 over the 30-day rollback window. With that added, month 1 is ~$2,670, above today's $2,143, which reverses the stated 'Month 1 is still below today' conclusion.",
+   "evidence": "\"The nightly parity test keeps running (new vs legacy)\" and \"compares, per (`event_date`, `account_id`) ... `BIT_XOR(FARM_FINGERPRINT(TO_JSON_STRING(t)))` over all columns\". Cost table has no parity line. \"Month 1 is ~$1,960, still below today.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The Looker savings figure compares a top-20 dry-run subtotal against the full September total. That is not like-for-like, so the $54 post-change Looker estimate is unsupported.",
+   "evidence": "\"dry runs of September's top 20 queries by bytes against v2: 61.2 → 8.7 TiB\" vs \"61.2 TiB in September ≈ $383\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The '≤31 days, ~$2.40/run' bound assumes the high-water mark keeps advancing. A failed run does not move the mark, so after an outage the rebuild window grows with outage length and is not capped at 31 days.",
+   "evidence": "\"A failed run writes nothing and does not move the high-water mark\" vs \"the run reads raw from the oldest selected date onward (at most ~31 days)\" and \"budget for the worst case every night: ~390 GiB\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The 'no gap, no lost events' rollback claim depends on the separate legacy job having succeeded. If it failed, the copied-back table is stale relative to the incremental table, and the plan does not say how a stale legacy target is detected or handled before rollback.",
+   "evidence": "\"It runs as a separate dbt Cloud job after the main job\" and \"Rollback: `bq cp -f fct_page_events_legacy fct_page_events` ... No gap, no lost events.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The high-water mark is read from the table as max ingested_at, but the plan does not say the table keeps an ingested_at column or where the mark is stored otherwise. Without that, the incremental selection logic cannot run as described.",
+   "evidence": "\"every `event_date` that appears in raw rows with `ingested_at` > (max `ingested_at` already in the table − 2 h)\" vs \"Columns, types, grain ... are unchanged.\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The erasure guarantee depends on privacy-svc and the dbt jobs sharing the analytics_write lock, but this is asserted without a reference. The legacy job and parity test are not mentioned as lock holders.",
+   "evidence": "\"privacy-svc and the dbt jobs already share the `analytics_write` lock (unchanged), so an erasure never interleaves with a running build.\" ABSENT: lock configuration or a check that legacy and parity jobs take it."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The cutover timing relies on the PR merge landing before the 02:20 job and on 12:00 UTC being the lowest-traffic window. Neither is checked. A late merge lets the old full-refresh SQL overwrite the swapped table, and the traffic claim is unsupported.",
+   "evidence": "\"Swap at 12:00 UTC (lowest Looker traffic; the nightly job starts at 02:20, so all three steps land with no build in between)\" and \"Merge the PR\" listed as step 3 of the swap."
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3937,
+  "tokOut": 13409,
+  "usd": 0.00732222,
+  "critMs": 61280
+ }
+}

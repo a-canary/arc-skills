@@ -1,0 +1,239 @@
+{
+ "approach": "elephant-gold",
+ "case": "deploy-03",
+ "rep": 2,
+ "wallMs": 219257,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "streaks-svc 2.15 computes streaks from streak_events while habits.streak_count is also dual-written. During the canary and full deploy, 2.14 pods still serve completions that update streak_count but create no event rows, so 2.15 can read an incomplete event log. Rolling back to 2.14 stops event writes, and re-upgrading then computes from stale events. The artifact has no reconciliation or re-roll-forward procedure, no transaction boundary for the dual-write, and no QA test of 2.14 running against a populated streak_events table.",
+   "evidence": "\"streak is computed from events, idempotent on `(user_id, habit_id, day)`\" / \"`habits.streak_count` is **kept** and dual-written by 2.15\" / \"2.14 runs against the migrated database unchanged (verified in staging)\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The backfill of 18.4M rows starts immediately after the full 2.15 deploy, against live writes. The only timing evidence is a 22-minute dry run on a snapshot with no concurrent writes. The artifact gives no throttle, DB load ceiling, abort threshold, failure alerting, or retry policy, and does not show that backfill inserts stay idempotent alongside live dual-writes.",
+   "evidence": "\"Backfill job starts after full deploy.\" / \"run as a resumable job (batches of 5k, checkpointed), dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches vs `streak_count`\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The `day` key used for idempotency and streak counting has no defined timezone. Completions from devices in different timezones can land on different days, and the saver's 'yesterday' is ambiguous. The passing timezone QA test does not establish which day boundary is used.",
+   "evidence": "\"New table `streak_events (user_id, habit_id, day, source_device, created_at)`; streak is computed from events, idempotent on `(user_id, habit_id, day)`.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The artifact does not say whether a streak-saver repair writes a streak_events row for the repaired day. If it does not, an event-derived streak breaks at every repaired day, even though the 3.1 streak_count path shows the streak as intact.",
+   "evidence": "\"one missed day per 30 days can be repaired from the streak screen.\" with no mention of a streak_events write for repairs"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "streak_events stores per-user, per-habit, per-day completion history with timestamps. The artifact gives no retention period, no TTL or archival policy, and no statement that rows are deleted on account deletion or erasure requests. The table grows without bound across 400k MAU.",
+   "evidence": "ABSENT: retention, deletion, or cascade policy for `streak_events (user_id, habit_id, day, source_device, created_at)`"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "A production snapshot containing personal habit data was used for the backfill dry run. The artifact does not say where the snapshot is stored, what region it is in, who can access it, or whether it was deleted afterward. Copying prod personal data into a non-production environment without these controls is an exposure risk.",
+   "evidence": "\"dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches vs `streak_count`\" — ABSENT: snapshot location, region, access controls, deletion"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The artifact does not describe server-side authorization for streak_events writes, the streak saver endpoint, or backfill user scoping. Without ownership checks, a client could write or repair events for another user_id or habit_id, or forge source_device values.",
+   "evidence": "ABSENT: authn/authz checks on the streak_events write path, the saver endpoint, and the backfill job. Only \"streak is computed from events, idempotent on `(user_id, habit_id, day)`\" is stated."
+  },
+  {
+   "lens": "ui",
+   "severity": "major",
+   "claim": "The saver button is labeled 'Repair yesterday', but the feature lets users repair any one missed day within 30 days. For any missed day other than yesterday, the label misdescribes the action, and users who missed an earlier day will not know they can repair it.",
+   "evidence": "\"Repair yesterday\" vs. \"one missed day per 30 days can be repaired from the streak screen.\""
+  },
+  {
+   "lens": "language",
+   "severity": "major",
+   "claim": "The VoiceOver/TalkBack label hardcodes the plural 'days', so a 1-day streak is read as '1 days'. The artifact gives no plural variants, and es, de, fr, and pt-BR have their own plural rules that are not addressed.",
+   "evidence": "Streak screen header: \"12-day streak\" (VoiceOver/TalkBack label: \"Current streak, 12 days\")."
+  },
+  {
+   "lens": "accessibility",
+   "severity": "major",
+   "claim": "The artifact says the copy is final and localized in en/es/de/fr/pt-BR, but it shows only English strings. Layout and truncation were verified only for Dynamic Type XXL and Android 200% font scale in English. Longer German, French, and Portuguese strings in the buttons and sheet are not verified.",
+   "evidence": "ABSENT: translated strings and locale-specific layout results for de, fr, pt-BR. QA only has \"Dynamic Type XXL / Android font scale 200% | device lab | Pass, no truncation\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The advancement gates have no alert thresholds, owners, dashboards, or rollback triggers. streak_mismatch_total is defined as server vs client recompute, not as streak_count vs streak_events, so it would not catch dual-write drift. No gate covers the 3.2 client sync error rate. Regressions between 24h steps could go unnoticed.",
+   "evidence": "\"Gates to advance each step: crash-free sessions ≥ 99.5%, `streak_mismatch_total` (server vs client recompute) < 0.1%...\" — ABSENT: alerting rules, owners, rollback thresholds, instrumentation evidence"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Setting streak_sync_v2 to 0% makes 3.2 clients revert to local-only streaks, which can differ from the server streak_count that 3.1 clients read. Users may see their streak change across devices, and the artifact has no reconciliation or user communication plan. The change is not undone when the flag is turned back on.",
+   "evidence": "\"set `streak_sync_v2` to 0%; 3.2 clients revert to local-only streaks within one config fetch (≤ 15 min)\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Store rollback only halts further distribution. Users who already installed 3.2 cannot be downgraded, and the artifact does not say whether 3.2 migrates on-device storage. The claim that flag-off 3.2 is functionally equivalent to 3.1 is not tested with populated sync data.",
+   "evidence": "\"Store builds: halt phased/staged rollout; 3.2 with flag off is functionally equivalent to 3.1 plus copy changes.\" — ABSENT: QA of flag-off behavior after sync writes"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Each completion now dual-writes to two tables, and streak_events adds a unique index on (user_id, habit_id, day). The write path roughly doubles on the hot completion path, and the artifact has no capacity or write-amplification evidence at production volume. The canary has no stated abort criteria, and no load test appears in QA.",
+   "evidence": "\"`habits.streak_count` is **kept** and dual-written by 2.15\" / \"canary 10% of pods for 1h, then full\" — QA table has no load-test row"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The crash-free gate is supported only by an internal beta of 1,900 users over 6 days, with no per-platform breakdown. The first rollout step is 1% of 3.2 users, so the threshold is checked per step, but the artifact does not show the Android and iOS sync paths separately.",
+   "evidence": "\"Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "source_device is a client-supplied value written directly to storage. The artifact does not say it is validated or length-bounded.",
+   "evidence": "\"`source_device` stores a per-install random ID, not a hardware identifier\" — ABSENT: validation or length constraints"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Server-side habit completion history is new collection, and the privacy section addresses only third-party sharing. It does not say whether users are informed of or can opt out of this history.",
+   "evidence": "\"No new data shared with third parties. Privacy nutrition label and Play data-safety form unchanged\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "A persistent per-install ID stored alongside user activity may count as personal data under GDPR and as a device identifier under Apple and Google declarations. The artifact asserts the classification without recording legal sign-off.",
+   "evidence": "\"`source_device` stores a per-install random ID, not a hardware identifier.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Reminder scheduling and fan-out are not described. Many users choosing the same default time could cause a synchronized notification spike.",
+   "evidence": "ABSENT: reminder scheduling design. \"Optional streak reminder notification at the user's chosen time.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Offline completions sync in a burst on reconnect. Batching, rate limiting, and jitter are not described, so many devices reconnecting together could spike streaks-svc.",
+   "evidence": "\"offline completion then reconnect\" / Pass (functional, staging) with no load characteristics stated"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Provisional iOS authorization delivers reminders quietly to Notification Center by default. The 8:00 PM nudge promised by the pre-prompt may go unseen, which undercuts the reminder's core value.",
+   "evidence": "\"we request provisional authorization first; full authorization is requested only if they enable sound in reminder settings.\""
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "The pre-prompt hardcodes 8:00 PM, but reminders fire at the user's chosen time. The copy may contradict the schedule the user sets.",
+   "evidence": "\"Want a nudge at 8:00 PM so you don't lose your streak?\" vs. \"Optional streak reminder notification at the user's chosen time.\""
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "The disabled-state date 'Nov 28' is hardcoded in a localized string. It should be computed from each user's last saver use.",
+   "evidence": "\"Streak saver available again on Nov 28\""
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "The accessible name ('Current streak, 12 days') does not contain the visible text '12-day streak'. Speech-input users who say the visible label may fail to activate the control (WCAG 2.5.3).",
+   "evidence": "\"12-day streak\" (VoiceOver/TalkBack label: \"Current streak, 12 days\")"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "No contrast results are reported for the disabled saver button, the 'Turn on in system settings' state, or the pre-prompt buttons.",
+   "evidence": "ABSENT: contrast measurements. QA covers screen readers and text scaling only."
+  },
+  {
+   "lens": "language",
+   "severity": "minor",
+   "claim": "Dates and times such as 'Nov 28' and '8:00 PM' are hardcoded in English-style formats and are not locale-aware, so they may display incorrectly in 24-hour or day-first locales.",
+   "evidence": "\"Streak saver available again on Nov 28\" / \"Want a nudge at 8:00 PM so you don't lose your streak?\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Streak logic lives in two sources of truth (streak_count and streak_events) through 3.4. Removal is tracked in STR-1244, but there is no owner or interim consistency check.",
+   "evidence": "\"Dropping `streak_count` is **not** part of this release. It is scheduled for 3.4\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The mismatch metric implies a second streak implementation on each client, with no shared spec or cross-platform test vectors.",
+   "evidence": "ABSENT: shared streak-computation spec or test fixtures; only \"`streak_mismatch_total` (server vs client recompute)\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The reminder and streak saver features are not gated separately from streak_sync_v2, so they cannot be disabled independently.",
+   "evidence": "\"Remote config `streak_sync_v2`\" is the only flag named"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Saver repairs consume the 30-day quota and write server-side events. The artifact gives no compensation or rule for a repaired streak or consumed quota if the flag is disabled.",
+   "evidence": "\"Streak saver: limit 1 per 30 days enforced server-side\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Scheduled reminders are not tied to the flag and may keep firing after rollback. Permission denials cannot be reversed through the system prompt.",
+   "evidence": "\"Optional streak reminder notification at the user's chosen time.\" / \"Denial is stored and the reminder toggle shows 'Turn on in system settings'\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The backfill has no documented undo, cleanup, or cancel step beyond resuming from a checkpoint.",
+   "evidence": "\"run as a resumable job (batches of 5k, checkpointed)\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Gates measure only safety and infrastructure health. No adoption, saver-use, reminder opt-in, or streak-continuation metric is defined, so the rollout could succeed technically while delivering no user value.",
+   "evidence": "ABSENT: adoption or retention metrics. Gates: \"crash-free sessions ≥ 99.5%...p95 < 250ms, support tickets tagged `streak`\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "The backfill carries only each habit's current streak. Longest-streak history is not represented, which may surprise users who expect history to follow them across devices.",
+   "evidence": "\"one `streak_events` row per day of each habit's current streak\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "Users face friction in the reminder permission flow: a dead-end disabled saver with no alternative, a two-hop Android recovery through system settings, and a second iOS authorization prompt when enabling sound.",
+   "evidence": "\"Repair yesterday\" (disabled state label: \"Streak saver available again on Nov 28\") / \"Turn on in system settings\" with a deep link / \"full authorization is requested only if they enable sound\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Clients that cannot fetch config (offline or throttled) during rollback have no stated timeout or fallback, so they may stay in sync mode against a failing backend.",
+   "evidence": "\"3.2 clients revert to local-only streaks within one config fetch (≤ 15 min). Verified in QA.\" — ABSENT: behavior when config fetch fails"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The remote-config parity claim is a snapshot with no export timestamp. The artifact does not confirm prod config was unchanged during the QA window.",
+   "evidence": "\"Staging remote config was exported from prod and only `streak_sync_v2` differed\" — ABSENT: export timestamp"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 61830,
+  "tokOut": 39935,
+  "usd": 0.023758059999999998,
+  "critMs": 68413
+ }
+}

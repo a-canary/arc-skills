@@ -1,0 +1,143 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-07",
+ "rep": 2,
+ "wallMs": 230903,
+ "verdict": "ATTACKS",
+ "confidence": 0.92,
+ "attacks": [
+  {
+   "lens": "injection",
+   "severity": "blocker",
+   "claim": "`_upload` interpolates partner-chosen filenames (`src.stem`) into a `shell=True` command string. A crafted name containing shell metacharacters, or even just spaces, executes arbitrary commands or breaks the `cp` call on a worker that holds write credentials for the whole raw bucket. The gsutil argv also has no `--` separator, so a name starting with `-` can be parsed as a flag.",
+   "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True)"
+  },
+  {
+   "lens": "partial-failure",
+   "severity": "blocker",
+   "claim": "The `_SUCCESS` marker is written unconditionally after the file loop, even when `failed > 0`. Dashboards read a partition as soon as its marker appears, so an incomplete partner dataset is published as complete.",
+   "evidence": "except Exception:\n            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n            failed += 1\n    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+  },
+  {
+   "lens": "timezone-partition",
+   "severity": "blocker",
+   "claim": "`partition_date()` changed from UTC to host-local time. Workers run with TZ=America/Los_Angeles and the job fires at 01:30 UTC, which is the previous day in Pacific time, so every nightly run writes and marks the wrong `dt` partition that dashboards (which read the UTC date) do not expect.",
+   "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")  (CONTEXT: TZ=America/Los_Angeles; scheduled 01:30 UTC; dashboards read UTC dt)"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The object layout changed from `raw/{partner}/dt={dt}/{stem}.csv.gz` to `raw/{partner}/dt={dt}/{stem}/{stem}-NNNN.csv.gz`. Existing consumers matching the old path will miss or misread data, and the PR does not mention or migrate them. Reverting the code does not remove objects already written in the new layout.",
+   "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\"  (previously f\"raw/{partner}/dt={dt}/{src.stem}.csv.gz\")"
+  },
+  {
+   "lens": "partial-failure",
+   "severity": "major",
+   "claim": "When a file fails midway, its already-uploaded chunks remain in the raw partition with no rollback, and its unuploaded gzip chunks stay on the worker disk because `unlink()` runs only on success and the except branch does not clean up. This leaves partial, personal-data-bearing objects and local scratch with no record of which file failed.",
+   "evidence": "for chunk in _write_chunks(src, work_dir):\n                _upload(chunk, partner, dt, src.stem)\n                chunk.unlink()\n            ok += 1\n        except Exception:"
+  },
+  {
+   "lens": "partial-failure",
+   "severity": "major",
+   "claim": "Reruns for the same `dt` do not clear the partition first. Chunk numbering depends on the chunk count of each run, so a rerun with fewer chunks leaves stale objects from the earlier attempt beside the new ones, which can duplicate rows under an existing success marker.",
+   "evidence": "def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None:\n    dt = partition_date()  (no delete or clear of raw/{partner}/dt={dt}/ before upload)"
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "`_write_chunks` fully writes every gzip chunk for a source file to local disk before any upload starts. Local scratch therefore scales with the compressed size of the whole file, and repeated failures accumulate leftover chunks without bound because nothing removes them.",
+   "evidence": "for chunk in _write_chunks(src, work_dir):  (returns the full list after writing all chunks; except branch has no unlink)"
+  },
+  {
+   "lens": "failure-mode",
+   "severity": "major",
+   "claim": "A source file with no data rows (empty or header-only) yields zero chunks and no uploads, but is still counted as `ok`. The run reports success for a file that contributed nothing, and the partition is marked complete even if it is empty.",
+   "evidence": "ok += 1 runs after the chunk loop; _write_chunks returns [] when the reader yields no rows"
+  },
+  {
+   "lens": "observability",
+   "severity": "major",
+   "claim": "Failures are only logged and counted. The function does not raise or exit non-zero, and no metric or alert is added, so the Airflow task reports success whenever the loop finishes and a failed partner run is visible only in worker logs.",
+   "evidence": "log.info(\"partner=%s dt=%s ok=%d failed=%d\", partner, dt, ok, failed)  (no raise, exit code, or metric in the diff)"
+  },
+  {
+   "lens": "timeouts",
+   "severity": "major",
+   "claim": "The gsutil subprocess has no timeout and no retry. A stalled multi-GB upload can block the worker indefinitely, and a transient network error permanently fails that file.",
+   "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The claim that schema normalisation is unchanged is unsupported. `normalise_row` now receives a `csv.DictReader` dict, where empty fields are \"\", instead of a pandas row where they were NaN from `dtype=str`. No equivalence test or golden-output comparison is provided.",
+   "evidence": "\"Schema normalisation is unchanged (same `normalise_row`).\" / -df = pd.read_csv(src, dtype=str)  +reader = csv.DictReader(fh)  (no equivalence check)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The OOM fix, the speed claim for parallel composite uploads, and the 150M threshold are all asserted without any memory profile, timing, or run on the 3.1 GB Northwind feed.",
+   "evidence": "\"The Northwind feed hit 3.1 GB last week and the ingest task OOM-killed the worker.\" / \"(parallel composite uploads are much faster than the client library for multi-GB objects)\"  ABSENT: memory profile, benchmark, or large-input test"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "`ingest_partner` gains a required `work_dir` parameter, but no call site or DAG reference is updated in the diff. Any existing caller will fail with a TypeError at runtime.",
+   "evidence": "-def ingest_partner(partner: str, drop_dir: Path) -> None:\n+def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None:"
+  },
+  {
+   "lens": "failure-mode",
+   "severity": "minor",
+   "claim": "The CSV header is taken from the first normalised row of each chunk. A later row with different keys makes DictWriter raise, failing the whole file, and the schema is not stated or enforced anywhere.",
+   "evidence": "norm = normalise_row(row)\n            if writer is None:\n                writer = csv.DictWriter(out, fieldnames=list(norm.keys()))"
+  },
+  {
+   "lens": "exposure",
+   "severity": "minor",
+   "claim": "The partner-chosen source filename is copied into the GCS object key and the failure log line. If names identify a customer or campaign, that identifier is written into bucket keys and logs without any sanitisation.",
+   "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\"; log.exception(\"partner=%s file=%s failed\", partner, src.name)"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Killed or failed gsutil parallel-composite uploads can leave temporary component objects in the raw bucket, which accrue storage charges. The PR adds no cleanup or lifecycle rule for them.",
+   "evidence": "ABSENT: cleanup or lifecycle policy for composite components; subprocess.run(... cp ..., shell=True, check=True)"
+  },
+  {
+   "lens": "resource-leak-on-error",
+   "severity": "minor",
+   "claim": "If `_write_chunks` raises mid-file, the open gzip handle is never closed, and partially written chunks are not removed.",
+   "evidence": "for i, row in enumerate(reader):\n            if i % CHUNK_ROWS == 0:\n                if out:\n                    out.close()"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Uploads run as one shell subprocess per chunk, strictly serially, with no concurrency bound. Per-process startup overhead and idle network time grow with the number of chunks.",
+   "evidence": "subprocess.run(f\"gsutil -q ... cp {local} {dest}\", shell=True, check=True) inside `for chunk in _write_chunks(src, work_dir)`"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "At 500,000 rows per gzip chunk, chunks may fall below the 150M composite-upload threshold, so the parallel-composite flag may never apply and the claimed speedup is unrealised.",
+   "evidence": "CHUNK_ROWS = 500_000 ... -o GSUtil:parallel_composite_upload_threshold=150M"
+  },
+  {
+   "lens": "observability",
+   "severity": "minor",
+   "claim": "Per-file row counts were removed from the logs, so it is harder to tell after the fact whether a partner feed was truncated or partially ingested.",
+   "evidence": "-        log.info(\"uploaded %s rows=%d\", src.name, len(df))  (no per-file row count logged in its place)"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "Ingest now shells out to the Google-specific gsutil CLI rather than the client library already in use, which slightly increases coupling to GCS tooling.",
+   "evidence": "subprocess.run(f\"gsutil -q ... cp {local} {dest}\", shell=True, check=True)"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 58404,
+  "tokOut": 40524,
+  "usd": 0.023941920000000002,
+  "critMs": 49743
+ }
+}

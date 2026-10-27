@@ -1,0 +1,113 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-07",
+ "rep": 2,
+ "wallMs": 332471,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "`_upload` builds a `shell=True` command from `src.stem`, which comes from partner-chosen SFTP filenames. A filename containing shell metacharacters executes commands on a worker that holds write credentials for the whole raw bucket.",
+   "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "`partition_date()` changed from UTC to naive local time. On TZ=America/Los_Angeles, a 01:30 UTC run resolves to the previous calendar day, so the data lands in a `dt` partition that dashboards (which read the UTC date) do not expect.",
+   "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")"
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "`_SUCCESS` is written unconditionally after the loop, even when `failed > 0`. Dashboards gate on the marker, so a partition with missing files is published as complete. The per-file isolation change makes this reachable.",
+   "evidence": "        except Exception:\n            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n            failed += 1\n    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The object layout changes from `{stem}.csv.gz` to `{stem}/{stem}-NNNN.csv.gz`, and each chunk carries its own header. Downstream readers keyed to the old layout or expecting one header per file will break, and the PR does not mention the change or provide a migration path.",
+   "evidence": "-        blob = bucket.blob(f\"raw/{partner}/dt={dt}/{src.stem}.csv.gz\")\n+    dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Re-runs do not clear the existing dt prefix. A run that produces fewer chunks than a prior attempt leaves stale higher-numbered `-NNNN` objects beside new ones, which duplicates rows for downstream readers. A failed file also leaves already-uploaded chunks with no manifest or cleanup.",
+   "evidence": "path = out_dir / f\"{src.stem}-{len(chunks):04d}.csv.gz\"  |  ABSENT: pre-delete of dt prefix or manifest"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "`normalise_row` now receives a `csv.DictReader` dict (empty strings, None for short rows) instead of a pandas Series from a `dtype=str` frame (NaN for empties). The claim that normalisation is unchanged is unverified, and any NaN-dependent logic may behave differently.",
+   "evidence": "-        df = df.apply(normalise_row, axis=1, result_type=\"expand\")\n+            norm = normalise_row(row)  |  ABSENT: fixture showing identical output"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "`DictWriter` fieldnames are fixed from the first normalised row. If a later row has a different key set, `writerow` raises and the whole file is counted failed, leaving partial uploads behind.",
+   "evidence": "writer = csv.DictWriter(out, fieldnames=list(norm.keys()))"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A header-only or empty CSV yields zero chunks with no exception, so the file is counted `ok` with no rows delivered and no log line. The failure counter cannot see this loss.",
+   "evidence": "for chunk in _write_chunks(src, work_dir): ... ok += 1"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "`subprocess.run` has no timeout and no retry. A hung gsutil copy blocks the Airflow task and the rest of the partner run indefinitely.",
+   "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True)"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Plaintext partner rows are written to `work_dir` and removed only on success, with no `finally` or tempdir cleanup. A crash or OOM kill, which is the failure this PR targets, leaves raw retail data on worker disk, and repeated failures can fill the disk.",
+   "evidence": "chunk.unlink()  (no finally, no tempdir; gzip handle not closed on exception)"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "`ingest_partner` gains a required `work_dir` parameter, and the diff shows no caller update, so any call site not updated fails with TypeError. The `work_dir` lifecycle (creation and cleanup) is also undefined. The PR adds no tests for the chunk writer, header behaviour, or failure accounting.",
+   "evidence": "def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None:  |  ABSENT: caller updates, work_dir lifecycle, tests"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The OOM fix and the 'much faster' composite-upload claim are asserted without a benchmark, peak-memory measurement, or run on the 3.1 GB Northwind feed. With 500k-row gzip chunks, the compressed size may stay below the 150M composite threshold, so the flag may never fire.",
+   "evidence": "CHUNK_ROWS = 500_000  |  ABSENT: benchmark, peak-memory profile, compressed chunk sizes"
+  },
+  {
+   "lens": "other",
+   "severity": "major",
+   "claim": "The description frames this as an OOM fix but also changes partition-date semantics, failure and marker behaviour, object layout, and the normaliser input type. None of these are called out, so the riskiest changes are the least likely to be reviewed.",
+   "evidence": "The Northwind feed hit 3.1 GB last week and the ingest task OOM-killed the worker."
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "One gsutil subprocess is spawned per chunk, sequentially. Process startup and auth overhead multiply with chunk count, and total runtime for the 3.1 GB feed is not estimated. Row-based chunking also leaves bytes per chunk unbounded for wide rows.",
+   "evidence": "for chunk in _write_chunks(src, work_dir): _upload(chunk, partner, dt, src.stem)  |  CHUNK_ROWS = 500_000"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "The google-cloud-storage client is replaced by a gsutil binary on PATH. The diff does not declare this runtime dependency, and gsutil is in maintenance mode, which raises the ops and migration burden.",
+   "evidence": "-from google.cloud import storage\n+import subprocess"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Parallel composite uploads create temporary component objects that bill until deleted. Failure paths leave chunks behind, and the PR describes no lifecycle rule or cleanup.",
+   "evidence": "-o GSUtil:parallel_composite_upload_threshold=150M  |  ABSENT: lifecycle or cleanup rule"
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 119804,
+  "tokOut": 44144,
+  "usd": 0.042129139999999995,
+  "critMs": 73985
+ }
+}

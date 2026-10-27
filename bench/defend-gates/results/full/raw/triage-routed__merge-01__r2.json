@@ -1,0 +1,89 @@
+{
+ "approach": "triage-routed",
+ "case": "merge-01",
+ "rep": 2,
+ "wallMs": 258290,
+ "verdict": "ATTACKS",
+ "confidence": 0.96,
+ "attacks": [
+  {
+   "lens": "idempotency",
+   "severity": "blocker",
+   "claim": "client_order_id is regenerated on every loop iteration, so a retry after a timeout or 502/503/504 sends a new ID that the broker cannot match to a possibly-accepted first attempt. The PR's stated safety premise (retries cannot double-fill) fails, and the agreed retry-safety constraint is violated on a live account.",
+   "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {\n    const clientOrderId = randomUUID();"
+  },
+  {
+   "lens": "risk-cap",
+   "severity": "blocker",
+   "claim": "Switching from floor to ceil lets sizeBuy return a quantity whose notional exceeds the per-symbol maxNotional headroom, which sizing must never do. Example: headroom 10,050, price 100, lotSize 10 gives 10.05 lots, ceil to 11, so 110 shares = $11,000 against $10,050 headroom.",
+   "evidence": "const lots = headroom / price / lotSize;\n  return Math.ceil(lots) * lotSize;"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The new sizing tests use only exact divisions, so they cannot detect the cap overshoot introduced by ceil. A non-integer case such as maxNotional 10000, price 33, lotSize 1 returns 304 shares (about $10,032), and no test covers it.",
+   "evidence": "expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 })).toBe(100);\n  expect(sizeBuy({ maxNotional: 10_000, price: 50, currentQty: 0, lotSize: 10 })).toBe(200);"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "There are no tests for the retry loop: retry on 502/503/504, no retry on 4xx, retry on timeout, retry exhaustion, or ID reuse across attempts. The only tests added cover sizing, so the risk-bearing submit path is unverified before a live deploy.",
+   "evidence": "test(\"sizes to the cap in whole lots\" ...), test(\"short position frees headroom for the cover\" ...)  ABSENT: any test touching src/router/submit.ts"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Before retrying after an ambiguous outcome (timeout or 5xx), the code does not look up an existing order by client_order_id. On retry exhaustion it just throws, so an order the broker may have accepted is never reconciled.",
+   "evidence": "ABSENT: any lookup/status query by client_order_id before retry; after the final attempt the code runs `throw lastErr;`"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The claim that retries are safe because the broker dedupes on client_order_id has no supporting evidence. The artifact cites no broker documentation for dedupe semantics, dedupe window, or behavior on 502/503/504 and timeouts where the order may already be accepted.",
+   "evidence": "\"Retries are safe: every order carries a client_order_id and the broker dedupes on it, so a retry after a timeout cannot double-fill.\" ABSENT: broker doc reference, dedupe window, idempotency test"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The retry depends on unverified contracts: the third argument { timeoutMs: 4000 } to broker.post, an error named 'TimeoutError' thrown by the client, and the ../util/sleep module. None appear in the diff. The predicate also dereferences err without a null check, so a thrown null or undefined raises a TypeError instead of the original error. If any contract is wrong, timeouts silently are not retried and orders drop, which is the original bug.",
+   "evidence": "(err as Error).name === \"TimeoutError\"  ;  { timeoutMs: 4000 }  ;  import { sleep } from \"../util/sleep\";  ABSENT: src/broker/client.ts and src/util/sleep.ts"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "There is no overall deadline. Three 4000ms timeouts plus backoff can keep an order in flight for about 13 seconds during the volatile open, so it may fill at a stale limit or stall the caller. No total time budget bounds the call.",
+   "evidence": "{ timeoutMs: 4000 } inside a loop of MAX_ATTEMPTS = 3 with await sleep(250 * 2 ** (attempt - 1));"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR describes the change as tidying sizing so quantities are rounded to lot size, but it flips rounding from floor to ceil. That is a behavioral change to order quantity that is neither stated nor justified.",
+   "evidence": "\"-  return Math.floor(headroom / price / lotSize) * lotSize;\" / \"+  return Math.ceil(lots) * lotSize;\" vs. \"Also tidies the sizing helper so quantities are rounded to the broker's lot size before submit.\""
+  },
+  {
+   "lens": "observability",
+   "severity": "major",
+   "claim": "Retry logs omit the clientOrderId of each attempt, and there is no log or alert for final failure or retry exhaustion. Ops cannot reconcile orders that may have been accepted by the broker.",
+   "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, attempt });  ABSENT: clientOrderId in logs, final-failure log, metric, or alert"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The change deploys to live trading before market open with no feature flag, kill switch, or rollback procedure. If the retry or sizing change misbehaves at the open, it cannot be disabled quickly.",
+   "evidence": "ABSENT: rollback plan, feature flag, or kill switch; artifact: \"This PR is about to merge to main and deploy before the next market open.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Backoff has no jitter, so clients that fail together retry together during broker recovery. Floating-point division before floor/ceil can also cause off-by-one lot counts.",
+   "evidence": "await sleep(250 * 2 ** (attempt - 1));  const lots = headroom / price / lotSize;"
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 25412,
+  "tokOut": 13308,
+  "usd": 0.00852647,
+  "critMs": 29052
+ }
+}

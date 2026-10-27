@@ -1,0 +1,119 @@
+{
+ "approach": "triage-routed",
+ "case": "plan-10",
+ "rep": 2,
+ "wallMs": 536097,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The nightly purge is irreversible and has no kill switch or pause control. The rollback leaves the purge job running regardless of the flag, and the dry-run covers only the first batch. The registry sets a delete or nullify action per table, but nothing reviews those actions, and the plan describes no recovery path for accounts purged in error across the 2.1M user base. A registry or ID-selection defect could destroy data for many accounts before anyone notices.",
+   "evidence": "\"Requests already confirmed are still purged on schedule (the purge job ignores the flag)\"; \"The first real purge batch ... runs in dry-run mode first\"; \"its action (delete, or nullify for rows owned by someone else)\"; ABSENT: per-table action review, a halt control for AccountPurgeJob, and a recovery procedure for wrongly purged accounts."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Processor deletions run after the DB transaction commits, but the transaction deletes the rows that hold the processor identifiers (Customer.io, Zendesk, Stripe customer, Apple refresh token). No durable outbox or pending-processor record is written inside the transaction, so a crash between commit and the processor calls can leave data at processors with nothing left to retry from.",
+   "evidence": "\"each account is one DB transaction across `users` and the 23 tables that reference it.\" … \"After the DB transaction commits: Amplitude: user deletion API. Customer.io: `DELETE /customers/{id}`.\" ABSENT: where processor IDs are kept after deletion, or an outbox written in the transaction."
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The claim that no other system holds user-level data is asserted by reference to an inventory rather than shown. The plan itself names a transactional email provider, push notifications and Sentry, and none of them are in the purge scope. Google sign-in identifiers and Google Play subscription records are also unaddressed.",
+   "evidence": "\"No other system holds user-level data beyond the processors below (data inventory DPI-2026, reviewed Sep 2026).\" ABSENT: transactional email provider, push provider, Google sign-in identifiers, and Google Play subscription records in the purge list."
+  },
+  {
+   "lens": "gdpr",
+   "severity": "major",
+   "claim": "\"Nothing else is kept\" is contradicted by the plan's own retention. Application logs and Sentry reports keep data for 30 days, and Postgres snapshots keep deleted users' data for 35 days, which is beyond the one-month Art. 17 window. The plan states no legal basis or disclosure for backup retention beyond the deadline.",
+   "evidence": "\"Nothing else is kept.\" … \"Postgres snapshots roll off after 35 days and are not edited.\" … \"Application logs and Sentry error reports have 30-day retention (privacy policy §7).\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The label \"no PII\" on `deleted_accounts` is asserted without analysis. Retained user IDs linked to deletion dates are personal data that is kept indefinitely for restore protection, and the plan gives no legal basis or retention limit for them.",
+   "evidence": "\"Table `deleted_accounts` keeps only purged user IDs and dates (no PII)\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The data export ZIP is still generated and emailed after deletion is confirmed. The plan sets no expiry or storage location for the export file or its link, and the export is not in the purge scope, so a full copy of personal data can persist outside erasure.",
+   "evidence": "\"An export requested here is still delivered after you confirm deletion.\" … \"links to the existing data export (emailed ZIP).\" ABSENT: export storage location, link expiry, and export inclusion in the purge."
+  },
+  {
+   "lens": "dark-patterns",
+   "severity": "major",
+   "claim": "On web, confirming deletion silently sets the Stripe subscription to cancel at period end. The plan gives no web-specific subscription notice or explicit cancellation confirmation, which conflicts with the agreed no-dark-patterns constraint and may trigger online-cancellation rules.",
+   "evidence": "\"Web (Stripe): at confirm, the subscription is set to `cancel_at_period_end`\" and \"Subscription notice, only when relevant (§3).\" ABSENT: web subscription notice text."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "At purge, any still-active web subscription is cancelled. For a user with prepaid time left, this irreversibly ends paid service, and the plan gives no proration or refund rule for that case beyond the general refund policy.",
+   "evidence": "\"At purge, any still-active subscription is cancelled.\" and \"Refunds follow the existing refund policy ... nothing changes there.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The restore runbook re-applies purges only to the Postgres database. Deletions at Amplitude, Customer.io, Zendesk, Stripe and Apple are not re-run after a restore, so restored processor data can reappear for deleted users.",
+   "evidence": "\"the restore runbook re-applies purges from it after any restore, so a restore cannot resurrect a deleted account\"; ABSENT: any re-run of processor deletions after restore."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Observability is incomplete for an irreversible nightly job. The plan has a dashboard but no alert on job failure, missed runs, or accounts overdue past their grace date, so a stalled purge may go unnoticed until the 21-day metric is missed.",
+   "evidence": "\"A dashboard shows pending, completed and failed per processor\"; ABSENT: alerting on AccountPurgeJob failure, missed runs, or overdue accounts."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Confirm-time failures are unspecified. If the Stripe cancel-at-period-end call, the confirmation email, or session revocation fails, the plan does not say whether deletion is still scheduled, whether the user is told, or whether the step is retried. The user could end up deactivated with a renewing subscription or without a cancel link.",
+   "evidence": "\"at confirm, the subscription is set to `cancel_at_period_end`\"; \"The link is single-use, signed, valid until the purge.\" ABSENT: failure and retry behaviour for confirm-time side effects."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Nightly purge at 2.1M-account scale has no batch size, runtime budget, lock behaviour, or failure isolation for a single failing account. Testing used only 500 synthetic accounts, so the 23-table per-account transaction has not been shown to hold up at production volume.",
+   "evidence": "\"staging run with 500 synthetic accounts\"; \"each account is one DB transaction across `users` and the 23 tables that reference it.\" ABSENT: batch sizing, runtime budget, and handling of a failing row."
+  },
+  {
+   "lens": "gdpr",
+   "severity": "minor",
+   "claim": "Processor failures become a `purge-failed` ticket with no resolution deadline or escalation before the one-month Art. 17 limit, so completion relies on manual action.",
+   "evidence": "\"anything still failing opens a `purge-failed` ticket for the privacy lead.\" ABSENT: ticket SLA or escalation."
+  },
+  {
+   "lens": "consumer-law",
+   "severity": "minor",
+   "claim": "The store-subscription warning depends on detecting an active App Store or Google Play subscription, but the plan gives no detection method and no fallback when status is unknown or stale. A user could miss the warning.",
+   "evidence": "\"If the user has an active store subscription, screen 1 says ...\" with no detection or fallback logic."
+  },
+  {
+   "lens": "gdpr",
+   "severity": "minor",
+   "claim": "The retention period for kept invoice records is referenced but not stated, so the privacy notice and purge schedule cannot be checked against it.",
+   "evidence": "\"invoice records ... for the statutory retention period under §147 AO\" ABSENT: the actual retention duration."
+  },
+  {
+   "lens": "gdpr",
+   "severity": "minor",
+   "claim": "The plan does not say whether open chargebacks, Stripe disputes or legal holds block a purge, so data needed for a claim could be erased on day 14.",
+   "evidence": "ABSENT: any check for open chargebacks, disputes, or legal holds before the day-14 purge."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The restore drill is listed as a pre-launch test only. No owner or recurring verification is stated, so later restores could skip the purge re-application step.",
+   "evidence": "\"restore-runbook drill on a staging snapshot\"; ABSENT: ongoing verification or owner after launch."
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 29536,
+  "tokOut": 27051,
+  "usd": 0.01625811,
+  "critMs": 79710
+ }
+}

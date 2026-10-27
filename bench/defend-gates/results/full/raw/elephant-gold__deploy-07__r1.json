@@ -1,0 +1,149 @@
+{
+ "approach": "elephant-gold",
+ "case": "deploy-07",
+ "rep": 1,
+ "wallMs": 328323,
+ "verdict": "ATTACKS",
+ "confidence": 0.9,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "Auto-discovery executes code from any installed package, including transitive and nested ones, that declares the `tasq-plugin` keyword. There is no allowlist, opt-out, or confirmation. A malicious, typosquatted, or compromised package with that keyword gets code execution in every `tasq run`, `tasq lint-staged` pre-commit hook, and CI job. The explicit user-declared trust boundary is replaced by keyword matching across the dependency tree.",
+   "evidence": "\"Any installed package with the `tasq-plugin` keyword is picked up automatically. No more `plugins: [...]` array\"; \"walks `node_modules` (including nested `node_modules` in workspaces)... loads the ones whose `keywords` include `tasq-plugin`\"; \"No `postinstall` scripts in tasq or its dependencies\" (does not cover load-time execution)"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Discovery adds a full recursive glob and JSON parse on every invocation, including `--version`. The artifact's own table shows roughly 6x slower `lint-staged` and about 10x slower `--version` and cache-hit `run`. The cost grows with installed file count, and the release does not measure it at larger scales, cold disk, or CI runners.",
+   "evidence": "| `tasq lint-staged` (3 staged files) | 0.38 s | 2.31 s |; | `tasq run build` (cache hit) | 0.21 s | 2.02 s |; \"Performance (reference monorepo: 61 workspaces, 2,430 installed packages, M2 MacBook Air, warm disk cache)\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The performance conclusion does not follow from the table. Discovery is described as negligible and build time as improving, but the cold build saves only about 2.6 s while every cached or lint-staged invocation gets several seconds slower. The conclusion rests on one cold-build row measured once, with no variance reported.",
+   "evidence": "\"Discovery is a fixed per-invocation cost and becomes negligible relative to real build work, so overall build time improves thanks to the new graph cache.\"; \"| `tasq run build` (cold, full build) | 48.7 s | 46.1 s |\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The headline cache claim of 'under 50 ms of task time' has no supporting measurement. The only cache-hit figure is 2.02 s wall time, and task time is never isolated from startup or discovery.",
+   "evidence": "\"repeated `tasq run build` with unchanged inputs completes in under 50 ms of task time\" vs \"`tasq run build` (cache hit) | 0.21 s | 2.02 s |\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The glob `**/node_modules/**/package.json` matches every nested package.json inside any node_modules tree, including fixtures, examples, and duplicate or nested copies of the same package. Any such file carrying the keyword is loaded as a plugin, and the same plugin can load more than once. The code does not filter to package roots or deduplicate by name.",
+   "evidence": "glob(\"**/node_modules/**/package.json\", { cwd: root }) ... if (pkg.keywords?.includes(\"tasq-plugin\")) found.push({ name: pkg.name, dir: dirname(pkgJson) })"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The discovery code does not resolve or confine paths before reading. A symlinked entry under node_modules could direct reads and plugin loads outside the project root.",
+   "evidence": "for await (const pkgJson of glob(\"**/node_modules/**/package.json\", { cwd: root })) ... JSON.parse(await readFile(join(root, pkgJson), \"utf8\"))"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Discovery has no error handling. One malformed package.json anywhere under node_modules throws from JSON.parse and aborts discovery, so every hook and CI job that runs the CLI fails. A plugin that throws during load has no described isolation either.",
+   "evidence": "\"JSON.parse(await readFile(join(root, pkgJson), \\\"utf8\\\"))\"; ABSENT: error handling or isolation for discovery or plugin load failures"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "There is no opt-out, allowlist, or env-var kill switch for discovery. Operators hit by a discovery hang, crash, or malicious plugin cannot disable it without uninstalling packages, and the rollback plan does not address that.",
+   "evidence": "\"The `plugins` array... Auto-discovery replaces it\"; ABSENT: a discovery opt-out flag, allowlist, or environment variable"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Yarn PnP projects have no node_modules tree, so discovery finds zero plugins with no error. The release describes these repos only as needing manual edits and never says plugins silently stop loading there.",
+   "evidence": "\"2 manual (Yarn PnP projects, documented)\"; \"walks `node_modules` (including nested `node_modules` in workspaces)\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Dropping the `plugins` array is silent. Any plugin lacking the `tasq-plugin` keyword, and any config that was not migrated, stops loading with no warning, and the tool emits no signal that the array was ignored.",
+   "evidence": "\"`plugins` array in config ignored | Auto-discovery replaces it; `tasq-migrate` removes the array and installs nothing new\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The cache key covers only input file hashes. Changes to the task command, environment, config, tool version, or loaded plugins do not invalidate it, so a cache hit can return stale outputs.",
+   "evidence": "\"Task graph caching keyed on input file hashes\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The rollback re-points only the `latest` dist-tag. Users with lockfiles or `tasq@^3` ranges stay on 3.0.0, and the plan has no `npm deprecate` step and no forced-downgrade path. It also does not verify that 2.9.4 works alongside current tooling.",
+   "evidence": "\"if a P1 is found after promotion, re-point `latest` to `2.9.4` (`npm dist-tag add tasq@2.9.4 latest`) and publish a fix as 3.0.1\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The blog post, changelog, and Discord announcement go live at publish, but promotion to `latest` waits 7 days. Users are told to upgrade to 3.x while `npm install tasq` still resolves to 2.x, and the announcement cannot be recalled if a P1 appears in the soak window.",
+   "evidence": "\"Blog post and changelog go live at publish; Discord announcement links the migration guide.\"; \"promote to `latest` after 7 days with no P1 issues\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "`tasq-migrate` rewrites config files and `require` calls in place. The artifact describes no backup, dry-run, or undo step, and 2 of 40 repos needed manual edits. Returning to 2.x has no documented path back to the original config.",
+   "evidence": "\"`npx tasq-migrate` rewrites config files and `require` calls\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The migration success figure of 38/40 is given without criteria or post-migration verification that the migrated repos still build or pass tests.",
+   "evidence": "\"tested on 40 public repos, 38 fully automatic, 2 needed manual edits (documented)\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "npm's `engines` field is advisory by default and is only enforced with `engine-strict`, so the claim that it enforces `>=20` is inaccurate. Node 18 users are not reliably blocked at install.",
+   "evidence": "\"`engines` field enforces `>=20`\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The `glob` call is used with `for await`, but the artifact does not establish that the imported `glob` returns an async iterable. If it is fast-glob's default promise-returning API, the loop fails.",
+   "evidence": "for await (const pkgJson of glob(\"**/node_modules/**/package.json\", { cwd: root })) ... new runtime deps: `fast-glob` (MIT)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The cache's on-disk location, format versioning, size bound, and cleanup are unspecified, and the rollback plan does not clear it. Downgrade behavior against any cache state is therefore unverified.",
+   "evidence": "\"**Task graph caching** keyed on input file hashes\"; ABSENT: cache location, size limit, eviction, or cleanup policy"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "The artifact does not state whether tasq 3.0 collects or transmits telemetry or diagnostic data. The CLI runs in pre-commit hooks and CI, so users need an explicit statement.",
+   "evidence": "ABSENT: any statement on telemetry, analytics, or network transmission in the 3.0.0 release"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "The pretty reporter becomes the default lint-staged output shape change, and the artifact gives no description of the grouped output, no plain-text or no-color mode, and no accessibility considerations.",
+   "evidence": "| `tasq lint-staged` output format | JSON reporter unchanged; pretty reporter shows grouped output |"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The 1,912-test pass claim and the 'all top 15 plugins load' smoke result are not tied to the release commit, and the plugins and versions tested are not listed.",
+   "evidence": "\"Unit + integration: 1,912 tests pass on Linux/macOS/Windows, Node 20 and 22.\"; \"Smoke test of top 15 community plugins under auto-discovery: all load and register subcommands.\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The release bundles three unrelated headline changes (plugin auto-discovery, a new cache, and ESM-only/Node 20+) into one major version, which makes the breaking surface harder to validate independently.",
+   "evidence": "\"Highlights: Zero-config plugins... Task graph caching... ESM-only, Node 20+.\""
+  }
+ ],
+ "usage": {
+  "calls": 18,
+  "tokIn": 59228,
+  "tokOut": 29118,
+  "usd": 0.025925430000000003,
+  "critMs": 47404
+ }
+}

@@ -1,0 +1,83 @@
+{
+ "approach": "clustered-panel",
+ "case": "merge-04",
+ "rep": 1,
+ "wallMs": 177949,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The up migration adds an empty private_notes column and drops notes without copying any data. Notes are unrecoverable user free text and migrations run automatically on merge, so every existing note is destroyed on deploy despite the PR calling it a 'pure rename, no data change'.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text; ALTER TABLE user_recipes DROP COLUMN notes; (no UPDATE copying data)"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The down migration is not a reversal. It re-adds notes as NULL and drops private_notes, so rolling back permanently loses every note written after deploy. The PR's claim that it 'restores the old name' is true only for the name.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN notes text; ALTER TABLE user_recipes DROP COLUMN private_notes;"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The handler loads every saved row for the user with no LIMIT and slices in JavaScript. Users with more than 200k saved recipes will read and transfer the full set on every page request, which likely breaks the 300ms p99 budget and adds memory pressure. Keyset pagination in SQL with LIMIT is needed, and no index on (user_id, saved_at, id) is added.",
+   "evidence": "WHERE ur.user_id = $1 ORDER BY ur.saved_at DESC, ur.id DESC`, [userId]; const page = rows.slice(start, start + limit); ABSENT: index migration for user_recipes(user_id, saved_at, id)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "A rename is done as drop-and-re-add rather than ALTER TABLE ... RENAME COLUMN, which is metadata-only and keeps the data. The drop takes an ACCESS EXCLUSIVE lock on a ~140M-row table inside the migration transaction, with no lock_timeout, so queued reads and writes can stall behind long-running queries.",
+   "evidence": "BEGIN; ALTER TABLE user_recipes ADD COLUMN private_notes text; ALTER TABLE user_recipes DROP COLUMN notes; COMMIT; (ABSENT: lock_timeout, batching, or maintenance-window note)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The schema change is not backward compatible. Migrations run automatically on deploy, so old instances still selecting ur.notes will fail once the migration commits and before the new code is live everywhere. No expand/contract sequence or deploy ordering is described.",
+   "evidence": "-    `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.notes` ... DROP COLUMN notes; ABSENT: deploy ordering or expand/contract plan"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The destructive schema change is bundled with the API change under auto-deploy. Reverting the code does not revert the schema, so a code rollback leaves the old code pointing at a dropped or emptied column, and the only schema rollback is the data-losing down migration.",
+   "evidence": "PR #1907 bundles migration 0087 and server/routes/saved.ts; \"Migrations run automatically on deploy after merge to main\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "If the cursor row is no longer in the result set (for example, unsaved between pages), findIndex returns -1, so start becomes 0 and the API silently returns page one again. Clients get duplicates or loop with no error or alert.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "compatibility",
+   "severity": "major",
+   "claim": "Removing offset support is a breaking change. Clients still sending offset silently receive page one on every call, which can cause duplicated content or infinite scroll loops. The PR asserts the client already sends cursor, but no client change or check for other consumers is shown, and there is no deprecation path.",
+   "evidence": "- const offset = Math.max(Number(req.query.offset) || 0, 0); ABSENT: confirmation that no other clients use offset, and no deprecation or error for offset"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The rename is claimed safe, but the diff changes only saved.ts and shows no search for other references to user_recipes.notes (other queries, writes, exports, or client code). Any remaining reference breaks on deploy.",
+   "evidence": "ABSENT: grep or list of call sites for notes / user_recipes.notes; only server/routes/saved.ts and migrations are changed"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "limit is not lower-bounded. With a negative limit and an empty result set, page is empty, start + limit is below rows.length is true, and page[page.length - 1].id reads from index -1 and throws, returning a 500. Negative limits also return odd page slices.",
+   "evidence": "const limit = Math.min(Number(req.query.limit) || 50, 100); ... start + limit < rows.length ? page[page.length - 1].id : null"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Tests cover only the happy path. They do not cover an unknown or stale cursor, an empty result set, a negative limit, or the drift scenario the PR claims to fix. The migration has no test for data preservation.",
+   "evidence": "it(\"pages with cursor\", ...) only exercises valid cursors on a stable dataset; ABSENT: migration data-integrity test"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 21017,
+  "tokOut": 15677,
+  "usd": 0.0120409,
+  "critMs": 32389
+ }
+}
