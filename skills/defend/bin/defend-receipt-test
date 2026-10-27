@@ -1,0 +1,24 @@
+#!/bin/bash
+# Stub-gh checks for defend-receipt (no network). Usage: defend-receipt-test [path]
+R=${1:-$(dirname "$0")/defend-receipt}; T=$(mktemp -d); HEAD=abcdef0123456789abcdef0123456789abcdef01
+trap 'command rm -r "$T"' EXIT
+[ -x "$R" ] || { echo "not executable: $R"; exit 1; }
+cat > "$T/gh" <<EOF
+#!/bin/bash
+if [ "\$1 \$2" = "pr view" ]; then echo '{"headRefOid":"$HEAD","url":"https://github.com/o/r/pull/7"}'; exit 0; fi
+echo "\$*" >> "$T/calls"
+EOF
+chmod +x "$T/gh"; export PATH="$T:$PATH"
+ok=0; bad=0
+t() { local want=$1; shift; : > "$T/calls"; "$R" "$@" >/dev/null 2>&1; rc=$?; got=$(cat "$T/calls")
+  if [ "$want" = fail ]; then [ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL expected refusal: $* rc=$rc calls=$got"; }
+  else [ $rc -eq 0 ] && grep -qF -- "$want" <<<"$got" && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL want '$want': $* rc=$rc calls=$got"; }; fi; }
+t "statuses/$HEAD -f state=success -f context=defend/merge -f description=all good" CLEAR 7 abcdef0 all good
+t "description=looks good" CLEAR 7 ABCDEF0 "looks good"
+t "state=failure" BLOCK 7 abcdef0123 -R o/r "nope"
+t fail CLEAR 7 1234567 "stale sha"
+t fail CLEAR 7 abcdef0
+t fail MAYBE 7 abcdef0 "x"
+t fail CLEAR 7 zzzzzzz "bad hex"
+echo "pass=$ok fail=$bad"
+exit $((bad > 0))
