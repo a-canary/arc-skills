@@ -32,10 +32,19 @@ complete: the gate between Worker (qwen|bonsai thin tasks) and `git merge`.
 hard-merge's second-disjoint-reviewer rule. Override = ledger note row.
 
 **Receipt (mechanical).** After verifying the verdict, the author posts it on the
-*reviewed* SHA: `skills/defend/bin/defend-receipt CLEAR|BLOCK <pr> <sha> -R owner/repo "<summary>"`
+*reviewed* SHA: `~/.claude/skills/defend/bin/defend-receipt CLEAR|BLOCK <pr> <sha> -R owner/repo "<summary>"`
 (a `defend/merge` commit status). Enforcement is GitHub branch protection on `main`
 requiring the `defend/merge` status (enforce_admins on), so every merge path — `gh pr merge`,
 `gh api`, web UI, `git push` — needs head to carry a success; a push after review voids it.
 Not a command-text hook: those leak and over-block (repos-76u counsel, 2026-10-27).
-Enable per repo (operator): `gh api -X PUT repos/<owner>/<repo>/branches/main/protection --input` a body with
-`required_status_checks.contexts=["defend/merge"]`, `enforce_admins=true`.
+The status is self-attested: anyone with write access can post it, so it stops careless
+skips, not deliberate forgery.
+Enable per repo (operator). PUT replaces the whole protection object, so first merge in any
+contexts the repo already requires (`gh api repos/<owner>/<repo>/branches/main/protection`):
+
+```sh
+gh api -X PUT repos/<owner>/<repo>/branches/main/protection --input - <<'EOF'
+{"required_status_checks":{"strict":false,"contexts":["defend/merge"]},
+ "enforce_admins":true,"required_pull_request_reviews":null,"restrictions":null}
+EOF
+```

@@ -3,19 +3,20 @@
 #
 #   defend-receipt CLEAR|BLOCK <pr> <reviewed-sha> [-R owner/repo] "<summary>"
 #
-# The status lands on the REVIEWED sha, not the current head: if the branch moved after
-# review, head has no receipt and branch protection (required status `defend/merge`) blocks
-# the merge until re-review — on every path: gh pr merge, gh api, web UI, git push.
+# The status lands on the PR's current head, and only if that is the reviewed sha: if the
+# branch moved after review, it refuses — re-review the new head. Branch protection
+# (required status `defend/merge`) then blocks the merge on every path: gh pr merge,
+# gh api, web UI, git push. Self-attested: write access can post it directly.
 set -euo pipefail
 die() { echo "defend-receipt: $*" >&2; exit 2; }
 usage='usage: defend-receipt CLEAR|BLOCK <pr> <reviewed-sha> [-R owner/repo] "<summary>"'
 [ $# -ge 4 ] || die "$usage"
 verdict=$1
 case $verdict in CLEAR) state=success ;; BLOCK) state=failure ;; *) die "$usage" ;; esac
-pr=$2 sha=$3; shift 3
+pr=$2 sha=${3,,}; shift 3
 repo= summary=
 while [ $# -gt 0 ]; do
-  case $1 in -R) [ $# -ge 2 ] || die "$usage"; repo=$2; shift 2 ;; *) summary=$1; shift ;; esac
+  case $1 in -R) [ $# -ge 2 ] || die "$usage"; repo=$2; shift 2 ;; *) summary+="${summary:+ }$1"; shift ;; esac
 done
 [ -n "$summary" ] || die "$usage"
 [[ $sha =~ ^[0-9a-f]{7,40}$ ]] || die "reviewed sha must be 7-40 hex chars, got '$sha'"
@@ -23,8 +24,7 @@ done
 info=$(gh pr view "$pr" ${repo:+-R "$repo"} --json headRefOid,url) || die "cannot resolve PR $pr"
 head=$(jq -r '.headRefOid' <<<"$info"); url=$(jq -r '.url' <<<"$info")
 p=${url#https://github.com/}; p=${p%/pull/*}
-if [ "${head#"$sha"}" != "$head" ]; then sha=$head   # short sha of current head → full
-else echo "defend-receipt: warning: head ${head:0:7} != reviewed ${sha:0:7}; merge stays blocked until head is reviewed" >&2; fi
+[ "${head#"$sha"}" != "$head" ] || die "head ${head:0:7} != reviewed ${sha:0:7}; the branch moved after review — re-review the new head"
 
-gh api -X POST "repos/$p/statuses/$sha" -f state=$state -f context=defend/merge -f "description=${summary:0:140}" >/dev/null
-echo "defend-receipt: $verdict → defend/merge=$state on $p@${sha:0:7}"
+gh api -X POST "repos/$p/statuses/$head" -f state=$state -f context=defend/merge -f "description=${summary:0:140}" >/dev/null
+echo "defend-receipt: $verdict → defend/merge=$state on $p@${head:0:7}"
