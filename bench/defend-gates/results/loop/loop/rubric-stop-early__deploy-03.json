@@ -1,0 +1,167 @@
+{
+ "approach": "rubric-stop-early",
+ "case": "deploy-03",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The artifact has two sources of truth for streaks: `streak_count` is authoritative for 2.14 and 3.1 clients, and `streak_events` is authoritative for 2.15 and 3.2. The proposal never says how they stay consistent once 2.14 writes complete habits without writing events, or how a re-roll-forward to 2.15 reconciles them. Events written before a rollback would be missing from the event-derived streak.",
+     "evidence": "\"streak is computed from events\" and \"`habits.streak_count` is **kept** and dual-written by 2.15\" vs. \"2.14 runs against the migrated database unchanged\" with no reconciliation or re-backfill step described for after a rollback."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3349,
+    "tokOut": 2064,
+    "usd": 0.00152965,
+    "critMs": 9818
+   },
+   "wallMs": 26684
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The backend rollback path can permanently lose per-day streak history. A streak broken and restarted during a 2.14 rollback window is reconstructed only as its current run, and the artifact does not provide a way to recover the lost days. The mitigation (re-backfill) is itself unexecuted, so the rollback is not safely reversible today.",
+     "evidence": "\"Caveat: the re-backfill derives days from `streak_count`, so a streak broken and restarted during the rollback window is reconstructed as its current run only. Per-day history from that window is not recoverable beyond this.\" Also: \"Status: planned, not yet run.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3943,
+    "tokOut": 1202,
+    "usd": 0.0012174500000000001,
+    "critMs": 5562
+   },
+   "wallMs": 46286
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The artifact says the release adds no new data exposure, but it introduces new per-completion history (streak_events with per-day completions and source_device) and a 90-day-retained changelog of streak changes. It states no deletion path on account erasure or retention limit for streak_events, so the 'label unchanged' claim is not supported.",
+     "evidence": "\"The changelog is kept for at least 90 days.\" / \"Privacy nutrition label and Play data-safety form unchanged\" / ABSENT: retention period for streak_events and account-deletion handling for streak_events and streak_count_changelog"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4622,
+    "tokOut": 1717,
+    "usd": 0.0016107500000000002,
+    "critMs": 8385
+   },
+   "wallMs": 33188
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The rollback reconstruction maps changelog rows to per-day history, but `streak_count_changelog` has no `day` column and the artifact never says how a UTC `changed_at` maps to the user's local streak day. Users in different timezones could have completions attributed to the wrong day, so the zero-mismatch gate could pass or fail for the wrong reason.",
+     "evidence": "`streak_count_changelog` (`user_id, habit_id, old_value, new_value, changed_at`) vs. `streak_events` keyed on `day`; \"days are reconstructed by replaying `streak_count_changelog`\" with no day-derivation rule stated. ABSENT: the timezone/day-boundary rule used to derive `day` from `changed_at`."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5215,
+    "tokOut": 2364,
+    "usd": 0.00205285,
+    "critMs": 11837
+   },
+   "wallMs": 30056
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The day-derivation rule that the changelog replay depends on is not settled. The artifact does not confirm which timezone field the services use for day boundaries, yet it treats this as an implementation-time check and says the section will be updated before sign-off. Rollback reconstruction of per-day history and the cross-timezone test cases both rely on this field being correct.",
+     "evidence": "\"Open item: confirm during implementation that the account-level timezone is the field the services already use for day boundaries. If it is not, the trigger must use whichever field is, and this section is updated before the gate is signed off.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5699,
+    "tokOut": 1382,
+    "usd": 0.0016586500000000002,
+    "critMs": 6919
+   },
+   "wallMs": 98717
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The backend rollback path is described as verified, but the QA table has no passing row for 2.14 running against the migrated database with completions. The only 2.14 rollback row is 'Not yet run', so the rollback path the deploy depends on is unvalidated.",
+     "evidence": "\"schema is additive and `streak_count` remains authoritative-compatible, so 2.14 runs against the migrated database unchanged (verified in staging).\" vs QA: \"Rollback to 2.14, completions under 2.14 ... | staging | Not yet run; required before launch\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5938,
+    "tokOut": 1848,
+    "usd": 0.0019394500000000001,
+    "critMs": 12779
+   },
+   "wallMs": 33301
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The initial 2.15 rollout does not require the backfill to finish with zero mismatches before serving. Streak reads from `streak_events` for users not yet backfilled would be wrong. The artifact also sets two different standards: zero mismatches before re-roll-forward, but a 0.1% mismatch tolerance to advance the flag.",
+     "evidence": "Rollout step 1: \"10:00 UTC deploy streaks-svc 2.15 (canary 10% of pods for 1h, then full). Backfill job starts after full deploy.\" Step 4: \"`streak_mismatch_total` (server vs client recompute) < 0.1% of synced users\" versus Reconciliation: \"2.15 does not serve traffic until the job reports 0 mismatches between the event-derived streak and `streak_count`.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 6059,
+    "tokOut": 1975,
+    "usd": 0.00202715,
+    "critMs": 9424
+   },
+   "wallMs": 27080
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback path depends on the `streak_count_changelog` trigger, but the artifact never schedules its production deployment. The rollout plan has no trigger step before the 10:00 UTC 2.15 deploy, and the launch gate only requires the trigger to be 'deployed and verified in staging'. A production rollback during the window could therefore run without the change capture that the proposal says is needed to rebuild per-day history.",
+     "evidence": "\"before the 2.15 deploy, we add a database trigger on `habits`\" vs. Launch gates: \"`streak_count_changelog` trigger (including `local_day` derivation) deployed and verified in staging.\" and Rollout plan step 1: \"10:00 UTC deploy streaks-svc 2.15\" with no trigger step. ABSENT: a gate or rollout step that deploys and verifies the trigger in production before 2.15 goes live."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 6614,
+    "tokOut": 2513,
+    "usd": 0.0024071500000000003,
+    "critMs": 11744
+   },
+   "wallMs": 56255
+  }
+ ],
+ "artifact": "# Release proposal: Stride 3.2 — Streak Sync\n\nOwner: mobile squad B · Store submission: Mon 2026-11-02 · Backend deploy: Mon 2026-11-02 10:00 UTC · Epic: STR-1190\n\n## What ships\n\n- Streaks now sync across devices. A habit completed on the watch or tablet counts toward the same streak on the phone.\n- \"Streak saver\": one missed day per 30 days can be repaired from the streak screen.\n- Optional streak reminder notification at the user's chosen time.\n\n## UI copy (final, localized en/es/de/fr/pt-BR)\n\n- Streak screen header: \"12-day streak\" (VoiceOver/TalkBack label: \"Current streak, 12 days\").\n- Saver button: \"Repair yesterday\" (disabled state label: \"Streak saver available again on Nov 28\").\n- Reminder pre-prompt sheet: \"Want a nudge at 8:00 PM so you don't lose your streak?\" Buttons: \"Remind me\" / \"Not now\".\n\n## Notifications permission\n\n- We do not request OS notification permission on launch or on upgrade.\n- The in-app pre-prompt sheet is shown only after the user reaches a 3-day streak, and only once per 30 days if they choose \"Not now\".\n- iOS: if the user taps \"Remind me\" we request provisional authorization first; full authorization is requested only if they enable sound in reminder settings.\n- Android 13+: POST_NOTIFICATIONS is requested only after \"Remind me\". Denial is stored and the reminder toggle shows \"Turn on in system settings\" with a deep link.\n\n## Backend changes (streaks-svc 2.14 → 2.15)\n\n- New table `streak_events (user_id, habit_id, day, source_device, created_at)`; streak is computed from events, idempotent on `(user_id, habit_id, day)`.\n- `habits.streak_count` is **kept** and dual-written by 2.15 so 3.1 clients (which read `streak_count` from `/v2/habits`) keep working unchanged.\n- Backfill: one `streak_events` row per day of each habit's current streak, run as a resumable job (batches of 5k, checkpointed), dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches vs `streak_count`.\n- **Read path until the backfill is verified:** `streak_events` is incomplete for users not yet backfilled, so 2.15 does not read streaks from it at first. On initial deploy, 2.15 serves streak values from `streak_count` (as 2.14 does) and writes both stores. The event-derived read path is switched on only after the backfill and a catch-up pass report 0 mismatches (see Rollout plan). Because `streak_sync_v2` stays at 0% until then, no user sees a streak computed from partial events.\n- Dropping `streak_count` is **not** part of this release. It is scheduled for 3.4, after the minimum supported app version is raised past 3.1 (tracked in STR-1244).\n- **Consistency between the two stores:** while 2.15 is running, every completion is written to both `streak_events` and `streak_count` in the same transaction, so the two cannot diverge. Divergence is possible only while 2.14 is serving traffic (i.e. after a backend rollback, or on 2.14 pods during the initial canary), because 2.14 updates `streak_count` and writes no events. In that window `streak_count` is the source of truth, and 3.2 clients fall back to local-only streaks.\n- **Change capture for rollback safety:** before the 2.15 deploy, we add a database trigger on `habits` that appends every `streak_count` change (`user_id, habit_id, old_value, new_value, changed_at, local_day`) to a new append-only table `streak_count_changelog`. The trigger runs regardless of which service version writes, so it also records what 2.14 does during a rollback window. The trigger is additive and does not alter the 2.14 or 2.15 write paths. Status: planned, not yet built or tested; launch-blocking (see Launch gates).\n- **Day derivation (`local_day`):** `changed_at` is stored in UTC, but streak days are the user's local calendar days, so replay never derives a day from `changed_at` alone. At write time the trigger computes `local_day` by converting `changed_at` to the user's timezone as of that moment, using the same day-boundary function that 2.14 and 2.15 use to decide which day a completion counts toward. The trigger and the service must call the same shared function, and the staging rehearsal checks that they agree. Because the day is fixed at write time, a later timezone change does not reassign earlier changelog rows, and a mid-window timezone change is attributed using the timezone in effect when each change occurred.\n  - **Unresolved: the timezone field is not yet confirmed.** We have not yet verified which field the day-boundary function in 2.14 and 2.15 reads (for example an account-level timezone versus a per-habit or per-device setting). Nothing in this proposal assumes the answer.\n  - **Required before trigger work starts:** read the day-boundary function in both the 2.14 and 2.15 source, confirm both read the same field, and record the field name and its source table in this section. The trigger is then built against that field. If 2.14 and 2.15 read different fields, that is a blocking finding: the trigger cannot produce a single correct `local_day`, and the backend deploy is postponed until the services are reconciled.\n  - Status: field confirmation not done; trigger planned, not yet built or tested; launch-blocking (see Launch gates).\n- **Reconciliation on re-roll-forward:** before 2.15 is redeployed after any rollback, the backfill job is re-run from the rollback timestamp. It is idempotent on `(user_id, habit_id, day)`, so existing events are untouched and only missing days are filled in. For the rollback window, days are reconstructed by replaying `streak_count_changelog` and keying each row on its stored `local_day`, which preserves resets and restarts, so a streak broken and restarted during the window is rebuilt with its per-day history. After a re-roll-forward, 2.15 serves streaks from `streak_count` only, and does not switch back to the event-derived read path until the job reports 0 mismatches between the event-derived streak and `streak_count`. Events written before the rollback are preserved, since 2.14 does not delete them.\n- **Residual limits:** the changelog records changes to `streak_count`, not individual completions. Two completions that leave the count at the same value (for example, a reset followed by a restart to the same value within one day) collapse to one day. Without the changelog in place, history from a rollback window could only be reconstructed as the current run from `streak_count`, which is why the changelog is a launch gate.\n- **Retention and erasure (new data):** `streak_events` is new per-day completion history, including `source_device`, so it is covered by the following rules.\n  - `streak_events`: retained while the account is active, since the streak is computed from it. Rows are deleted when the habit is deleted and when the account is deleted.\n  - `streak_count_changelog`: retained for 90 days from `changed_at`, then purged by a scheduled job. This is a maximum, not a minimum. The 90 days covers the rollback-reconciliation need.\n  - Account erasure: the existing account-deletion job is extended to delete the user's rows from `streak_events` and `streak_count_changelog` (and `streak_count` via the existing `habits` deletion) in the same deletion run, so erasure does not wait for the 90-day purge. Rows for erased users are skipped during any changelog replay.\n  - Status: planned, not yet built or tested; launch-blocking (see Launch gates).\n- The re-backfill, changelog replay and the zero-mismatch gate are exercised in staging before launch (see QA report), including a case where a streak is broken and restarted during the rollback window, and cases where completions fall near a local-day boundary for users in different timezones (for example UTC−8 and UTC+9) and where the user's timezone changes during the window. Status: planned, not yet run.\n\n## QA report summary (build 3.2.0 (4410), streaks-svc 2.15.0-rc2)\n\n| Area | Env | Result |\n|---|---|---|\n| Multi-device sync (phone + watch + tablet), offline completion then reconnect | staging | Pass |\n| Timezone change mid-streak (UTC−8 → UTC+9), DST boundary | staging | Pass |\n| 3.1 client against 2.15 API (N-1 compatibility) | staging | Pass |\n| 3.2 client against 2.14 API (server rollback scenario) | staging | Pass (sync silently disabled, local streak shown) |\n| Streak saver: limit 1 per 30 days enforced server-side | staging | Pass |\n| VoiceOver / TalkBack on streak screen and pre-prompt | device lab | Pass |\n| Dynamic Type XXL / Android font scale 200% | device lab | Pass, no truncation |\n| Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87% |\n| Rollback to 2.14, completions under 2.14 (including a streak broken and restarted, and completions near local-day boundaries in UTC−8 and UTC+9 plus a mid-window timezone change), roll forward to 2.15 with changelog-based re-backfill and 0-mismatch gate; per-day history compared against expected | staging | Not yet run; required before launch |\n| `streak_count_changelog` trigger: captures writes from both 2.14 and 2.15, `local_day` matches the services' day-boundary function, no measurable write-latency regression | staging | Not yet run; required before launch |\n| Account deletion removes the user's `streak_events` and `streak_count_changelog` rows; 90-day changelog purge job runs | staging | Not yet run; required before launch |\n\nStaging remote config was exported from prod and only `streak_sync_v2` differed (on in staging); prod values for every other key were identical during QA.\n\n## Launch gates (must pass before the 2026-11-02 backend deploy)\n\n- Day-boundary timezone field confirmed from the 2.14 and 2.15 source (same field in both) and recorded under \"Day derivation\" before trigger work starts.\n- `streak_count_changelog` trigger (including `local_day` derivation) deployed and verified in staging.\n- Full rollback → roll-forward rehearsal passes in staging with per-day history matching expected, including the broken-and-restarted streak case and the cross-timezone day-boundary and mid-window timezone-change cases. This rehearsal is also the first validation of 2.14 running against the migrated database with completions being written.\n- Account-deletion extension and 90-day changelog purge deployed and verified in staging (deleted user leaves no rows in `streak_events` or `streak_count_changelog`).\n- Privacy label and data-inventory re-review completed against the new tables (see Privacy).\n- If any gate is not met, the backend deploy is postponed; the store submission can proceed since the flag keeps the feature off.\n\n## Rollout plan\n\n1. 10:00 UTC deploy streaks-svc 2.15 (canary 10% of pods for 1h, then full). 2.15 serves streaks from `streak_count` and dual-writes both stores; the event-derived read path is off.\n2. After full deploy (so no 2.14 pods remain writing without events), run the backfill, then a catch-up pass (idempotent, same job) to fill days written by 2.14 pods during the canary. Enable the event-derived read path only when the job reports 0 mismatches between the event-derived streak and `streak_count`. This is a hard gate on the read path; `streak_sync_v2` stays at 0% until it passes.\n3. Remote config `streak_sync_v2`: 1% → 10% → 50% → 100% of 3.2 users, 24h between steps, starting only after step 2 passes.\n4. iOS phased release (7 days) and Play staged rollout 10% → 50% → 100% in parallel; the flag gates the feature independently of store rollout.\n5. Gates to advance each flag step: crash-free sessions ≥ 99.5%, `streak_mismatch_total` (server vs client recompute) < 0.1% of synced users, streaks-svc p95 < 250ms, support tickets tagged `streak` < 2× 4-week baseline.\n   - The two mismatch standards measure different things. The zero-mismatch gate in step 2 is a deterministic server-side check (event-derived streak vs `streak_count`) and must be exactly 0 before any user is served from events. The 0.1% `streak_mismatch_total` tolerance in this step covers live client-vs-server recompute differences (for example offline completions not yet synced) once serving from events is already correct; it is not a tolerance for backfill gaps.\n\n## Rollback\n\n- Feature: set `streak_sync_v2` to 0%; 3.2 clients revert to local-only streaks within one config fetch (≤ 15 min). Verified in QA. This is the preferred first response, as it loses no history.\n- Backend: redeploy streaks-svc 2.14. The schema change is additive and `streak_count` is kept and dual-written, so 2.14 is expected to run against the migrated database unchanged, but this is **not yet verified**. The only passing staging row is the 3.2 client against the 2.14 API; 2.14 running against the migrated database with completions is covered by the rollback rehearsal, which has not yet been run (see QA report and Launch gates). Note that 2.14 does not write `streak_events`, so rolling back creates a gap in events; the changelog trigger records `streak_count` changes during that gap so per-day history can be rebuilt (see \"Change capture for rollback safety\", \"Day derivation\", \"Consistency between the two stores\" and \"Reconciliation on re-roll-forward\" above). Re-rolling forward to 2.15 requires the re-backfill and zero-mismatch gate before the event-derived read path is enabled. Backend rollback is reversible without history loss only once the changelog launch gate and the rollback rehearsal have passed.\n- Store builds: halt phased/staged rollout; 3.2 with flag off is functionally equivalent to 3.1 plus copy changes.\n\n## Privacy\n\n- `source_device` stores a per-install random ID, not a hardware identifier. No new data shared with third parties.\n- 3.2 does add first-party data: per-day completion history in `streak_events` (with `source_device`) and the 90-day `streak_count_changelog`. Both hold only user/habit IDs, counts, days and timestamps, plus the random install ID. Retention and erasure for both are defined under \"Retention and erasure (new data)\" above.\n- The earlier statement that the Privacy nutrition label and Play data-safety form are unchanged was checked against the data inventory before these tables were added to the plan. It is therefore not treated as confirmed. The label and data-safety form are re-reviewed against the new tables as a launch gate, and updated if the review finds a change.",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 30810,
+  "tokOut": 29631,
+  "usd": 0.41952199999999995,
+  "critMs": 162564
+ },
+ "status": "cap"
+}

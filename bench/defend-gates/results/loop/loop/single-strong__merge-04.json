@@ -1,0 +1,101 @@
+{
+ "approach": "single-strong",
+ "case": "merge-04",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The migration is described as a pure rename but actually adds a new empty column and drops the old `notes` column, permanently destroying all user-written notes. The down migration only re-adds an empty `notes` column, so data is not restored. Notes cannot be recovered elsewhere, and the migration auto-runs on deploy.",
+     "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes; ... \"Pure rename, no data change; the down migration restores the old name.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "No backfill copies notes into private_notes, so after the migration every user's notes read as NULL. The PR description contradicts the SQL, since a rename would be `ALTER TABLE ... RENAME COLUMN`.",
+     "evidence": "ABSENT: UPDATE user_recipes SET private_notes = notes, or RENAME COLUMN"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The column swap is not deploy-safe. Migrations run automatically on deploy, and old app instances that still SELECT `ur.notes` will error during the rollout window. The code and schema change are coupled in one step with no expand/contract sequence. DROP COLUMN also takes an ACCESS EXCLUSIVE lock on a 140M-row table.",
+     "evidence": "\"Migrations run automatically on deploy after merge to main.\"; schema change and `ur.private_notes` query change in the same PR"
+    },
+    {
+     "lens": "scale",
+     "severity": "blocker",
+     "claim": "The cursor pagination fetches ALL of a user's saved recipes (200k+ for heavy users) joined to recipes, then paginates in memory with findIndex/slice. Every page request is O(n) in rows, memory, and transfer, including the notes text. This defeats the purpose of pagination and will blow the 300ms p99 budget and risk memory pressure.",
+     "evidence": "ORDER BY ur.saved_at DESC, ur.id DESC`,\n    [userId],\n  );\n  const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "An unknown or stale cursor (for example, the item was deleted) makes findIndex return -1, so start becomes 0 and the client silently restarts from page one. This can cause infinite loops or duplicate items in the client. The cursor is also just an id and is not tied to the sort key, so it is not a true keyset cursor. The empty-result case is also fragile: when rows is empty, page is empty and `page[page.length-1]` is undefined, though start+limit<0 guards it.",
+     "evidence": "rows.findIndex((r) => r.id === cursor) + 1"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "Tests cover only a 5-row happy path. There is no test for an invalid cursor, no scale test, and no test that notes survive the migration.",
+     "evidence": "it(\"pages with cursor\") with r1..r5 only"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "No index is shown to support the (user_id, saved_at DESC, id DESC) ordering, so a proper keyset query isn't possible as written and the sort may be expensive per request on a 140M-row table.",
+     "evidence": "ABSENT: CREATE INDEX on user_recipes (user_id, saved_at DESC, id DESC)"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3432,
+    "tokOut": 1212,
+    "usd": 0.0223652,
+    "critMs": 8923
+   },
+   "wallMs": 67944
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "If `CREATE INDEX CONCURRENTLY` fails or is cancelled partway, Postgres leaves an INVALID index. `IF NOT EXISTS` then skips it on retry, so the invalid index stays in place unnoticed and the query falls back to a slow plan.",
+     "evidence": "CREATE INDEX CONCURRENTLY IF NOT EXISTS user_recipes_user_saved_idx"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The cursor id is only checked to be a string. If `id` is a uuid or integer column, a tampered cursor with a bad id raises a Postgres cast error and returns 500 instead of the promised 400.",
+     "evidence": "typeof o.i === \"string\" && !Number.isNaN(Date.parse(o.s))"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The migration depends on the runner's non-transactional mode, but the PR shows no config or marker that enables it. A runner that wraps migrations in a transaction would fail the deploy. The failure is loud and the migration is not destructive.",
+     "evidence": "It must run in the migration runner's non-transactional mode."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4869,
+    "tokOut": 1262,
+    "usd": 0.028613200000000002,
+    "critMs": 9991
+   },
+   "wallMs": 43435
+  }
+ ],
+ "artifact": "PR #1907: Cursor pagination for saved recipes (the `notes` → `private_notes` rename is split out)\n\nThis PR now contains only the pagination change and the index it needs. The column rename is deferred to a follow-up because it can't be done safely in a single auto-run migration.\n\n1. **Rename deferred.** The earlier draft added `private_notes` and dropped `notes`. That would have destroyed user-written notes, which can't be recovered elsewhere, and the down migration only re-added an empty column. A single-step rename would also break old app instances that still `SELECT ur.notes` while a deploy rolls out. This PR keeps `notes` untouched. The follow-up will use expand/contract:\n   - (a) Ship code that reads and writes both columns.\n   - (b) Add `private_notes` and backfill it in batches, with no long lock on 140M rows.\n   - (c) Switch reads to `private_notes`.\n   - (d) Drop `notes` in a separate, later PR, after a verified backup and confirmation that no instance reads it.\n\n   `RENAME COLUMN` is not used because the old-name readers would still fail during rollout.\n2. **`GET /api/recipes/saved` moves from offset to true keyset pagination**, because offsets drifted when users saved recipes while scrolling.\n   - The cursor is an opaque token encoding `(saved_at, id)`.\n   - The query is `WHERE (saved_at, id) < (cursor)` with `LIMIT n+1`, so it reads only one page of rows.\n   - A malformed cursor returns 400 instead of silently restarting from page one.\n   - A deleted item can't break the cursor, because it encodes a position rather than a row to find.\n3. **New index** `(user_id, saved_at DESC, id DESC)`, created with `CREATE INDEX CONCURRENTLY` so writes aren't blocked on the large table. Because `CONCURRENTLY` can't run inside a transaction, the migration has no `BEGIN`/`COMMIT`. It must run in the migration runner's non-transactional mode.\n\n```diff\ndiff --git a/db/migrations/0087_saved_recipes_cursor_idx.up.sql b/db/migrations/0087_saved_recipes_cursor_idx.up.sql\nnew file mode 100644\n--- /dev/null\n+++ b/db/migrations/0087_saved_recipes_cursor_idx.up.sql\n@@ -0,0 +1,3 @@\n+-- Must run outside a transaction (CONCURRENTLY).\n+CREATE INDEX CONCURRENTLY IF NOT EXISTS user_recipes_user_saved_idx\n+  ON user_recipes (user_id, saved_at DESC, id DESC);\ndiff --git a/db/migrations/0087_saved_recipes_cursor_idx.down.sql b/db/migrations/0087_saved_recipes_cursor_idx.down.sql\nnew file mode 100644\n--- /dev/null\n+++ b/db/migrations/0087_saved_recipes_cursor_idx.down.sql\n@@ -0,0 +1,2 @@\n+-- Must run outside a transaction (CONCURRENTLY).\n+DROP INDEX CONCURRENTLY IF EXISTS user_recipes_user_saved_idx;\ndiff --git a/server/routes/saved.ts b/server/routes/saved.ts\nindex 2c9f1ab..e7a50d3 100644\n--- a/server/routes/saved.ts\n+++ b/server/routes/saved.ts\n@@ -1,36 +1,58 @@\n import { Router } from \"express\";\n import { db } from \"../db\";\n import { requireUser } from \"../auth\";\n\n export const saved = Router();\n\n+type SavedRow = {\n+  id: string;\n+  recipe_id: string;\n+  title: string;\n+  saved_at: Date;\n+  saved_at_raw: string;\n+  notes: string | null;\n+};\n+\n+// Cursor encodes the sort key (saved_at as full-precision text, id).\n+function encodeCursor(savedAtRaw: string, id: string): string {\n+  return Buffer.from(JSON.stringify({ s: savedAtRaw, i: id })).toString(\"base64url\");\n+}\n+\n+function decodeCursor(c: string): { s: string; i: string } | null {\n+  try {\n+    const o = JSON.parse(Buffer.from(c, \"base64url\").toString(\"utf8\"));\n+    if (\n+      o &&\n+      typeof o.s === \"string\" &&\n+      typeof o.i === \"string\" &&\n+      !Number.isNaN(Date.parse(o.s))\n+    ) {\n+      return { s: o.s, i: o.i };\n+    }\n+  } catch {\n+    /* fall through */\n+  }\n+  return null;\n+}\n+\n saved.get(\"/api/recipes/saved\", requireUser, async (req, res) => {\n   const userId = req.user!.id;\n-  const limit = Math.min(Number(req.query.limit) || 50, 100);\n-  const offset = Math.max(Number(req.query.offset) || 0, 0);\n-  const { rows } = await db.query(\n-    `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.notes\n-       FROM user_recipes ur JOIN recipes r ON r.id = ur.recipe_id\n-      WHERE ur.user_id = $1\n-      ORDER BY ur.saved_at DESC\n-      LIMIT $2 OFFSET $3`,\n-    [userId, limit, offset],\n-  );\n-  res.json({ items: rows });\n+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);\n+\n+  let after: { s: string; i: string } | null = null;\n+  if (typeof req.query.cursor === \"string\" && req.query.cursor !== \"\") {\n+    after = decodeCursor(req.query.cursor);\n+    if (!after) {\n+      return res.status(400).json({ error: \"invalid cursor\" });\n+    }\n+  }\n+\n+  // Keyset pagination: served by user_recipes_user_saved_idx; fetch one extra\n+  // row to know whether another page exists.\n+  const { rows } = await db.query<SavedRow>(\n+    `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at,\n+            ur.saved_at::text AS saved_at_raw, ur.notes\n+       FROM user_recipes ur JOIN recipes r ON r.id = ur.recipe_id\n+      WHERE ur.user_id = $1\n+        AND ($2::timestamptz IS NULL OR (ur.saved_at, ur.id) < ($2::timestamptz, $3))\n+      ORDER BY ur.saved_at DESC, ur.id DESC\n+      LIMIT $4`,\n+    [userId, after?.s ?? null, after?.i ?? null, limit + 1],\n+  );\n+\n+  const hasMore = rows.length > limit;\n+  const page = hasMore ? rows.slice(0, limit) : rows;\n+  const last = page[page.length - 1];\n+  const nextCursor = hasMore && last ? encodeCursor(last.saved_at_raw, last.id) : null;\n+\n+  res.json({\n+    items: page.map(({ saved_at_raw, ...item }) => item),\n+    nextCursor,\n+  });\n });\ndiff --git a/server/routes/saved.test.ts b/server/routes/saved.test.ts\nindex 91d0c3e..4b7f2a1 100644\n--- a/server/routes/saved.test.ts\n+++ b/server/routes/saved.test.ts\n@@ -12,9 +12,24 @@ describe(\"GET /api/recipes/saved\", () => {\n-  it(\"pages with offset\", async () => {\n-    const a = await get(\"/api/recipes/saved?limit=2&offset=0\");\n-    const b = await get(\"/api/recipes/saved?limit=2&offset=2\");\n-    expect(a.items.map((i) => i.id)).toEqual([\"r5\", \"r4\"]);\n-    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n+  it(\"pages with cursor\", async () => {\n+    const a = await get(\"/api/recipes/saved?limit=2\");\n+    expect(a.items.map((i) => i.id)).toEqual([\"r5\", \"r4\"]);\n+    const b = await get(`/api/recipes/saved?limit=2&cursor=${a.nextCursor}`);\n+    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n+    const c = await get(`/api/recipes/saved?limit=2&cursor=${b.nextCursor}`);\n+    expect(c.items.map((i) => i.id)).toEqual([\"r1\"]);\n+    expect(c.nextCursor).toBeNull();\n+  });\n+\n+  it(\"rejects a malformed cursor with 400\", async () => {\n+    const res = await getRaw(\"/api/recipes/saved?cursor=not-a-cursor\");\n+    expect(res.status).toBe(400);\n+  });\n+\n+  it(\"keeps paging correctly when the cursor item is deleted\", async () => {\n+    const a = await get(\"/api/recipes/saved?limit=2\");\n+    await deleteSaved(\"r4\");\n+    const b = await get(`/api/recipes/saved?limit=2&cursor=${a.nextCursor}`);\n+    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n+  });\n+\n+  it(\"returns an empty page with null cursor when the user has no saved recipes\", async () => {\n+    const res = await getAsUser(\"empty-user\", \"/api/recipes/saved\");\n+    expect(res.items).toEqual([]);\n+    expect(res.nextCursor).toBeNull();\n   });\n });\n```",
+ "fixerUsage": {
+  "calls": 1,
+  "tokIn": 3679,
+  "tokOut": 4547,
+  "usd": 0.06018199999999999,
+  "critMs": 28239
+ },
+ "status": "cleared"
+}

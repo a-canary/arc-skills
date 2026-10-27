@@ -1,0 +1,198 @@
+{
+ "approach": "cascade",
+ "case": "deploy-07",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Auto-discovery loads and executes any package carrying the `tasq-plugin` keyword anywhere under node_modules (including transitive deps) on every invocation, including git pre-commit hooks and CI. There is no allowlist, opt-in, or confirmation, and the removed `plugins` array was the explicit trust boundary. A compromised or typosquatted dependency gains execution inside tasq. The 'no postinstall scripts' claim does not cover this path.",
+     "evidence": "\"Any installed package with the `tasq-plugin` keyword is picked up automatically.\" / glob \"**/node_modules/**/package.json\" / \"No `postinstall` scripts in tasq or its dependencies.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Discovery does a full recursive glob and reads and parses every package.json under node_modules on every invocation. Cost grows with installed package count, and only one tree (2,430 packages) was measured. Larger monorepos and pnpm layouts are unmeasured. Hooks and CI at 180k weekly downloads will feel it.",
+     "evidence": "\"On every invocation ... the CLI walks `node_modules` (including nested `node_modules` in workspaces)\"; benchmark \"2,430 installed packages\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "`JSON.parse` has no error handling, so a single malformed or partial package.json in node_modules aborts every command, including lint-staged in pre-commit hooks and CI. Discovery runs before argument parsing, so even `--version` fails. No timeout, logging, or fallback is described.",
+     "evidence": "\"const pkg = JSON.parse(await readFile(join(root, pkgJson), \"utf8\"));\" ; \"Discovery runs before argument parsing\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The performance claim is contradicted by the artifact's own table. The cache-hit build goes from 0.21 s to 2.02 s, and `--version` from 0.11 s to 1.94 s. The cold build gains only 2.6 s. The statement that overall build time improves because of the cache is unsupported, and the '<50 ms' claim contradicts the 2.02 s wall time. Numbers come from rc.2, not the artifact being published.",
+     "evidence": "\"`tasq run build` (cache hit) | 0.21 s | 2.02 s\"; \"overall build time improves thanks to the new graph cache\"; \"under 50 ms of task time\""
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "major",
+     "claim": "Every invocation pays roughly 1.8 to 2 s, a 5 to 17x latency regression on pre-commit (0.38→2.31 s), editor integrations, and cached builds. The docs recommend these as the primary integration points, and no mitigation is planned (such as caching discovery results, lazy discovery, or skipping it for --version).",
+     "evidence": "\"`tasq lint-staged` (3 staged files) | 0.38 s | 2.31 s\"; \"Discovery is a fixed per-invocation cost\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Plugins configured via the old `plugins` array are silently ignored, and migration removes the array while installing nothing, so users lose plugins without an error. Yarn PnP has no node_modules, so discovery finds nothing there, a silent functional regression for a known project class. Only a 'documented' manual fix is offered.",
+     "evidence": "\"`plugins` array in config ignored\"; \"`tasq-migrate` removes the array and installs nothing new\"; \"2 manual (Yarn PnP projects, documented)\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The staged `next` tag is undermined because the blog post, changelog, and Discord announcement go live at publish, pointing users to a version not yet on `latest`. Rollback only re-points `latest`. 3.0.0 stays installable, and the security and perf issues need a new version to fix.",
+     "evidence": "\"Blog post and changelog go live at publish\" vs \"Publish `3.0.0` under `next` dist-tag; promote to `latest` after 7 days\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "`dir` is `dirname(pkgJson)`, which is relative to root rather than absolute. Symlinked pnpm layouts can yield duplicate entries, and the same plugin may be found at several nested paths.",
+     "evidence": "\"found.push({ name: pkg.name, dir: dirname(pkgJson) })\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "Testing does not appear to cover malformed package.json, PnP, symlinked layouts, or large trees. Smoke testing ran against the RC rather than the final artifact.",
+     "evidence": "ABSENT: tests for malformed package.json, PnP, or large node_modules"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Nothing gate-worthy: no data collection is described.",
+     "evidence": "ABSENT: telemetry"
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "Reliance on npm and GitHub Actions is standard, and exit cost is low.",
+     "evidence": "\"Published from GitHub Actions with npm provenance\""
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 8824,
+    "tokOut": 8905,
+    "usd": 0.04130194,
+    "critMs": 48186
+   },
+   "wallMs": 177502
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "On a cache hit, `discoverPlugins` returns the cached entries without checking the cache key, and the stored `dir` is used for loading. The artifact does not say whether `.tasq/plugins.json` is gitignored or integrity-checked, or whether `dir` is re-resolved on read. A committed or tampered cache could point a trusted plugin name at attacker code. Only the trusted-name filter stands in the way.",
+     "evidence": "'const cached = await readCache(root); if (cached) return cached.filter((p) => trusted.has(p.name));' (ABSENT: cache integrity check, gitignore rule, or re-resolution of `dir`)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The discovery code does not implement the stated fault tolerance. `declaredDependencies(root)` is outside the try block, so a malformed root package.json can abort the command. There is no per-file timeout and no 5 s budget. If a budget were added, the partial `found` list would still be written to the cache, so plugins would be silently missed until the lockfile changes. The required new tests do not cover budget expiry.",
+     "evidence": "'for (const name of await declaredDependencies(root)) {' and 'await writeCache(root, found);' vs 'never aborts the command. Each file read has a timeout, and discovery as a whole has a 5 s budget'"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Trust is by package name only, with no version or integrity pin. A compromised later release of a trusted plugin would load without re-approval.",
+     "evidence": "'trusted.has(p.name)' (ABSENT: version or integrity field in trustedPlugins)"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The performance gate sets targets only for the warm cache. Cold discovery on pre-commit runs, such as after a lockfile change, has no target, even though the 5 s budget is far above the 0.38 s lint-staged baseline.",
+     "evidence": "'with both cold and warm discovery cache. Targets: ... warm-cache `lint-staged` and cache-hit `run build` within 100 ms' (ABSENT: cold-path target)"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The QA section cites rc.2 results and a plugin smoke test as validating the new flow. The migration re-run after the PnP and `trustedPlugins` changes is a QA note, not a release gate. The 'under 50 ms' highlight is caveated but still reads well against a measured 2.02 s end-to-end.",
+     "evidence": "'Re-run after the PnP and `trustedPlugins` changes.' (gates list only performance, new tests, security sign-off)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The artifact says an error-level warning is printed for a legacy `plugins` array but does not say whether the command fails. In CI, plugin subcommands could disappear without a nonzero exit.",
+     "evidence": "'prints an error-level warning if a `plugins` array is present' (ABSENT: exit behavior)"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The new-dependency list does not match the redesign. `fast-glob` is listed although discovery no longer globs, and the PnP API dependency is not listed.",
+     "evidence": "'New runtime deps: `fast-glob` (MIT), `semver` (ISC).' vs 'Discovery uses the PnP API'"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The blog title 'plugins for everyone' overstates a feature where plugins do not run until explicitly trusted.",
+     "evidence": "'Discovered-but-untrusted plugins are reported with a warning and are not executed.'"
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 11175,
+    "tokOut": 16306,
+    "usd": 0.05717132,
+    "critMs": 81559
+   },
+   "wallMs": 99708
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The text says that after the 5 s budget expires tasq continues with the last valid cache or the trusted list. The code returns only the partial `found` list, and `readCache` returns null on a key mismatch, so no such fallback exists. The `trusted` parameter of `scan` is also unused. The pre-publish tests and security sign-off should catch this.",
+     "evidence": "discovery as a whole has a 5 s budget after which tasq continues with the last valid cache or the trusted list and warns"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Rolling `latest` back to 2.9.4 does not undo `tasq-migrate` rewrites. Migrated configs use `trustedPlugins` and ESM, which 2.9.4 will not read. The rollback section does not mention this. The risk is limited because publish goes to `next` first and migration is user-initiated.",
+     "evidence": "`tasq-migrate` converts each entry into a `trustedPlugins` entry ... re-point `latest` to `2.9.4`"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The 5 s budget is checked only between dependencies, and `resolvePackageDir` and `declaredDependencies` have no timeout. A hung mount could stall discovery. The cache write also has no stated atomic temp-file-plus-rename step. The performance gate on larger monorepos should surface both.",
+     "evidence": "if (Date.now() > deadline) {"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Trust is granted by plugin name only, and `tasq-migrate` auto-trusts legacy entries even when they are not installed. The lockfile pins versions for installed plugins, and the 2.x `plugins` array already executed code, so this is a residual risk covered by the security sign-off gate.",
+     "evidence": "reports any that are not installed (it does not install them)"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "`fast-glob` is listed as a new runtime dependency even though the redesign removes the recursive glob. No use of `semver` is shown. The dependency list may be out of sync with the design.",
+     "evidence": "New runtime deps: `fast-glob` (MIT), `semver` (ISC)."
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 13937,
+    "tokOut": 14696,
+    "usd": 0.05479262,
+    "critMs": 69427
+   },
+   "wallMs": 139754
+  }
+ ],
+ "artifact": "# Release proposal: tasq 3.0.0 (npm)\n\nMaintainers: core team · Publish: Thu 2026-11-12 · Tracking: #1840 · Blog: \"tasq 3: plugins for everyone\"\n\n**Status: not ready to promote.** Review found security, performance, and reliability problems in the rc.2 discovery design. The plan below changes the design and gates the release on re-measurement. Publish of `3.0.0` to `next` is conditional on the gates in \"Release gates\".\n\n## Highlights\n\n- **Plugin auto-discovery (opt-in trust).** Packages with the `tasq-plugin` keyword are discovered, but are only loaded if listed in a trust allowlist (`tasq.config.ts` `trustedPlugins`, or written by `tasq plugins trust <name>`). Discovered-but-untrusted plugins are reported with a warning and are not executed.\n- **Task graph caching** keyed on input file hashes. Task time on a cache hit is under 50 ms, which excludes CLI startup and plugin discovery. End-to-end wall time is reported in the Performance section.\n- **ESM-only**, Node 20+.\n\n## Breaking changes\n\n| Change | Migration |\n|---|---|\n| Node 18 support dropped | Node 18 is EOL since April 2025; `engines` field enforces `>=20` |\n| CommonJS `require('tasq')` removed | `npx tasq-migrate` rewrites config files and `require` calls; tested on 40 public repos, 38 fully automatic, 2 needed manual edits (documented) |\n| `plugins` array in config no longer the loading mechanism | tasq 3 prints an error-level warning if a `plugins` array is present, naming each entry. `tasq-migrate` converts each entry into a `trustedPlugins` entry and reports any that are not installed (it does not install them). |\n| `tasq lint-staged` output format | JSON reporter unchanged; pretty reporter shows grouped output |\n| Yarn PnP (no `node_modules`) | Discovery uses the PnP API to enumerate dependencies; if PnP is detected and enumeration is unavailable, tasq errors with instructions to list plugins in `trustedPlugins` rather than silently loading none |\n\n## How plugin discovery works\n\nDiscovery changes from the rc.2 design (full recursive glob on every invocation, run before argument parsing):\n\n- **Scoped to declared dependencies.** Discovery reads the root and workspace `package.json` files, then resolves only declared `dependencies`/`devDependencies` (not an arbitrary recursive walk of `node_modules`). This also works with pnpm layouts.\n- **Cached.** Results are stored in `.tasq/plugins.json`, keyed on the lockfile hash plus the workspace `package.json` hashes. The cache is reused until those change. The cache is untrusted input: tasq creates `.tasq/.gitignore` (ignoring the cache) on first write, the key is verified on every read (a mismatch or unparseable file is treated as a miss and rebuilt), and only plugin names are trusted from the cache. The stored `dir` is never used for loading; on load, each trusted plugin's directory is re-resolved from the project root via normal package resolution. Only complete discovery results are written to the cache.\n- **Lazy.** `tasq --version`, `--help`, and `tasq plugins ...` skip discovery. Other commands run discovery only when no valid cache exists, and the subcommand registry is read from the cache.\n- **Fault tolerant.** A malformed or unreadable `package.json` (including the root one) is logged as a warning (path and error) and skipped; it never aborts the command. Each file read has a timeout, and discovery as a whole has a 5 s budget after which tasq continues with the last valid cache or the trusted list and warns. A discovery run that hits the budget or a read timeout is incomplete and is not written to the cache, so the next invocation retries instead of persisting missed plugins.\n- **Trust boundary.** Only plugins on the allowlist are loaded. `TASQ_NO_PLUGINS=1` disables loading entirely, recommended for untrusted CI contexts.\n\n```ts\n// src/plugins/discover.ts\nexport async function discoverPlugins(root: string, trusted: Set<string>): Promise<PluginRef[]> {\n  const key = await computeCacheKey(root);\n  const cached = await readCache(root, key); // null on missing, unparseable, or key mismatch\n  const names = cached\n    ? cached.map((p) => p.name)\n    : await scan(root, trusted);\n  // Never trust a stored `dir`: re-resolve from the project root.\n  const refs: PluginRef[] = [];\n  for (const name of names) {\n    if (!trusted.has(name)) continue;\n    try {\n      refs.push({ name, dir: await resolvePackageDir(root, name) });\n    } catch (err) {\n      warn(`tasq: cannot resolve plugin ${name}: ${(err as Error).message}`);\n    }\n  }\n  return refs;\n}\n\nasync function scan(root: string, trusted: Set<string>): Promise<{ name: string }[]> {\n  const deadline = Date.now() + DISCOVERY_BUDGET_MS; // 5000\n  const found: { name: string }[] = [];\n  let complete = true;\n  let deps: string[] = [];\n  try {\n    deps = await declaredDependencies(root); // inside try: malformed root package.json is a warning\n  } catch (err) {\n    warn(`tasq: cannot read dependencies: ${(err as Error).message}`);\n    complete = false;\n  }\n  for (const name of deps) {\n    if (Date.now() > deadline) {\n      warn(\"tasq: plugin discovery budget exceeded; using partial results\");\n      complete = false;\n      break;\n    }\n    try {\n      const dir = await resolvePackageDir(root, name);\n      const raw = await readFileWithTimeout(join(dir, \"package.json\"), READ_TIMEOUT_MS);\n      const pkg = JSON.parse(raw);\n      if (pkg.keywords?.includes(\"tasq-plugin\")) found.push({ name: pkg.name });\n    } catch (err) {\n      warn(`tasq: skipping ${name}: ${(err as Error).message}`);\n      if (err instanceof ReadTimeoutError) complete = false;\n    }\n  }\n  if (complete) await writeCache(root, found, await computeCacheKey(root));\n  return found;\n}\n```\n\n## Performance\n\nrc.2 numbers (reference monorepo: 61 workspaces, 2,430 installed packages, M2 MacBook Air, warm disk cache), measured with the uncached full-glob discovery that is being replaced:\n\n| Command | 2.9.4 | 3.0.0-rc.2 |\n|---|---|---|\n| `tasq --version` | 0.11 s | 1.94 s |\n| `tasq lint-staged` (3 staged files) | 0.38 s | 2.31 s |\n| `tasq run build` (cache hit) | 0.21 s | 2.02 s |\n| `tasq run build` (cold, full build) | 48.7 s | 46.1 s |\n\nThese numbers show a regression of roughly 1.8-2 s per invocation in rc.2. The earlier claim that the graph cache improves overall build time is withdrawn: the cold build gains only about 2.6 s, and cache-hit builds were slower end-to-end. The redesign above (cached, scoped, lazy discovery) is intended to remove that cost, but it is not yet measured.\n\nRelease gate for performance: re-run this table on the release candidate containing the redesign, on the reference monorepo plus a larger monorepo and a pnpm layout, with both cold and warm discovery cache. Targets: `--version` within 50 ms of 2.9.4, and warm-cache `lint-staged` and cache-hit `run build` within 100 ms of 2.9.4. Results are published in #1840. If targets are missed, the release slips.\n\n## Supply chain and licensing\n\n- Published from GitHub Actions with npm provenance (`--provenance`); 2FA required for all maintainers.\n- No `postinstall` scripts in tasq or its dependencies. Note this does not cover plugin execution; that risk is addressed by the trust allowlist above.\n- New runtime deps: `fast-glob` (MIT), `semver` (ISC). License scan: no copyleft dependencies.\n\n## QA summary\n\n- Unit + integration: 1,912 tests pass on Linux/macOS/Windows, Node 20 and 22 (rc.2). New tests required before publish: untrusted plugin not loaded, malformed `package.json` skipped with warning (including a malformed root `package.json`), `--version` with a broken `package.json`, cache invalidation, Yarn PnP behavior, `plugins` array warning and migration, and the following discovery-hardening tests: a tampered or committed `.tasq/plugins.json` with a wrong key is ignored, a tampered `dir` in the cache is never used for loading, discovery budget expiry and read timeout continue with a warning and do not write the cache, and a subsequent run after a timed-out run re-scans.\n- `tasq-migrate` on 40 public repos (list in #1840): 38 automatic, 2 manual (Yarn PnP projects, documented). Re-run after the PnP and `trustedPlugins` changes.\n- Smoke test of top 15 community plugins under the new trusted-discovery flow: all load and register subcommands.\n\n## Release gates\n\nPublish to `next` only when all are met:\n1. Performance targets above are met and posted in #1840.\n2. The new QA tests pass.\n3. Security review sign-off on the trust allowlist and discovery path, including cache integrity and `dir` re-resolution.\n\n## Release and support plan\n\n1. Publish `3.0.0` under `next` dist-tag; promote to `latest` after 7 days with no P1 issues.\n2. Announcements are staged with the tag: the blog post, changelog, and Discord announcement go live at promotion to `latest`, not at publish. During the `next` period, only a short pre-release note (install with `tasq@next`, request for feedback) is posted in #1840 and the Discord beta channel.\n3. `2.x` moves to `latest-2` dist-tag and receives security fixes until 2027-11-12. Announced in the README and blog post.\n4. Rollback: if a P1 is found after promotion, re-point `latest` to `2.9.4` (`npm dist-tag add tasq@2.9.4 latest`), publish a fix as 3.0.1, and `npm deprecate tasq@3.0.0` with a message pointing to the fix. Because 3.0.0 remains installable by explicit version, the deprecation message and a blog/changelog update are part of the rollback.\n5. The Discord announcement links the migration guide at promotion.",
+ "fixerUsage": {
+  "calls": 2,
+  "tokIn": 7579,
+  "tokOut": 6474,
+  "usd": 0.095048,
+  "critMs": 38382
+ },
+ "status": "cleared"
+}

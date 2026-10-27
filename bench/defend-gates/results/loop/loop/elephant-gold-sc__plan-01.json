@@ -1,0 +1,356 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "plan-01",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "cost",
+     "severity": "blocker",
+     "claim": "The plan stays on Starter (5 req/min, 15-min delayed), but chain_poller needs ~160+ req/min of real-time quotes. Starter cannot serve the design, and Growth (100 req/min) is also below the need. Growth plus VPS is $259, over the $250 cap, and Pro is $559. The stated $139 run cost is not achievable for a working design.",
+     "evidence": "\"We stay on Starter. Monthly run cost: Optiq Starter $79 + existing VPS $60 = $139, comfortably inside the $250 cap.\" vs. \"40 underlyings => 160 requests/min during RTH.\" and \"Growth | $199 | 100 req/min | real-time\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Starter quotes are 15 minutes delayed, so intraday triggers (delta, extrinsic, 4% gap) and mid-minus-1-tick limit pricing would run on stale data. No snapshot-age or staleness guard exists; the only guard is broker heartbeat, so stale quotes can emit RollIntents and real orders.",
+     "evidence": "\"Option quotes | 15-min delayed\"; \"limit at mid minus 1 tick\"; guard is only \"last successful broker heartbeat is > 60 s old\"; ABSENT: quote-age check"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "Migration 0042 runs in-place on prod and drops positions.roll_history in the same transaction after backfilling only 90 days. Full roll history since inception is destroyed with no backup, archive, dry run, or down-migration, which also raises books-and-records/tax retention concerns.",
+     "evidence": "\"In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.\" / \"Backfill copies roll_history entries from the last 90 days... older entries are not needed by roll_engine.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The fallback roll_eod.py is kept through week 4 but the migration drops the column it presumably reads. The rollback path is not shown to work after Monday of week 1 and no test of the EOD path post-migration is required.",
+     "evidence": "\"roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4.\" vs. \"DROP COLUMN roll_history\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Order lifecycle and safety controls are under-specified: no idempotency keys, no cancel-failure or unknown-state reconciliation, no persistence location for the daily caps (a restart could reset them), and undefined ROLLER_KILL/heartbeat-loss behavior for in-flight working orders.",
+     "evidence": "\"re-priced every 20 s up to 3 times, then cancelled\"; \"hard limits checked before submit\"; \"ROLLER_KILL env switch read on every loop\"; ABSENT: idempotency, counter storage, in-flight order handling"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "No observability or alerting is planned (poller lag, 429s, snapshot age, order counts), and rollout has no rollback thresholds. Failures would be silent until the 30-day review.",
+     "evidence": "ABSENT: metrics, alert thresholds, rollback criteria; \"Week 4: ROLLER_V2=true on 5 underlyings, then all 40.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Caps of 8 orders/account/day and 1 roll/contract/day will bind on correlated gap days across 40 names, with no priority, queueing, or overflow behavior. Cancelled or capped rolls leave short calls unrolled and possibly deep ITM. It is also unspecified whether failed attempts count against the per-contract limit.",
+     "evidence": "\"max 1 roll per contract per day and max 8 roll orders per account per day\"; \"re-priced every 20 s up to 3 times, then cancelled.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "roll_engine emits RollIntent rows on each evaluation while a trigger holds, with no dedupe key or retention. At 15 s cadence this writes huge numbers of rows. There is also no sizing or retention for chain snapshots if persisted.",
+     "evidence": "\"emits RollIntent rows\"; \"Postgres: new tables roll_intents, rolls\"; ABSENT: dedupe, TTL, retention"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The headline +3.8% net APR has no backtest, simulation, or data. It rests on anecdotal desk notes and an unsourced appeal to fund practice. Transaction costs (commissions, spread crossings, extra rolls) are not netted, and paper mode compares intents only, not fills, so it cannot validate the benefit.",
+     "evidence": "\"Expected impact: +3.8% net APR vs. EOD rolling (see §2).\"; \"compare intents vs. EOD decisions daily\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Trigger and roll-target specs are ambiguous: the 4% gap reference point is undefined, and the $0.05 credit test does not say whether it is net of buy-to-close, how it is evaluated, or what happens when neither target qualifies. These cannot be implemented unambiguously.",
+     "evidence": "\"Underlying gaps > 4% through strike within the session.\"; \"same strike +1 expiry, or next strike up if the credit is >= $0.05.\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Credential handling for the new poller and order path (vendor read-only vs. broker trade scope, storage, rotation) is not described. Also no validation of vendor snapshot integrity before it drives real orders.",
+     "evidence": "ABSENT: credential storage, scoping, rotation; snapshot validation before RollIntent emission"
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Polling at 160 req/min on a 5 req/min tier would breach vendor terms. The plan also does not address vendor data-use licence for automated trading, PDT/day-trade treatment, or tax effects of more frequent rolls.",
+     "evidence": "\"We stay on Starter.\"; ABSENT: vendor terms review, account type/PDT analysis, tax-treatment analysis"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "Trigger logic is not required to be a single shared pure function between roll_eod.py and roll_engine, so the paper-mode comparison can diverge silently. No injectable clock or snapshot seam is named for testing the timing rules.",
+     "evidence": "\"consumes snapshots, evaluates §1 triggers\" / \"compare intents vs. EOD decisions daily\"; ABSENT: injectable clock/fake snapshot source"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 58405,
+    "tokOut": 33007,
+    "usd": 0.1219119,
+    "critMs": 33377
+   },
+   "wallMs": 124794
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "logic",
+     "severity": "major",
+     "claim": "The 5 s snapshot freshness limit, which is re-checked at submit, cannot be met under the stated polling cadence. Near-trigger names are polled at best every 15 s and others every 60 s, so most snapshots are older than 5 s by the time an order is submitted. The engine would block nearly all rolls or the rule would be loosened ad hoc.",
+     "evidence": "\"vendor timestamp age <= 5 s (checked again at order submit)\" vs. \"minimum 15 s for near-trigger names, 60 s otherwise\""
+    },
+    {
+     "lens": "math",
+     "severity": "major",
+     "claim": "The request budget is never converted into a per-request figure. With about 40 names near a trigger at 15 s, one request per name needs 160 req/min, above the 100 cap. The plan gives no contracts-per-request count, no bound on concurrent near-trigger names, and no arbitration or 429 backoff when the budget saturates (for example on a gap day). The claim that Growth fits is unsupported.",
+     "evidence": "\"The request budget is capped at 100 req/min (adaptive cadence, minimum 15 s for near-trigger names, 60 s otherwise).\" and \"Growth fits the throttled request budget in §3\""
+    },
+    {
+     "lens": "logic",
+     "severity": "major",
+     "claim": "Roll targets are qualified on mid net credit (>= $0.05 or >= $0.00), but the order limit is mid minus 1 tick, with re-prices. A roll qualified at $0.00 can fill at a net debit, and the $0.05 threshold can be missed. The threshold is never re-checked against the actual limit price.",
+     "evidence": "\"same strike, +1 expiry, if net credit >= $0.00\" vs. \"a limit at mid minus 1 tick, re-priced every 20 s up to 3 times\""
+    },
+    {
+     "lens": "edge-case",
+     "severity": "major",
+     "claim": "The 25% one-tick sanity band rejects legitimate moves in cheap options. A $0.05 to $0.10 option moves more than 25% on a single tick. These are exactly the DTE<=5 / extrinsic<$0.10 contracts the roll trigger targets, so valid snapshots would be dropped where they matter most.",
+     "evidence": "\"reject moves >25% in one tick absent a gap trigger on the underlying\""
+    },
+    {
+     "lens": "rollback",
+     "severity": "major",
+     "claim": "The down-migration removes the rolls table, but the plan does not say where rolls are written after cutover. Rolls recorded between cutover and rollback would be lost with no reverse backfill, which contradicts 'retained in full'.",
+     "evidence": "\"A tested down-migration (0042_down) restores the original name and removes rolls.\" vs. \"Roll history is retained in full.\""
+    },
+    {
+     "lens": "logic",
+     "severity": "minor",
+     "claim": "The migration renames the column the currently deployed roll_eod.py reads. The plan does not require the updated roll_eod.py to deploy with or before the rename, so the 15:45 safety net could fail on migration day. The post-migration EOD test mitigates this but does not fix the deploy ordering.",
+     "evidence": "\"renames positions.roll_history to roll_history_legacy\" and \"It is updated to read the legacy column or rolls\" (no deploy ordering stated)"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The safety claim that a failed or cancelled combo never leaves a leg open rests on an unverified assumption of broker all-or-none behavior. The plan lists no week-0 check or fallback for a partial fill, which would leave an uncovered or doubled short position.",
+     "evidence": "\"combo orders are all-or-none at the broker, so a rejected or cancelled combo leaves the original short call untouched.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The go/no-go criteria are not evaluable. The backtest that sets the improvement target is only 'if obtainable within budget', with no fallback if it cannot be produced. The rollback 'pre-agreed tolerance' has no value. The 10-day rollback window and 30-day success window are not justified as able to detect an APR difference.",
+     "evidence": "\"Backtest ... on historical chains, if obtainable within budget.\" and \"worse than the EOD baseline by more than the pre-agreed tolerance over 10 trading days\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "The mission is steady income with capped drawdown, but the success and rollback criteria cover only net APR and relative performance. An intraday policy that raises APR while worsening drawdown or assignment risk would pass.",
+     "evidence": "ABSENT: any drawdown, tail-loss, or assignment metric in §2, §6, or §9 criteria; \"realized net APR over the first 30 live days ... >= EOD baseline\""
+    },
+    {
+     "lens": "concurrency",
+     "severity": "minor",
+     "claim": "Upserts update a RollIntent row in place, while client_order_id derives from the intent id and attempt number. A retry could reuse the same id with different strike or price than the original attempt. No versioning or freeze of an intent once an order is in flight is specified.",
+     "evidence": "\"upserts RollIntent rows keyed by (contract_id, trigger_type, trading_day)\" and \"client_order_id derived from (roll_intent id, attempt number)\""
+    },
+    {
+     "lens": "rollback",
+     "severity": "minor",
+     "claim": "roll_intents rows, the decision record for irreversible orders, are pruned after 30 days. This is not reconciled with the plan's own books-and-records and tax retention concerns.",
+     "evidence": "\"roll_intents retained 30 days, then pruned.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Behavior is undefined if the broker API is unreachable while combo orders are working, because only a failed cancel is covered. The migration has no stated lock or statement timeouts or an abort trigger. There is no check that the 15:45 EOD fallback actually ran.",
+     "evidence": "ABSENT: broker-outage handling for cancel/list failures; migration timeout/abort criteria; success alert for the 15:45 roll_eod.py run"
+    },
+    {
+     "lens": "trust boundary",
+     "severity": "minor",
+     "claim": "Only the underlying price is cross-checked against the broker. The vendor option bid/ask that sets the live limit price has no independent check.",
+     "evidence": "\"underlying price cross-checked against the broker's quote\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 98343,
+    "tokOut": 34321,
+    "usd": 0.140655,
+    "critMs": 80582
+   },
+   "wallMs": 182403
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The 20 s freshness rule for intent evaluation contradicts the polling arbitration. At most 10 names poll at 15 s, and the other ~30 poll at 60 s, so their snapshots are routinely older than 20 s and cannot produce intents. Roll-target legs are also fetched only when a trigger is within 90% of firing, so a sudden gap on a 60 s name has no target quotes. About 30 of 40 names silently fall back to EOD, which contradicts the 'all 40' rollout and the intraday premise.",
+     "evidence": "\"(a) scheduled snapshot vendor timestamp age <= 20 s for intent evaluation (15 s cadence plus margin)\" vs \"the top 10 get 15 s cadence and the rest 60 s\" and \"roll-target legs only when a trigger is within 90% of firing\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Nothing prevents two live combo orders on one contract. The 1/contract cap counts only filled rolls, and nothing fills at submit time. Intents are keyed per trigger_type, so two intents on one contract can both pass. The re-price mechanism (cancel-replace with confirmed cancel, whether it reuses client_order_id) is undefined. The 15:45 EOD run can also act while an engine order is working. The idempotency key covers only (intent id, attempt number).",
+     "evidence": "\"max 1 filled roll per contract per day\"; upsert key \"(contract_id, trigger_type, trading_day)\"; \"re-priced every 20 s up to 3 times\"; \"roll_eod.py continues to run at 15:45 as a safety net\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback path (flipping ROLLER_V2=false) does not cancel or reconcile working combo orders, unlike the kill-switch path. A rollback during the session could leave live orders with no owner.",
+     "evidence": "\"Rollback criteria (any one flips ROLLER_V2=false and pages the owner)\" vs ROLLER_KILL \"cancel working orders through the broker (confirm cancels)\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The stall of the reconciliation loop itself is not covered by any alert. The rollback criterion 'unreconciled order state >5 min' has no corresponding §9 alert.",
+     "evidence": "ABSENT: alert for reconciliation not running or for unreconciled state >5 min in §9"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The migration rename of roll_history needs deploy ordering against the roll_eod.py code change. The plan gives no ordering, so a run of the old code after the rename would fail.",
+     "evidence": "\"renames positions.roll_history to roll_history_legacy\" with no deploy ordering stated"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Gate sequencing is inconsistent: gate 4 requires the backtest before week 1, but §2 schedules it for 'week 0/1'.",
+     "evidence": "\"Backtest (week 0/1, required gate)\" vs gate 4 \"must pass before week 1 starts\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "Assignment or exercise arriving while an intent or order is pending is not explicitly handled. Ex-dividend early-assignment risk is also not modelled.",
+     "evidence": "ABSENT: assignment/exercise handling during pending intents or working orders; no mention of ex-dividend dates"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 135119,
+    "tokOut": 39370,
+    "usd": 0.1548135,
+    "critMs": 80048
+   },
+   "wallMs": 204515
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "spec-mismatch",
+     "severity": "major",
+     "claim": "The re-price rule and the attempt cap contradict each other. An initial submit plus up to 3 re-prices gives 4 attempt numbers, but a contract is capped at 3 attempts per day. The plan does not say which limit wins, so the order_router state machine and the client_order_id scheme are ambiguous.",
+     "evidence": "\"re-priced every 20 s up to 3 times from fresh quotes, then cancelled\" / \"a re-price creates the next attempt number\" / \"A contract has at most 3 attempts per day.\""
+    },
+    {
+     "lens": "logic",
+     "severity": "major",
+     "claim": "The one-filled-roll-per-contract cap is not delivered by the stated mechanism. The one-working-order rule only prevents overlapping orders. A filled roll creates a new contract_id with a fresh counter, so the new short can be rolled again the same day, by the engine or by the 15:45 EOD run. The only ceiling is the 8-per-account cap, and there is no per-position or per-underlying limit on churn, including repeated $0.00-credit rolls.",
+     "evidence": "\"Because only one order can be working per contract, the filled-roll cap is enforced by the one-working-order rule at submit time, not only after a fill.\" / \"max 1 filled roll per contract per day\" (caps are keyed by contract_id)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The submit path has no durable pre-send record. The order is recorded `working` in the same transaction as the counter update, but the broker call cannot be inside that transaction. A crash between broker acceptance and commit leaves a live order that Postgres does not show, and the attempt number is lost. The lock and cap checks can pass during that window until the 60 s reconciliation runs.",
+     "evidence": "\"The submit is recorded as `working` in the same transaction as the counter update.\" ABSENT: a committed `submitting` state before the broker call and a restart rule for an attempt with unknown send outcome."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Several failure end states are undefined. Kill and heartbeat-loss cancellation is performed by the same process that has died, with no external canceller or broker-side expiry. Broker or DB unreachable at the 15:40 handoff has no fail-closed behaviour. Contracts left in `unknown` or `leg_mismatch` are skipped by the EOD run with no deadline or overnight owner, so a short call can sit unmanaged with assignment risk.",
+     "evidence": "\"heartbeat loss (>60 s): stop emitting intents, cancel working orders through the broker (confirm cancels), and alert.\" / \"checks Postgres for any contract with an active engine intent (`pending`, `working`, `unknown`) or a working order and skips it.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The 4% gap trigger is also gated on the prior close being below the strike and the price being at or above it. The prior close and its source are never specified, so the trigger depends on an undefined input that is not injectable for testing.",
+     "evidence": "\"(last underlying price − prior regular-session close) / prior close\" ABSENT: source and storage of prior close."
+    },
+    {
+     "lens": "trust boundary",
+     "severity": "minor",
+     "claim": "The option-mid sanity check is skipped on gap triggers, which is when a bad quote is most dangerous. The submit-time refresh comes from the same vendor feed. The credit floor limits the damage but does not validate the quote itself.",
+     "evidence": "\"absent a gap trigger on the underlying\" / \"(d) underlying price cross-checked against the broker's quote.\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The plan has no rule for ex-dividend early-assignment risk on deep-ITM short calls. This is a core covered-call risk and bears directly on the mission of capped drawdown and assignment.",
+     "evidence": "ABSENT: any mention of dividends or ex-dividend dates."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The 20 req/min reserve serves both gap-day on-demand target fetches and submit-time refreshes, with no priority or quota split. The text says refreshes are never starved, but the on-demand fetches draw from the same pool. Paging on every expected gap-day condition also risks drowning out real pages such as `leg_mismatch`.",
+     "evidence": "\"drawn from the reserved 20 req/min\" / \"never starve submit-time refreshes\" / \"Alerts page the on-call engineer.\""
+    },
+    {
+     "lens": "authz",
+     "severity": "minor",
+     "claim": "The control surface and counters are not access-controlled in the plan. It does not say where ROLLER_KILL and ROLLER_V2 are read from or who may set them. It also does not say which DB roles may write roll_counters and roll_intents, or which credential roll_eod.py uses.",
+     "evidence": "ABSENT: source and write authority for ROLLER_KILL/ROLLER_V2; DB roles for roll_counters."
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 163757,
+    "tokOut": 47859,
+    "usd": 0.179123,
+    "critMs": 58046
+   },
+   "wallMs": 141126
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Gate 4 requires the backtest before week 1 and gate 6 derives its limits from it, but §2 labels the backtest 'week 0/1'. The sequencing wording is inconsistent.",
+     "evidence": "\"Backtest (week 0/1, required gate)\" vs. gate 4 \"must pass before week 1 starts\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Backfill copies all roll_history into rolls, yet roll_eod.py is also told to read the legacy column for pre-cutover history. Reading both risks double-counting unless it is made explicit that only one source is read.",
+     "evidence": "\"read from `rolls` (and the legacy column for pre-cutover history)\" vs. \"Backfill copies **all** roll_history entries\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The submit-time refresh re-checks the credit floor and quote age but not that the original trigger still holds. A 60 s-tier intent may therefore be sent after the trigger has reverted. The impact is limited by the floor and the caps.",
+     "evidence": "\"requires vendor timestamp age <= 5 s, otherwise the order is blocked\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The manual leg_mismatch runbook involves irreversible trades but is not listed as a week-0 or rollout gate. Roll_intents are pruned at 30 days, which may conflict with the stated retention policy.",
+     "evidence": "\"resolved manually per a written runbook\"; \"roll_intents retained 30 days, then pruned.\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 198516,
+    "tokOut": 38492,
+    "usd": 0.1681388,
+    "critMs": 70654
+   },
+   "wallMs": 185088
+  }
+ ],
+ "artifact": "# Plan: Auto-Roller v2 — intraday roll decisions\n\nOwner: trading-infra | Build: 4 weeks, 2 engineers | Status: **BLOCKED on the week-0 data-source decision (§4). Not ready for dispatch.**\n\n## Summary\nReplace the end-of-day roll script (roll_eod.py) with an intraday engine that rolls short calls when a roll trigger fires, instead of waiting for the 15:45 ET batch.\nExpected impact: **unproven hypothesis** that intraday rolling improves net APR vs. EOD rolling without worsening drawdown or assignment risk. §2 describes how it will be measured. No figure is claimed until paper-mode and backtest results exist.\n\n## 0. Week-0 gates (must pass before week 1 starts)\n1. Data source decision (§4): real-time quotes inside the $250/month cap, or an explicit cap exception from the owner. Also confirm the vendor's maximum contracts per request (§3 budget depends on it).\n2. Vendor/broker terms review: confirm that data licence terms permit automated trading and that the polling rate is permitted.\n3. Account review: confirm account type and day-trade treatment of rolls, and get tax sign-off (see §8).\n4. Backtest of triggers and cost model (§2) on historical chains. This is **required**, not optional. If historical chains cannot be obtained within the $250/month budget, the owner decides in week 0 between a one-off data purchase approved as an exception and a paper-only project with no live go-live until the paper results meet the §2 criteria.\n5. Combo-order atomicity and broker-behavior check (§7): written broker confirmation, plus a sandbox/small-size test, that multi-leg roll orders are native all-or-none and that cancel/reject/partial-fill behave as assumed. Also confirm: (a) whether the broker supports atomic cancel-replace (modify) of a combo order and whether a replacement may reuse the client_order_id; (b) that an order can be looked up by client_order_id (needed to resolve an unknown send outcome, §7); (c) whether the broker supports a short expiry/time-in-force on combo orders, and whether a cancel-only credential scope exists for the watchdog (§7). If atomicity is not confirmed, live rollout is blocked until a reviewed leg-level fallback is built. If lookup by client_order_id is not available, live rollout is blocked until an equivalent way to resolve unknown submits is agreed.\n6. Success and rollback thresholds (§2, §6): the owner records numeric values for the tolerance, drawdown and assignment limits in this document before week 1.\n\n## 1. Roll triggers (unchanged semantics, new timing)\n- Short call delta >= 0.70, or\n- DTE <= 5 and extrinsic value < $0.10, or\n- Underlying gap > 4% through the strike within the session. The gap is measured as (last underlying price − prior regular-session close) / prior close, and fires only when the prior close was below the strike and the current price is at or above it.\n\nRoll target, with net credit = sell-to-open price − buy-to-close price. Qualification uses the **executable limit credit** (the credit at the order's limit price, which is mid credit minus 1 tick), not mid:\n1. Next strike up, +1 expiry, if limit credit >= $0.05.\n2. Otherwise same strike, +1 expiry, if limit credit >= $0.00.\n3. Otherwise no intent is emitted. The position is left to the EOD fallback run (§6) and logged as `no_qualifying_target`.\n\nEach intent carries a `min_net_credit` floor equal to the threshold of the selected target. The order router must never submit or re-price below that floor (§7). The threshold is re-checked on every re-price against the fresh quote.\n\nNo change to contract counts (position sizing is out of scope).\n\nAll trigger and target logic lives in one pure module, `roll_rules.py` (no I/O, no clock reads). Both roll_eod.py and roll_engine import it, so paper-mode comparison cannot diverge from the EOD logic. Time and data are injected through a `Clock` interface and a `SnapshotSource` interface, with fakes for unit tests of the timing rules (gap day, 15:30 spreads, stale snapshot, limit-credit floor).\n\n## 2. Rationale and evidence plan\nHypothesis: rolling at the close means we sometimes roll after intraday mean-reversion has already happened, and closing spreads after 15:30 are wide. Desk notes list several days where a mid-session roll \"would have been better\", but these are anecdotal and not a basis for a quantified claim. No fund-practice claim is relied on.\n\nValidation:\n- Backtest (week 0/1, required gate): EOD vs. intraday decisions, net of commissions, spread crossing, and extra rolls. It reports net APR, max drawdown of the option-strategy P&L, early-assignment/called-away rate, and debit-roll count, each with an uncertainty range. The backtest sets the improvement target and the drawdown and assignment limits recorded in gate 6.\n- Paper mode (weeks 2–3) records hypothetical fills from the quotes at intent time (limit at mid minus 1 tick, with the same re-price rules and floor, and spread-crossing cost), not only the intents, and compares them to the EOD fills on matched events.\n- Live success criteria, all required:\n  - Primary: paired per-roll net credit (after costs) of intraday rolls vs. the EOD-equivalent outcome on matched events is >= the backtest-derived target.\n  - Risk: option-strategy drawdown and assignment/called-away rate are no worse than the EOD baseline beyond the gate-6 limits.\n  - 30-day realized net APR >= EOD baseline. A 30-day APR comparison across ~40 names is dominated by market noise and cannot statistically prove an improvement, so it serves only as a no-harm check, not as evidence of the hypothesis.\n- Coverage is measured, not assumed: the share of trigger events that were evaluated intraday with qualifying fresh data, versus those left to the EOD run, is reported daily (§9). The \"all 40\" rollout in §6 means all 40 names are eligible for intraday rolling, with the coverage metric showing how many actually were. If coverage on 60 s names is too low to test the hypothesis, the owner decides whether to change the budget (§4) before widening the rollout.\n\n## 3. Architecture\n- chain_poller (new): fetch quotes only for held underlyings with an open short call, and only the contracts needed (current short leg; roll-target legs only when a trigger is within 90% of firing). Snapshots are held in memory and not persisted.\n- Request budget (cap 100 req/min), assuming one batched request per name covers the short leg plus roll-target legs (to be confirmed in gate 1; if the vendor does not batch, the math below is redone and the §4 decision re-opened):\n  - 80 req/min scheduled and 20 req/min reserved for submit-time refreshes and re-prices (below).\n  - A name at 60 s cadence costs 1 req/min; a near-trigger name at 15 s costs 4 req/min. With all 40 names at 60 s (40 req/min), the remaining 40 req/min allows at most 13 near-trigger names; the hard cap is **10 concurrent at 15 s** (10×4 + 30×1 = 70 ≤ 80).\n  - Arbitration: names are ranked by proximity to firing; the top 10 get 15 s cadence and the rest 60 s. On a gap day with more than 10 near-trigger names, the excess is served at 60 s and an alert fires. Names whose triggers fire but have no fresh data are handled by the EOD run.\n  - 429 handling: honor Retry-After, back off exponentially with jitter, shed lowest-priority scheduled polls first, and never starve submit-time refreshes.\n- Snapshot validation before any RollIntent: (a) scheduled snapshot vendor timestamp age is within the **cadence-dependent limit**: <= 20 s for names polled at 15 s (cadence plus margin) and <= 75 s for names polled at 60 s (cadence plus margin). The limit is a function of the name's current cadence, not a single constant. This is safe because an intent never prices an order: the submit-time refresh (below) re-quotes and enforces the 5 s limit before anything is sent. A 60 s-cadence intent whose refreshed quote no longer qualifies is dropped with `below_floor`/`no_qualifying_target`; (b) bid >= 0, ask >= bid; delta in [0,1]; (c) mid sanity check versus the last prior snapshot: reject a move only if it exceeds both 25% and $0.10 absolute (so cheap options are not falsely rejected), absent a gap trigger on the underlying; (d) underlying price cross-checked against the broker's quote. Failed snapshots are dropped and counted.\n- Gap/trigger without target quotes: when a trigger condition is detected on the short-leg snapshot (including a gap trigger on a 60 s name) but no fresh roll-target quotes exist, the poller immediately issues an on-demand batched fetch of the target legs for that name, drawn from the reserved 20 req/min, and promotes the name to the 15 s tier if a slot is free. If the reserved budget is exhausted, the name is handled by the EOD run and counted in the coverage metric. On gap days this means some names will fall back to EOD, by design and visibly (alert + coverage metric), not silently.\n- Submit-time refresh: before each order submission and each re-price, order_router fetches a fresh on-demand quote for the combo's legs from the reserved budget, and requires vendor timestamp age <= 5 s, otherwise the order is blocked. The 5 s limit therefore applies to the quote that prices the order, not to the polling snapshot.\n- roll_engine (new): consumes validated snapshots, evaluates §1 via `roll_rules.py`, and upserts RollIntent rows keyed by (contract_id, trading_day, ...) with at most one **active** intent per contract per day, enforced by a partial unique index on (contract_id, trading_day) where status is in an active set (`pending`, `submitting`, `working`, `unknown`). If a second trigger type fires for a contract that already has an active intent, it is recorded as an additional trigger reason on the existing intent (a `trigger_types` array) and does not create a second intent. Repeated evaluation while a trigger holds updates the same row. roll_intents retained 30 days, then pruned.\n- order_router (existing broker client, extended): turns RollIntent into a single combo order (buy-to-close + sell-to-open) with a limit at mid minus 1 tick, subject to the intent's `min_net_credit` floor, re-priced every 20 s up to 3 times from fresh quotes (1 initial attempt + 3 re-prices = at most 4 attempts), then cancelled. See §7.\n- Postgres: new tables roll_intents, rolls, roll_counters (including per-underlying counters, §7); positions changes in §5.\n- Credentials: vendor key is read-only/data-scope; broker credentials are trade-scoped, used only by order_router and by the independent watchdog (§7), the latter with a cancel-only scope if gate 5 confirms the broker offers one. Both are loaded from the VPS secret store (not env files in the repo), separate per process, with a documented rotation procedure (rotate at least quarterly and on any suspected exposure). roll_engine and chain_poller never hold the trade credential.\n\n## 4. Market data vendor and cost\nCurrent vendor: Optiq Data. Plan tiers:\n\n| Tier    | Price/mo | Rate limit   | Option quotes   |\n|---------|----------|--------------|-----------------|\n| Starter | $79      | 5 req/min    | 15-min delayed  |\n| Growth  | $199     | 100 req/min  | real-time       |\n| Pro     | $499     | unlimited    | real-time       |\n\nStarter is unusable for this design: its 15-minute-delayed quotes cannot drive intraday triggers or limit pricing, and 5 req/min is far below the need. Growth is expected to fit the request budget in §3 (80 scheduled + 20 reserved req/min, at most 10 near-trigger names at 15 s), provided the vendor supports batched multi-contract requests (gate 1). It costs $199 + existing VPS $60 = **$259, which is $9 over the $250 cap**. Pro is $559.\n\nDecision required in week 0, one of:\n- (a) Confirm the existing broker API client provides real-time option quotes at no added cost and within its rate limits. Optiq is then not upgraded.\n- (b) Owner approves a cap exception for Growth ($259/month).\n- (c) Reduce other infra spend by >= $9/month to bring Growth inside the cap.\n\nIf none is available, the project does not proceed and roll_eod.py stays. Staying on Starter is not an option for live use. It is acceptable only to keep the existing EOD tooling.\n\n## 5. Data model migration (week 1)\npositions.roll_history (JSONB array of every roll since account inception) is replaced by a normalized rolls table. Roll history is retained in full.\n- Before anything: `pg_dump` of the database, restore-verified to a scratch instance, and kept per the records-retention policy.\n- Dry run of migration 0042 on the restored copy, with row-count and checksum comparison of roll_history entries vs. rolls rows.\n- Backfill copies **all** roll_history entries (full history since inception) into rolls.\n- Migration 0042 only adds rolls and renames positions.roll_history to roll_history_legacy. **No column is dropped.**\n- After cutover, `rolls` is the single source of truth: both roll_engine and roll_eod.py write new rolls only to `rolls`.\n- A tested down-migration (0042_down) first reverse-backfills every `rolls` row created after cutover into roll_history_legacy (appending to the JSONB arrays), verifies row counts and checksums against `rolls`, then renames the column back and only then removes `rolls`. The down-migration aborts without changes if verification fails. It is tested in the dry run with synthetic post-cutover rolls included.\n- Dropping roll_history_legacy is a separate later migration, allowed only after week 4 plus a 90-day soak, a verified archive export, and sign-off on books-and-records/tax retention.\n- Run in prod Monday 08:00 ET (pre-market) only after the dry run passes.\n- roll_eod.py remains the fallback behind ROLLER_V2=false. It is updated to write to and read from `rolls` (and the legacy column for pre-cutover history), and a post-migration test of the full EOD path on the restored copy (and again in prod pre-market) is a required exit criterion for week 1.\n\n## 6. Rollout\n- Week 1: migration (§5), chain_poller, roll_engine skeleton, observability (§9).\n- Week 2–3: paper mode (RollIntent written, no orders, hypothetical fills recorded) alongside roll_eod.py; compare intents and hypothetical fills vs. EOD decisions daily.\n- Week 4: ROLLER_V2=true on 5 underlyings, then all 40 (eligible for intraday rolling; actual intraday coverage is tracked per §2 and §9). roll_eod.py continues to run at 15:45 as a safety net for any unrolled trigger, but only after the pre-EOD handoff in §7 (it skips any contract with an active engine intent or working order).\n- Rollback criteria (any one flips ROLLER_V2=false and pages the owner):\n  - Operational: any order-cap hit caused by a bug, any stale-quote order, any order submitted below its credit floor, any leg mismatch after a combo (§7), or unreconciled order state >5 min.\n  - Economic: on the pilot names, mean per-roll net credit worse than the paired EOD-equivalent outcome by more than the tolerance recorded in gate 6, evaluated over a minimum number of rolls (also set in gate 6) rather than a fixed 10 days, since a short calendar window may contain too few rolls to judge.\n  - Risk: drawdown or assignment/called-away rate on the pilot names exceeding the gate-6 limits relative to the EOD baseline.\n- Rollback procedure: flipping ROLLER_V2=false triggers the same shutdown sequence as ROLLER_KILL (§7): stop emitting intents, cancel all working combo orders through the broker and confirm the cancels, run a reconciliation pass, and mark affected intents `cancelled_by_rollback`. The flag flip is not considered complete until no working engine orders remain and positions match expectations (no `leg_mismatch`/`unknown`); otherwise the on-call engineer is paged to resolve manually under the deadlines in §7. Only then may roll_eod.py act on those contracts.\n- Success criteria: those in §2 (paired per-roll net credit vs. backtest target, drawdown/assignment within limits, 30-day APR no-harm check).\n\n## 7. Order lifecycle and safety\n- One live order per contract: at most one working combo order per contract at any time. Before submit, order_router takes a per-contract lock in Postgres (row lock / advisory lock on contract_id) and checks that no working or `submitting` order exists for it, and that no active intent other than this one exists (§3 partial unique index). It also takes an advisory lock on (account, underlying) and checks the per-underlying cap (Caps, below).\n- Durable pre-send record: the attempt is committed **before** the broker call. In one transaction, order_router inserts the attempt with status `submitting` (client_order_id, attempt number, limit price, `min_net_credit`) and updates the roll_counters in the same transaction. Only after that commit does it call the broker. On broker acceptance it updates the attempt to `working`; on a definite reject it marks it `rejected`. Because `submitting` is in the active set and counts for the lock, caps and handoff checks, no second order can be created in the window between broker acceptance and the `working` update.\n- Unknown send outcome: if the process crashes or the broker call times out while an attempt is `submitting`, the outcome is unknown. On restart (before any new submit, and on every reconciliation pass) order_router resolves each `submitting` attempt by looking up the broker order by client_order_id (gate 5). If the broker has the order, it is adopted (`working`, or its terminal state). If the broker confirms that no such order exists, the attempt is marked `not_sent`, and the same attempt number and client_order_id may be retried once with a fresh quote and floor check. If the lookup itself fails, the attempt is marked `unknown`, alerts, blocks new orders for that contract, and follows the Reconciliation and deadline rules below. The attempt number is never lost, since it was committed pre-send.\n- Re-price (cancel-replace): a re-price either uses the broker's atomic modify/replace if confirmed in gate 5, or cancels the working order, waits for a broker-confirmed cancel, and only then submits the replacement. No replacement is submitted while the prior order's state is unconfirmed; if the cancel cannot be confirmed (or the order filled in the meantime), the intent is marked `unknown` and handled per Reconciliation below. Each replacement is a new attempt with a new client_order_id (see Idempotency) and goes through the same `submitting` pre-send commit; a replacement is never submitted under the previous id unless gate 5 confirms the broker treats it as a modify of the same order.\n- Attempt limit (one rule): the per-contract limit is **4 attempts per contract per trading day**: the initial submit (attempt 1) plus up to 3 re-prices (attempts 2–4), counted across all intents for that contract. A `not_sent` retry of the same attempt does not consume a new attempt number. When attempt 4 is not filled within its 20 s window, the order is cancelled (confirmed) and the intent is marked `exhausted`, left to the EOD run. The state machine and client_order_id scheme above both follow this limit.\n- Idempotency: each combo order carries a client_order_id derived from (roll_intent id, attempt number). Retries of the same attempt (e.g., a network timeout on submit, resolved per Unknown send outcome) re-use it, so the same attempt cannot create duplicate orders; a re-price creates the next attempt number. Because at most one active intent and one working order exist per contract (above), the per-attempt key cannot be circumvented by a second intent.\n- Price floor: each submit and re-price is computed from a fresh quote (§3) and must keep net credit >= the intent's `min_net_credit`. If it cannot, the order is cancelled and the intent is marked `below_floor`, left to the EOD run. A roll qualified at >= $0.00 therefore cannot fill at a net debit.\n- Caps (stored in Postgres roll_counters, updated in the same transaction that records the `submitting` attempt, and surviving restarts):\n  - **Max 1 filled roll per (account, underlying) per trading day.** A filled roll creates a new contract_id, so a per-contract counter alone would let the new short be rolled again the same day. The counter is therefore keyed by underlying (and carries the roll lineage), and is checked by both the engine and roll_eod.py before submit. No same-day second roll on an underlying, including repeated $0.00-credit rolls, can occur through either path. Contract counts are not changed. Triggers that fire again after a roll that day are logged as `underlying_rolled_today` and are evaluated again the next trading day.\n  - Max 1 filled roll per contract per day, max 4 attempts per contract per day (above), and at most 1 working or `submitting` order per contract.\n  - Max 8 roll orders per account per day, counting each intent's first submit (attempt 1). Re-prices count against the per-contract 4-attempt limit and not against the 8/account cap, which bounds total account attempts at 32 per day. Cancelled or rejected first submits still count against the 8.\n  - Because the per-underlying cap is checked under the (account, underlying) lock at submit time, it does not depend on a fill having been recorded first. An open `submitting`/`working` attempt on any contract of the underlying also blocks a new order on that underlying.\n- Priority when intents exceed the cap: highest delta first, then largest ITM amount, then nearest expiry. Intents beyond the cap are marked `capped` and alert, and are handled by the 15:45 EOD run.\n- EOD handoff (fail closed): at 15:40 ET the engine stops emitting new intents and cancels any still-working engine orders (confirmed cancels), so the EOD run starts from a settled state. Before the 15:45 EOD run acts, it checks Postgres for any contract with an active engine intent (`pending`, `submitting`, `working`, `unknown`) or a working order, or in `leg_mismatch`, and skips it. The EOD run also takes the same per-contract and per-underlying locks and counter checks before submitting, so it cannot create a second roll on a contract or underlying already rolled that day. If at 15:40 the broker or Postgres is unreachable, or any cancel cannot be confirmed, the handoff fails closed: neither the engine nor roll_eod.py submits any new order for the affected contracts (all contracts if Postgres is unreachable), an immediate page goes out, and the watchdog (below) keeps retrying cancels. The EOD run never acts on state it could not read.\n- Reconciliation: on startup and every 60 s, order_router lists open and recent broker orders and reconciles them with the rolls/roll_intents state, including resolving any `submitting` attempts as above. Reconciliation completes on startup before any new submit. Unknown state or a failed cancel marks the intent `unknown`, alerts, blocks new orders for that contract, and requires broker-confirmed state before any retry.\n- Atomicity: rolls are submitted only as a native broker multi-leg order, never as two separate single-leg orders. All-or-none behavior is a week-0 gate (gate 5), verified with broker documentation and a sandbox/small-size test, not assumed. After every fill, cancel, or reject, and in every reconciliation pass, order_router compares actual broker option positions for the contract against the expected position (exactly the pre-roll short, or exactly the post-roll short). Any mismatch (e.g., only one leg filled, leaving no call or two short calls) marks the contract `leg_mismatch`, blocks new orders on it, pages on-call immediately, and is resolved manually per a written runbook, not by automated retries.\n- Kill, rollback and heartbeat loss: ROLLER_KILL, ROLLER_V2=false, or heartbeat loss (>60 s): stop emitting intents, cancel working orders through the broker (confirm cancels), and alert. A rejected or cancelled combo leaves the original short call untouched, per the confirmed atomic behavior above.\n- Independent watchdog: because the process that has died cannot cancel its own orders, a separate watchdog process (own systemd unit, own credential, not importing roll_engine or order_router code paths) monitors the order_router heartbeat and the kill/rollback flags. When the heartbeat is lost for >60 s or a kill/rollback flag is set, the watchdog lists open engine orders at the broker (identified by client_order_id prefix) and cancels them, confirming each cancel, retrying until confirmed, and paging if it cannot. As a second layer, engine combo orders are submitted with the shortest expiry the broker supports (gate 5), at latest DAY, so a stuck order cannot survive past the close. The watchdog also alerts if its own heartbeat check cannot reach the broker.\n- Stuck `unknown` / `leg_mismatch` deadlines and ownership: both states page immediately, and the on-call engineer owns the contract until it is resolved. If still unresolved 15 minutes after the page, or by 15:55 ET, whichever is earlier, it escalates to the owner (and the secondary on-call). A contract that is unresolved at the close (or any short call with DTE <= 1 that is ITM and in either state) is a critical page and is recorded in an overnight handoff note with the named owner, who must confirm broker-state and position at the 09:00 ET pre-market check and before the next open. The EOD run's skipping of these contracts is therefore time-bounded by a human owner, never indefinite. The written runbook covers manual disposition (confirm positions at the broker, close or re-establish the short call, record the result in `rolls`).\n- Stale quote (>5 s at submit or re-price) blocks the order.\n\n## 8. Compliance and tax\nBefore live trading (week-0 gate): written confirmation of vendor data-use terms for automated trading and polling rate; account type and PDT/day-trade treatment of intraday rolls; and review by the family office's tax advisor of the effect of more frequent rolls (e.g., holding periods, qualified covered call status, wash-sale treatment on loss rolls). Live rollout is blocked if any answer is adverse.\n\n## 9. Observability and alerting\nMetrics: poller lag, snapshot age (by cadence tier), request-budget utilization (scheduled vs. reserved), near-trigger names over the 10-name cap, on-demand target-quote fetches and reserved-budget exhaustion count, intraday coverage (trigger events evaluated intraday vs. left to EOD, split by 15 s and 60 s tier), vendor/broker 429 and error counts, rejected-snapshot count, intents per day, orders per day vs. caps, attempts per contract, `submitting` attempts resolved on restart (adopted / not_sent / unknown), `underlying_rolled_today` count, fill rate, slippage vs. mid, below-floor cancels, leg-mismatch count, watchdog cancels, age of oldest `unknown`/`leg_mismatch` contract, unrolled-ITM count at 15:45. Risk metrics, compared daily with the EOD baseline: option-strategy drawdown, assignment/called-away count and rate, ITM-at-expiry count, debit-roll count.\nAlerts: snapshot age beyond its cadence-tier limit (20 s / 75 s) for >1 min, submit-time refresh older than 5 s, any 429 burst, poller lag >30 s, order count >=6/8, any `unknown` order state, any `submitting` attempt older than 60 s, any `leg_mismatch`, any `unknown`/`leg_mismatch` unresolved past the §7 deadlines, any capped intent, any trigger left to EOD for lack of fresh data, heartbeat loss, watchdog cancel or watchdog failure, broker/DB unreachable at the 15:40 handoff, kill switch trip or rollback, drawdown or assignment rate beyond gate-6 limits. Alerts page the on-call engineer. A daily summary is reviewed during the rollout, not only at the 30-day mark.",
+ "fixerUsage": {
+  "calls": 4,
+  "tokIn": 27070,
+  "tokOut": 32699,
+  "usd": 0.435254,
+  "critMs": 205910
+ },
+ "status": "cleared"
+}

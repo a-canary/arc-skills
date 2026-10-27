@@ -41,7 +41,7 @@ async function slot<T>(fn: () => Promise<T>): Promise<T> {
 // OpenAI-compatible backends, addressed as "<prefix>:<model>". v100 = sovereign local qwen on ai-lab-02 (single lane).
 // usd=0: local/9router spend is not list-priced; compare these on tokens and latency.
 const HTTP: Record<string, { base: string; lanes: number; key?: string }> = {
-  v100: { base: "http://127.0.0.1:8099", lanes: 1 },
+  v100: { base: "http://127.0.0.1:8099", lanes: 2 }, // llama-server --parallel 2
   "9r": { base: "http://127.0.0.1:20128", lanes: 4, key: "NINEROUTER_KEY" }, // key: env var NAME (pass api/9router/local-key)
 };
 const httpActive: Record<string, number> = {}, httpWait: Record<string, (() => void)[]> = {};

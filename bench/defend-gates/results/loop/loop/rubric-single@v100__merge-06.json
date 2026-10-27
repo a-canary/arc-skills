@@ -1,0 +1,176 @@
+{
+ "approach": "rubric-single@v100",
+ "case": "merge-06",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "Tenant API keys are logged in plaintext via `tenant.apiKey` in the rate-limit log line, violating the context requirement that tenant API keys must never appear in logs. The `keyFingerprint` function exists but is applied to the full key, not used as a replacement for it.",
+     "evidence": "req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, 'tenant rate limited');"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The retry-after calculation for upstream 429s incorrectly parses the header as seconds and multiplies by 1000, but the standard Retry-After header can be either an HTTP-date or a number of seconds. The code assumes it's always seconds and doesn't handle the date format at all.",
+     "evidence": "const secs = Number(header); if (!Number.isFinite(secs) || secs < 0) return 1_000; return Math.min(secs * 1000, MAX_UPSTREAM_RETRY_MS);"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The upstream retry uses setTimeout without checking if the request signal is aborted during the wait. If the client disconnects during the retry delay, the gateway will still make the second upstream call, wasting resources and potentially returning a response to a closed connection.",
+     "evidence": "await new Promise((r) => setTimeout(r, delay)); res = await upstream.chat(req.body, { signal: req.signal });"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The LRU cache is bounded at 10,000 tenants, but the context states there are ~120 internal tenants. If a new tenant ID appears (e.g., from a misconfigured client or attack), the LRU will evict existing tenants' bucket state, causing them to get a fresh burst allowance. This could be exploited for rate-limit bypass.",
+     "evidence": "private buckets = new LRUCache<string, Bucket>({ max: 10_000 });"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The token bucket refill calculation uses floating-point arithmetic, which could lead to precision issues over time. For example, after many small increments, the token count might drift slightly from the expected value.",
+     "evidence": "b.tokens = Math.min(limits.burst, b.tokens + elapsedSec * limits.ratePerSec);"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2164,
+    "tokOut": 525,
+    "usd": 0,
+    "critMs": 42939
+   },
+   "wallMs": 50024
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The `keyFingerprint` function is exported but only used for logging; a 10-character hex SHA-256 prefix (40 bits) is too short and could be brute-forced or collided to link a logged fingerprint back to a specific API key, violating the requirement that keys never appear in logs in any recoverable form.",
+     "evidence": "return createHash(\"sha256\").update(apiKey).digest(\"hex\").slice(0, 10);"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The `sleep` function has a race condition: if the abort signal fires between the `signal.aborted` check and `addEventListener`, the timer will not be cleared and the promise will resolve after the client disconnects, causing a wasted upstream call and potential response to a disconnected client.",
+     "evidence": "if (signal.aborted) return reject(signal.reason); ... signal.addEventListener(\"abort\", onAbort, { once: true });"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The upstream 429 retry logic does not check if the client has already disconnected before making the second upstream call after sleep resolves; if the client disconnects during the sleep, it returns 499, but if the sleep completes and the client disconnects immediately after, the second `upstream.chat` call proceeds unnecessarily, wasting resources.",
+     "evidence": "await sleep(delay, req.signal); ... res = await upstream.chat(req.body, { signal: req.signal });"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The token bucket refill calculation uses floating-point arithmetic (`b.tokens + elapsedSec * limits.ratePerSec`) which could accumulate floating-point errors over time, potentially causing slight inaccuracies in rate limiting for long-running tenants.",
+     "evidence": "b.tokens = Math.min(limits.burst, b.tokens + elapsedSec * limits.ratePerSec);"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2595,
+    "tokOut": 417,
+    "usd": 0,
+    "critMs": 28962
+   },
+   "wallMs": 75092
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The `sleep` function has a TDZ (Temporal Dead Zone) error: `timer` is referenced in `onAbort` before it is declared, which will throw a ReferenceError at runtime whenever `sleep` is called.",
+     "evidence": "const onAbort = () => { clearTimeout(timer); reject(signal.reason); }; const timer = setTimeout(...)"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2854,
+    "tokOut": 101,
+    "usd": 0,
+    "critMs": 15958
+   },
+   "wallMs": 44662
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "TenantLimiter is a single shared instance with no lock, but `take()` is not atomic: it reads the bucket, mutates, then writes back. Under concurrent requests for the same tenant, multiple requests can read the same `tokens` value and all be admitted, allowing burst to be exceeded and defeating the rate limit. The artifact's justification that this is safe relies on the single-threaded Node model, but Fastify handlers run concurrently via async/await and event-loop interleaving, so two `take()` calls for the same tenant can interleave between the read and the write.",
+     "evidence": "const limiter = new TenantLimiter(); ... take(tenantId: string, limits: Limits): number { const nowMs = this.now(); const b = this.buckets.get(tenantId) ?? { tokens: limits.burst, updatedMs: nowMs }; ... b.tokens = Math.min(limits.burst, b.tokens + elapsedSec * limits.ratePerSec); ... this.buckets.set(tenantId, b); }"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The `sleep` function has a genuine race window despite the PR's claim that the aborted check and listener registration are synchronous. While it is true that in JavaScript `signal.aborted` check and `addEventListener` run in the same synchronous block with no interleaving, the PR's reasoning about the `timer` TDZ is misleading: the `onAbort` closure references `timer` before its declaration in source order, which is valid in JS due to hoisting of `const` within the same scope, but the real issue is that if `signal.aborted` is true, `reject(signal.reason)` is called but the Promise is never resolved or rejected with a proper reason in all paths — specifically, if the timer fires and then an abort happens in the same tick, both resolve and reject could be called (though Promise only takes the first). More critically, the PR's defensive comments suggest the author was uncertain about correctness, indicating untested edge cases.",
+     "evidence": "function sleep(ms: number, signal: AbortSignal): Promise<void> { return new Promise((resolve, reject) => { if (signal.aborted) return reject(signal.reason); const onAbort = () => { clearTimeout(timer); reject(signal.reason); }; const timer = setTimeout(() => { signal.removeEventListener(\"abort\", onAbort); resolve(); }, ms); signal.addEventListener(\"abort\", onAbort, { once: true }); }); }"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "When the upstream returns 429 and the retry also returns an error (including another 429), that error is passed through to the client. However, the rate limit token was already consumed on the first `take()` call, and no token is consumed for the retry. This means a tenant hitting upstream 429s effectively gets an extra free request beyond their rate limit, skewing fairness. More importantly, if the retry also gets 429, the tenant receives a 429 from upstream rather than the gateway's own rate-limited response, confusing diagnostics.",
+     "evidence": "let res = await upstream.chat(req.body, { signal: req.signal }); if (res.status === 429) { ... res = await upstream.chat(req.body, { signal: req.signal }); } return reply.code(res.status).headers(res.forwardHeaders()).send(res.body);"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The keyFingerprint function logs a truncated SHA-256 hash of the API key alongside the tenant ID. While the PR claims this is safe because the keys are high-entropy, logging any derivative of a secret (even hashed) alongside an identifier creates a correlation target. If the tenant ID is ever exposed or guessed, an attacker with access to logs can use the fingerprint to verify key guesses or link log entries across systems. The 40-bit prefix provides only ~1 trillion possibilities, which is not brute-force resistant for offline attacks.",
+     "evidence": "export function keyFingerprint(apiKey: string): string { return createHash(\"sha256\").update(apiKey).digest(\"hex\").slice(0, 10); } ... req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, \"tenant rate limited\");"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2976,
+    "tokOut": 926,
+    "usd": 0,
+    "critMs": 55831
+   },
+   "wallMs": 85756
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The 499 response after client disconnect during retry is a non-standard status code; 503 or simply ending the response would be more conventional, though this is a reasonable internal convention.",
+     "evidence": "return reply.code(499).send();"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The 40-bit key fingerprint, while not reversible to the full key, could theoretically be used to correlate tenant activity across systems if the fingerprint is exposed in logs that are shared or archived; consider whether this meets the organization's data retention policies for API key derivatives.",
+     "evidence": "export function keyFingerprint(apiKey: string): string {\n  return createHash(\"sha256\").update(apiKey).digest(\"hex\").slice(0, 10);\n}"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3393,
+    "tokOut": 196,
+    "usd": 0,
+    "critMs": 24113
+   },
+   "wallMs": 62789
+  }
+ ],
+ "artifact": "PR #377: Per-tenant token-bucket rate limiting + upstream 429 handling\n\nTenants on the shared gateway can currently starve each other: one batch job at 400 rps pushed everyone else into upstream 429s on Tuesday.\nThis adds an in-process token bucket per tenant (limits from tenant config, default 20 rps / burst 40) and returns 429 with Retry-After when a tenant is over.\nWhen the upstream itself returns 429 we retry once, honoring its Retry-After (delta-seconds or HTTP-date) capped at 5s; the wait is abandoned if the client disconnects. Any other upstream error is passed straight through.\nBucket state is bounded by an LRU (10k tenants), so idle tenants do not accumulate. Buckets are keyed by authenticated tenant id only, so unauthenticated or misconfigured clients cannot create entries or evict real tenants' state; with ~120 tenants the bound is never reached in practice.\nRate-limit decisions are logged with a key fingerprint (truncated SHA-256, never the key itself) for debugging. Tenant API keys are high-entropy random secrets, so a truncated hash cannot be inverted to the key; the 40-bit prefix is only for correlating log lines, and the tenant id is logged alongside it.\nOn concurrency in `take()`: the method is fully synchronous, with no `await` between reading the bucket and writing it back. Concurrent Fastify handlers interleave only at `await` points, so two requests for the same tenant can never observe the same `tokens` value. No lock is needed. This holds only while `take()` stays synchronous and the process stays single per region. If we scale horizontally, this needs shared state.\nOn abort handling: Node runs this code on a single thread, so the `signal.aborted` check and the `addEventListener` call in `sleep` run synchronously with no gap for an abort to land in. The retry call also receives `req.signal`, so if the client disconnects right after the sleep resolves, the second upstream call is aborted rather than run to completion. A Promise settles only once, so if the timer and an abort both fire, the first one wins and the other is a no-op. Every path through `sleep` settles: an already-aborted signal rejects immediately, the timer resolves, and an abort rejects.\nOn the `timer` reference inside `onAbort` in `sleep`: this is not a TDZ error. `onAbort` only runs when the abort event fires, and the listener is registered after `const timer` has been initialized. The already-aborted case returns before `onAbort` is ever attached, so `timer` is always initialized by the time `onAbort` can execute.\nOn token accounting for the upstream retry: the bucket limits client requests to the gateway, not upstream attempts. One client request consumes one token, and the single internal retry is part of that same request, so it is intentionally not charged again. The retry is bounded at one attempt, so it cannot be used to amplify a tenant's rate. If the retry also returns 429 (or any other error), it is passed through unchanged, as described above. Gateway-originated limits are distinguishable from upstream ones: the gateway's body has `error.type = \"rate_limited\"` and the 429 is logged as \"tenant rate limited\", while a passed-through upstream 429 carries the upstream's own body and is preceded by an \"upstream 429, retrying once\" log line.\n\ndiff --git a/src/ratelimit/bucket.ts b/src/ratelimit/bucket.ts\nnew file mode 100644\nindex 0000000..f1e2d3c\n--- /dev/null\n+++ b/src/ratelimit/bucket.ts\n@@ -0,0 +1,42 @@\n+import { createHash } from \"node:crypto\";\n+import { LRUCache } from \"lru-cache\";\n+\n+export type Limits = { ratePerSec: number; burst: number };\n+type Bucket = { tokens: number; updatedMs: number };\n+\n+export class TenantLimiter {\n+  // Keyed by authenticated tenant id only (take() is called after authenticate()),\n+  // so the key space is the ~120 real tenants; the 10k cap is a safety bound and\n+  // unknown callers cannot create entries or evict existing tenants' buckets.\n+  private buckets = new LRUCache<string, Bucket>({ max: 10_000 });\n+\n+  constructor(private now: () => number = Date.now) {}\n+\n+  /**\n+   * Returns 0 when admitted, otherwise milliseconds until a token is available.\n+   * Fully synchronous (no await between read and write), so concurrent requests\n+   * cannot interleave inside it; keep it that way or add locking.\n+   */\n+  take(tenantId: string, limits: Limits): number {\n+    const nowMs = this.now();\n+    const b = this.buckets.get(tenantId) ?? { tokens: limits.burst, updatedMs: nowMs };\n+    const elapsedSec = (nowMs - b.updatedMs) / 1000;\n+    b.tokens = Math.min(limits.burst, b.tokens + elapsedSec * limits.ratePerSec);\n+    b.updatedMs = nowMs;\n+    if (b.tokens >= 1) {\n+      b.tokens -= 1;\n+      this.buckets.set(tenantId, b);\n+      return 0;\n+    }\n+    this.buckets.set(tenantId, b);\n+    return Math.ceil(((1 - b.tokens) / limits.ratePerSec) * 1000);\n+  }\n+}\n+\n+// Log-correlation only. API keys are high-entropy random secrets, so a truncated\n+// unsalted SHA-256 cannot be inverted to the key; 40 bits is enough to tell keys\n+// apart within one tenant's logs, not to identify a key.\n+export function keyFingerprint(apiKey: string): string {\n+  return createHash(\"sha256\").update(apiKey).digest(\"hex\").slice(0, 10);\n+}\ndiff --git a/src/routes/completions.ts b/src/routes/completions.ts\nindex 8d2c4e1..3b7a9f0 100644\n--- a/src/routes/completions.ts\n+++ b/src/routes/completions.ts\n@@ -1,22 +1,76 @@\n import type { FastifyInstance } from \"fastify\";\n import { authenticate } from \"../auth\";\n import { upstream } from \"../upstream\";\n+import { TenantLimiter, keyFingerprint } from \"../ratelimit/bucket\";\n+import { limitsFor } from \"../tenants\";\n+\n+const limiter = new TenantLimiter();\n+const MAX_UPSTREAM_RETRY_MS = 5_000;\n+\n+// Retry-After is either delta-seconds or an HTTP-date (RFC 9110); handle both.\n+function retryAfterMs(header: string | undefined, nowMs = Date.now()): number {\n+  const v = header?.trim();\n+  if (!v) return 1_000;\n+  let ms: number;\n+  if (/^\\d+$/.test(v)) ms = Number(v) * 1000;\n+  else {\n+    const at = Date.parse(v);\n+    if (Number.isNaN(at)) return 1_000;\n+    ms = at - nowMs;\n+  }\n+  return Math.min(Math.max(ms, 0), MAX_UPSTREAM_RETRY_MS);\n+}\n+\n+// Abortable delay: rejects as soon as the client disconnects.\n+// The aborted check and addEventListener run synchronously in one tick, so an\n+// abort cannot slip between them; any later abort fires onAbort and clears the timer.\n+// Not a TDZ hazard: onAbort references `timer` but is only attached after `timer`\n+// is initialized, so it can never run before the const is assigned.\n+// A Promise settles once, so a timer/abort race is harmless: first one wins.\n+function sleep(ms: number, signal: AbortSignal): Promise<void> {\n+  return new Promise((resolve, reject) => {\n+    if (signal.aborted) return reject(signal.reason);\n+    const onAbort = () => {\n+      clearTimeout(timer);\n+      reject(signal.reason);\n+    };\n+    const timer = setTimeout(() => {\n+      signal.removeEventListener(\"abort\", onAbort);\n+      resolve();\n+    }, ms);\n+    signal.addEventListener(\"abort\", onAbort, { once: true });\n+  });\n+}\n\n export async function completionsRoutes(app: FastifyInstance) {\n   app.post(\"/v1/chat/completions\", async (req, reply) => {\n     const tenant = await authenticate(req);\n-    const res = await upstream.chat(req.body, { signal: req.signal });\n+\n+    const waitMs = limiter.take(tenant.id, limitsFor(tenant));\n+    if (waitMs > 0) {\n+      req.log.info(\n+        // keyFingerprint is a truncated SHA-256 of the key; the raw key is never logged.\n+        { tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs },\n+        \"tenant rate limited\",\n+      );\n+      return reply\n+        .code(429)\n+        .header(\"Retry-After\", String(Math.ceil(waitMs / 1000)))\n+        .send({ error: { type: \"rate_limited\", message: \"tenant rate limit exceeded\" } });\n+    }\n+\n+    let res = await upstream.chat(req.body, { signal: req.signal });\n+    if (res.status === 429) {\n+      const delay = retryAfterMs(res.headers.get(\"retry-after\") ?? undefined);\n+      req.log.warn({ tenant: tenant.id, delay }, \"upstream 429, retrying once\");\n+      try {\n+        await sleep(delay, req.signal);\n+      } catch {\n+        return reply.code(499).send();\n+      }\n+      // req.signal is passed here, so a client that disconnects right after the\n+      // sleep resolves aborts this call immediately instead of running it to completion.\n+      // The retry is part of the same client request, so it is not charged a second\n+      // token; it is bounded to one attempt, and its result is passed through as-is.\n+      res = await upstream.chat(req.body, { signal: req.signal });\n+    }\n     return reply.code(res.status).headers(res.forwardHeaders()).send(res.body);\n   });\n }\ndiff --git a/src/ratelimit/bucket.test.ts b/src/ratelimit/bucket.test.ts\nnew file mode 100644\nindex 0000000..77aa012\n--- /dev/null\n+++ b/src/ratelimit/bucket.test.ts\n@@ -0,0 +1,18 @@\n+import { expect, test } from \"bun:test\";\n+import { TenantLimiter } from \"./bucket\";\n+\n+test(\"admits burst, then rate-limits, then refills\", () => {\n+  let t = 0;\n+  const l = new TenantLimiter(() => t);\n+  const lim = { ratePerSec: 2, burst: 3 };\n+  expect([l.take(\"a\", lim), l.take(\"a\", lim), l.take(\"a\", lim)]).toEqual([0, 0, 0]);\n+  expect(l.take(\"a\", lim)).toBe(500);\n+  t = 500;\n+  expect(l.take(\"a\", lim)).toBe(0);\n+});\n+\n+test(\"tenants are isolated\", () => {\n+  const l = new TenantLimiter(() => 0);\n+  const lim = { ratePerSec: 1, burst: 1 };\n+  expect([l.take(\"a\", lim), l.take(\"b\", lim)]).toEqual([0, 0]);\n+});",
+ "fixerUsage": {
+  "calls": 4,
+  "tokIn": 16683,
+  "tokOut": 16859,
+  "usd": 0.235306,
+  "critMs": 94908
+ },
+ "status": "cleared"
+}

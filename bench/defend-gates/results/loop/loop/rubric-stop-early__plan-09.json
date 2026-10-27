@@ -1,0 +1,148 @@
+{
+ "approach": "rubric-stop-early",
+ "case": "plan-09",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The partition-selection rule only rebuilds partitions for rows with ingested_at > (max ingested_at in table − 2 h). A row whose streaming-insert visibility is delayed beyond 2 hours carries an older ingested_at, so it is never selected by any later run. That produces a permanent gap, which the spec forbids, and nothing after cutover detects it.",
+     "evidence": "\"The 2 h overlap covers streaming-insert visibility delay (p99.9 measured at 4 min in September); overwrite is idempotent, so the overlap cannot double count.\" The plan gives no measured maximum visibility delay, and post-cutover checks are only a weekly unique_event_id test and a nightly parity test against legacy, which runs only for 30 days."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3950,
+    "tokOut": 5373,
+    "usd": 0.00330435,
+    "critMs": 24632
+   },
+   "wallMs": 33485
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Per-partition dedup equals global dedup only if a duplicate event_id never lands on two event_dates. That holds by observation (0 such ids in history), not by construction. The existing clamp makes event_date depend on ingested_at for old events, so a retry ingested minutes later across a UTC midnight can derive a different event_date. The duplicate would then be counted in two partitions, and the agreed 'never double count' constraint would be violated until the weekly unique_event_id test runs, up to 7 days later.",
+     "evidence": "\"Today dedup is global; after the change it is per rebuilt partition. That is equivalent only if a duplicated `event_id` never maps to two different `event_date`s. Checked over all 4.2B rows: 0 such `event_id`s... SDK retries happen within minutes of the original send.\" Also: \"Today's model already clamps `event_time` to [`ingested_at` − 30 d, `ingested_at`]\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4704,
+    "tokOut": 6994,
+    "usd": 0.00426565,
+    "critMs": 31222
+   },
+   "wallMs": 41615
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The plan creates `fct_page_events_v2` in step 1 and copies it over `fct_page_events` in step 3, but never says what happens to the v2 table afterwards. Retention and erasure are specified only for `raw.events`, `fct_page_events`, and (for 30 days) `fct_page_events_legacy`. A persistent v2 table holding per-user event rows would sit outside the 25-month retention job and the erasure flow, which conflicts with the stated privacy policy §6 obligations.",
+     "evidence": "ABSENT: any drop, rename, or inclusion of `fct_page_events_v2` in the retention/erasure lists after step 3. Text says: \"Add model `fct_page_events_v2` ... backfill it once\" and \"`bq cp -f fct_page_events_v2 fct_page_events`\", while retention covers only \"`raw.events` and `fct_page_events`\" and erasure only \"`fct_page_events_legacy`\" for the 30-day window."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5126,
+    "tokOut": 9278,
+    "usd": 0.00549205,
+    "critMs": 42406
+   },
+   "wallMs": 136668
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The design lets a double count reach dashboards and the export, which breaks the agreed 'never see double counts' constraint. Dedup only runs over the ~32-day read window, so a duplicate pair whose earliest copy falls outside that window survives. The plan accepts this exposure and relies on detection checks that only alert and do not gate the 05:00 refresh, and the weekly full-table check can leave it visible for up to a week.",
+     "evidence": "CONTEXT: \"dashboards and the export must never see gaps or double counts\". ARTIFACT: \"The remaining exposure is a duplicate pair separated by more than the window, which the checks below catch.\" and \"Failure alerts #data-oncall and pages before the 05:00 EU refresh ... the runbook repairs it\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5560,
+    "tokOut": 9134,
+    "usd": 0.00550685,
+    "critMs": 42199
+   },
+   "wallMs": 58997
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The uniqueness check runs after `insert_overwrite` has already written to `analytics.fct_page_events`, so a failing check leaves duplicates in the live table. The plan's claim that dashboards keep serving the previous day's data does not hold, because Looker and the export read that table by name. This breaks the hard constraint that dashboards and the export never see double counts.",
+     "evidence": "\"The 05:00 EU Looker refresh and the usage export trigger only on successful completion of that job, so on a failure dashboards keep serving the previous day's data rather than a double count.\" versus \"Looker and the customer usage export query `analytics.fct_page_events` by name; neither needs a change.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5911,
+    "tokOut": 2871,
+    "usd": 0.00244555,
+    "critMs": 13564
+   },
+   "wallMs": 76675
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The high-water-mark rule selects every event_date that has any raw row ingested after the cutoff, with no age limit. A row more than 31 days late therefore forces its old event_date into the nightly rebuild and widens the read window beyond the stated ~32 days. The plan instead says such rows are repaired only by a weekly check plus a manual runbook, which leaves them unrepaired for up to a week and breaks the 'never see gaps' constraint and the $2.40/run budget.",
+     "evidence": "\"every `event_date` that appears in raw rows with `ingested_at` > (max `ingested_at` already in the table − 24 h)\" and \"the run reads raw from one day before the oldest selected date onward (at most ~32 days)\" versus \"Rows that surface more than 31 days after their `event_date` are outside this window. The weekly full-table check below covers them... The rebuild itself is a manual runbook step\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 6705,
+    "tokOut": 3979,
+    "usd": 0.00315835,
+    "critMs": 17888
+   },
+   "wallMs": 97005
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The plan's gap guarantee is conditional on a visibility delay it has not measured. A row whose streaming-insert visibility delay exceeds the 24 h overlap is not selected by the high-water-mark rule. The nightly reconciliation only compares rows already visible in raw, so the late row is not flagged until a later night. Dashboards and the export can therefore show a gap for at least one day, which violates the agreed 'never see gaps' constraint.",
+     "evidence": "\"The overlap must exceed it, and the reconciliation below is the backstop if it is ever exceeded.\" and \"so a visibility delay beyond the overlap is noticed rather than silent.\" The stated constraint is \"dashboards and the export must never see gaps or double counts\"; the maximum visibility delay is only to be \"measure[d] ... in week 1\", after the plan is dispatched."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 6910,
+    "tokOut": 3566,
+    "usd": 0.00299285,
+    "critMs": 20217
+   },
+   "wallMs": 67596
+  }
+ ],
+ "artifact": "# Plan: make fct_page_events incremental and partitioned\n\nOwner: analytics engineering (1 engineer) · 2 weeks · Ticket DATA-412\n\n## 1. Why\n- `fct_page_events` (4.2B rows, 1.9 TiB) is rebuilt by full refresh every night from `raw.events` (9.4 TiB, ingestion-time partitioned, 25 months of history).\n- Each rebuild scans all of raw: 30 × 9.4 TiB = 282 TiB/month ≈ $1,760 at on-demand $6.25/TiB (September billing export, job label `dbt_model=fct_page_events`).\n- Runtime is 2h40m; the 05:00 UTC EU dashboard refresh missed its SLA on 9 nights in September.\n- The table is unpartitioned, so every Looker query scans it fully: 61.2 TiB in September ≈ $383.\n- Prototype on a prod snapshot (DATA-412): a 31-day rebuild took 11 min and billed 388 GiB.\n\n## 2. Design\n- Materialization: dbt `incremental`, strategy `insert_overwrite`, partitioned by `event_date` (DAY, UTC, same derivation as today), clustered by `account_id, event_name`.\n- **The incremental model never writes to the live table.** It builds in a staging copy, `fct_page_events_stage`, and the live table `analytics.fct_page_events` is replaced only after all checks pass (see \"Stage, check, promote\" below).\n- `require_partition_filter = false`: 38 of 41 dashboards already filter on `event_date` (LookML `always_filter`); the other 3 are all-time totals and keep working, scanning as they do today.\n- Columns, types, grain and the dedup rule (keep the row with the earliest `ingested_at` per `event_id`) are unchanged.\n- Partitions rebuilt each night: every `event_date` that appears in raw rows with `ingested_at` > (max `ingested_at` already in the table − overlap), plus any partition flagged by the nightly reconciliation below. The overlap is a configured parameter, 24 h by default, and covers streaming-insert visibility delay. The p99.9 delay measured in September was 4 min, but a percentile is not a maximum. **Week-1 go/no-go gate:** we measure the true maximum visibility delay (`ingested_at` vs. actual availability in raw) over all of 2026 and record it in DATA-412. The backfill (cutover step 1) does not start until the overlap is set to at least 2× that measured maximum (and never below 24 h). If the maximum is too large for a practical overlap, the design is revisited before any build. Overwrite is idempotent, so the overlap cannot double count.\n- A row that is not yet visible in raw cannot be seen by today's full refresh either. The guarantee is therefore \"after every promoted run, `fct_page_events` equals what a full refresh of the raw rows visible at `run_cutoff` would produce\". It holds even if a visibility delay exceeds the overlap, because the nightly reconciliation (below) runs the same night, before partition selection, against everything visible in raw at that moment. The overlap is only the cheap first line of defence, not what the guarantee rests on.\n- Each selected partition is rebuilt from **all** raw rows with that `event_date`, not only the new ones. Today's model already clamps `event_time` to [`ingested_at` − 30 d, `ingested_at`], so rows for a given `event_date` can only sit in raw ingestion partitions on or after that date, and a row's `event_date` is never more than 30 days before its ingestion date. The run reads raw from one day before the oldest selected date onward (at most ~32 days).\n- Late data is normal: on 27 of 30 nights in September at least one row arrived more than 7 days late (SDK offline replay). Because of the clamp, a row that arrives very late gets an `event_date` no more than 30 days before its ingestion date (the same derivation as today), so the high-water-mark rule selects its partition automatically on the night it arrives, with no manual step and no wait for a weekly check. We therefore budget for the worst case every night: ~390 GiB ≈ $2.40/run. The wider overlap does not raise this worst case, because the run already reads the ~32-day window.\n- A failed run writes nothing to the live table and does not move the high-water mark, so the next run rebuilds the same partitions. Failure alerting is the existing dbt Cloud job alert to #data-oncall.\n\n### Stage, check, promote\nBecause `insert_overwrite` and dbt tests cannot be made atomic on the live table, the nightly job works on a copy and swaps only on success. All steps run under the `analytics_write` lock, held from step 1 to step 5, so an erasure cannot interleave.\n1. `bq cp -f analytics.fct_page_events analytics.fct_page_events_stage` (same-region copy, free).\n2. Reconciliation and partition selection (below), reading raw and the live table.\n3. `dbt build` of the incremental model, targeting `fct_page_events_stage`.\n4. Run the tests on the **stage** table, including the full-table uniqueness gate (see \"Dedup across partitions\"), severity `error`.\n5. Only if steps 3 and 4 all pass: `bq cp -f analytics.fct_page_events_stage analytics.fct_page_events`. The copy replaces the live table atomically for readers.\n\nIf any step fails, `fct_page_events` is untouched and still holds the previous day's data; Looker and the export (which query `analytics.fct_page_events` by name) never see the failed build. The next night's step 1 re-copies from live, so a bad stage table is discarded automatically.\n\n### Gap detection and self-healing (permanent, not tied to the legacy period)\n- Every night, before partition selection, a reconciliation step compares per `event_date` over the trailing 31 days: `count(distinct event_id)` from raw (rows with `ingested_at < run_cutoff`) vs. row count in `fct_page_events`. It reads only the `event_id`, `event_time` and `ingested_at` columns.\n- Any `event_date` that mismatches is added to **that same night's** rebuild set, before the build in step 3. A row that the high-water-mark rule missed is therefore repaired in the same run in which it first becomes visible in raw, and it is in the promoted table that night. Each mismatch is also logged and alerts #data-oncall, so a visibility delay beyond the overlap is noticed rather than silent.\n- Under the clamp, no row's `event_date` is more than 30 days before its ingestion date, so the 31-day window covers every row that can arrive late. The weekly full-table check below is a backstop for anything that escapes both the high-water-mark rule and the nightly reconciliation (for example a row whose `event_date` falls outside the 31-day window): it compares the same per-`event_date` counts over all 25 months and alerts on any mismatch. A mismatch found there is repaired by a manual runbook step (dbt `--vars` with the affected dates). This is not the expected path for late data.\n\n### Dedup across partitions\n- Today dedup is global. Per-partition dedup would be equivalent only if a duplicated `event_id` never maps to two different `event_date`s. This holds by observation, not by construction: 0 such `event_id`s over all 4.2B rows (query linked in DATA-412), and SDK retries happen within minutes of the original send. But the clamp makes `event_date` depend on `ingested_at` for old events, so a retry ingested just after UTC midnight could derive a different `event_date`. We therefore do not rely on the observation.\n- By construction, in two steps:\n  1. The dedup `qualify row_number() over (partition by event_id order by ingested_at) = 1` runs over the **whole read window** (all raw rows read, which starts one day before the oldest selected `event_date`), and only afterwards is the result filtered to the selected partitions.\n  2. The deduped rows for the selected partitions are then anti-joined on `event_id` against stage-table rows in the partitions that are **not** being rebuilt (reads only `event_id` and `event_date`, ~140 GiB, ~$0.85/run). A row whose `event_id` already exists in an untouched partition is dropped, however far back that partition is.\n- Together these make dedup global by construction, with no window limit. The table is globally unique before each run (the cutover parity test establishes this for v2, and every run preserves it). A copy that arrives later than an existing winner is dropped by the anti-join. Overwriting a selected partition can only drop rows. An untouched partition's existing winner stays correct, because any earlier-ingested copy would have been ingested, and its partition selected, before that winner was written.\n- Gate, not just alert: step 4 of \"Stage, check, promote\" runs the uniqueness test `count(*) - count(distinct event_id)` over the **full stage table** (reads only `event_id`, ~140 GiB, ~$0.85/run) with severity `error`. A failure stops the job before promotion, so the live table is never replaced by a build containing duplicates. The 05:00 EU Looker refresh and the usage export trigger only on successful completion of that job, and on a failure they keep reading the unchanged previous-day `fct_page_events`. The failure also pages #data-oncall (the job starts at 02:20, leaving time to repair), and the runbook repairs it by rebuilding the affected dates and re-running the job. No double count is ever served.\n- The weekly full-history per-`event_date` count check (gap detection, above) remains weekly, run against the live table. The old weekly `unique_event_id` test is replaced by the nightly stage-table check.\n\n### Privacy jobs\n- Retention: the existing nightly job deletes rows older than 25 months from `raw.events` and `fct_page_events` (privacy policy §6). Unchanged; on a partitioned table it prunes instead of scanning. It runs under the `analytics_write` lock, so it never interleaves with the stage-and-promote sequence, and it is applied to `fct_page_events_stage` as well as the live table (see below).\n- Erasure: privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`. Rebuilds read only `raw.events`, so a rebuild cannot bring erased rows back. privacy-svc and the dbt jobs already share the `analytics_write` lock (unchanged), so an erasure never interleaves with a running build, and the lock covers the whole copy-build-test-promote sequence, so a promote cannot restore rows erased after the stage copy was taken. New staging integration test: erase a test user, force a 31-day rebuild, assert 0 rows for that user. The reconciliation compares raw and fct counts after erasure has hit both tables, so it does not flag erased rows.\n- Every table that holds per-user rows is in the retention and erasure table lists for its whole life. That includes the temporary and working tables: `fct_page_events_v2` from its creation in cutover step 1 until it is dropped in step 3, `fct_page_events_stage` from its creation (it is added in the swap PR, before the first nightly run that creates it) for as long as the nightly job exists, and `fct_page_events_legacy` from the swap until it is dropped (section 4). The lists are updated in the same PR that creates each table, and the staging erasure test asserts 0 rows for the test user in every listed table. No per-user table exists outside these lists at any point.\n\n## 3. Cutover (build alongside, then swap)\n1. Confirm the week-1 visibility-delay gate (section 2) is met and the overlap is set accordingly. Then add `fct_page_events_v2` to the retention and erasure table lists (see Privacy jobs), add the model with the new config and backfill it once (one full read of raw, ≈ $59). The backfill runs under the `analytics_write` lock, so an erasure cannot interleave with it.\n2. Parity for 7 consecutive nights. v1 and v2 run in the same dbt invocation with a shared `run_cutoff` (only raw rows with `ingested_at < run_cutoff`). A dbt test compares, per (`event_date`, `account_id`): row count, `count(distinct event_id)`, and `BIT_XOR(FARM_FINGERPRINT(TO_JSON_STRING(t)))` over all columns. It also compares `INFORMATION_SCHEMA.COLUMNS` (names, types, order). All must match exactly on all 7 nights before step 3.\n3. Swap at 12:00 UTC (lowest Looker traffic; the nightly job starts at 02:20, so all steps land with no build in between):\n   - `bq cp` the current table to `fct_page_events_legacy` (already in the retention and erasure lists, see section 4).\n   - `bq cp -f fct_page_events_v2 fct_page_events`. A same-region copy job is free and replaces the table atomically for readers.\n   - Merge the PR that points the incremental model at `fct_page_events_stage` (with the copy, test and promote steps from section 2 in the nightly job), adds `fct_page_events_stage` to the retention and erasure lists, and keeps the old full-refresh SQL as model `fct_page_events_legacy`. The same PR removes the `fct_page_events_v2` model.\n   - Verify that `fct_page_events` matches `fct_page_events_v2` (row count and the fingerprint check), then `bq rm -t analytics.fct_page_events_v2` the same day. After that, remove `fct_page_events_v2` from the retention and erasure lists in a follow-up PR, and confirm via `INFORMATION_SCHEMA.TABLES` that it no longer exists. Rollback does not need v2, since it uses the legacy table.\n4. Looker and the customer usage export query `analytics.fct_page_events` by name; neither needs a change.\n\n## 4. Rollback\n- For 30 days after the swap, `fct_page_events_legacy` is still rebuilt nightly from raw with the old full-refresh SQL, so it contains every event ingested after cutover. It runs as a separate dbt Cloud job after the main job, with the same `run_cutoff`, so it cannot delay the 05:00 refresh.\n- For those 30 days the retention and erasure jobs include `fct_page_events_legacy` in their table lists.\n- The nightly parity test keeps running (new vs legacy) for those 30 days and alerts #data-oncall on any mismatch. After the legacy table is dropped, the nightly reconciliation, the nightly gating full-table uniqueness check and the weekly full-history count check (section 2) remain as the permanent safeguards.\n- Rollback: `bq cp -f fct_page_events_legacy fct_page_events`, then revert the PR; the next run is a full refresh of an unpartitioned table, exactly as today. No gap, no lost events.\n- After 30 clean parity nights: drop the legacy model and table, then remove `fct_page_events_legacy` from the retention and erasure lists (DATA-431).\n\n## 5. Cost (per month)\n| Item | Today | After |\n|---|---|---|\n| Nightly build | $1,760 | ~$72 (worst case, 30 × $2.40) |\n| Nightly cross-partition dedup anti-join | — | ~$26 (30 × ~$0.85, `event_id`/`event_date` columns only) |\n| Nightly full-table uniqueness gate | — | ~$26 (30 × ~$0.85) |\n| Staging table `fct_page_events_stage` (storage; the nightly copies are free) | — | ~$39 (1.9 TiB at ~$0.02/GiB active logical, to be confirmed against the billing export) |\n| Nightly reconciliation | — | to be measured in the week-1 prototype (column-pruned scans of 31 days; expected small relative to the build) |\n| Weekly full-history per-date count check | — | ~$4 (4 × ~$0.85, to be confirmed) |\n| Looker queries | $383 | ~$54 (dry runs of September's top 20 queries by bytes against v2: 61.2 → 8.7 TiB) |\n| Legacy rebuild (first 30 days only) | — | $1,760 |\n| One-time backfill + 7 parity nights | — | ~$76 |\n\nSteady state from month 2: ~$221 plus reconciliation vs $2,143 today. Month 1 is ~$2,059 plus reconciliation, still below today but with a thin margin. If the measured costs change this conclusion, we will revisit before cutover. Note that the anti-join and the uniqueness gate both read the same `event_id` column and can be combined into one scan if the prototype shows it saves cost.",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 35267,
+  "tokOut": 37427,
+  "usd": 0.51531,
+  "critMs": 212427
+ },
+ "status": "running"
+}

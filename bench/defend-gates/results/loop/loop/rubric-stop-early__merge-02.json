@@ -1,0 +1,167 @@
+{
+ "approach": "rubric-stop-early",
+ "case": "merge-02",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "The new results export route has no authentication or role check, so anyone can download tallies. The PR says the route is for admins and that closed measures are the use case, but the handler neither requires `require_role(\"admin\")` nor checks `measure.is_open()`, so interim counts for open measures are also exposed. Tallies cannot be un-leaked once published.",
+     "evidence": "\"@router.get(\\\"/measures/{measure_id}/results.csv\\\")\\nasync def export_results(\\n    measure_id: int,\\n    db: Session = Depends(get_db),\\n):\" — ABSENT: any `Depends(require_role(\"admin\"))` or `is_open()` guard, despite \"Results CSV export for closed measures\" and \"returning one row per choice\" for admins."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2866,
+    "tokOut": 706,
+    "usd": 0.00075405,
+    "critMs": 4364
+   },
+   "wallMs": 141397
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The new duplicate-ballot log line writes the internal user id together with the measure id to a third-party host that the whole support team can read. Any resident who re-submits is then recorded as having voted on that measure. The PR only checks that the choice is absent, but the anonymity promise is that a resident's ballot must not be linkable to their identity outside the tally, and participation in a secret ballot is itself sensitive.",
+     "evidence": "logger.info(\"duplicate ballot rejected measure=%s user=%s\", measure_id, user.id) ... \"logs ship to a third-party log host readable by support and must never link a resident to a choice\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2994,
+    "tokOut": 1658,
+    "usd": 0.00125565,
+    "critMs": 8675
+   },
+   "wallMs": 15436
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The CSV loop iterates the `Choice` enum members and looks them up in `counts`, whose keys are raw `Ballot.choice` database values. If `Choice` is a plain Enum rather than a str-based enum, every lookup misses and the export reports 0 votes for every option in the council packet. Ballots with choice values outside the enum are also dropped silently.",
+     "evidence": "for choice in Choice:\n        writer.writerow([measure.slug, choice.value, counts.get(choice, 0)]) ... ABSENT: the definition of `Choice` and the type of `Ballot.choice`, which are needed to confirm the keys match. No test shows a non-zero count being exported."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3066,
+    "tokOut": 1856,
+    "usd": 0.0013690500000000001,
+    "critMs": 10008
+   },
+   "wallMs": 33812
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The export writes stored choice strings that are not `Choice` members straight into the CSV with no formula-injection escaping. Clerks open these files in spreadsheets and attach them to council packets, so a crafted value starting with `=`, `+`, `-`, or `@` could execute as a formula. Those values originate from the user-submitted `body.choice`, which the diff never validates.",
+     "evidence": "\"Any stored choice value that is not a current Choice member is still exported as its own row\" and `Ballot(measure_id=measure_id, choice=body.choice)` with no visible enum validation in the diff (ABSENT: BallotIn schema validation of choice, and any CSV sanitization of cells beginning with =, +, -, @)"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3371,
+    "tokOut": 1361,
+    "usd": 0.00118255,
+    "critMs": 7509
+   },
+   "wallMs": 24289
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The export writes every stored value outside the Choice enum as its own row with its count, and those values can be user-submitted free text. A voter who submits a unique string produces a count-1 row in the admin CSV, which reveals that individual's ballot in a secret-ballot measure. The export therefore breaks the anonymity promise the PR says it protects.",
+     "evidence": "\"Any stored choice value that is not a current `Choice` member is still exported as its own row instead of being dropped\" and \"Because those values can originate from user-submitted input\" and \"Real `Choice` values are unaffected in practice\" (no evidence that BallotIn restricts choice to the enum, and no suppression of rows with small counts)"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3727,
+    "tokOut": 1632,
+    "usd": 0.00138925,
+    "critMs": 8609
+   },
+   "wallMs": 80276
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The diff does not show cast_ballot validating body.choice against the Choice enum before writing it to Ballot. The export's anonymity protection depends on non-enum values never being stored, but the write path is untouched, so untrusted free text can still be persisted and the anonymity risk is only partly mitigated on the read side.",
+     "evidence": "\"values outside the enum may be user-submitted free text\" and the unchanged line \"db.add(Ballot(measure_id=measure_id, choice=body.choice))\". ABSENT: evidence that BallotIn restricts choice to Choice members, or a server-side check that rejects other values."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3819,
+    "tokOut": 2439,
+    "usd": 0.00181115,
+    "critMs": 12702
+   },
+   "wallMs": 52894
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The duplicate-ballot check is a check-then-act sequence with no transaction, lock, or shown unique constraint on Receipt.token. Two concurrent requests from the same resident can both pass the query and both insert a Receipt and a Ballot, so one resident can vote twice and the tally is wrong. The PR is meant to fix duplicate handling, so this gap matters at merge.",
+     "evidence": "if db.query(Receipt).filter_by(token=receipt).first(): ... raise HTTPException(409, \"already voted\") / db.add(Receipt(token=receipt)) / db.add(Ballot(measure_id=measure_id, choice=choice)) / db.commit(). ABSENT: a unique constraint on Receipt.token, or a locking or IntegrityError-handling path, in this diff."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4165,
+    "tokOut": 1789,
+    "usd": 0.00155535,
+    "critMs": 8598
+   },
+   "wallMs": 83918
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The one-ballot-per-resident guarantee under concurrency depends entirely on a unique constraint on Receipt.token, which this diff does not show exists. Without it, two racing requests both commit and the resident is counted twice, which the PR itself says must be fixed by migration before merge.",
+     "evidence": "\"This depends on a unique constraint on `Receipt.token`. The model is outside this diff, so I have not assumed it... if it does not, it must be added in a migration before merge, because without it the `IntegrityError` path never fires and the race remains.\" ABSENT: the model or migration showing the constraint exists."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4612,
+    "tokOut": 1616,
+    "usd": 0.0015582500000000002,
+    "critMs": 7918
+   },
+   "wallMs": 41838
+  }
+ ],
+ "artifact": "PR #231: Results CSV export for closed measures + better duplicate-ballot diagnostics\n\nClerks have asked for a downloadable tally once a measure closes so they can attach it to the council packet.\nAdds GET /measures/{id}/results.csv for admins, returning one row per choice with counts. The route requires `require_role(\"admin\")` and returns 409 while the measure is still open, so interim tallies are never exposed.\n`cast_ballot` now validates `body.choice` against the `Choice` enum before anything is written. Anything else is rejected with a 422, and this check runs before the receipt is created, so a rejected request does not use up the resident's vote. Free text can therefore no longer be persisted through the write path. This PR does not rely on `BallotIn` to enforce it, because the schema is outside this diff.\nDuplicate votes are now handled atomically rather than only by check-then-act. The receipt lookup stays as a fast path. The `Receipt` and `Ballot` inserts are committed together, and an `IntegrityError` on commit (two concurrent requests from the same resident racing past the lookup) is caught, rolled back, and returned as the same 409 \"already voted\". The rollback discards both the receipt and the ballot, so a losing request leaves nothing behind. This depends on a unique constraint on `Receipt.token`. The model is outside this diff, so I have not assumed it: reviewers should confirm the constraint exists, and if it does not, it must be added in a migration before merge, because without it the `IntegrityError` path never fires and the race remains.\nCounts are keyed by the choice's string value, whether `Ballot.choice` comes back from the database as a `Choice` member or as a raw value, so the lookup matches either way. The export still handles any stored choice value that is not a current `Choice` member, such as legacy rows written before this validation or members later removed from the enum. Such a value is never written out as its own row, because it could be free text, and a unique string with a count of 1 would reveal an individual's ballot. Instead, all of them are folded into a single aggregated `(other)` row containing only the combined count, so the CSV still totals to the real ballot count and no stored text outside the enum is ever exported. The `(other)` row is omitted when there are no such ballots. This read-side fold is defense in depth alongside the write-side validation. Every text cell that is written (the measure slug and the enum choice values) still passes through a formula-injection guard: a cell starting with `=`, `+`, `-`, `@`, tab, or carriage return is prefixed with a single quote so spreadsheets treat it as text. The raw stored value is never altered in the database.\nAlso adds a log line when a duplicate ballot is rejected (on both the lookup path and the concurrent-commit path), since support keeps getting \"it says I already voted\" tickets and we have no way to see what happened. The log line records only the measure id. It does not include the user id, email, or submitted choice. Logs ship to a third-party host readable by support, and a user id alongside a measure id would record that a specific resident voted on that measure, which is itself sensitive in a secret ballot. The line gives support an aggregate signal (how often duplicates are rejected per measure) without identifying anyone. Investigating an individual ticket should not rely on these logs.\n\ndiff --git a/app/routes/ballots.py b/app/routes/ballots.py\nindex 4e1b0a7..9c3d2f5 100644\n--- a/app/routes/ballots.py\n+++ b/app/routes/ballots.py\n@@ -1,14 +1,19 @@\n+import csv\n+import io\n import logging\n\n from fastapi import APIRouter, Depends, HTTPException\n+from fastapi.responses import StreamingResponse\n+from sqlalchemy import func\n+from sqlalchemy.exc import IntegrityError\n from sqlalchemy.orm import Session\n\n from app.auth import current_user, require_role\n from app.db import get_db\n-from app.models import Ballot, Measure, Receipt, User\n+from app.models import Ballot, Choice, Measure, Receipt, User\n from app.receipts import voter_receipt\n from app.schemas import BallotIn\n\n logger = logging.getLogger(__name__)\n router = APIRouter()\n@@ -23,26 +28,92 @@ async def cast_ballot(\n     user: User = Depends(current_user),\n     db: Session = Depends(get_db),\n ):\n     measure = db.get(Measure, measure_id)\n     if measure is None or not measure.is_open():\n         raise HTTPException(404, \"measure not open\")\n+    # Reject anything that is not a current Choice member before any write, so\n+    # free text can never be stored and a bad request does not burn the receipt.\n+    try:\n+        choice = Choice(body.choice)\n+    except ValueError:\n+        raise HTTPException(422, \"invalid choice\")\n     receipt = voter_receipt(user.id, measure_id)\n     if db.query(Receipt).filter_by(token=receipt).first():\n+        logger.info(\n+            \"duplicate ballot rejected measure=%s\",\n+            measure_id,\n+        )\n         raise HTTPException(409, \"already voted\")\n     db.add(Receipt(token=receipt))\n-    db.add(Ballot(measure_id=measure_id, choice=body.choice))\n-    db.commit()\n+    db.add(Ballot(measure_id=measure_id, choice=choice))\n+    try:\n+        db.commit()\n+    except IntegrityError:\n+        # Concurrent request from the same resident won the race. Requires a\n+        # unique constraint on Receipt.token. The rollback discards both the\n+        # receipt and the ballot, so only one ballot is ever counted.\n+        db.rollback()\n+        logger.info(\n+            \"duplicate ballot rejected measure=%s\",\n+            measure_id,\n+        )\n+        raise HTTPException(409, \"already voted\")\n     return {\"ok\": True}\n\n\n @router.post(\"/measures/{measure_id}/close\")\n async def close_measure(\n     measure_id: int,\n     user: User = Depends(require_role(\"admin\")),\n     db: Session = Depends(get_db),\n ):\n     measure = db.get(Measure, measure_id)\n     if measure is None:\n         raise HTTPException(404)\n     measure.close(closed_by=user.id)\n     db.commit()\n     return {\"closed\": True}\n+\n+\n+_FORMULA_PREFIXES = (\"=\", \"+\", \"-\", \"@\", \"\\t\", \"\\r\")\n+_OTHER_LABEL = \"(other)\"\n+\n+\n+def _csv_safe(value):\n+    \"\"\"Neutralize spreadsheet formula injection in text cells.\n+\n+    Any cell that a spreadsheet could interpret as a formula is prefixed with\n+    a single quote.\n+    \"\"\"\n+    text = str(value)\n+    if text.startswith(_FORMULA_PREFIXES):\n+        return \"'\" + text\n+    return text\n+\n+\n+@router.get(\"/measures/{measure_id}/results.csv\")\n+async def export_results(\n+    measure_id: int,\n+    user: User = Depends(require_role(\"admin\")),\n+    db: Session = Depends(get_db),\n+):\n+    measure = db.get(Measure, measure_id)\n+    if measure is None:\n+        raise HTTPException(404)\n+    if measure.is_open():\n+        raise HTTPException(409, \"measure still open\")\n+    # Key counts by the plain string value so the lookup works whether the\n+    # column yields Choice members or raw values (Choice may not be str-based).\n+    counts = {}\n+    rows = (\n+        db.query(Ballot.choice, func.count(Ballot.id))\n+        .filter(Ballot.measure_id == measure_id)\n+        .group_by(Ballot.choice)\n+        .all()\n+    )\n+    for raw, n in rows:\n+        key = raw.value if isinstance(raw, Choice) else raw\n+        counts[key] = counts.get(key, 0) + n\n+    buf = io.StringIO()\n+    writer = csv.writer(buf)\n+    writer.writerow([\"measure\", \"choice\", \"votes\"])\n+    slug = _csv_safe(measure.slug)\n+    for choice in Choice:\n+        writer.writerow([slug, _csv_safe(choice.value), counts.pop(choice.value, 0)])\n+    # Never drop ballots silently, but never export their text either: values\n+    # outside the enum (legacy rows, removed members) may be free text, and a\n+    # unique string would reveal an individual's ballot. Fold them into one\n+    # aggregate row. New writes are validated in cast_ballot; this is defense\n+    # in depth for rows stored before that check existed.\n+    other = sum(counts.values())\n+    if other:\n+        writer.writerow([slug, _OTHER_LABEL, other])\n+    buf.seek(0)\n+    return StreamingResponse(\n+        buf,\n+        media_type=\"text/csv\",\n+        headers={\n+            \"Content-Disposition\": f'attachment; filename=\"{measure.slug}-results.csv\"'\n+        },\n+    )",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 20095,
+  "tokOut": 18258,
+  "usd": 0.262932,
+  "critMs": 117023
+ },
+ "status": "cap"
+}

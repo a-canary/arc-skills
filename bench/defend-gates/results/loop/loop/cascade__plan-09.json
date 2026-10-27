@@ -1,0 +1,174 @@
+{
+ "approach": "cascade",
+ "case": "plan-09",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The full refresh used to repair any failed fact-table erasure, because it rebuilt everything from raw every night. The incremental design rebuilds only partitions that received new ingestion. If privacy-svc deletes from raw.events and then fails before deleting from fct_page_events, the erased rows stay in old partitions indefinitely. The plan adds no retry, reconciliation or alert for that failure. The new integration test covers only the happy path.",
+     "evidence": "\"privacy-svc deletes a user's rows from raw.events first, then from fct_page_events. Rebuilds read only raw.events\"; ABSENT: retry, reconciliation or alerting for partial erasure failure"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "event_date comes from event_time clamped against ingested_at. A duplicate event_id with an old event_time (more than 30 days old, so clamped) and different ingestion times could map to two event_dates. Per-partition dedup would then double count it. The 0-collision check is historical, and the weekly test only detects the problem after it has been served to dashboards and the export.",
+     "evidence": "\"Today's model already clamps event_time to [ingested_at − 30 d, ingested_at]\"; \"unique_event_id runs weekly\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The swap and rollback both rely on `bq cp -f` replacing a table with a different partitioning and clustering spec (unpartitioned to partitioned, and back). No rehearsal of this is cited. BigQuery may reject a copy that overwrites a table with a different partitioning spec, which would delay rollback during an incident.",
+     "evidence": "\"`bq cp -f fct_page_events_legacy fct_page_events`, then revert the PR\"; ABSENT: a rehearsal of the swap or rollback in staging"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The high-water mark is max ingested_at in the table, but the plan never states that fct_page_events retains an ingested_at column. Columns are described as unchanged.",
+     "evidence": "\"max `ingested_at` already in the table − 2 h\"; ABSENT: whether the fact table has ingested_at"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "`fct_page_events_legacy` names both the bq cp snapshot and the dbt full-refresh model. The first nightly legacy run overwrites the snapshot, and the plan does not say which one is authoritative.",
+     "evidence": "\"`bq cp` the current table to `fct_page_events_legacy`\" and \"keeps the old full-refresh SQL as model `fct_page_events_legacy`\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "BIT_XOR over row fingerprints cancels identical pairs. Duplicate pairs are caught only by the count checks, not by the hash.",
+     "evidence": "\"BIT_XOR(FARM_FINGERPRINT(TO_JSON_STRING(t)))\""
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 9925,
+    "tokOut": 16203,
+    "usd": 0.07025532000000001,
+    "critMs": 88383
+   },
+   "wallMs": 139118
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "During build and parity, `fct_page_events_v2` is in no erasure or retention table list. Only `fct_page_events_legacy` is added, and only after the swap. Erasures during the 7+ parity nights hit v1 but not v2. Incremental runs never rebuild old partitions, so v2 keeps erased users' rows. The 12:00 `bq cp -f v2 fct_page_events` then restores those rows to production and the customer export. The manual swap is also not stated to take the `analytics_write` lock. The nightly reconciliation test only checks `fct_page_events` and legacy, so v2 is never checked.",
+     "evidence": "\"For those 30 days the retention and erasure jobs include `fct_page_events_legacy` in their table lists.\" ABSENT: any erasure/retention coverage for `fct_page_events_v2` before the swap, or a lock around the swap."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Per-partition dedup is safe only if no duplicated `event_id` maps to two `event_date`s. The evidence is a check \"over all 4.2B rows\", which is the already-deduplicated fct row count. A check run on that data trivially finds 0 cross-date duplicates. The design does not enforce the invariant. The `event_time` clamp to `ingested_at` can send a retry that crosses midnight into D+1 while the original stays in D, and D is not rebuilt. Detection is only the weekly test.",
+     "evidence": "\"Checked over all 4.2B rows: 0 such `event_id`s (query linked in DATA-412).\" Table is \"4.2B rows\"; dedup is `qualify row_number() ... = 1`; test `unique_event_id` runs \"weekly\"."
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The cutover cost and the month-1 claim are wrong. For the 7 parity nights v1 still full-refreshes (about $59 each, about $413). The parity test hashes every column of both tables (about 3.8 TiB, over $20 per night) for the parity nights plus the 30-day rollback window. The $76 line covers only the backfill plus about $2.40 per night. Month 1 therefore exceeds today's $2,143, contradicting the plan.",
+     "evidence": "\"One-time backfill + 7 parity nights | — | ~$76\"; \"The nightly parity test keeps running (new vs legacy)\"; \"Month 1 is ~$1,960, still below today.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "After the 30-day rollback window there is no check that the incremental build did not silently miss partitions. The only alert is the job-failure alert, which does not fire on a successful but incomplete run. The weekly test only detects duplicates, not gaps. This conflicts with the \"never see gaps\" constraint.",
+     "evidence": "\"Failure alerting is the existing dbt Cloud job alert to #data-oncall.\" ABSENT: raw-vs-fct per-partition row-count reconciliation or an alert on selected-partition count after the legacy table is dropped."
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The Looker savings compare September's full 61.2 TiB with dry runs of only the top 20 queries, so the sets are unlike. The savings are not decision-critical, because the build savings alone keep steady state far below today.",
+     "evidence": "\"dry runs of September's top 20 queries by bytes against v2: 61.2 → 8.7 TiB\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The erasure repair depends on ledger fields in privacy-svc that are not yet verified, and the verification is deferred to week 1. Adding them is unestimated work inside a 2-week plan that already needs 7 consecutive clean parity nights. The plan does cover the case, so this is a schedule risk, not a blocker.",
+     "evidence": "\"Build task: confirm during week 1 that the ledger fields above exist in privacy-svc; if not, adding them is part of DATA-412 scope.\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The reconciliation test is called a \"clustered lookup by user\", but the table is clustered by `account_id, event_name`. A per-user lookup scans the user column nightly on fct and legacy. The cost is small but is not computed.",
+     "evidence": "\"clustered by `account_id, event_name`\" vs \"Cost is a clustered lookup by user, negligible.\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "A dbt test auto-deletes production rows on failure, with no human gate. A bad ledger row or a bug could delete the wrong data.",
+     "evidence": "\"On failure it deletes the offending rows under the `analytics_write` lock and alerts #data-oncall.\""
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 11803,
+    "tokOut": 25845,
+    "usd": 0.11132202000000001,
+    "critMs": 141923
+   },
+   "wallMs": 274543
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The nightly `partition_reconciliation` compares per-date raw `count(distinct event_id)` with the deduplicated fct `count(*)`. A cross-date retry (original in D, copy in D+1) is correctly dropped from D+1 by the model's dedup, but raw still counts it in D+1. The test then mismatches on correct output. The automatic re-run cannot fix it, so it pages on legitimate dedup. The plan itself says the cross-date frequency is not yet known.",
+     "evidence": "\"compares count(distinct event_id) from raw.events ... with count(*) in fct_page_events. Any mismatch (a gap or a double count) alerts #data-oncall\" versus \"A D+1 retry of a D original is therefore dropped\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The swap and rollback both rely on `bq cp -f` replacing an unpartitioned table with a partitioned, clustered one (and the reverse on rollback), described as atomic and free. BigQuery copy-overwrite can reject a change of partitioning spec. The prototype covered only a 31-day rebuild, not the copy or swap, and the plan cites no evidence for the copy. If it fails, the cutover and the rollback path both break.",
+     "evidence": "\"`bq cp -f fct_page_events_v2 fct_page_events`. A same-region copy job is free and replaces the table atomically for readers.\" and \"`bq cp -f fct_page_events_legacy fct_page_events`\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The privacy check is called a clustered lookup, but the tables are clustered by `account_id, event_name`, not by user. It also covers every ledger request with no time bound, across up to three tables. It will scan a user column on every run, and the cost grows with erasure volume. This cost is not in the budget.",
+     "evidence": "\"Cost is a clustered lookup by user, negligible.\" versus \"clustered by `account_id, event_name`\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The plan may require new ledger fields, retries and paging in privacy-svc, which is outside the analytics engineer's codebase. It is folded into the 2-week, one-engineer estimate with no ownership or time allowance.",
+     "evidence": "\"if not, adding them is part of DATA-412 scope.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The Looker savings are extrapolated from dry runs of the top 20 queries to the full monthly volume, with no check that the sample is representative.",
+     "evidence": "\"dry runs of September's top 20 queries by bytes against v2: 61.2 → 8.7 TiB\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Storage for the transition is not budgeted, although v1, v2 and legacy full-size tables coexist for about 30 days.",
+     "evidence": "ABSENT: no storage line in either cost table"
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 14314,
+    "tokOut": 24628,
+    "usd": 0.06775702,
+    "critMs": 119914
+   },
+   "wallMs": 242278
+  }
+ ],
+ "artifact": "# Plan: make fct_page_events incremental and partitioned\n\nOwner: analytics engineering (1 engineer) · 2 weeks · Ticket DATA-412\n\n## 1. Why\n- `fct_page_events` (4.2B rows, 1.9 TiB) is rebuilt by full refresh every night from `raw.events` (9.4 TiB, ingestion-time partitioned, 25 months of history).\n- Each rebuild scans all of raw: 30 × 9.4 TiB = 282 TiB/month ≈ $1,760 at on-demand $6.25/TiB (September billing export, job label `dbt_model=fct_page_events`).\n- Runtime is 2h40m; the 05:00 UTC EU dashboard refresh missed its SLA on 9 nights in September.\n- The table is unpartitioned, so every Looker query scans it fully: 61.2 TiB in September ≈ $383.\n- Prototype on a prod snapshot (DATA-412): a 31-day rebuild took 11 min and billed 388 GiB. The prototype did not exercise the table swap or rollback copy; those are covered by the week-1 spike in section 3.\n\n## 2. Design\n- Materialization: dbt `incremental`, strategy `insert_overwrite`, partitioned by `event_date` (DAY, UTC, same derivation as today), clustered by `account_id, event_name`.\n- `require_partition_filter = false`: 38 of 41 dashboards already filter on `event_date` (LookML `always_filter`); the other 3 are all-time totals and keep working, scanning as they do today.\n- Columns, types, grain and dedup logic (`qualify row_number() over (partition by event_id order by ingested_at) = 1`) are unchanged in output; see \"Dedup across partitions\" for the window it runs over.\n- Partitions rebuilt each night: every `event_date` that appears in raw rows with `ingested_at` > (max `ingested_at` already in the table − 2 h). The 2 h overlap covers streaming-insert visibility delay (p99.9 measured at 4 min in September); overwrite is idempotent, so the overlap cannot double count.\n- Each selected partition is rebuilt from **all** raw rows with that `event_date`, not only the new ones. Today's model already clamps `event_time` to [`ingested_at` − 30 d, `ingested_at`], so rows for a given `event_date` can only sit in raw ingestion partitions on or after that date; the run reads raw from 1 day before the oldest selected date onward (at most ~32 days; the extra day is for dedup, below).\n- Late data is normal: on 27 of 30 nights in September at least one row arrived more than 7 days late (SDK offline replay). We therefore budget for the worst case every night: ~400 GiB ≈ $2.50/run.\n- A failed run writes nothing and does not move the high-water mark, so the next run rebuilds the same partitions. A failed run alerts through the existing dbt Cloud job alert to #data-oncall. That alert does not fire on a run that succeeds but is incomplete, so completeness is checked separately (next subsection).\n\n### Completeness checks (permanent, not tied to the rollback window)\n- New nightly dbt test `partition_reconciliation`, run after the build with the same `run_cutoff`. For every `event_date` in the trailing 35 days it compares the **expected** count from `raw.events` with `count(*)` in `fct_page_events`. The expected count applies the model's own dedup semantics: over raw rows with `ingested_at < run_cutoff` (read from 36 days back, so originals one day before the window are seen), keep one row per `event_id` (`qualify row_number() over (partition by event_id order by ingested_at) = 1`, global across the read window), derive `event_date` exactly as in the model, then count rows per `event_date`. This way a cross-date retry (original in D, copy in D+1) is dropped from D+1 on both sides and does not cause a false mismatch. A raw per-date `count(distinct event_id)` is deliberately not used, because it would count the D+1 copy. Any remaining mismatch (a gap, a double count, or a duplicate copy more than a day apart that the model's window missed) alerts #data-oncall and triggers one automatic `insert_overwrite` re-run of the mismatched partitions; if they still mismatch, it pages. Cost: three narrow raw columns (`event_id`, `event_time`, `ingested_at`) over ~36 days, ≈ 60 GiB ≈ $0.36/night.\n- New freshness/selection test: alert #data-oncall if the run selected 0 partitions while raw has rows newer than the high-water mark, or if the table's max `ingested_at` is more than 6 h behind the latest raw `ingested_at`.\n- These run for as long as the model exists, including after the legacy table is dropped.\n\n### Dedup across partitions\n- Today dedup is global; a naive incremental build would dedup per rebuilt partition. That is equivalent only if a duplicated `event_id` never maps to two different `event_date`s. Because `event_time` is clamped to `ingested_at`, a retry that crosses midnight UTC can land in D+1 while the original sits in D, and D is not rebuilt. So the invariant is enforced in the model, not assumed.\n- Earlier evidence is withdrawn: a check run over the 4.2B rows of `fct_page_events` is already deduplicated and trivially finds 0 cross-date duplicates. Week-1 task: run the check on `raw.events` instead (derive `event_date` as the model does; count `event_id`s with more than one distinct `event_date`) and record the result in DATA-412. The design does not depend on that count being 0; it tells us how often the guard below fires.\n- Enforcement in the model: the dedup window function partitions by `event_id` across the whole read window (oldest selected date − 1 day onward), keeping the earliest `ingested_at`, and only then filters to the selected partitions. A D+1 retry of a D original is therefore dropped, as in today's global dedup. SDK retries happen within minutes of the original send, so one extra day covers the midnight-crossing case.\n- Residual risk (copies more than a day apart) is detected nightly, not weekly: new test `unique_event_id_recent` checks `event_id` uniqueness over the last 35 days of `fct_page_events` (reads `event_id` and `event_date` only, ~6 GiB, negligible) and alerts #data-oncall; repair is a re-run of the affected partitions. The weekly full-table `unique_event_id` test stays (~140 GiB, ~$0.85).\n\n### Privacy jobs\n- Retention: the existing nightly job deletes rows older than 25 months from `raw.events` and `fct_page_events` (privacy policy §6). On a partitioned table it prunes instead of scanning.\n- Table lists: `fct_page_events_v2` is added to the retention and erasure table lists, and to the reconciliation test, **before** its backfill starts (cutover step 1), and stays there until its table is dropped. `fct_page_events_legacy` is added when it is created (step 3) and stays for the rollback window.\n- Erasure: privacy-svc deletes a user's rows from `raw.events` first, then from each table in the list. Rebuilds read only `raw.events`, so a rebuild cannot bring erased rows back. privacy-svc and the dbt jobs already share the `analytics_write` lock (unchanged), so an erasure never interleaves with a running build. New staging integration test: erase a test user, force a 31-day rebuild, assert 0 rows for that user.\n- Partial-failure gap: the old nightly full refresh implicitly repaired any erasure that deleted from `raw.events` but failed before deleting from `fct_page_events`. The incremental build only rebuilds partitions with new ingestion, so it no longer does this, and old partitions could keep erased rows indefinitely. We add explicit repair:\n  - privacy-svc records each erasure request in a ledger (request id, user id, `raw_deleted_at`, `fct_deleted_at`). A request is complete only when both timestamps are set. Any request with `raw_deleted_at` set and `fct_deleted_at` null for more than 1 h is retried automatically, and pages #data-oncall if still incomplete after 24 h.\n  - New nightly dbt test `erased_users_absent_from_fct` (runs after the build): for every ledger request with `raw_deleted_at` set, assert 0 rows for that user in `fct_page_events`, and in `fct_page_events_v2` and `fct_page_events_legacy` whenever those tables exist. Cost is a clustered lookup by user, negligible. On failure it deletes the offending rows under the `analytics_write` lock and alerts #data-oncall.\n  - New staging failure-path integration test: erase a test user with the second delete forced to fail, run the nightly build and the reconciliation test, assert the user's rows are gone from `fct_page_events` and the alert fired. A second case erases a user while `fct_page_events_v2` exists and asserts its rows are gone from v2 too.\n  - Build task: confirm during week 1 that the ledger fields above exist in privacy-svc; if not, adding them is part of DATA-412 scope.\n\n## 3. Cutover (build alongside, then swap)\n0. Week-1 spike (before any cutover work depends on it): on small test tables in the production region, test both directions of `bq cp -f`: an unpartitioned table over a partitioned, clustered one, and the reverse. BigQuery copy-overwrite can reject a change of partitioning or clustering spec, so this is not assumed to work. Record the results (and whether table ACLs, labels and description survive) in DATA-412. If both directions work, use the copy commands below. If either is rejected, use the fallback in step 3 and in section 4 for that direction.\n1. Add `fct_page_events_v2` to the erasure/retention lists and the reconciliation test (see Privacy jobs), then add the model with the new config and backfill it once (one full read of raw, ≈ $59).\n2. Parity for 7 consecutive nights. v1 (still the nightly full refresh, as today) and v2 run in the same dbt invocation with a shared `run_cutoff` (only raw rows with `ingested_at < run_cutoff`). A dbt test compares, per (`event_date`, `account_id`): row count, `count(distinct event_id)`, and `BIT_XOR(FARM_FINGERPRINT(TO_JSON_STRING(t)))` over all columns. It also compares `INFORMATION_SCHEMA.COLUMNS` (names, types, order). To keep it cheap, the nightly comparison covers the trailing 35 days of partitions (about 155 GiB across both tables, ≈ $1/night); once, on night 7, it runs over the full tables (≈ 3.8 TiB ≈ $24). All must match exactly on all 7 nights, including the full-table run, before step 3.\n3. Swap at 12:00 UTC (lowest Looker traffic; the nightly job starts at 02:20, so no build runs in between). The whole swap runs while holding the `analytics_write` lock, so no erasure can run between the copy and the checks:\n   - Run `erased_users_absent_from_fct` against `fct_page_events_v2` and fix any rows it finds; abort the swap if it still fails.\n   - Copy the current table to `fct_page_events_legacy` (it is added to the erasure/retention lists and reconciliation test at this point). This keeps the unpartitioned spec, so `bq cp` to a new name is expected to work; the spike confirms it.\n   - Replace `fct_page_events` with the contents of `fct_page_events_v2`. If the spike showed the copy works: `bq cp -f fct_page_events_v2 fct_page_events` (same-region copy job, free, atomic for readers). Otherwise fallback: `CREATE OR REPLACE TABLE analytics.fct_page_events PARTITION BY event_date CLUSTER BY account_id, event_name AS SELECT * FROM analytics.fct_page_events_v2` (a query job, ≈ 1.9 TiB ≈ $12, replaces the table in one statement). Either way the resulting table must have exactly the partitioning and clustering of the incremental model, so the first incremental run works, and Looker's and the export's grants must be verified after the swap.\n   - Merge the PR that points model `fct_page_events` at the incremental SQL and keeps the old full-refresh SQL as model `fct_page_events_legacy`.\n   - Re-run `erased_users_absent_from_fct` against `fct_page_events`, then release the lock. The v2 table is no longer built after the swap; it stays in the erasure/retention lists until dropped with the legacy table (DATA-431).\n4. Looker and the customer usage export query `analytics.fct_page_events` by name; neither needs a change.\n\n## 4. Rollback\n- For 30 days after the swap, `fct_page_events_legacy` is still rebuilt nightly from raw with the old full-refresh SQL, so it contains every event ingested after cutover. It runs as a separate dbt Cloud job after the main job, with the same `run_cutoff`, so it cannot delay the 05:00 refresh.\n- For those 30 days the retention and erasure jobs include `fct_page_events_legacy` (and `fct_page_events_v2`, until dropped) in their table lists.\n- The nightly parity test keeps running (new vs legacy, trailing 35 days, ≈ $1/night) and alerts #data-oncall on any mismatch.\n- Rollback: take the `analytics_write` lock, run `erased_users_absent_from_fct` against `fct_page_events_legacy`, then replace `fct_page_events` with the legacy table and revert the PR. If the spike showed the copy works, use `bq cp -f fct_page_events_legacy fct_page_events`. Otherwise use `CREATE OR REPLACE TABLE analytics.fct_page_events AS SELECT * FROM analytics.fct_page_events_legacy` (≈ 1.9 TiB ≈ $12). The next run is a full refresh of an unpartitioned table, exactly as today. No gap, no lost events. The chosen rollback command is rehearsed on test tables during the week-1 spike, so it is known to work before cutover.\n- After 30 clean parity nights: drop the legacy and v2 models and tables (DATA-431). `partition_reconciliation`, the freshness test and `unique_event_id_recent` stay in place.\n\n## 5. Cost\nSteady state (per month):\n\n| Item | Today | After |\n|---|---|---|\n| Nightly build | $1,760 | ~$75 (worst case, 30 × $2.50) |\n| Completeness and dedup checks | — | ~$15 (`partition_reconciliation` ~$11, weekly full-table `unique_event_id` ~$4) |\n| Looker queries | $383 | ~$54 (dry runs of September's top 20 queries by bytes against v2: 61.2 → 8.7 TiB) |\n| **Total** | **$2,143** | **~$144** |\n\nTransition (37 nights: 7 parity nights + 30-day rollback window):\n\n| Item | Cost |\n|---|---|\n| Parity nights, 7×: v1 full refresh (same as today) | ~$411 |\n| v2 backfill | ~$59 |\n| Parity nights, 7×: v2 incremental ~$18, nightly parity ~$7, one full-table parity ~$24 | ~$49 |\n| Looker on v1 during parity nights (same as today) | ~$89 |\n| Rollback window, 30×: legacy full refresh | ~$1,760 |\n| Rollback window: v2 incremental ~$75, nightly parity ~$30, Looker on new table ~$54 (checks of ~$15 excluded; see steady state) | ~$159 |\n| **Transition total** | **~$2,530** |\n\nThe total excludes the `CREATE OR REPLACE TABLE` fallback, which costs ≈ $12 at the swap, plus ≈ $12 more if a rollback is ever used, and applies only if the week-1 spike shows `bq cp -f` is rejected.\n\nToday's cost over the same 37 nights is ~$2,640 ($2,143 × 37/30 less nothing for checks), so the transition is roughly break-even, not clearly cheaper. The legacy rebuild is the main cost and can be shortened if the rollback window is cut. Savings start after the legacy table is dropped; steady state from then is ~$144 vs $2,143 today.",
+ "fixerUsage": {
+  "calls": 3,
+  "tokIn": 13992,
+  "tokOut": 20083,
+  "usd": 0.256786,
+  "critMs": 126611
+ },
+ "status": "running"
+}

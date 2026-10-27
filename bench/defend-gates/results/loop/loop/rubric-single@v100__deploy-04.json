@@ -1,0 +1,526 @@
+{
+ "approach": "rubric-single@v100",
+ "case": "deploy-04",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "The Playground share URL embeds the owner's full API key (`url.searchParams.set(\"k\", project.apiKey)`), so anyone with a share link obtains a working credential to the owner's account.",
+     "evidence": "\"url.searchParams.set(\"k\", project.apiKey);\" and \"replayKey: url.searchParams.get(\"k\")\""
+    },
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "Unauthenticated viewers replaying a shared session consume the owner's paid quota, enabling a free-to-paid resource theft vector (and a DoS path) via malicious or viral share links.",
+     "evidence": "\"Viewers without an account replay against the owner's project quota.\""
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "Cost projection assumes exactly 2 replicas but the config sets `min_replicas: 2` with autoscaling to 24; at the stated on-demand rate ($2.49/h) even 3 replicas exceed the $4k/month budget, and any sustained queue depth blows past it entirely.",
+     "evidence": "\"min_replicas: 2\", \"max_replicas: 24\", \"scale_on: queue_depth > 8 for 60s\", \"Two H100 replicas serve the projected free load ... ~$3.6k/month, within the $4k/month free-tier budget\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The gateway config rate limit uses `per: second` (20 req/s, burst 40) while the release notes promise 20 requests per minute; the QA pass explicitly used a different staging config (`per: minute`), so prod will allow 10x the documented rate and burn the token budget.",
+     "evidence": "Config: `rate_limit: { requests: 20, per: second, burst: 40 }` vs release notes: \"20 requests per minute\" vs QA: \"(staging config used `per: minute`)\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Share links are public and unauthenticated (\"even without a Lumen account\") but store the entire conversation verbatim; there is no mention of consent, PII handling, or whether users can share sessions containing personal data.",
+     "evidence": "\"Anyone with the link can view the conversation and re-run it, even without a Lumen account.\" and `messages: session.messages`"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The alert threshold (free pool replicas > 6) is far below `max_replicas: 24`, so the pool can scale to 4x the alert level before anyone is paged; combined with the cost overrun risk, this is an inadequate guardrail.",
+     "evidence": "\"free pool replicas > 6 pages on-call\" vs config `max_replicas: 24`"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Rollback is incomplete: turning off `free_signup_open` stops new signups but existing free keys keep working, so the free tier (and its cost) cannot actually be rolled back without a separate migration or key revocation.",
+     "evidence": "\"Rollback: `free_signup_open` off stops new signups; existing free keys keep working.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The cost model assumes on-demand GPU pricing for a free tier that will run 24/7 at min_replicas; no evidence is given that spot/preemptible or reserved pricing was considered, making the budget claim fragile.",
+     "evidence": "\"at the GPU provider's on-demand rate of $2.49/h that is ~$3.6k/month\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1739,
+    "tokOut": 977,
+    "usd": 0,
+    "critMs": 174052
+   },
+   "wallMs": 583385
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "cost",
+     "severity": "blocker",
+     "claim": "The free-tier pool is hard-capped at 2 replicas and sheds free traffic when demand exceeds capacity, but the on-demand GPU cost (~$3.6k/month) is charged continuously regardless of actual utilization, so the 'marketing expense' budget is consumed even at near-zero traffic. If free-tier adoption is low, the company pays full GPU cost for a pool that could otherwise scale to zero; the design lacks a cost-efficient low-traffic mode (e.g., scale-to-zero or spot capacity) and the proposal explicitly defers that decision to 'after the first month.'",
+     "evidence": "Two H100 replicas serve the projected free load at < 30% utilization. At the GPU provider's on-demand rate of $2.49/h, 2 replicas × ~730 h is ~$3.6k/month, within the $4k/month free-tier budget."
+    },
+    {
+     "lens": "cost",
+     "severity": "blocker",
+     "claim": "The $3.6k/month GPU cost projection assumes 730 hours of operation per month, but the proposal does not account for the fact that on-demand GPU pricing is typically charged per second or per minute with no minimum commitment — meaning if the pool is scaled to zero during low-traffic periods (which the proposal does not enable), the cost would be lower. The current design forces continuous payment for 2 idle H100s during off-peak hours, which is economically inefficient for a marketing expense with a hard $4k budget.",
+     "evidence": "The pool is hard-capped at 2 replicas (`min_replicas = max_replicas = 2`), so $3.6k/month is the worst-case GPU spend, not just the projection."
+    },
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "The free-tier pool has `min_replicas: 2` and `max_replicas: 2` with `overload: shed`, meaning if one H100 replica fails or is taken out of service for maintenance, the remaining single replica must handle all free traffic. With only 2 replicas total and no autoscaling, a single node failure reduces capacity by 50% and likely triggers immediate traffic shedding (429/503) for all free users, since the pool cannot scale up to compensate. The proposal does not address single-node failure scenarios or maintenance windows.",
+     "evidence": "min_replicas: 2 / max_replicas: 2   # hard cap: budget ceiling, no autoscaling beyond this / overload: shed    # queue_depth > 8 for 60s returns 429/503 instead of adding replicas"
+    },
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "The rollback plan states that turning `free_tier_enabled` off 'lets the `free-8b` pool scale to zero,' but the config explicitly sets `max_replicas: 2` with a comment 'hard cap: budget ceiling, no autoscaling beyond this.' There is no mechanism described for scaling the pool to zero — the config only supports 2 replicas at all times. This is a contradiction between the rollback plan and the actual configuration.",
+     "evidence": "Rollback: ... `free_tier_enabled` off (gateway flag) makes the gateway reject all free-tier keys immediately (403 with a 'free tier paused' message) and lets the `free-8b` pool scale to zero."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The QA summary states that rate limiting 'passed on staging, which used `per: minute`. The prod config previously differed (`per: second`) and has been corrected to match, but **QA must be re-run against the exact prod `gateway.yaml`... before deploy**.' This is an explicit admission that the production configuration has not been validated by QA, which is a major gate risk for a GA launch.",
+     "evidence": "QA must be re-run against the exact prod `gateway.yaml` (including `daily_tokens: 100000` and `max_replicas: 2`) before deploy"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The QA summary states that share link testing 'passed against the earlier implementation' and '**Must be re-run against the revised flow before deploy**' for several critical behaviors: no key in the URL, replay requires sign-in, replay billed to the viewer, and unauthenticated replay returns 401. The current implementation's security and billing properties for share links have not been validated against the production code.",
+     "evidence": "Must be re-run against the revised flow before deploy: no key in the URL, replay requires sign-in, replay billed to the viewer, and unauthenticated replay returns 401"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The share link uses a 128-bit random ID (`randomId(128)`), which is cryptographically strong against guessing. However, the share stores the entire conversation (`messages: session.messages`) in the database, and there is no mention of encryption at rest for share records. If the database is compromised, all shared conversations (which users are explicitly warned may contain sensitive data) would be exposed in plaintext. The proposal does not address encryption for share data.",
+     "evidence": "messages: session.messages, // snapshot at share time"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The share confirmation dialog warns users not to share conversations containing personal data, secrets, or other people's information, but the system does not enforce any content filtering or consent from individuals mentioned in the conversation. The share link grants read access to the entire conversation to anyone with the URL, with no expiration, no access logging, and no way for the owner to know who has viewed the share. This creates a significant privacy risk, especially since the proposal explicitly positions sharing as a feature for users to share their work.",
+     "evidence": "Share creation shows a confirmation dialog: 'Anyone with this link can read this entire conversation. Don't share conversations containing personal data, secrets or other people's information.'"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The proposal projects 3,000 free DAU with 35 requests/day each, totaling ~105,000 requests/day or ~73 requests/minute average. The free pool is rate-limited to 20 requests/minute per user, but the total pool capacity is not explicitly calculated. With 2 H100 replicas and no autoscaling, the system must handle all 3,000 users' requests on fixed hardware. If actual adoption exceeds the projection (which is common for free tiers), the system will immediately begin shedding traffic with no ability to scale, potentially damaging the user experience and the marketing value of the free tier.",
+     "evidence": "Projection: 3,000 free DAU in month 1, avg 35 requests/day each, ~1.2k tokens per request."
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The daily token cap of 100k tokens per user is enforced, but there is no mention of a total daily token cap for the free pool. If all 3,000 users consume their full 100k tokens, the free pool would process 300 million tokens/day. At the projected average of 1.2k tokens/request, this would require 250,000 requests/day or ~174 requests/minute, which may exceed the capacity of 2 H100 replicas. The proposal does not calculate or validate the total pool throughput capacity against worst-case token consumption.",
+     "evidence": "daily_tokens: 100000"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The proposal states that deleted shares have their stored messages purged, but there is no mention of a grace period or soft-delete mechanism. If a user accidentally deletes a share, it is immediately gone with no recovery option. For a feature that users explicitly opt into and may rely on for sharing work, this lack of a safety net is a significant UX and reliability concern.",
+     "evidence": "Shares can be deleted from Playground → History; deleted shares return 404 and the stored messages are purged."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The proposal claims that 'Two H100 replicas serve the projected free load at < 30% utilization,' but this is based on a projection of 3,000 DAU with specific usage patterns. There is no evidence provided (e.g., load testing results, benchmark data) that 2 H100 replicas can actually handle the projected load at the stated utilization. This is a load-bearing claim for the budget and capacity plan, but it is presented as a projection rather than a validated measurement.",
+     "evidence": "Two H100 replicas serve the projected free load at < 30% utilization."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The proposal states that the free pool is 'isolated from `shared-h100`, so free traffic cannot degrade paid latency,' but there is no evidence provided that the isolation is effective. If both pools share the same underlying infrastructure (e.g., network, storage, or GPU scheduling), free traffic could still impact paid users through resource contention. The proposal does not describe the isolation mechanism or provide testing evidence.",
+     "evidence": "Free pool is isolated from `shared-h100`, so free traffic cannot degrade paid latency."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The proposal hard-codes the free-tier models (`llama-3.1-8b-instruct` and `qwen2.5-7b-instruct`) in the gateway config. If the team wants to add or remove models from the free tier in the future, they must modify the config and redeploy. There is no mention of a dynamic model allow-list or feature flag for free-tier models, which could make future changes more cumbersome.",
+     "evidence": "models: [llama-3.1-8b-instruct, qwen2.5-7b-instruct]"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "The share link flow requires the viewer to sign in and use their own quota to re-run a conversation. While this is a reasonable billing model, it adds friction for viewers who may not have a Lumen account or who are on the free tier with limited quota. The proposal does not mention whether viewers can at least view the conversation without signing in (which the current implementation appears to allow based on the `load` function), but the replay friction could reduce the utility of share links.",
+     "evidence": "Re-running a shared conversation requires a free Lumen account and uses the viewer's own quota, never the owner's."
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The proposal mentions that share pages are served with `noindex` and `Referrer-Policy: no-referrer`, which is good for privacy. However, there is no mention of GDPR or other data protection compliance for the share feature, particularly regarding the storage of conversation data and the ability of users to request deletion of their data. While account deletion deletes shares, there is no mention of a data export or individual share deletion request process that would be required for GDPR compliance.",
+     "evidence": "Share pages are served with `noindex` and `Referrer-Policy: no-referrer`."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2496,
+    "tokOut": 2762,
+    "usd": 0,
+    "critMs": 132072
+   },
+   "wallMs": 150415
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Load validation claims a single replica can handle the projected load, but the math is wrong. At ~73 req/min projected (or ~174 worst-case), a single H100 would be at ~60% (projected) or ~150% (worst-case) of the two-replica capacity. The artifact says 'one replica would run at roughly < 60%' but that's the load on ONE replica when TWO are serving, not the load on ONE replica serving all traffic. When one replica fails, the survivor must handle 100% of traffic, not 50%. This is a fundamental error in the failure-mode analysis.",
+     "evidence": "'At the projected < 30% utilization across two replicas, one replica would run at roughly < 60%, so the projection still fits on one replica'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The budget math is inconsistent. The artifact states 2 replicas × ~730h × $2.49/h = ~$3.6k/month, but 2 × 730 × 2.49 = $3,632.40. More critically, it says 'the ~$3.6k is spent even if free traffic is low' (fixed cost) but also claims on-demand billing is 'metered by usage.' On-demand GPU pricing is typically per-second or per-minute of actual usage, not a flat monthly fee. The artifact conflates reserved (fixed monthly) with on-demand (usage-based) pricing models, making the cost analysis unreliable.",
+     "evidence": "'At the GPU provider's on-demand rate of $2.49/h, 2 replicas × ~730 h is ~$3.6k/month' AND 'On-demand billing is metered by usage, so scale-to-zero or off-peak scale-down would likely reduce cost'"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The share link deletion model has a race condition. The artifact states deletion is 'immediate and permanent' but the share is a snapshot stored in the database. Between the owner clicking delete and the database actually purging the record, a viewer with the link can still access it. More importantly, browser caches, search engine caches (despite noindex), and third-party link preview services (Slack, X, iMessage) may have already cached the conversation content. Deletion of the source does not retract content that has been cached or screenshotted elsewhere, but the UX implies it does.",
+     "evidence": "'Deleted shares return 404 and the stored messages are purged' AND 'deletion is intentionally immediate and permanent'"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The share link is a 128-bit random ID with no expiry and no revocation other than deletion. This means if a share link is accidentally posted publicly (e.g., to a public forum or included in a commit), the conversation remains accessible indefinitely until the owner remembers to delete it. There is no 'link expired' state and no way to limit access to a specific time window or viewer count. For a product handling potentially sensitive conversations, this is a significant privacy risk.",
+     "evidence": "'The link has no expiry and no per-viewer tracking' AND 'This is a deliberate choice'"
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The free tier has a hard budget of $4k/month but the artifact admits the pool runs 2 warm replicas continuously at ~$3.6k/month even with zero traffic. This leaves only $400/month (10% of budget) for any overage, unexpected load, or pricing changes. If GPU on-demand rates increase by even 12%, the free tier exceeds budget. The 'fixed cost' design leaves virtually no margin for error in a marketing expense with a 'hard budget.'",
+     "evidence": "'Two H100 replicas are projected to serve this load at < 30% utilization' AND 'The pool runs 2 warm replicas continuously, so the ~$3.6k is spent even if free traffic is low'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The free pool has min_replicas: 2 and max_replicas: 2 with no autoscaling. During the launch period (blog, HN, X posts), traffic could spike dramatically above the 3,000 DAU projection. The artifact acknowledges shedding will occur but does not define what 'shedding' means for the user experience beyond '429/503.' If 50% of new signups immediately hit rate limits or service unavailability during the first hour of launch, the free tier's value proposition is destroyed before users can form a positive impression. The 'no cold starts' design goal is undermined by 'no capacity for spikes.'",
+     "evidence": "'If demand exceeds capacity, free traffic is shed (429/503) rather than scaled' AND 'max_replicas: 2 # hard cap: budget ceiling, no autoscaling beyond this'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The rate limit configuration is inconsistent between staging and prod, and the artifact admits QA was run against the wrong configuration. The staging test used 'per: minute' but 'The prod config previously differed (per: second) and has been corrected to match.' This means the rate limiting behavior was never validated against the actual production configuration. The 'corrected' config may have introduced new issues. The deploy gate requires re-running QA but acknowledges 'This re-run has not yet been done.'",
+     "evidence": "'pass on staging, which used per: minute. The prod config previously differed (per: second) and has been corrected to match' AND 'This re-run has not yet been done, and the deploy does not proceed without it.'"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The share link endpoint (/s/[id]) does not require authentication to VIEW the conversation, only to replay it. This means anyone with the link can read the full conversation without creating an account or providing any identifier. There is no rate limiting on the share view endpoint mentioned, so an attacker who obtains a share link could download the conversation repeatedly. The 'capability link' model with no expiry and no rate limiting is a weak security posture for potentially sensitive content.",
+     "evidence": "'Anyone with the link can view the conversation' AND 'canReplay: Boolean(locals.user)' (viewing does not require user)"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3503,
+    "tokOut": 1385,
+    "usd": 0,
+    "critMs": 72939
+   },
+   "wallMs": 72939
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "Pre-deploy gate for encryption at rest on the shares table is unresolved, and the artifact explicitly states this is a launch blocker if not confirmed.",
+     "evidence": "Open item before deploy: confirm that the shares table sits under the same database-level encryption at rest ... If it does not, that is a launch blocker for this feature (share_links_enabled stays off until resolved)."
+    },
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "Pre-deploy gate for per-IP rate limiting on share links is unresolved, and the artifact requires it before deploy.",
+     "evidence": "Open item before deploy: confirm a per-IP rate limit applies to /s/* (at the edge or in the route), and add one if it does not."
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The QA re-run against the exact prod gateway.yaml has not been done and is a stated deploy gate.",
+     "evidence": "Deploy gate: QA must be re-run against the exact prod gateway.yaml ... and pass before deploy. This re-run has not yet been done, and the deploy does not proceed without it."
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The QA re-run of the share-link flow against the revised implementation has not been done and is a stated deploy gate.",
+     "evidence": "Deploy gate: must be re-run and pass against the revised flow before deploy ... This has not yet been done."
+    },
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "Load validation against the free-8b pool config on staging is a stated pre-deploy gate and is not marked as completed.",
+     "evidence": "Before deploy, run a load test against the free-8b pool configuration on staging ... If the '< 30% utilization' estimate does not hold, the capacity and cost sections must be revised before launch."
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The worst-case scenario (all users at cap) would cause ~144% utilization on a single surviving replica, shedding a substantial share of requests, with no validated plan to handle it.",
+     "evidence": "The worst case does not fit: 2.4× the projected load would be ~144% of one replica, so with a replica down and users at their caps the pool would shed a substantial share of free requests (roughly a third on this estimate) by design."
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The budget margin is only ~10%, and a GPU rate increase above that threshold would exceed the budget with no automatic mitigation.",
+     "evidence": "Headroom under the $4k budget is ~$370/month (~10%). A GPU rate increase of more than ~10% would put two replicas over budget"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Rolling back the free tier does not stop GPU spend without a separate config change, creating an operational gap where the rollback flag alone leaves ~$1.2k per 10 days of idle cost running.",
+     "evidence": "The flag alone does not stop GPU spend: with min_replicas: 2 the free-8b pool does not scale down by itself. To stop the ~$1.2k per 10 days of idle cost, also deploy a config change setting free-8b min_replicas: 0 and max_replicas: 0"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4213,
+    "tokOut": 725,
+    "usd": 0,
+    "critMs": 45962
+   },
+   "wallMs": 58225
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "cost",
+     "severity": "blocker",
+     "claim": "The $4k/month budget only covers the two H100 replicas; every other cost (gateway compute, network egress, database, object storage, monitoring) is unitemized, so the free tier will exceed budget even at projected load. The proposal itself acknowledges this margin is only ~10% and that 'any other free-tier cost we have not itemized here' would break the budget.",
+     "evidence": "Headroom under the $4k budget is ~$370/month (~10%)... and so would any other free-tier cost we have not itemized here."
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The release notes promise two free models (llama-3.1-8b-instruct and qwen2.5-7b-instruct) but the load validation plan only covers projected and worst-case token volume; it does not validate the pool serving both models simultaneously or model-switching behavior, which could change utilization and cause the '< 30% utilization' estimate to fail.",
+     "evidence": "Free accounts get 20 requests per minute and 100k tokens per day on llama-3.1-8b-instruct and qwen2.5-7b-instruct."
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Share links are 128-bit random capability URLs with no expiry, no viewer tracking, and no rate limit confirmed. An attacker who obtains a link (via screenshot, browser history, or forwarded copy) retains indefinite read access, and the per-IP rate limit on /s/* is still an open gate, leaving the endpoint vulnerable to enumeration and scraping.",
+     "evidence": "The link has no expiry and no per-viewer tracking... Open item before deploy (not yet confirmed): confirm a per-IP rate limit applies to /s/*"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Share links expose entire conversation snapshots to anyone with the URL, with only a warning dialog as the sole safeguard. There is no content scanning, no consent mechanism for third parties mentioned, and deletion cannot recall already-distributed copies. This creates a high risk of accidental exposure of personal data, secrets, or confidential information.",
+     "evidence": "We do not scan conversation content or obtain consent from third parties mentioned in it; responsibility for content rests with the sharer, who is warned in the dialog."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The single-replica failure scenario at worst-case load (2.4x projected) results in ~144% utilization on the survivor, causing ~33% of free requests to be shed. This is a significant degradation that will be visible to users and may generate support volume, especially during launch when traffic spikes are expected.",
+     "evidence": "the pool would shed a substantial share of free requests (roughly a third on this estimate) by design"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The core capacity claim ('Two H100 replicas are projected to serve this load at < 30% utilization') is explicitly labeled as an unvalidated estimate, yet the entire cost and capacity model depends on it. The load validation is a pre-deploy gate that has not been run, so the proposal is committing to a launch date based on unproven assumptions.",
+     "evidence": "This is an estimate, not a measurement; see 'Load validation' below, which is a pre-deploy gate."
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The share link feature stores full conversation snapshots in the database without confirmed encryption at rest. If the shares table uses different encryption than other conversation data, this could violate internal data handling policies or regulatory requirements for stored personal data.",
+     "evidence": "Open item before deploy (not yet confirmed): confirm that the shares table sits under the same database-level encryption at rest as other stored conversation data"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The launch spike scenario (HN/X traffic) will likely exceed the 3,000 DAU projection, causing widespread 429/503 responses for free users. While this is by design, it may create a negative first impression during the critical launch window and generate public complaints on the same platforms driving the traffic.",
+     "evidence": "The launch post (HN, X) may bring traffic well above the 3,000 DAU projection, and the pool cannot absorb it."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Rolling back the free tier requires two steps (disabling the flag AND deploying a config change to zero replicas), and the config change requires budget-owner approval. During an incident, this two-step process with an approval gate may delay the spend stop, especially if the budget owner is unavailable.",
+     "evidence": "To stop the ~$1.2k per 10 days of idle cost, also deploy a config change setting free-8b min_replicas: 0 and max_replicas: 0 (budget-owner approval applies as for any max_replicas change)."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4651,
+    "tokOut": 1285,
+    "usd": 0,
+    "critMs": 79026
+   },
+   "wallMs": 80433
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "The deploy plan lists 6 open pre-deploy gates (QA re-runs, load validation, encryption confirmation, rate-limit confirmation, cost itemization) and explicitly states none is complete, yet schedules the deploy for Wednesday. Deploying before these pass violates the plan's own conditions.",
+     "evidence": "\"Pre-deploy gate status (all open as of this proposal; none is claimed complete)\" and \"The deploy does not proceed until it passes.\""
+    },
+    {
+     "lens": "cost",
+     "severity": "blocker",
+     "claim": "Non-GPU costs (gateway compute, egress, database, storage, monitoring) are not itemized and could consume the entire $370/month headroom, putting the all-in spend over the $4k budget. This is listed as a deploy gate but is not resolved.",
+     "evidence": "\"Non-GPU costs (open gate, not yet itemized)... With only ~$370/month of headroom, these could plausibly consume it.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The capacity estimate of '< 30% utilization' for two H100 replicas is explicitly labeled an unvalidated estimate, and the load test that would validate it has not been run. The entire cost and capacity argument rests on this unverified number.",
+     "evidence": "\"This is an estimate, not a measurement; see 'Load validation' below, which is a pre-deploy gate.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The load validation plan does not cover the launch-spike scenario that the document itself predicts (\"launch post may bring traffic well above the 3,000 DAU projection\"). The shed behavior under spike is assumed, not tested.",
+     "evidence": "Load validation tests projected and worst-case steady load, but not the transient spike expected from HN/X launch. \"The launch post (HN, X) may bring traffic well above the 3,000 DAU projection, and the pool cannot absorb it.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Share links are public capability URLs with no expiry, no revocation of already-distributed copies, and no content scanning. The document admits the exposure risk is a leaked link that \"stays readable until its owner deletes it,\" but link expiry and view limits are deferred. This is a significant privacy exposure for a feature being launched publicly.",
+     "evidence": "\"The link has no expiry and no per-viewer tracking... The exposure risk is a link that leaks... That link stays readable until its owner deletes it\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The per-IP rate limit on /s/* share links is not yet confirmed and is listed as a deploy gate. Without it, share links are vulnerable to scraping and abuse. This gate is open.",
+     "evidence": "\"Open item before deploy (not yet confirmed): confirm a per-IP rate limit applies to /s/*... This is a deploy gate; if it is not resolved, share_links_enabled stays off.\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Encryption at rest for the shares table is not yet confirmed and is listed as a launch blocker. This gate is open.",
+     "evidence": "\"Open item before deploy (not yet confirmed): confirm that the shares table sits under the same database-level encryption at rest as other stored conversation data... If it does not, that is a launch blocker\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The rollback plan requires two separate steps (flag flip + config change) to actually stop GPU spend, and the config change requires budget-owner approval. The pre-staged change mitigates this but adds operational complexity and a failure mode where an operator flips the flag but forgets or fails to deploy the config change, leaving ~$1.2k/10 days of idle cost running.",
+     "evidence": "\"The flag alone does not stop GPU spend... To stop the ~$1.2k per 10 days of idle cost, also deploy a config change\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The share dialog warns about personal data and third-party information, but there is no mention of GDPR/CCPA implications for the snapshot data stored in the shares table, data subject access requests, or the right to erasure (deletion is immediate, which helps, but no process is described).",
+     "evidence": "ABSENT: No mention of data protection regulation compliance for share snapshots."
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The worst-case token scenario (300M tokens/day at user caps) would hit ~144% of a single replica's capacity if one is down, causing ~33% shed. This is acknowledged but the user experience degradation during a single-replica failure at peak is not quantified in terms of user impact or support load.",
+     "evidence": "\"with a replica down and users at their caps the pool would shed a substantial share of free requests (roughly a third on this estimate) by design\""
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "Free users hitting the daily 100k token cap or the rate limit will get 429/503 errors with no in-product explanation of their remaining quota. The /v1/usage endpoint exists but there is no mention of surfacing quota status in the UI or playground.",
+     "evidence": "ABSENT: No mention of quota visibility in the playground or UI for free users."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The free tier pool uses only 8B models while paid users get all models. If the free tier becomes popular and the 8B models are insufficient, adding larger models to the free tier would require new capacity planning and potentially more GPUs, but the architecture supports this. No issue, just noting the constraint.",
+     "evidence": "\"models: [llama-3.1-8b-instruct, qwen2.5-7b-instruct]\" for free vs \"models: ['*']\" for pro"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5191,
+    "tokOut": 1292,
+    "usd": 0,
+    "critMs": 100419
+   },
+   "wallMs": 104117
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Share links are permanent, unguessable-but-public capability URLs with no expiry, no revocation beyond manual deletion, and no viewer tracking. A leaked link (screenshot, forwarded, in browser history) remains readable until the owner manually deletes it, and the owner has no way to know it leaked. This is a meaningful information disclosure risk for any conversation containing sensitive content, despite the warning dialog.",
+     "evidence": "The link has no expiry and no per-viewer tracking, and we do not log or expose who viewed it."
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The budget analysis treats the $4k/month as covering GPU cost alone, with non-GPU costs (egress, database, object storage, monitoring, gateway compute) explicitly unitemized and potentially consuming the entire $370 headroom. Gate 6 is open and the artifact admits 'the all-in budget claim is not yet established.' Deploying without resolving this risks silently exceeding the hard budget from day one.",
+     "evidence": "Non-GPU costs are not yet itemized... With only ~$370/month of headroom, these could plausibly consume it."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The free pool has no scale-to-zero or off-peak scale-down, meaning ~$3.6k/month is spent even with zero traffic. More critically, with only 2 replicas and no autoscaling, any sustained traffic above ~174 req/min (worst case per the artifact) causes shedding with no path to recovery other than manual intervention. The launch spike scenario (HN/X) is acknowledged to potentially overwhelm the pool, and the only mitigation is turning off new signups — existing users still get degraded service.",
+     "evidence": "If demand exceeds capacity, free traffic is shed (429/503) rather than scaled."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The entire capacity and cost model rests on an unvalidated estimate: 'Two H100 replicas are projected to serve this load at < 30% utilization on each replica. This is an estimate, not a measurement.' Load validation is a blocking gate that has not been run. The deploy date is conditional on it, but the proposal is being reviewed for deploy readiness without that evidence existing yet.",
+     "evidence": "This is an estimate, not a measurement; see 'Load validation' below, which is a pre-deploy gate."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The worst-case token analysis shows that if all 3,000 users hit their 100k token/day cap, the pool reaches ~72% utilization per replica — but this assumes the <30% estimate holds. If actual utilization per request is higher (which is possible and unvalidated), the pool could be saturated at much lower user activity. The margin between projected and worst-case is thin and untested.",
+     "evidence": "This is ~2.4× the projected token volume, or ~72% utilization on each of two replicas if the < 30% estimate holds."
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Share links store the full conversation snapshot in the database. While encryption-at-rest is a blocking gate (gate 4), the artifact does not specify whether the messages field is encrypted at the application layer, meaning anyone with database access (DBA, backup systems, cloud provider in a worst-case scenario) can read all shared conversations in plaintext if only TDE is used.",
+     "evidence": "Open item before deploy (not yet confirmed): confirm that the shares table sits under the same database-level encryption at rest as other stored conversation data"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "Free users hitting the rate limit or daily token cap receive 429/503 errors with Retry-After, but there is no mention of a user-facing dashboard or notification showing remaining quota. Users will discover limits by hitting errors, which is a poor onboarding experience for a marketing-driven free tier.",
+     "evidence": "New GET /v1/usage endpoint returns your current daily token usage."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5613,
+    "tokOut": 1051,
+    "usd": 0,
+    "critMs": 91435
+   },
+   "wallMs": 91436
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [],
+   "usage": {
+    "calls": 1,
+    "tokIn": 6063,
+    "tokOut": 34,
+    "usd": 0,
+    "critMs": 50749
+   },
+   "wallMs": 50749
+  }
+ ],
+ "artifact": "# Release proposal: Lumen Gateway — Free tier GA + Playground share links\n\nOwner: platform · Deploy: Wed 2026-11-04 16:00 UTC, **conditional on the blocking pre-deploy gates in \"Rollout\" passing; if any is open at the go/no-go, the date slips** · Launch post: Wed 17:00 UTC (blog, HN, X), moves with the deploy\n\n*Status note: this is a proposal for a conditional go/no-go. The load test, QA re-runs, cost itemization and security confirmations are gates that have not yet been run, and no result is claimed here. Each result is recorded in this document before the go decision, and the deploy does not proceed on estimates.*\n\n## Release notes (public changelog)\n\n- **Free tier is generally available.** Sign up with email, no card required. Free accounts get **20 requests per minute** and **100k tokens per day** on `llama-3.1-8b-instruct` and `qwen2.5-7b-instruct`.\n- **Share from Playground.** Click \"Share\" on any playground session to get a link. Anyone with the link can view the conversation (a snapshot taken when you click Share). Re-running a shared conversation requires a free Lumen account and uses the viewer's own quota, never the owner's. Sharing is explicit and opt-in, and you can delete a share at any time. Deleting a share removes it from Lumen but cannot recall copies others have already saved or screenshotted.\n- New `GET /v1/usage` endpoint returns your current daily token usage.\n\n## Gateway config change (`deploy/prod/gateway.yaml`, diff)\n\nThis diff is the corrected prod config (`per: minute`), the same value staging used.\n\n```diff\n tiers:\n+  free:\n+    models: [llama-3.1-8b-instruct, qwen2.5-7b-instruct]\n+    rate_limit: { requests: 20, per: minute, burst: 5 }\n+    daily_tokens: 100000\n+    max_tokens_per_request: 4096\n+    pool: free-8b\n   pro:\n     models: [\"*\"]\n     rate_limit: { requests: 600, per: minute, burst: 120 }\n     daily_tokens: null\n     pool: shared-h100\n pools:\n+  free-8b:\n+    gpu: h100-80g\n+    min_replicas: 2\n+    max_replicas: 2   # hard cap: budget ceiling, no autoscaling beyond this\n+    overload: shed    # queue_depth > 8 for 60s returns 429/503 instead of adding replicas\n   shared-h100:\n     gpu: h100-80g\n     min_replicas: 6\n     max_replicas: 40\n```\n\n## Capacity and cost\n\n- Projection: 3,000 free DAU in month 1, avg 35 requests/day each, ~1.2k tokens per request. That is ~105k requests/day (~73 requests/minute average) and ~126M tokens/day.\n- Two H100 replicas are projected to serve this load at < 30% utilization **on each replica**. **This is an estimate, not a measurement; see \"Load validation\" below, which is a pre-deploy gate. The Wednesday deploy date is conditional on that gate passing. If it does not pass, the date slips rather than launching on the estimate.** At the GPU provider's on-demand rate of $2.49/h, 2 replicas × ~730 h × $2.49 = ~$3,632/month (~$3.6k). This is within the $4k/month free-tier budget **on GPU cost alone**. Non-GPU costs are not yet itemized (see \"Non-GPU costs\" below), so the all-in budget claim is not yet established.\n- The pool is hard-capped at 2 replicas (`min_replicas = max_replicas = 2`), so ~$3.6k/month is the worst-case GPU spend at the current rate, not just the projection. A third replica would cost ~$1.8k/month more and exceed the budget, so it is not allowed. If demand exceeds capacity, free traffic is shed (429/503) rather than scaled.\n- **Budget margin.** Headroom under the $4k budget is ~$370/month (~10%) after GPU cost. A GPU rate increase of more than ~10% would put two replicas over budget, and so would any other free-tier cost we have not itemized here. The spend alerts below (50%, 80%, page at 100%) are the early warning. If the rate rises, the budget owner must decide between a larger budget, scale-down, or a smaller pool. The cap itself is not raised automatically. The lack of automatic mitigation is deliberate: the only automatic responses available would be shrinking the pool or shedding more traffic, and both are product decisions that the budget owner should make. Replica count cannot grow on its own, so the only way to exceed the budget is a provider rate change or an unitemized cost, and the alerts cover both.\n- **Non-GPU costs (open gate, not yet itemized).** Gateway compute, network egress, database (including the new `shares` table), object storage and monitoring attributable to the free tier have not been estimated. With only ~$370/month of headroom, these could plausibly consume it. **Before deploy:** (a) platform estimates each non-GPU line item for the projected load; (b) the budget owner confirms in writing whether the $4k covers GPU only or all free-tier cost; (c) if all-in cost exceeds $4k, the budget is raised or the pool or limits are reduced before launch. Free-tier spend alerts must be set against all-in cost, not GPU alone. This is a **blocking** deploy gate (gate 6 below): the free tier does not launch until it is resolved, and no all-in budget claim is made until then. The proposal does not ask to deploy with this open; the headroom risk is why the gate blocks.\n- **Fixed cost is a deliberate choice.** The pool runs 2 warm replicas continuously, so the ~$3.6k is spent even if free traffic is low. On-demand billing is per hour of *allocated* replica time, not per request, so a warm replica is billed whether or not it serves traffic. Scale-to-zero or off-peak scale-down would reduce the billed hours and therefore the cost. We have not enabled it or modeled the saving. We chose a predictable, capped spend and no cold starts (a latency goal, not a capacity goal) for the first impressions of a launch. Scale-down and spot/reserved capacity are follow-ups after the first month of real utilization data. The budget claim does not depend on any discount. Scale-down would lower cost but would not add capacity, so it does not bear on the shedding behavior described below.\n- Pricing basis: on-demand only. Reserved and spot/preemptible capacity were not evaluated for launch. Spot interruptions would affect free-tier availability.\n- **Worst case on tokens.** The per-user cap bounds each account at 100k tokens/day. If all 3,000 projected users used their full allowance, that is 300M tokens/day (~3.5k tokens/s average; at ~1.2k tokens/request, ~250k requests/day, ~174 requests/minute). This is ~2.4× the projected token volume, or ~72% utilization on each of two replicas **only if** the < 30% estimate holds. That margin is thin and is conditional on an unmeasured estimate: if per-request cost is higher than assumed, the pool could saturate at well below full-cap usage. We have not validated that 2 replicas sustain it, and no claim of headroom at the worst case is made until \"Load validation\" reports measured numbers. If demand is higher than projected, or users hit their caps, the pool sheds rather than scales, so excess free traffic gets 429/503. Cost stays capped and paid traffic is unaffected, but the free experience degrades. This is the accepted trade-off of a hard budget.\n- **Launch-spike behavior.** The launch post (HN, X) may bring traffic well above the 3,000 DAU projection, and the pool cannot absorb it. Shed requests get a 429/503 with a `Retry-After` header and an OpenAI-style error body, so clients can back off. Shedding is automatic and self-recovering: once load falls below capacity the pool admits requests again without manual action (verified in the spike run). Manual intervention is needed only to change capacity or budget. Per-account limits (20 req/min, 100k tokens/day) bound any single user. If the saturation alert fires during launch, on-call may turn `free_signup_open` off to stop new signups while existing users keep working. Existing users may see degraded service during a spike; that is the accepted cost of the hard budget. Shed behavior under a transient spike is tested in \"Load validation\" (spike run), not assumed, and the QA re-run must confirm the shed response format.\n- **Single-replica failure and maintenance.** If one replica fails or is taken out for maintenance, the survivor must carry 100% of free traffic, i.e. the combined load of both replicas. At the projected < 30% utilization on each of two replicas, the combined load is < 60% of one replica, so the projection still fits on one replica, subject to load validation. The worst case does not fit: 2.4× the projected load would be ~144% of one replica, so with a replica down and users at their caps the pool would shed a substantial share of free requests (roughly a third on this estimate) by design. This is an accepted, bounded degradation, not an unplanned gap. It requires two unlikely conditions at once (a replica down and nearly every user at their cap), only free traffic is affected, and spend stays capped. Shed responses carry `Retry-After` and a clear error body, so users see a \"busy, retry\" message rather than an unexplained failure, and support can point to it. The single-replica worst-case run in \"Load validation\" measures the actual shed fraction, and the saturation alert pages on-call if shedding persists. A replacement for a failed replica replaces it rather than adding to it, so the 2-replica cap is not exceeded.\n- Free pool uses separate GPU replicas from `shared-h100`, so free traffic does not compete with paid traffic for GPU capacity. The two tiers share the gateway and network layers; the isolation claim covers GPU contention only, and \"Load validation\" checks paid latency while the free pool is saturated.\n- The config now enforces the documented limits (20 req/min and 100k tokens/day per account). The daily token cap bounds per-user consumption.\n\n### Load validation (pre-deploy gate)\n\n**Status: not yet run. This is an open, blocking gate, and no result is claimed anywhere in this document.** The deploy does not proceed until it passes.\n\nBefore deploy, run a load test against the `free-8b` pool configuration on staging that covers:\n- the projected load (~73 requests/minute, ~126M tokens/day) and the worst-case load (~300M tokens/day), recording utilization and queue depth;\n- **a launch-spike run.** Ramp request rate from the projected average to at least 5× the worst-case request rate (~870 requests/minute) within a few minutes, hold it for at least 15 minutes, then drop back to the projected load. Verify that: the pool stays at 2 replicas (no scale-out); excess requests are shed with 429/503, `Retry-After` and the OpenAI-style error body; admitted requests keep acceptable latency; queue depth and the saturation alert fire as designed; the pool recovers without manual action after the spike; paid-tier latency on `shared-h100` is unaffected; and turning `free_signup_open` off works mid-spike;\n- **both free models served by the pool at once.** Use a realistic mix of `llama-3.1-8b-instruct` and `qwen2.5-7b-instruct` traffic, plus skewed runs where nearly all traffic hits one model. Record how the two models are placed on the two replicas (both resident on each replica, or split), GPU memory headroom, and any model-load or switching latency, because the < 30% estimate was not derived per model;\n- a single-replica run (one replica removed) at the projected load, to confirm the survivor stays within capacity, and at the worst-case load, to measure how much is shed. Run it with the same model mixes as above;\n- paid-tier latency on `shared-h100` while the free pool is saturated and shedding.\n\n**Pass criteria (to be confirmed by platform and recorded with the results):** at the projected load, with both replicas up, the pool sheds essentially nothing and per-replica utilization is measured and recorded (the < 30% figure is checked, not assumed); at the projected load on a single replica, the survivor stays within capacity without sustained shedding; at the worst-case load, the measured utilization and shed fraction are recorded and the budget owner explicitly accepts them (the 72% figure is not assumed); the spike run meets every check listed above; and paid-tier latency is unaffected throughout. If projected-load utilization is materially above the estimate, the thin worst-case margin does not hold, and the capacity and cost sections are revised (smaller launch, lower limits, or a larger budget) before launch.\n\nIf the \"< 30% utilization\" estimate does not hold, the capacity and cost sections must be revised before launch.\n\n## Playground share links (`apps/playground/src/share.ts`)\n\n```ts\nexport async function createShareLink(session: Session, project: Project): Promise<string> {\n  const share = await db.shares.insert({\n    id: randomId(128), // unguessable, 128-bit random\n    sessionId: session.id,\n    projectId: project.id,\n    messages: session.messages, // snapshot at share time\n    model: session.model,\n    createdAt: new Date(),\n  });\n  // No credentials in the URL. Re-running requires the viewer to sign in\n  // and is billed to the viewer's own project quota.\n  return new URL(\"/s/\" + share.id, PLAYGROUND_ORIGIN).toString();\n}\n```\n\n```ts\n// apps/playground/src/routes/s/[id].ts\nexport async function load({ params, locals }) {\n  const share = await db.shares.get(params.id);\n  if (!share) throw error(404);\n  return {\n    messages: share.messages,\n    model: share.model,\n    canReplay: Boolean(locals.user), // replay uses locals.user's own project key server-side\n  };\n}\n```\n\n- The owner's API key is never placed in a URL, page payload or share record. Replays run server-side under the signed-in viewer's own project and free-tier limits.\n- Share creation shows a confirmation dialog: \"Anyone with this link can read this entire conversation. Don't share conversations containing personal data, secrets or other people's information. If you delete the link later, we remove it from Lumen, but we can't recall copies others have already saved, screenshotted or forwarded.\" Sharing is never automatic.\n- **Access model.** A share is a capability link: anyone holding the URL can read the snapshot, and viewing deliberately does not require an account. Only replay requires sign-in. The link has no expiry and no per-viewer tracking, and we do not log or expose who viewed it. This is a deliberate choice, with no viewer analytics collected. We do not scan conversation content or obtain consent from third parties mentioned in it; responsibility for content rests with the sharer, who is warned in the dialog. Sharing is explicit and opt-in per conversation, and the dialog is the point of consent. Content scanning and third-party consent are out of scope for this release. The owner's control is deletion. Playground → History lists the account's active shares so an accidentally exposed link can be found and deleted. Link expiry and view limits are not part of this release and are candidates for a follow-up, as is content scanning. We accept this residual exposure for launch because every share is an explicit, warned, per-conversation action, ids cannot be guessed, and the owner can delete at any time; it is a known trade-off, not an oversight, and the kill switch (`share_links_enabled`) is available if abuse or leak reports appear. Because ids are 128-bit random, enumerating or guessing links is computationally infeasible. The exposure risk is a link that leaks (screenshot, history, forwarding). That link stays readable until its owner deletes it, as the dialog states, and the owner will not be told that it leaked, because we deliberately collect no viewer data. Adding viewer tracking would mean retaining data about third parties who open a link, and we have chosen not to do that for this release. Expiry is the most likely follow-up if leak reports appear. A viewer who already holds the link can already read the conversation, so view-rate limiting is about abuse, scraping of known links and load rather than secrecy. **Open item before deploy (not yet confirmed):** confirm a per-IP rate limit applies to `/s/*` (at the edge or in the route), and add one if it does not. This is a deploy gate (gate 5); if it is not resolved, `share_links_enabled` stays off and share links do not ship.\n- **Encryption at rest.** The share record stores the full message snapshot. **Open item before deploy (not yet confirmed):** confirm that the `shares` table sits under the same database-level encryption at rest as other stored conversation data, and record the answer here. If it does not, that is a launch blocker for this feature (`share_links_enabled` stays off until resolved). This is gate 4.\n- Share pages are served with `noindex`, `Referrer-Policy: no-referrer` and `Cache-Control: no-store`. Open Graph tags are generic (title and Lumen branding only) and do not include conversation content, so unfurls on Slack/X don't leak text and link-preview services have no conversation text to cache.\n- Shares can be deleted from Playground → History. Deletion is a single database delete, so once it commits the share returns 404 and the stored messages are purged, and no later request can read it. Account deletion also deletes all of the account's shares. Deletion is intentionally immediate and permanent, with no soft-delete grace period, because it is the owner's remedy for accidental exposure and a retained copy would defeat it. **Limits of deletion:** it removes our copy only. It cannot retract content that someone already viewed, saved, screenshotted or forwarded, or that a browser or third party cached before deletion. The dialog and changelog say so explicitly. Deleting a share does not touch the original session, so an accidentally deleted share can be re-created by clicking Share again (it gets a new URL).\n- Kill switch: the `share_links_enabled` flag disables creation and viewing of share links immediately.\n\n## Logging\n\n- Gateway access logs redact the `Authorization` header and drop request bodies; we log model, token counts, latency, status and project id only (unchanged from current prod).\n\n## QA summary (staging)\n\n- Signup → first free request in < 60s: pass.\n- Free-tier model allow-list: request to `llama-3.1-70b-instruct` with a free key returns 403: pass.\n- Rate limiting: 21st request inside a minute returned 429 with `Retry-After`: pass on staging, which used `per: minute`. The prod config previously differed (`per: second`) and has been corrected to match. **Deploy gate: QA must be re-run against the exact prod `gateway.yaml` (including `daily_tokens: 100000` and `max_replicas: 2`) and pass before deploy. This re-run has not yet been done, and the deploy does not proceed without it.** This gate exists because the earlier staging pass did not cover the prod file. Any issue introduced by the correction is caught here, not in production.\n- Share link: create, open in incognito, re-run, delete → 404: passed against the earlier implementation only. **Deploy gate: must be re-run and pass against the revised flow before deploy** (no key in the URL, replay requires sign-in, replay billed to the viewer, and unauthenticated replay returns 401). This has not yet been done. If it fails or is not completed, `share_links_enabled` stays off and the free tier ships without share links.\n- `/v1/usage` matches billing ledger within 0.1%: pass.\n\n## Rollout\n\n- Deploy gateway config and playground at 16:00 UTC, flag `free_signup_open` on at 16:45 UTC. This sequence runs only after the blocking gates below are recorded as passed.\n- **Pre-deploy gate status (all open as of this proposal; none is claimed complete):**\n  1. QA re-run against exact prod `gateway.yaml`: not done.\n  2. QA re-run of the share-link flow against the revised implementation: not done.\n  3. Load validation on staging (including the two-model mix and the launch-spike run): not run.\n  4. Encryption-at-rest confirmation for `shares`: not confirmed.\n  5. Per-IP rate limit on `/s/*`: not confirmed.\n  6. Non-GPU cost itemization and budget-owner confirmation of what the $4k covers: not done.\n\n  Gates 1, 3, 6 and the free-tier part of the release block the deploy. Gates 2, 4 and 5 affect share links only, and if any is unmet, `share_links_enabled` stays off and the free tier ships without share links. Each gate is recorded in this document as passed (with the result) before the go decision. If a blocking gate is not passed, the deploy date slips.\n- Alerting (free pool is capped at 2 replicas, so alerts target spend and saturation, not replica count):\n  - Free pool queue depth > 8 for 5 min pages on-call (the pool is saturated and shedding).\n  - Error rate > 2% pages on-call.\n  - Free-tier spend (all-in once gate 6 defines the scope; GPU at minimum): alert at 50% and 80% of the $4k monthly budget, and page at 100%.\n  - **Idle-spend alert:** if `free_tier_enabled` is off and `free-8b` still has running replicas for more than 30 minutes, page on-call. This catches a rollback where the pool was not scaled down.\n  - Any change to `max_replicas` for `free-8b` requires budget-owner approval.\n- Rollback:\n  - `free_signup_open` off stops new signups.\n  - `free_tier_enabled` off (gateway flag) makes the gateway reject all free-tier keys immediately (403 with a \"free tier paused\" message). Paid projects are unaffected. No key migration or revocation is needed, and turning the flag back on restores the keys. **The flag alone does not stop GPU spend:** with `min_replicas: 2` the `free-8b` pool does not scale down by itself, so ~$1.2k per 10 days of idle cost continues until the pool is set to `min_replicas: 0` and `max_replicas: 0`.\n  - **Single-action free-tier rollback.** To remove the two-step failure mode, a single pre-staged, reviewed config change does both things at once: it sets `free_tier_enabled: off` and sets `free-8b` `min_replicas: 0` / `max_replicas: 0`. The runbook's free-tier rollback is that one deploy. Budget-owner approval for its use in a rollback is obtained in advance, so no approval is needed mid-incident. Restoring the previous values resumes the free tier. Flipping only the flag (for a short pause where the pool should stay warm) is a deliberate, separate choice, and the idle-spend alert above covers a flag-only flip that is left in place.\n  - `share_links_enabled` off disables share links independently.",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 47599,
+  "tokOut": 46025,
+  "usd": 0.6506180000000001,
+  "critMs": 266097
+ },
+ "status": "cleared"
+}

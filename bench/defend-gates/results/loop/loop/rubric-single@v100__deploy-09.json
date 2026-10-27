@@ -1,0 +1,89 @@
+{
+ "approach": "rubric-single@v100",
+ "case": "deploy-09",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "ui",
+     "severity": "major",
+     "claim": "The announcement text says the SMS alert feature is 'for every cardholder', but the artifact specifies it is only available on adult and teen (13+) cards, not juvenile cards. This is a factual error in the announcement copy that will mislead patrons.",
+     "evidence": "Announcement text says exactly: \"Text alerts for holds, for every cardholder.\" vs \"The option appears on adult and teen (13+) cards only; juvenile cards do not show it\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The locker pickup code is a 6-digit numeric code delivered via SMS. With only 1,000,000 possible codes and no stated rate limiting on code entry attempts beyond the 5-attempt lockout per cell, a determined attacker could brute-force codes, especially since codes expire at the pickup deadline (potentially days).",
+     "evidence": "Code 482913 ... Codes are single-use, expire at the pickup deadline, and 5 wrong attempts lock the cell and alert branch staff."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The 72-hour unconfirmed number deletion creates a race condition: if a patron starts the opt-in flow but doesn't receive or reply to the confirmation text within 72 hours (due to carrier delays, missed text, etc.), their number is deleted. However, the artifact doesn't specify whether this deletion is handled gracefully or could cause errors if the confirmation text arrives after deletion and the patron then replies YES.",
+     "evidence": "Unconfirmed numbers are deleted after 72 h."
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The spend cap of $900/month is less than 2x the forecast of $460/month. If the daily per-patron cap of 3 texts is hit by many patrons simultaneously (e.g., a popular new release with many holds), the actual cost could approach the cap much faster than expected, triggering the fallback for all patrons when only a subset should be affected.",
+     "evidence": "Forecast 38,000 texts/month at about $0.012 all-in = ~$460/month ... Provider account hard spend cap $900/month"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The locker hold remapping script `scripts/remap_locker_holds.sql` is only tested in staging on 1,200 rows. In production, there could be significantly more locker holds at any given time, and the script's behavior at scale is unverified.",
+     "evidence": "scripts/remap_locker_holds.sql (tested in staging on 1,200 rows)"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "The artifact mentions ADA reach range, high-contrast mode, audio guidance, and adjustable text size for the lockers, but doesn't specify whether the touchscreen interface supports screen readers or keyboard navigation for patrons who cannot use the touchscreen directly.",
+     "evidence": "Touchscreen and card reader mounted within ADA reach range (max 48 in); screen has high-contrast mode, audio guidance through a headphone jack, and adjustable text size."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2236,
+    "tokOut": 682,
+    "usd": 0,
+    "critMs": 45026
+   },
+   "wallMs": 80777
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The rollback description for `sms_holds` off states opt-in records are kept so turning the flag back on needs no re-consent, but the permanent-withdrawal path deletes numbers and consent records within 30 days. If the flag is turned off and then back on within 30 days after a permanent withdrawal decision, it is unclear whether records still exist; the two paths should specify the decision point that triggers permanent deletion vs. temporary retention.",
+     "evidence": "Opt-in records are kept so turning the flag back on needs no re-consent. If SMS is withdrawn permanently, numbers and consent records are deleted within 30 days and patrons are emailed."
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The theoretical ceiling calculation (3 texts x $0.012 x 210k patrons per day) is not computed or stated, leaving the true worst-case daily/monthly cost unstated. While the $900 hard cap exists, the ceiling math should be shown to confirm the cap is appropriately sized.",
+     "evidence": "Even if all 210k cardholders opted in, this is a theoretical ceiling, not a forecast"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2565,
+    "tokOut": 331,
+    "usd": 0,
+    "critMs": 110493
+   },
+   "wallMs": 131211
+  }
+ ],
+ "artifact": "# Release proposal: SMS hold alerts and 24/7 pickup lockers\n\nOwner: Patron Services Digital · Launch: Mon 2026-11-09 · Announcement: library site, branch posters and e-newsletter, same day 10:00 · Change: RPL-2291\n\n## Summary\n\nPatrons can choose to get a text when a hold is ready, in addition to (or instead of) the current email. Three branches (Oak Street, Millbrook, Harbor) open 24/7 pickup lockers so holds can be collected outside opening hours. Both ship behind flags `sms_holds` and `locker_pickup` in `config/prod.flags.yaml`.\n\n## SMS opt-in flow\n\n1. My Account > Notifications > \"Text me when a hold is ready\". Phone field plus an unchecked checkbox with the disclosure: \"Riverbend Library will text you about holds. Msg frequency varies. Msg & data rates may apply. Reply STOP to cancel, HELP for help. Consent is not required to borrow.\"\n2. We send a confirmation text; texts start only after the patron replies YES. Unconfirmed numbers are deleted after 72 h. Confirmation is tied to a pending-confirmation record that is deleted with the number; a YES arriving after deletion matches no record, sends no alert opt-in, and triggers an auto-reply \"We couldn't confirm your request. Please sign up again in My Account.\" No error is raised and no texts are sent. The patron's account shows the option as not enabled, so they can retry.\n3. STOP (and carrier synonyms) is honored by the provider and our signed webhook, which clears the opt-in flag. HELP returns the branch phone number and opt-out instructions.\n- 10DLC brand and campaign are registered and approved (campaign CX7R2Q, use case \"account notifications\").\n- Texts are sent only 08:00-20:00 patron local time; anything later is queued to 08:00. Max 3 texts per patron per day; extra holds are batched into one message.\n- English and Spanish, following the patron's existing language preference.\n- The option appears on adult and teen (13+) cards only; juvenile cards do not show it, and guardians can opt in with their own number on the linked guardian account.\n\n## Message content\n\n> Riverbend Library: 2 holds ready at Oak St locker. Code 482913, pick up by Sat Nov 14. Details: rpl.org/h. Reply STOP to opt out.\n\n- No titles, authors or item counts by format appear in any text. The link opens the account page after normal login.\n- The locker opens only after the patron scans their library card (or enters card number + PIN, existing ILS PIN lockout applies) AND enters the code. The code is a second factor, not the sole credential: an attacker would also need a valid card or card number + PIN, so guessing codes alone cannot open a cell. Codes are single-use, expire at the pickup deadline, and 5 wrong attempts lock the cell and alert branch staff. Failed attempts are also limited per card (5 failures in 15 min suspends locker access for that card for 1 h) and per locker bank (20 failures in 15 min puts the bank in staff-assist mode and alerts staff).\n\n## Data and privacy\n\n- Phone number and consent record (timestamp, IP, checkbox text version) are stored in the patron record; the phone column uses the same column encryption as the existing email field.\n- The notification log stores notification id, patron id, branch, channel, and delivery status. It holds no item or title ids and is purged after 30 days, consistent with our no-borrowing-history policy.\n- The SMS provider is covered by our existing DPA (signed 2025-03); it retains message logs 30 days and is barred from marketing use.\n- Privacy policy section 4 updated to list SMS; legal review complete (ticket LGL-118).\n\n## Lockers\n\n- 3 locker banks (48 cells each) installed and acceptance-tested by the vendor and branch staff on 2026-10-21/22.\n- Touchscreen and card reader mounted within ADA reach range (max 48 in); screen has high-contrast mode, audio guidance through a headphone jack, and adjustable text size. Holds stay collectible at the service desk during opening hours for anyone who prefers it.\n- Items left past the deadline are returned to the holds shelf by staff next morning and the hold is extended 3 days, with a notice on the patron's chosen channel.\n\n## Cost\n\n- Forecast 38,000 texts/month at about $0.012 all-in = ~$460/month, funded from the notifications line (approved, budget memo BM-26-14).\n- The 3-texts-per-patron-per-day cap bounds the worst case: 3 texts x $0.012 x opted-in patrons per day. Even if all 210k cardholders opted in, this is a theoretical ceiling, not a forecast; a demand spike (e.g. a popular release) is absorbed by batching extra holds into one message, so spikes raise cost far less than hold volume does.\n- Provider account hard spend cap $900/month (about 2x forecast), alert to ops at 70% (~$630) so ops can raise the cap or investigate before it is hit. On cap, texts stop and every opted-in patron falls back to their previous notice method (email or automated phone call, which stays on file), so no alert is lost. The fallback applies to all patrons by design, since the provider cap cannot be applied to a subset.\n\n## Monitoring\n\n- Dashboard: texts sent, delivery rate, STOP rate, queue depth, locker cell status.\n- Alerts: delivery failures > 5% for 15 min, webhook signature failures > 0, any locker bank offline > 10 min (pages branch manager + vendor; vendor SLA 4 h on-site), locker failed-attempt rate limits tripped.\n\n## QA summary\n\nAll QA ran on staging with `config/prod.flags.yaml` copied verbatim, against the production SMS provider account in test mode and a locker bank in the staff room.\n\n| Check | Result |\n|---|---|\n| Opt-in, YES confirm, STOP, HELP, re-opt-in (EN + ES) on 4 carriers | Pass |\n| Quiet hours: hold ready 21:30 → text at 08:00 | Pass |\n| Juvenile card: SMS option not shown; guardian account opt-in works | Pass |\n| Daily cap: 5 holds same day → 1 batched text | Pass |\n| Text body contains no title/author for 500 generated holds | Pass |\n| Locker: card+code, card number+PIN+code, wrong code ×5 lockout + staff alert | Pass |\n| Spend cap reached (test cap $5) → fallback to email / phone call | Pass |\n| Opt-in form with NVDA + Firefox, VoiceOver iOS; 320/768/1280 px layouts | Pass |\n| Staff pilot week (64 staff cards, real holds) | 0 misdelivered texts; 2 copy fixes shipped and re-verified |\n\n## Rollout\n\n1. Nov 2-6: flags on for staff cards only (pilot above).\n2. Nov 9 09:00: flags on for all cardholders; announcement goes out at 10:00 only after a smoke test of one live text and one locker pickup per branch.\n3. Announcement text says exactly: \"Text alerts for holds for adult and teen (13+) cardholders; guardians can sign up for children's cards' holds on their own account. 24/7 pickup lockers at Oak Street, Millbrook and Harbor.\"\n\n## Rollback\n\n- `sms_holds` off: no new texts; every opted-in patron gets hold notices by their previous method (email or automated phone call, kept on file). Opt-in records are kept so turning the flag back on needs no re-consent. If SMS is withdrawn permanently, numbers and consent records are deleted within 30 days and patrons are emailed.\n- `locker_pickup` off: holds currently assigned to a locker (`pickup_location` = `OAK-LKR` / `MIL-LKR` / `HAR-LKR`) are remapped to the branch desk by `scripts/remap_locker_holds.sql` (tested in staging on 1,200 rows), staff move items to the holds shelf, hold deadlines extend 3 days and patrons are notified of the new location.",
+ "fixerUsage": {
+  "calls": 1,
+  "tokIn": 3740,
+  "tokOut": 2752,
+  "usd": 0.042476,
+  "critMs": 15303
+ },
+ "status": "cleared"
+}

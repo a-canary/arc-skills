@@ -1,0 +1,70 @@
+{
+ "approach": "cascade",
+ "case": "deploy-11",
+ "rounds": [
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Offline expiry relies on device time, so a user who deliberately sets the clock back between download and valid_until would see a color rating after real expiry. This takes a deliberate user action, and the artifact already guards the earlier-than-download case. The first pass rated it a blocker, which overstates it.",
+     "evidence": "if the device clock reads earlier than that, the stored forecast is treated as expired."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The CDN TTL and client cache policy are not stated, so the maximum delay before an upward rating revision reaches users is unspecified beyond the 10-minute poll. The invariant is only against showing expired ratings, but a documented bound would help. The card does show the issue time.",
+     "evidence": "Our backend polls WADE every 10 min and serves zone geometry + ratings from our CDN."
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The artifact does not say whether the origin per-IP rate limit sees real client IPs or CDN edge IPs. Misconfiguration could throttle legitimate cache misses at launch traffic (about 144k origin requests/day).",
+     "evidence": "rate limited at origin to 120 req/min per IP (CDN-cached responses are not counted)"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The request carries a bbox, which is coarse location-like data. The artifact says location is not sent but does not state retention for access logs. Zone-id-only analytics is a good mitigation.",
+     "evidence": "GET /avy/v1/zones?bbox=… ... device location is not sent"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The 92% CDN hit rate is a projection, and bbox query strings could fragment the cache if they are not tile-aligned. The $400 alert and the 6-instance autoscaling cap bound the exposure.",
+     "evidence": "Projected 1.8M zone requests/day at 92% CDN hit rate; origin cost ~$140/month."
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "The screen-reader announcement is specified only for active zones. Expired and no-forecast zones have no stated announcement, although the visible text is specified.",
+     "evidence": "zone announced as \"[zone], danger 3 Considerable, issued [time]\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "The layer depends on a single data source (WADE) and an unnamed CDN, with no stated exit path. The source is contractually required, so this is not gate-worthy.",
+     "evidence": "ABSENT: no alternate source or CDN vendor named"
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 10208,
+    "tokOut": 12378,
+    "usd": 0.05025043,
+    "critMs": 65249
+   },
+   "wallMs": 118895
+  }
+ ],
+ "artifact": "# Release proposal: Avalanche forecast layer in Ridgeline Maps 6.12\n\nOwner: Maps team · App store release: iOS + Android 6.12, Thu 2026-11-19 · Remote flag on + blog post + in-app card: Mon 2026-11-23 · Change: RM-6120\n\n## What ships\n\nA map layer that colors backcountry forecast zones by today's avalanche danger rating, using forecasts published by the regional avalanche centers in the Western Avalanche Data Exchange (WADE). Tapping a zone opens a summary card and a link to the center's full forecast.\n\n- Coverage at launch: the 19 WADE member centers in the US and Canada (list in `config/avy_centers.json`, same list in the blog post).\n- Layer toggle: Map layers > Avalanche forecast. Free for all users, no account needed.\n\n## Data source and license\n\n- WADE data agreement signed 2026-09-30 (contract C-2209): display in our app is permitted for free and paid users as long as the layer is not behind a paywall; we must attribute and link to the issuing center and may not alter ratings or forecast text.\n- The card shows the center's name and logo (permitted in the agreement), the issue time, the valid-until time, and \"Read the full forecast\" linking to the center's page.\n- We show the rating exactly as issued (1-5 plus name). We never interpolate, smooth, or forecast ratings ourselves.\n\n## Danger display\n\n- Forecasts rate three elevation bands. The zone color uses the highest of the three; the card lists all three bands with their ratings.\n- Zones use the standard North American danger scale colors, each zone label also shows the number and name (e.g. \"3 Considerable\"), and the legend lists all five levels with names.\n- Zones with no current forecast (out of season, or none issued today) show a gray hatched fill and \"No current forecast\" — never a color.\n- Card text: \"Avalanche forecasts are issued by [center]. Conditions change. Read the full forecast and make your own assessment before entering avalanche terrain.\" Card text and the terms-of-use update were reviewed by legal (LGL-902).\n\n## Freshness and offline\n\n- Our backend polls WADE every 10 min and serves zone geometry + ratings from our CDN.\n- Each forecast carries `valid_until`. After it passes, the zone turns gray hatched with \"Forecast expired [time]\"; the app never shows an expired rating in color, including in offline maps.\n- Offline: when a user downloads an offline map area, the current forecast for those zones is stored with it. The expiry rule above applies on-device using device time, so an offline phone in the field shows \"Forecast expired\" once `valid_until` passes. The app also stores the server time at download; if the device clock reads earlier than that, the stored forecast is treated as expired.\n- If WADE is unreachable, our API keeps serving forecasts still inside `valid_until` and expires them on time; nothing is extended. Alert to Maps on-call after 30 min without a successful poll.\n\n## Privacy and security\n\n- The app requests forecasts by zone id for the visible map tiles; device location is not sent. Analytics adds two events (layer toggled, card opened) with zone id only, no location or account id.\n- The new endpoint `GET /avy/v1/zones?bbox=…` is read-only, unauthenticated, rate limited at origin to 120 req/min per IP (CDN-cached responses are not counted), and serves only WADE public data.\n\n## Cost\n\n- Projected 1.8M zone requests/day at 92% CDN hit rate; origin cost ~$140/month. CDN budget alert at $400/month; origin autoscaling capped at 6 instances.\n\n## Monitoring\n\n- Dashboard: WADE poll success, last update per center, endpoint 5xx and p95, CDN hit rate, crash-free sessions on 6.12.\n- Pages Maps on-call: no successful poll for 30 min, any center not updated for 26 h during its season, endpoint 5xx > 1% for 10 min.\n\n## QA summary\n\nQA ran on release candidates 6.12.0 (iOS build 6120.4, Android 612004) with `avalanche_layer=true` and the production `config/avy_centers.json`, against the production WADE feed.\n\n| Check | Result |\n|---|---|\n| All 19 centers: all three band ratings, issue time, valid-until and link match the center's own site for 3 consecutive days | Pass, 0 mismatches |\n| Expiry: device clock set past `valid_until`, online and in airplane mode with an offline map | Pass, gray \"Forecast expired\" |\n| Device clock moved earlier than offline download time | Pass, treated as expired |\n| Out-of-season center (no forecast) | Pass, gray hatched \"No current forecast\" |\n| WADE poll blocked 2 h in staging | Pass, valid forecasts served, expired ones gray, alert at 30 min |\n| Color vision simulation (deuteranopia, protanopia, tritanopia): levels distinguishable via label text | Pass |\n| VoiceOver / TalkBack: zone announced as \"[zone], danger 3 Considerable, issued [time]\"; card fully readable; 200% text | Pass |\n| Small screens (iPhone SE, 360 dp Android) and dark map style: labels legible, card scrolls | Pass |\n| Network capture: no location in avalanche requests or analytics | Pass |\n| `avalanche_layer=false`: layer hidden, offline forecast data purged on next launch | Pass |\n\n## Rollout\n\n1. Nov 19: 6.12 released with `avalanche_layer=false` for everyone; public store notes do not mention the layer yet. App Review notes for 6.12 describe the layer and the remote flag, and the review build had it enabled.\n2. Nov 19-22: flag on for staff and 40 ski-patrol beta testers.\n3. Nov 23 08:00: flag on for 100%. Blog post and in-app card go live at 10:00 after a check that all 19 centers render. Blog post: \"Avalanche forecasts from 19 avalanche centers across the US and Canada, now in Ridgeline Maps. Free for everyone.\"\n4. Store notes for 6.13 mention the layer once it is live for everyone.\n\n## Rollback\n\n- Set `avalanche_layer=false` (remote config, takes effect on next app foreground). The layer and card disappear, and on-device forecast data stored with offline maps is deleted, so no stale ratings remain on phones.\n- A single center can be removed by editing `config/avy_centers.json` (e.g. if a center asks us to stop); its zones disappear within 10 min and any offline copies expire at their `valid_until`.\n- The endpoint is additive; disabling it affects nothing else.",
+ "fixerUsage": {
+  "calls": 0,
+  "tokIn": 0,
+  "tokOut": 0,
+  "usd": 0,
+  "critMs": 0
+ },
+ "status": "cleared"
+}
