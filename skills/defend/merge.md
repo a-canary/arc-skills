@@ -33,5 +33,9 @@ hard-merge's second-disjoint-reviewer rule. Override = ledger note row.
 
 **Receipt (mechanical).** After verifying the verdict, the author posts it on the
 *reviewed* SHA: `skills/defend/bin/defend-receipt CLEAR|BLOCK <pr> <sha> -R owner/repo "<summary>"`
-(a `defend/merge` commit status). `hooks/defend-merge-guard.sh` (PreToolUse Bash) blocks
-`gh pr merge` unless head carries a `defend/merge` success — a push after review voids it.
+(a `defend/merge` commit status). Enforcement is GitHub branch protection on `main`
+requiring the `defend/merge` status (enforce_admins on), so every merge path — `gh pr merge`,
+`gh api`, web UI, `git push` — needs head to carry a success; a push after review voids it.
+Not a command-text hook: those leak and over-block (repos-76u counsel, 2026-10-27).
+Enable per repo (operator): `gh api -X PUT repos/<owner>/<repo>/branches/main/protection --input` a body with
+`required_status_checks.contexts=["defend/merge"]`, `enforce_admins=true`.
