@@ -10,7 +10,7 @@ TRASH=${TRASH:-$HOME/trash}
 TMPD=${TMPD:-/tmp}
 LOG=${LOG:-$HOME/.cache/trash-pressure.log}
 cd / || exit 1   # never let a relative path resolve against cron's cwd
-exec 9>"$HOME/.cache/trash-pressure.lock"; flock -n 9 || exit 0   # lock outside $TMPD so it is never a candidate
+mkdir -p "$HOME/.cache"; exec 9>"$HOME/.cache/trash-pressure.lock"; flock -n 9 || exit 0   # lock outside $TMPD so it is never a candidate
 log() { echo "$(date -Is) $*" >> "$LOG"; }
 
 free_kb=$(df --output=avail -k / | tail -1 | tr -d ' ')
@@ -58,7 +58,7 @@ while IFS= read -r p; do
   kb=$(du -sk -- "$p" 2>/dev/null | cut -f1); kb=${kb:-0}
   extra=(); case $p in "$TRASH"/*) [ -e "$p.REASON" ] && extra=("$p.REASON");; esac
   if [ -n "${DRY:-}" ]; then log "dry: would delete $p (${kb}K)"
-  elif rm -rf -- "$p" "${extra[@]}"; then log "deleted $p (${kb}K)"
+  elif rm -rf --one-file-system -- "$p" "${extra[@]}" 2>>"$LOG"; then log "deleted $p (${kb}K)"
   else log "delete failed: $p"; continue; fi
   freed=$((freed + kb))
   [ "$freed" -ge $((TARGET_GB * 1024 * 1024)) ] && break
