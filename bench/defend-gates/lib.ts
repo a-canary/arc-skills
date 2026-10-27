@@ -5,11 +5,13 @@ import { readdirSync, readFileSync, existsSync } from "fs";
 
 // Corpus + adjudicated key amendments (corpus-amend/<id>.json: unkeyed defects that two independent adjudicators confirmed on a
 // "clean" control, see adjudicate.ts). originalVerdict keeps the authoring key for the grey raw-key column.
+// BENCH_CORPUS=corpus-v2 selects the hard tier; amendments live in <corpus>-amend/.
+export const CORPUS = process.env.BENCH_CORPUS ?? "corpus";
 export const isDefectLabel = (l: string) => /^[dx]\d+$/.test(l);
 export function loadCorpus(dir: string): Record<string, any> {
   const read = (p: string) => JSON.parse(readFileSync(p, "utf8"));
-  return Object.fromEntries(readdirSync(`${dir}/corpus`).filter((f) => f.endsWith(".json")).sort().map((f) => {
-    const k = read(`${dir}/corpus/${f}`), am = `${dir}/corpus-amend/${f}`;
+  return Object.fromEntries(readdirSync(`${dir}/${CORPUS}`).filter((f) => f.endsWith(".json")).sort().map((f) => {
+    const k = read(`${dir}/${CORPUS}/${f}`), am = `${dir}/${CORPUS}-amend/${f}`;
     k.originalVerdict = k.expected_verdict;
     if (existsSync(am)) { k.expected_verdict = "ATTACKS"; k.defects = [...k.defects, ...read(am).defects]; k.amended = true; }
     return [k.id, k];

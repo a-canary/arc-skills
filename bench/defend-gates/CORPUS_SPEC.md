@@ -46,3 +46,16 @@ security, privacy, sovereignty (vendor lock-in, data residency, self-hostability
 - Defective cases may also contain decoys.
 - Do not mention this benchmark, reviewers, or lenses anywhere in `context`/`artifact`.
 - Validate every file parses: `bun -e 'for (const f of process.argv.slice(1)) JSON.parse(await Bun.file(f).text())' corpus/<your files>`.
+
+## Hard tier (`corpus-v2/`)
+
+v1 saturated: every approach found ~100% of seeded defects, so only TNR discriminated.
+v2 keeps the file format and all rules above, and changes what a defect is:
+
+- Categories (each case lists one in `"category"`): `complex-bug` (multi-hop logic, concurrency/ordering, numeric/time/unit, state machines, cache invalidation), `subtle-ui` (CSS stacking/overflow/layout shift, focus and keyboard flow, state desync between components, responsive breakpoints, i18n/RTL/long strings), `second-order` (feedback loops, cost/data growth curves, incentive and metric gaming, retry storms, one-way doors that only bite later, ops burden that compounds), `poor-design` (wrong abstraction or layering, coupling that blocks the stated roadmap, duplicating a module the context says exists, untestable seams, solving a different problem than the one stated).
+- No defect may be visible in a single line. Each must need at least one of: tracing values across two or more hunks/sections, simulating runtime behaviour (ordering, timing, growth over months), or combining a fact in `context` with something in `artifact`.
+- `evidence` is 2+ short quotes joined by ` + `, or `ABSENT: ...` plus the quote that makes the absence matter.
+- Each defect adds `"why_hard"`: one sentence naming the reasoning step a skim misses.
+- 1-2 defects per defective case. No obvious defects at all: a careful reviewer reading line-by-line for 2 minutes should miss them; one reasoning about behaviour should find them.
+- Artifacts 80-220 lines. Decoys are mandatory (2-3 per case) and should look exactly like the real defects' category: an apparent race that a lock two hunks away prevents, a growth curve the plan already caps, etc.
+- CLEAR controls are equally complex and in the same categories; they must survive a hostile senior reviewer.

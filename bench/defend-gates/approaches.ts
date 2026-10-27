@@ -4,6 +4,7 @@ import { type Usage, callJson, stage, zero } from "./lib";
 
 export const W = process.env.BENCH_W ?? "haiku"; // e.g. v100:qwen3.8-27b for the sovereign tier
 export const S = process.env.BENCH_S ?? "sonnet";
+export const E = process.env.BENCH_E ?? S; // escalation reviewer for escalate-blind (target: opus; benched on qwen first)
 
 export type Attack = { lens: string; severity: "blocker" | "major" | "minor"; claim: string; evidence: string };
 export type Verdict = { verdict: "CLEAR" | "ATTACKS"; confidence?: number; attacks: Attack[] };
@@ -214,5 +215,13 @@ STOP at the FIRST blocker or major finding and output immediately with that sing
   "single-strong": {
     desc: "reference: 1 strong-tier (sonnet) agent, full rubric",
     fn: async (c) => { const u = zero(); return { ...(await rubricOnce(u, c, S)), usage: u }; },
+  },
+  "escalate-blind": {
+    desc: "worker rubric review; if it CLEARs, an escalation reviewer (BENCH_E) attacks blind (never sees round 1); ATTACKS if either blocks",
+    fn: async (c) => {
+      const u = zero(), first = await rubricOnce(u, c);
+      if (first.verdict === "ATTACKS") return { ...first, usage: u };
+      return { ...(await rubricOnce(u, c, E)), usage: u };
+    },
   },
 };

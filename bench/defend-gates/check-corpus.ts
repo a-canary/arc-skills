@@ -1,8 +1,9 @@
 // bun check-corpus.ts — schema + ground-truth sanity for corpus/*.json. Exits 1 on any violation.
 import { readdirSync, readFileSync } from "fs";
 import { LENSES } from "./approaches";
+import { CORPUS } from "./lib";
 
-const dir = `${import.meta.dir}/corpus`;
+const dir = `${import.meta.dir}/${CORPUS}`;
 const lenses = new Set([...Object.keys(LENSES), "other"]);
 const errs: string[] = [], lensCount: Record<string, number> = {};
 let defects = 0, clean = 0;
@@ -15,13 +16,15 @@ for (const f of readdirSync(dir).filter((f) => f.endsWith(".json")).sort()) {
   if ((k.expected_verdict === "CLEAR") !== (k.defects.length === 0)) e("verdict/defects mismatch");
   if (k.expected_verdict === "CLEAR") { clean++; if (!k.decoys.length) e("CLEAR case without decoys"); }
   const lines = k.artifact.split("\n").length;
-  if (lines < 35 || lines > 170) e(`artifact ${lines} lines`);
+  if (lines < 35 || lines > 230) e(`artifact ${lines} lines`);
   for (const d of k.defects) {
     defects++;
     lensCount[d.lens] = (lensCount[d.lens] ?? 0) + 1;
     if (!lenses.has(d.lens)) e(`${d.id} bad lens ${d.lens}`);
     if (!["blocker", "major"].includes(d.severity)) e(`${d.id} bad severity`);
-    if (!d.evidence.startsWith("ABSENT") && !k.artifact.includes(d.evidence)) e(`${d.id} evidence quote not in artifact`);
+    // Hard tier joins several quotes with " + "; every non-ABSENT part must be verbatim.
+    for (const q of d.evidence.split(" + ")) if (!q.startsWith("ABSENT") && !k.artifact.includes(q)) e(`${d.id} evidence quote not in artifact: ${q.slice(0, 60)}`);
+    if (k.category && !d.why_hard) e(`${d.id} missing why_hard`);
   }
   // Signposting check: the artifact must not admit its own bugs.
   if (/TODO|FIXME|HACK|insecure|vulnerab/i.test(k.artifact)) e("artifact contains signpost word");

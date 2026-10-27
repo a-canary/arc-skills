@@ -56,9 +56,9 @@ function seeded(s: string) { let h = 2166136261; for (const ch of s) h = Math.im
 const judgeJobs = corpus.flatMap((k) => reps.map((r) => ({ k, r }))).filter(({ k, r }) => !existsSync(`${OUT}/judged/${k.id}__r${r}.json`));
 let jdone = 0;
 await pool(judgeJobs, 4, async ({ k, r }) => {
-  const subs = Object.keys(APPROACHES).filter((n) => existsSync(rawPath(n, k.id, r)))
+  const subs = names.filter((n) => existsSync(rawPath(n, k.id, r)))
     .map((n) => ({ n, res: JSON.parse(require("fs").readFileSync(rawPath(n, k.id, r), "utf8")) as Result }));
-  if (subs.length < Object.keys(APPROACHES).length) return log(`judge skip ${k.id} r${r}: ${subs.length} subs`);
+  if (subs.length < names.length) return log(`judge skip ${k.id} r${r}: ${subs.length} subs`);
   const rnd = seeded(`${k.id}-${r}`);
   const order = subs.map((s) => ({ s, x: rnd() })).sort((p, q) => p.x - q.x).map((p) => p.s);
   const letters = order.map((_, i) => String.fromCharCode(65 + i));
