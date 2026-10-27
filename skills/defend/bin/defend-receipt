@@ -7,6 +7,11 @@
 # branch moved after review, it refuses — re-review the new head. Branch protection
 # (required status `defend/merge`) then blocks the merge on every path: gh pr merge,
 # gh api, web UI, git push. Self-attested: write access can post it directly.
+#
+# CLEAR verdicts additionally require before posting: (1) the PR body contains a line
+# starting with `Rollback:` (case-insensitive) and non-space text after it, and (2) if
+# scripts/merge-gate.sh exists in the repo, the current git HEAD must match the reviewed
+# sha and that script must exit 0. BLOCK verdicts post immediately with no extra checks.
 set -euo pipefail
 die() { echo "defend-receipt: $*" >&2; exit 2; }
 usage='usage: defend-receipt CLEAR|BLOCK <pr> <reviewed-sha> [-R owner/repo] "<summary>"'
@@ -21,10 +26,22 @@ done
 [ -n "$summary" ] || die "$usage"
 [[ $sha =~ ^[0-9a-f]{7,40}$ ]] || die "reviewed sha must be 7-40 hex chars, got '$sha'"
 
-info=$(gh pr view "$pr" ${repo:+-R "$repo"} --json headRefOid,url) || die "cannot resolve PR $pr"
-head=$(jq -r '.headRefOid' <<<"$info"); url=$(jq -r '.url' <<<"$info")
+info=$(gh pr view "$pr" ${repo:+-R "$repo"} --json headRefOid,url,body) || die "cannot resolve PR $pr"
+head=$(jq -r '.headRefOid' <<<"$info"); url=$(jq -r '.url' <<<"$info"); body=$(jq -r '.body // ""' <<<"$info")
 p=${url#https://github.com/}; p=${p%/pull/*}
 [ "${head#"$sha"}" != "$head" ] || die "head ${head:0:7} != reviewed ${sha:0:7}; the branch moved after review — re-review the new head"
+
+if [ "$verdict" = CLEAR ]; then
+  grep -qiE '^Rollback:[[:space:]]*\S' <<<"$body" || die "CLEAR requires a Rollback: line in the PR body"
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || top=
+  if [ -n "$top" ] && [ -f "$top/scripts/merge-gate.sh" ]; then
+    actual=$(git -C "$top" rev-parse HEAD)
+    case $actual in ${sha}*) ;; *) die "checkout the reviewed sha to run its merge gate" ;; esac
+    bash "$top/scripts/merge-gate.sh" >/dev/null || die "merge gate failed"
+  else
+    echo "defend-receipt: no scripts/merge-gate.sh — project gate skipped" >&2
+  fi
+fi
 
 gh api -X POST "repos/$p/statuses/$head" -f state=$state -f context=defend/merge -f "description=${summary:0:140}" >/dev/null
 echo "defend-receipt: $verdict → defend/merge=$state on $p@${head:0:7}"

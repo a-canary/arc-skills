@@ -1,18 +1,27 @@
 #!/bin/bash
 # Stub-gh checks for defend-receipt (no network). Usage: defend-receipt-test [path]
-R=${1:-$(dirname "$0")/defend-receipt}; T=$(mktemp -d); HEAD=abcdef0123456789abcdef0123456789abcdef01
+R=${1:-$(dirname "$0")/defend-receipt}
+R=$(cd "$(dirname "$R")" && pwd)/$(basename "$R")
+T=$(mktemp -d); export T; HEAD=abcdef0123456789abcdef0123456789abcdef01
 trap 'command rm -r "$T"' EXIT
 [ -x "$R" ] || { echo "not executable: $R"; exit 1; }
-cat > "$T/gh" <<EOF
+
+# Stub gh reads HEAD and body from env vars (set per test case).
+export BODY='Rollback: git revert' STUB_HEAD=$HEAD
+cat > "$T/gh" <<'EOF'
 #!/bin/bash
-if [ "\$1 \$2" = "pr view" ]; then echo '{"headRefOid":"$HEAD","url":"https://github.com/o/r/pull/7"}'; exit 0; fi
-echo "\$*" >> "$T/calls"
+if [ "$1 $2" = "pr view" ]; then
+  jq -n --arg h "$STUB_HEAD" --arg u "https://github.com/o/r/pull/7" --arg b "${BODY:-}" '{headRefOid:$h,url:$u,body:$b}'
+  exit 0
+fi
+echo "$*" >> "$T/calls"
 EOF
 chmod +x "$T/gh"; export PATH="$T:$PATH"
 ok=0; bad=0
 t() { local want=$1; shift; : > "$T/calls"; "$R" "$@" >/dev/null 2>&1; rc=$?; got=$(cat "$T/calls")
   if [ "$want" = fail ]; then [ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL expected refusal: $* rc=$rc calls=$got"; }
   else [ $rc -eq 0 ] && grep -qF -- "$want" <<<"$got" && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL want '$want': $* rc=$rc calls=$got"; }; fi; }
+
 t "statuses/$HEAD -f state=success -f context=defend/merge -f description=all good" CLEAR 7 abcdef0 all good
 t "description=looks good" CLEAR 7 ABCDEF0 "looks good"
 t "state=failure" BLOCK 7 abcdef0123 -R o/r "nope"
@@ -20,5 +29,40 @@ t fail CLEAR 7 1234567 "stale sha"
 t fail CLEAR 7 abcdef0
 t fail MAYBE 7 abcdef0 "x"
 t fail CLEAR 7 zzzzzzz "bad hex"
+
+# Rollback plan checks (CLEAR only)
+BODY="no rollback here"
+t fail CLEAR 7 abcdef0 "all good"
+BODY="just text"
+t "state=failure" BLOCK 7 abcdef0 "nope"
+
+# Merge-gate checks (need actual git repo)
+MG=$(mktemp -d); trap 'command rm -r "$T" "$MG"' EXIT
+git -C "$MG" init -q 2>/dev/null; git -C "$MG" config user.email t@t; git -C "$MG" config user.name t
+git -C "$MG" commit --allow-empty -q -m init
+MGHEAD=$(git -C "$MG" rev-parse --short=7 HEAD)
+export BODY='Rollback: git revert'
+
+# No merge-gate.sh → skips, posts success
+STUB_HEAD=$(git -C "$MG" rev-parse HEAD)
+export STUB_HEAD
+(cd "$MG" && : > "$T/calls" && "$R" CLEAR 7 "$MGHEAD" "ok" >/dev/null 2>&1); rc=$?; got=$(cat "$T/calls")
+[ $rc -eq 0 ] && grep -qF "state=success" <<<"$got" && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL merge-gate: skip when absent rc=$rc calls=$got"; }
+
+# merge-gate.sh exits 1 → refuses
+mkdir -p "$MG/scripts"; printf '#!/bin/bash\nexit 1\n' > "$MG/scripts/merge-gate.sh"; chmod +x "$MG/scripts/merge-gate.sh"
+(cd "$MG" && : > "$T/calls" && "$R" CLEAR 7 "$MGHEAD" "ok" >/dev/null 2>&1); rc=$?; got=$(cat "$T/calls")
+[ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL merge-gate: refuse on fail rc=$rc calls=$got"; }
+
+# merge-gate.sh exits 0 → posts success
+printf '#!/bin/bash\nexit 0\n' > "$MG/scripts/merge-gate.sh"
+(cd "$MG" && : > "$T/calls" && "$R" CLEAR 7 "$MGHEAD" "ok" >/dev/null 2>&1); rc=$?; got=$(cat "$T/calls")
+[ $rc -eq 0 ] && grep -qF "state=success" <<<"$got" && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL merge-gate: pass on success rc=$rc calls=$got"; }
+
+# HEAD != reviewed sha → refuses
+git -C "$MG" commit --allow-empty -q -m second
+(cd "$MG" && : > "$T/calls" && "$R" CLEAR 7 "$MGHEAD" "ok" >/dev/null 2>&1); rc=$?; got=$(cat "$T/calls")
+[ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL merge-gate: refuse on sha mismatch rc=$rc calls=$got"; }
+
 echo "pass=$ok fail=$bad"
 exit $((bad > 0))
