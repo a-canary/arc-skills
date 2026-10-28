@@ -31,7 +31,7 @@ Projects never own a lane; they only set priority.
 
 `bash ~/vault/director/scripts/driver-next.sh 3` prints the next ready beads; its header is the full protocol.
 It skips human/decided-pending beads, other lanes, epics and decisions.
-It emits `[v100-starved]` when the V100 is up and no `lane:v100` bead is ready: decompose the next bead into ~10-min lane-run beads.
+It emits `[v100-starved]` when the V100 is up, no `lane:v100` bead is in progress and the lane's queue is empty: decompose the next bead into ~10-min lane-run beads.
 Each bead is one Sprint: `bun ~/vault/director/scripts/sprint.ts start|end`.
 End states:
 - done → `bd close <id> --reason "<evidence>"`
@@ -44,7 +44,7 @@ Irreversible steps (destructive delete, force-push, credential/account change, p
 ## Budget
 
 Meter: `~/.claude/skills/capacity/claude-window.ts` (reads `/api/oauth/usage`, no model call); one meter for all callers.
-`budget-hook.sh` injects `[claude-budget] util=…` after tool calls.
+`budget-hook.sh` injects `[claude-budget] util=…` after tool calls, at most once per 5 min per session.
 util ≥ 0.90 → no new Claude beads; dispatch to V100 or park.
 Park = `bash ~/vault/director/scripts/budget-wait.sh` in the background; it exits `BUDGET OK` when util < 0.90.
 Never end a turn while driver-next shows work and util < 0.90.
