@@ -9,7 +9,7 @@ Public API providers. Keys live in the GPG `pass` store — never inline; pull a
 | openrouter | `api/openrouter/api-key` | https://openrouter.ai/api/v1 | Bearer | OpenAI-compat | ❌ 401 — key was in conjecture git history, rotate before public use |
 | cerebras | `api/cerebras/api-key` | https://api.cerebras.ai/v1 | Bearer | OpenAI-compat | ❌ 402 quota. NOT for agentic work: per-model context cap + TPM quota trips on ~90k-tok requests. Short-prompt latency tier only (judges, classifiers, extract/rewrite) |
 | chutes | `api/chutes/api-key` | https://llm.chutes.ai/v1 | Bearer | OpenAI-compat | ❌ 402 quota. Bulk cheap tokens on hot open models; expert-horde primary |
-| huggingface | `api/huggingface/token` | huggingface.co hub | Bearer | hub API | model downloads, gated repos |
+| huggingface | `huggingface` | huggingface.co hub | Bearer | hub API | model downloads, gated repos |
 | vast | `api/vast/api-key` | vast.ai CLI | CLI auth | CLI | GPU leasing — see `/vast-cli`, `/vast-compute` |
 | Veles (self-hosted, cloudflare tunnel) | `api/veles/api-key` | https://cia-balanced-sixth-tmp.trycloudflare.com/v1/ | Bearer | OpenAI-compat | ? (registered in pi as provider `Veles`). **Last-resort fallback endpoint** — captain policy 2026-08-24 |
 | claude (OAuth, via cli-proxy) | `api/claude/oauth-token` | via cli-proxy http://127.0.0.1:7890/v1 | pool-managed | OpenAI-compat | Max quota, no per-token cost. Down with cli-proxy (see 04-hosts) |
