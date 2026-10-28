@@ -3,7 +3,8 @@
 // seed-42 reference traffic for BOTH provider truths (reference: 93% / 95%).
 
 import { describe, expect, test } from "bun:test";
-import { estimate, type Outcome } from "./estimator.ts";
+import { estimate, withMeter, type Outcome } from "./estimator.ts";
+import { meterOf } from "./claude-window.ts";
 import { arbitrate } from "./arbitrate.ts";
 
 const lcg = (s: number) => () => (s = (s * 48271) % 2147483647) / 2147483647;
@@ -107,5 +108,40 @@ describe("CLI fail-open red line", () => {
     const v = JSON.parse(route.stdout.toString().trim());
     expect(v.action).toBe("run");
     expect(v.fail_open).toBe(false);
+  });
+});
+
+describe("vendor meter (claude /api/oauth/usage) beats inference", () => {
+  const blind = estimate([], "claude");
+  const lim = (group: string, util: number, scope: string | null = null) => ({ group, util, active: true, scope });
+  const win = (u5: number | null, u7: number | null) =>
+    ({ limits: [...(u5 === null ? [] : [lim("session", u5)]), ...(u7 === null ? [] : [lim("weekly", u7)])] });
+
+  test("binding util is max(5h, active weekly); unreachable meter is null", () => {
+    expect(meterOf(win(0.3, 0.8))).toEqual({ util: 0.8, limited: false });
+    expect(meterOf(win(0.3, null))).toEqual({ util: 0.3, limited: false });
+    expect(meterOf(null)).toBeNull();
+    expect(meterOf(win(null, null))).toBeNull();
+    expect(meterOf(win(NaN, null))).toBeNull(); // API dropped `percent`
+    expect(meterOf(win(0.2, 1))).toEqual({ util: 1, limited: true });
+    expect(meterOf(win(null, 1))).toEqual({ util: 1, limited: true }); // no session limit: weekly still binds
+    // exhausted Opus-only week does not park all of claude
+    expect(meterOf({ limits: [lim("session", 0.2), lim("weekly", 1, "Opus")] })).toEqual({ util: 0.2, limited: false });
+  });
+
+  test("util 0.25 → run; util 0.95 → standard parks, critical escalates", () => {
+    expect(arbitrate(withMeter(blind, meterOf(win(0.25, null))), "standard").action).toBe("run");
+    expect(arbitrate(withMeter(blind, meterOf(win(0.95, null))), "standard").action).toBe("park");
+    expect(arbitrate(withMeter(blind, meterOf(win(0.95, null))), "critical").action).toBe("escalate");
+  });
+
+  test("a limited window is a block even below the floor", () => {
+    const e = withMeter(blind, meterOf(win(1, null)));
+    expect(e.blocked).toBe(true);
+    expect(arbitrate(e, "standard").action).toBe("park");
+  });
+
+  test("no meter keeps the 429-inferred estimate unchanged", () => {
+    expect(withMeter(blind, null)).toEqual(blind);
   });
 });
