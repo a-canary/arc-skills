@@ -24,7 +24,7 @@
 //   --dry-run  probe + print, write no alert/file.
 //
 // Env: VAULT_DIR, HEALTH_DIR, NOTIFY_BIN (default ~/repos/arc-agents/bin/notify.ts),
-//      DISCORD_WEBHOOK_URL (default: `pass show discord/webhook-url`, read only when alerting)
+//      DISCORD_WEBHOOK_URL (default: `pass show discord/webhook-url`, read by the discord probe / first alert)
 
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
@@ -109,11 +109,12 @@ export async function sendAlert(state: "down" | "up", serviceId: string, detail:
   const title = state === "down" ? `${serviceId} DOWN` : `${serviceId} recovered`;
   const body = `${emoji} **${title}** — ${detail}`;
   try {
-    discordWebhook(); // notify.ts reads it from the inherited env
+    discordWebhook();
     const r = spawnSync(
       process.execPath,
       [NOTIFY_BIN, title, body, "--source", "health-monitor", "--severity", state === "down" ? "error" : "info", "--dedupe-key", `health-monitor:${serviceId}`, "--state", state],
-      { encoding: "utf8", timeout: 15_000 },
+      // explicit env: Bun's spawnSync passes the START-UP env, not later process.env writes
+      { encoding: "utf8", timeout: 15_000, env: process.env },
     );
     return r.status === 0;
   } catch {
