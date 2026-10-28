@@ -23,7 +23,8 @@
 // Manual:  bun bin/health-monitor.ts [--quiet] [--dry-run]
 //   --dry-run  probe + print, write no alert/file.
 //
-// Env: VAULT_DIR, HEALTH_DIR, NOTIFY_BIN (default ~/repos/arc-agents/bin/notify.ts)
+// Env: VAULT_DIR, HEALTH_DIR, NOTIFY_BIN (default ~/repos/arc-agents/bin/notify.ts),
+//      DISCORD_WEBHOOK_URL (default: `pass show discord/webhook-url`, read only when alerting)
 
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
@@ -84,6 +85,19 @@ function newestLog(dirs: string[], re: RegExp): number {
 }
 
 /**
+ * DISCORD_WEBHOOK_URL, else `pass show discord/webhook-url` exported into this
+ * process's env, so the secret never sits in crontab (repos-bm5). "" when neither.
+ */
+export function discordWebhook(): string {
+  if (!process.env.DISCORD_WEBHOOK_URL) {
+    const p = spawnSync("pass", ["show", "discord/webhook-url"], { encoding: "utf8", timeout: 10_000 });
+    const url = p.status === 0 ? p.stdout.split("\n")[0].trim() : "";
+    if (url) process.env.DISCORD_WEBHOOK_URL = url;
+  }
+  return process.env.DISCORD_WEBHOOK_URL ?? "";
+}
+
+/**
  * Alert via arc-agents/bin/notify.ts. Fan-out to Discord + director chat.
  * Passes --dedupe-key so notify only fires on state transitions; sustained
  * outages and sustained health stay silent.
@@ -95,6 +109,7 @@ export async function sendAlert(state: "down" | "up", serviceId: string, detail:
   const title = state === "down" ? `${serviceId} DOWN` : `${serviceId} recovered`;
   const body = `${emoji} **${title}** — ${detail}`;
   try {
+    discordWebhook(); // notify.ts reads it from the inherited env
     const r = spawnSync(
       process.execPath,
       [NOTIFY_BIN, title, body, "--source", "health-monitor", "--severity", state === "down" ? "error" : "info", "--dedupe-key", `health-monitor:${serviceId}`, "--state", state],
@@ -149,15 +164,15 @@ export const SERVICES: Service[] = [
     id: "discord",
     project: "arc-skills",
     // The alert path itself: a broken transport turns every other alert silent.
-    // Webhook is preferred over bot token — bot auth requires pass-store lookup.
     probe: async () => {
-      if (process.env.DISCORD_WEBHOOK_URL) {
-        const r = await get(process.env.DISCORD_WEBHOOK_URL);
+      const url = discordWebhook();
+      if (url) {
+        const r = await get(url);
         return r?.status === 200 ? "webhook reachable" : fail(`webhook → ${r?.status ?? "unreachable"}`);
       }
       // No webhook set is a config gap, not an outage — surface as failure so
       // the operator sees it once per transition rather than on every tick.
-      return fail("DISCORD_WEBHOOK_URL not set");
+      return fail("DISCORD_WEBHOOK_URL not set and no pass discord/webhook-url");
     },
   },
   {
