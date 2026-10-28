@@ -11,7 +11,8 @@
 # CLEAR verdicts additionally require before posting: (1) the PR body contains a line
 # starting with `Rollback:` (case-insensitive) and non-space text after it, and (2) if
 # scripts/merge-gate.sh exists in the repo, the current git HEAD must match the reviewed
-# sha and that script must exit 0. BLOCK verdicts post immediately with no extra checks.
+# sha and that script must exit 0, and (3) in a bench repo, champion-check <PR base> must pass.
+# BLOCK verdicts post immediately with no extra checks.
 set -euo pipefail
 die() { echo "defend-receipt: $*" >&2; exit 2; }
 usage='usage: defend-receipt CLEAR|BLOCK <pr> <reviewed-sha> [-R owner/repo] "<summary>"'
@@ -26,18 +27,25 @@ done
 [ -n "$summary" ] || die "$usage"
 [[ $sha =~ ^[0-9a-f]{7,40}$ ]] || die "reviewed sha must be 7-40 hex chars, got '$sha'"
 
-info=$(gh pr view "$pr" ${repo:+-R "$repo"} --json headRefOid,url,body) || die "cannot resolve PR $pr"
+info=$(gh pr view "$pr" ${repo:+-R "$repo"} --json headRefOid,url,body,baseRefName) || die "cannot resolve PR $pr"
 head=$(jq -r '.headRefOid' <<<"$info"); url=$(jq -r '.url' <<<"$info"); body=$(jq -r '.body // ""' <<<"$info")
+base=$(jq -r '.baseRefName // "main"' <<<"$info")
 p=${url#https://github.com/}; p=${p%/pull/*}
 [ "${head#"$sha"}" != "$head" ] || die "head ${head:0:7} != reviewed ${sha:0:7}; the branch moved after review — re-review the new head"
 
 if [ "$verdict" = CLEAR ]; then
   grep -qiE '^Rollback:[[:space:]]*\S' <<<"$body" || die "CLEAR requires a Rollback: line in the PR body"
   top=$(git rev-parse --show-toplevel 2>/dev/null) || top=
-  if [ -n "$top" ] && [ -f "$top/scripts/merge-gate.sh" ]; then
+  # ponytail: bench repo = bench/ at the reviewed sha or a CHAMPION on the local origin/<base>
+  # (possibly stale, but a ref that ever had a champion still has it); champion-check fetches fresh.
+  bench=
+  [ -n "$top" ] && { [ -e "$top/bench" ] || git -C "$top" cat-file -e "origin/$base:bench/CHAMPION" 2>/dev/null; } && bench=1
+  if [ -n "$top" ] && { [ -f "$top/scripts/merge-gate.sh" ] || [ -n "$bench" ]; }; then
     actual=$(git -C "$top" rev-parse HEAD) || die "cannot read HEAD in $top"
     case $actual in ${sha}*) ;; *) die "checkout the reviewed sha to run its merge gate" ;; esac
-    (cd "$top" && bash scripts/merge-gate.sh) >&2 || die "merge gate failed"
+    if [ -f "$top/scripts/merge-gate.sh" ]; then (cd "$top" && bash scripts/merge-gate.sh) >&2 || die "merge gate failed"
+    else echo "defend-receipt: no scripts/merge-gate.sh — project gate skipped" >&2; fi
+    [ -z "$bench" ] || (cd "$top" && "$(dirname "$(readlink -f "$0")")/champion-check" "$base") >&2 || die "champion check failed"
   else
     echo "defend-receipt: no scripts/merge-gate.sh — project gate skipped" >&2
   fi

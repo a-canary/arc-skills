@@ -64,5 +64,18 @@ git -C "$MG" commit --allow-empty -q -m second
 (cd "$MG" && : > "$T/calls" && "$R" CLEAR 7 "$MGHEAD" "ok" >/dev/null 2>&1); rc=$?; got=$(cat "$T/calls")
 [ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL merge-gate: refuse on sha mismatch rc=$rc calls=$got"; }
 
+# Bench repo without merge-gate.sh: champion-check still runs (stub gh has no baseRefName -> main)
+BR=$(mktemp -d); trap 'command rm -r "$T" "$MG" "$BR"' EXIT
+git init -q --bare -b main "$BR/o.git"; git clone -q "$BR/o.git" "$BR/w" 2>/dev/null
+mkdir "$BR/w/bench"; echo 0.9 > "$BR/w/bench/CHAMPION"; printf '#!/bin/bash\necho 0.5\n' > "$BR/w/bench/run.sh"; chmod +x "$BR/w/bench/run.sh"
+git -C "$BR/w" add -A; git -C "$BR/w" -c user.email=t@t -c user.name=t commit -qm base; git -C "$BR/w" push -q origin main
+br() { export STUB_HEAD; STUB_HEAD=$(git -C "$BR/w" rev-parse HEAD)
+  (cd "$BR/w" && : > "$T/calls" && "$R" CLEAR 7 "$(git rev-parse --short=7 HEAD)" ok >/dev/null 2>&1); rc=$?; got=$(cat "$T/calls"); }
+br
+[ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: refuse below champion without merge-gate.sh rc=$rc calls=$got"; }
+printf '#!/bin/bash\necho 0.95\n' > "$BR/w/bench/run.sh"; git -C "$BR/w" -c user.email=t@t -c user.name=t commit -qam better
+br
+[ $rc -eq 0 ] && grep -qF "state=success" <<<"$got" && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: pass above champion rc=$rc calls=$got"; }
+
 echo "pass=$ok fail=$bad"
 exit $((bad > 0))

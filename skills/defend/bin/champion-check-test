@@ -1,0 +1,48 @@
+#!/bin/bash
+# champion-check against a real bare origin (no network). Usage: champion-check-test [path]
+C=${1:-$(dirname "$0")/champion-check}
+C=$(cd "$(dirname "$C")" && pwd)/$(basename "$C")
+T=$(mktemp -d); trap 'command rm -r "$T"' EXIT
+[ -x "$C" ] || { echo "not executable: $C"; exit 1; }
+g() { git -c user.email=t@t -c user.name=t "$@"; }
+git init -q --bare -b main "$T/o.git"; git clone -q "$T/o.git" "$T/w" 2>/dev/null; cd "$T/w" || exit 1
+mkdir bench; echo 0.7 > bench/CHAMPION; g add -A; g commit -qm base; git push -q origin main
+ok=0; bad=0
+# t <want pass|fail> <label> <run.sh body> [PR CHAMPION|-] [base]  — commits the PR state, runs, resets to base
+t() { mkdir -p bench; printf '#!/bin/bash\n%s\n' "$3" > bench/run.sh; chmod +x bench/run.sh
+  case ${4:--} in -) ;; DEL) git rm -q bench/CHAMPION ;; *) echo "$4" > bench/CHAMPION ;; esac
+  g add -A; g commit -qm pr --allow-empty
+  "$C" "${5:-main}" >/dev/null 2>&1 && got=pass || got=fail
+  git reset -q --hard origin/main
+  [ "$got" = "$1" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL $2: want $1 got $got"; }; }
+t pass "above champion"           'echo 0.8'
+t pass "equal"                    'echo 0.7'
+t fail "below"                    'echo 0.6'
+t pass "numeric not string"       'echo 10'
+t fail "non-numeric"              'echo abc'
+t fail "nan"                      'echo nan'
+t fail "extra text"               'echo "7 extra"'
+t pass "multi-line, last counts"  'echo log; echo 0.9'
+t fail "run.sh fails after print" 'echo 0.9; exit 1'
+t fail "empty output"             'true'
+t fail "PR lowers champion"       'echo 0.8' 0.1
+t pass "PR raises to its score"   'echo 0.9' 0.9
+t fail "PR raises above score"    'echo 0.8' 0.95
+t fail "PR deletes CHAMPION"      'echo 0.8' DEL
+t fail "absent base branch"       'echo 0.8' - master
+# stale origin/main: a second clone raises the bar to 0.95; this clone's tracking ref still says 0.7
+git clone -q "$T/o.git" "$T/x" 2>/dev/null; (cd "$T/x" && echo 0.95 > bench/CHAMPION && g commit -qam raise && git push -q origin main)
+git config remote.origin.fetch '+refs/heads/none:refs/remotes/origin/none'   # single-branch-style refspec: fetch won't refresh origin/main
+t fail "stale tracking ref"       'echo 0.8'
+git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'; git fetch -q origin
+git remote set-url origin "$T/nonexistent.git"
+t fail "unreachable origin"       'echo 0.99'
+git remote set-url origin "$T/o.git"
+echo dirty > bench/x; "$C" main >/dev/null 2>&1 && { bad=$((bad+1)); echo "FAIL dirty bench/: passed"; } || ok=$((ok+1)); command rm bench/x
+# first adoption: base has no bench/CHAMPION
+(cd "$T/x" && git rm -q bench/CHAMPION && g commit -qm rm && git push -q origin main); git fetch -q origin; git reset -q --hard origin/main
+t pass "first adoption"           'echo 0.6' 0.5
+t fail "first adoption above score" 'echo 0.4' 0.5
+t pass "no champion anywhere"     'echo 0.6'
+echo "pass=$ok fail=$bad"
+exit $((bad > 0))
