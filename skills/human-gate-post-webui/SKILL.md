@@ -1,6 +1,6 @@
 ---
 name: human-gate-post-webui
-description: 'Surface a genuine human-gate or taste choice to the developer via webui /decide without blocking on the reply. Rare by design; most uncertainty self-resolves via docs/ke/counsel. Use only when a decision is genuinely the human''s. Triggers: "surface this to the developer", "post a human-gate", "this needs Aaron''s call", "flag a taste choice".'
+description: 'Surface a genuine human-gate or taste choice to the developer via webui /decide without blocking on the reply. Rare by design; most uncertainty self-resolves via docs/ke/counsel. Use only when a decision is genuinely the human''s. Triggers: "surface this to the developer", "post a human-gate", "this needs the developer''s call", "flag a taste choice".'
 ---
 
 # Human-Gate-Post-Webui
@@ -46,7 +46,7 @@ options*, price the wait against the options:
 
 Rule: **if the wait costs more than the delta between the options, don't gate —
 pick the reversible/cheaper-to-undo option and proceed**, logging the choice +
-why you didn't wait (LOG row, not OPEN). Gate only when the options are
+why you didn't wait (`bd note` on your own bead, no gate). Gate only when the options are
 expensive or irreversible *enough that human-reply latency is the smaller cost*
 — i.e. picking wrong is costlier than waiting. Spend/publish/delete/account
 gates are (almost) always worth the wait because picking wrong is
@@ -56,13 +56,15 @@ State the latency reasoning in the post so the developer sees you did the math.
 
 ## 2. Write the gate — one `human` bead
 
-One bead in the shared `~/repos` db (or the repo's own db if it keeps one). The
+One bead in a db `/decide` scans: `~/repos` itself, or a `~/repos/<name>` that
+keeps its own `.beads/embeddeddolt`. Pass `-C` explicitly — run from `~` and
+`bd` resolves to `~/.beads`, which `/decide` never reads. The
 developer reads it on mobile ([[response-style-caveman]]): `/decide` shows the
 question, options and recommendation; everything from the first `Footnotes:` /
 `Evidence:` / `Tech:` / `---` line on folds behind "more".
 
 ```
-bd create "<repo>: <the decision in a few words>" -p <0-3> -t decision -l human \
+bd -C ~/repos create "<repo>: <the decision in a few words>" -p <0-3> -t decision -l human \
   -d "Q: <request/scope-change in 1-2 lines>?
 
 Options:
@@ -76,11 +78,13 @@ Latency: <why gated not defaulted (§1 math)>
 Meanwhile: <the unblocked work you moved to>"
 ```
 
-- Option lines `A) …` / `B) …` become the card's buttons; keep them one line each.
-- If your work depends on the answer, `bd dep add <your-bead> <gate-bead>` so it
-  drops out of `bd ready` until decided.
+- Option lines `A) …` / `B) …` (two or more) become the card's buttons; keep them
+  one line each.
+- If your work depends on the answer, `bd dep add <your-bead> <gate-bead>`: it
+  drops out of `bd ready` until the gate bead is **closed** — deciding alone
+  leaves it open, so close it once you have acted on the answer (§3).
 - Never write ledger `feedback` rows (source='human-gate') or HITL `issues` for
-  this — that legacy queue is folded away on /decide and nobody reads it (aw3-rsn).
+  this — that legacy queue is folded away on /decide and nobody reads it.
 - A gate is a **measurement** (UM-0500): cite real `file:line`/data, never a
   fabricated number to make the gate look urgent. Nothing to decide, only to log?
   `bd note` your own bead — no gate.
@@ -100,9 +104,11 @@ a reply.** Immediately:
    developer's next cadence pass; that's fine. Don't serialize your own work on
    them.
 
-The developer's reply arrives async: `/decide` swaps `human`→`decided` and adds a
-`DECISION <verb>: …` comment (`bd list --label decided`, `bd comments <id>`), or
-a fresh instruction — you act on it *when it comes*, not by blocking now. A gate
+The developer's reply arrives async. Accept/reject swaps `human`→`decided` and
+adds a `DECISION <verb>: …` comment (`bd list --label decided`, `bd comments
+<id>`); defer sets status `deferred` with a `DECISION defer until …` comment and
+resurfaces later. Act on it, then `bd close <gate> --reason "<what you did>"` so
+dependents unblock. Or a fresh instruction — you act on it *when it comes*, not by blocking now. A gate
 that stalled the agent until the human replied is a broken use of this skill
 (it re-couples throughput to human latency, the exact thing ADR-0011 cut).
 
