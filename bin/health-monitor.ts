@@ -124,17 +124,9 @@ export const SERVICES: Service[] = [
   {
     id: "v100",
     project: "llm-hosting",
-    // Local GPU inference (llama-server / vllm / sglang) behind provider `v100`.
-    probe: async () => {
-      const proc = sh("pgrep", ["-f", "llama-server|vllm|sglang"]);
-      if (proc.rc !== 0) return fail("no llama-server/vllm/sglang process");
-      const url = await firstOk([
-        "http://127.0.0.1:8099/health",
-        "http://127.0.0.1:8092/health",
-        "http://127.0.0.1:1234/health",
-      ]);
-      return `${url} ok (pid ${proc.out.split("\n")[0]})`;
-    },
+    // GPU inference behind provider `v100`. The model runs on ai-lab-02; :8099 here is
+    // lane-front forwarding to it, so probe HTTP only (a local pgrep is always empty).
+    probe: async () => `${await firstOk(["http://127.0.0.1:8099/health"])} ok`,
   },
   {
     id: "webui",
