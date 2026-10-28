@@ -10,6 +10,10 @@ trap 'command rm -r "$T"' EXIT
 export BODY='Rollback: git revert' STUB_HEAD=$HEAD
 cat > "$T/gh" <<'EOF'
 #!/bin/bash
+if [ "$1" = api ] && [[ $2 == */contents/bench/CHAMPION* ]]; then   # base champion lookup
+  case ${STUB_CHAMP:-} in 1) echo '{}'; exit 0 ;; err) echo 'gh: Server Error (HTTP 500)' >&2; exit 1 ;;
+    *) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;; esac
+fi
 if [ "$1 $2" = "pr view" ]; then
   jq -n --arg h "$STUB_HEAD" --arg u "https://github.com/o/r/pull/7" --arg b "${BODY:-}" '{headRefOid:$h,url:$u,body:$b}'
   exit 0
@@ -76,6 +80,16 @@ br
 printf '#!/bin/bash\necho 0.95\n' > "$BR/w/bench/run.sh"; git -C "$BR/w" -c user.email=t@t -c user.name=t commit -qam better
 br
 [ $rc -eq 0 ] && grep -qF "state=success" <<<"$got" && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: pass above champion rc=$rc calls=$got"; }
+# invoked by a relative path from a subdir: champion-check must still be found
+(cd "$BR/w/bench" && : > "$T/calls" && "$(realpath --relative-to=. "$R")" CLEAR 7 "$(git rev-parse --short=7 HEAD)" ok >/dev/null 2>&1); rc=$?; got=$(cat "$T/calls")
+[ $rc -eq 0 ] && grep -qF "state=success" <<<"$got" && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: relative \$0 from subdir rc=$rc calls=$got"; }
+# PR deletes bench/ and the local origin/main is gone: GitHub says base has a champion -> refused
+git -C "$BR/w" rm -rq bench; git -C "$BR/w" -c user.email=t@t -c user.name=t commit -qm drop; git -C "$BR/w" update-ref -d refs/remotes/origin/main
+export STUB_CHAMP=1; br
+[ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: refuse PR deleting bench/ with stale local ref rc=$rc calls=$got"; }
+STUB_CHAMP=err; br
+[ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: refuse when champion lookup errors rc=$rc calls=$got"; }
+unset STUB_CHAMP
 
 echo "pass=$ok fail=$bad"
 exit $((bad > 0))

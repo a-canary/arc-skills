@@ -11,10 +11,12 @@
 # CLEAR verdicts additionally require before posting: (1) the PR body contains a line
 # starting with `Rollback:` (case-insensitive) and non-space text after it, and (2) if
 # scripts/merge-gate.sh exists in the repo, the current git HEAD must match the reviewed
-# sha and that script must exit 0, and (3) in a bench repo, champion-check <PR base> must pass.
+# sha and that script must exit 0, and (3) in a bench repo (bench/CHAMPION on the PR base per
+# GitHub, or at the reviewed sha), HEAD must match likewise and champion-check <PR base> must pass.
 # BLOCK verdicts post immediately with no extra checks.
 set -euo pipefail
 die() { echo "defend-receipt: $*" >&2; exit 2; }
+self=$(dirname "$(readlink -f "$0")")   # before any cd: a relative $0 resolves against the caller's cwd
 usage='usage: defend-receipt CLEAR|BLOCK <pr> <reviewed-sha> [-R owner/repo] "<summary>"'
 [ $# -ge 4 ] || die "$usage"
 verdict=$1
@@ -36,19 +38,21 @@ p=${url#https://github.com/}; p=${p%/pull/*}
 if [ "$verdict" = CLEAR ]; then
   grep -qiE '^Rollback:[[:space:]]*\S' <<<"$body" || die "CLEAR requires a Rollback: line in the PR body"
   top=$(git rev-parse --show-toplevel 2>/dev/null) || top=
-  # ponytail: bench repo = bench/CHAMPION at the reviewed sha or on the local origin/<base>
-  # (possibly stale, but a ref that ever had a champion still has it); champion-check fetches fresh.
+  # bench repo = bench/CHAMPION on the PR's base per GitHub (never a possibly-stale local ref),
+  # or at the reviewed sha. Only a 404 means "no champion"; any other API error refuses.
   bench=
-  [ -n "$top" ] && { [ -e "$top/bench/CHAMPION" ] || git -C "$top" cat-file -e "origin/$base:bench/CHAMPION" 2>/dev/null; } && bench=1
-  if [ -n "$top" ] && { [ -f "$top/scripts/merge-gate.sh" ] || [ -n "$bench" ]; }; then
+  if out=$(gh api "repos/$p/contents/bench/CHAMPION?ref=$base" 2>&1); then bench=1
+  else grep -q 'HTTP 404' <<<"$out" || die "cannot check $p@$base for bench/CHAMPION"; fi
+  [ -n "$top" ] && [ -e "$top/bench/CHAMPION" ] && bench=1
+  gate=; [ -n "$top" ] && [ -f "$top/scripts/merge-gate.sh" ] && gate=1
+  if [ -n "$gate$bench" ]; then
+    [ -n "$top" ] || die "bench repo: run from a checkout of the reviewed sha"
     actual=$(git -C "$top" rev-parse HEAD) || die "cannot read HEAD in $top"
     case $actual in ${sha}*) ;; *) die "checkout the reviewed sha to run its merge gate" ;; esac
-    if [ -f "$top/scripts/merge-gate.sh" ]; then (cd "$top" && bash scripts/merge-gate.sh) >&2 || die "merge gate failed"
-    else echo "defend-receipt: no scripts/merge-gate.sh — project gate skipped" >&2; fi
-    [ -z "$bench" ] || (cd "$top" && "$(dirname "$(readlink -f "$0")")/champion-check" "$base") >&2 || die "champion check failed"
-  else
-    echo "defend-receipt: no scripts/merge-gate.sh — project gate skipped" >&2
   fi
+  if [ -n "$gate" ]; then (cd "$top" && bash scripts/merge-gate.sh) >&2 || die "merge gate failed"
+  else echo "defend-receipt: no scripts/merge-gate.sh — project gate skipped" >&2; fi
+  [ -z "$bench" ] || (cd "$top" && "$self/champion-check" "$base") >&2 || die "champion check failed"
 fi
 
 gh api -X POST "repos/$p/statuses/$head" -f state=$state -f context=defend/merge -f "description=${summary:0:140}" >/dev/null

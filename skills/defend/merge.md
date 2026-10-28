@@ -41,8 +41,9 @@ The status is self-attested: anyone with write access can post it, so it stops c
 skips, not deliberate forgery.
 
 **Champion check (repos with a bench).** A CLEAR also runs `bin/champion-check <PR base>` when
-the repo has `bench/CHAMPION` at the reviewed SHA or its local `origin/<base>` has a `bench/CHAMPION`. Deleting
-`scripts/merge-gate.sh` does not skip it. Contract: `bench/run.sh` prints the score as a bare
+the PR's base has `bench/CHAMPION` per the GitHub API (never a possibly-stale local ref), or the
+reviewed SHA has one. A lookup error other than 404 refuses. Deleting `scripts/merge-gate.sh` or
+`bench/` does not skip it. Contract: `bench/run.sh` prints the score as a bare
 decimal on its last line (higher = better; negate a lower-is-better metric), and
 `bench/CHAMPION` holds the champion. The bar is the base branch's `bench/CHAMPION`, fetched
 fresh into a private ref. The PR's own `bench/CHAMPION` must sit between that bar and its
