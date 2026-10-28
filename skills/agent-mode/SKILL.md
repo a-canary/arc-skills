@@ -24,7 +24,8 @@ An unclear or conflicting virtue is a director clarify trigger.
 
 ### director
 
-- **Objective:** Pull ideas from Designer, Feedback, Dashboard, and logs;
+- **Objective:** Interview the operator to clarify design, mission, and virtue (director "Stop and interview").
+  Pull ideas from Designer, Feedback, Dashboard, and logs;
   quickly prototype for clarity; web-search for existing reference; refine
   missions; queue design specs for Driver to implement. Owns mission scope and
   design decisions. Terminal act is the spec handoff to driver — bookie rows at
