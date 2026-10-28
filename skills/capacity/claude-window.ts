@@ -13,11 +13,11 @@ export async function readClaudeWindow(): Promise<any | null> {
     if (!res.ok) return null;
     const j: any = await res.json();
     const limits = (j.limits ?? []).map((l: any) => ({
-      kind: l.kind, group: l.group, util: Number(l.percent) / 100, reset: l.resets_at ?? null, active: !!l.is_active,
+      kind: l.kind, group: l.group, util: typeof l.percent === "number" ? l.percent / 100 : NaN, reset: l.resets_at ?? null, active: !!l.is_active,
       scope: l.scope?.model?.display_name ?? null,
     }));
     const session = limits.find((l: any) => l.group === "session");
-    const weekly = limits.filter((l: any) => l.group === "weekly" && l.active).sort((a: any, b: any) => b.util - a.util)[0];
+    const weekly = limits.filter((l: any) => l.group === "weekly" && l.active && Number.isFinite(l.util)).sort((a: any, b: any) => b.util - a.util)[0];
     return {
       status: limits.some((l: any) => l.active && l.util >= 1) ? "limited" : "allowed",
       "5h": { util: session?.util ?? null, reset: session?.reset ?? null },
@@ -29,13 +29,15 @@ export async function readClaudeWindow(): Promise<any | null> {
   }
 }
 
-/** The binding utilisation: max of the 5h session and the most-used active weekly limit. */
-// ponytail: route has no model, so a model-scoped weekly counts against all of claude (conservative);
-// pass the model through when a director routes per model.
+/** The binding utilisation for routing: max of the session and every ACTIVE all-models weekly.
+ *  Model-scoped weeklies are skipped: an exhausted Opus-only week must not park all of claude. */
+// ponytail: route has no model; pass it through and include its scoped weekly when a director routes per model.
 export const meterOf = (w: any | null): { util: number | null; limited: boolean } | null => {
-  const u5 = w?.["5h"]?.util, u7 = w?.["7d"]?.util ?? 0;
-  if (!Number.isFinite(u5) || !Number.isFinite(u7)) return null;
-  const util = Math.max(u5, u7);
+  const us = (w?.limits ?? [])
+    .filter((l: any) => l.active && !l.scope && (l.group === "session" || l.group === "weekly"))
+    .map((l: any) => l.util);
+  if (!us.length || !us.every(Number.isFinite)) return null; // missing/garbled percent → 429 estimate stands
+  const util = Math.max(...us);
   return { util, limited: util >= 1 };
 };
 

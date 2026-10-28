@@ -113,7 +113,9 @@ describe("CLI fail-open red line", () => {
 
 describe("vendor meter (claude /api/oauth/usage) beats inference", () => {
   const blind = estimate([], "claude");
-  const win = (u5: number | null, u7: number | null, status = "allowed") => ({ status, "5h": { util: u5 }, "7d": { util: u7 } });
+  const lim = (group: string, util: number, scope: string | null = null) => ({ group, util, active: true, scope });
+  const win = (u5: number | null, u7: number | null) =>
+    ({ limits: [...(u5 === null ? [] : [lim("session", u5)]), ...(u7 === null ? [] : [lim("weekly", u7)])] });
 
   test("binding util is max(5h, active weekly); unreachable meter is null", () => {
     expect(meterOf(win(0.3, 0.8))).toEqual({ util: 0.8, limited: false });
@@ -122,6 +124,9 @@ describe("vendor meter (claude /api/oauth/usage) beats inference", () => {
     expect(meterOf(win(null, null))).toBeNull();
     expect(meterOf(win(NaN, null))).toBeNull(); // API dropped `percent`
     expect(meterOf(win(0.2, 1))).toEqual({ util: 1, limited: true });
+    expect(meterOf(win(null, 1))).toEqual({ util: 1, limited: true }); // no session limit: weekly still binds
+    // exhausted Opus-only week does not park all of claude
+    expect(meterOf({ limits: [lim("session", 0.2), lim("weekly", 1, "Opus")] })).toEqual({ util: 0.2, limited: false });
   });
 
   test("util 0.25 → run; util 0.95 → standard parks, critical escalates", () => {
@@ -131,7 +136,7 @@ describe("vendor meter (claude /api/oauth/usage) beats inference", () => {
   });
 
   test("a limited window is a block even below the floor", () => {
-    const e = withMeter(blind, meterOf(win(1, null, "limited")));
+    const e = withMeter(blind, meterOf(win(1, null)));
     expect(e.blocked).toBe(true);
     expect(arbitrate(e, "standard").action).toBe("park");
   });
