@@ -125,8 +125,18 @@ export const SERVICES: Service[] = [
     id: "v100",
     project: "llm-hosting",
     // GPU inference behind provider `v100`. The model runs on ai-lab-02; :8099 here is
-    // lane-front forwarding to it, so probe HTTP only (a local pgrep is always empty).
-    probe: async () => `${await firstOk(["http://127.0.0.1:8099/health"])} ok`,
+    // lane-front, and /health passes front -> laneproxy -> llama-server (502 if any hop is down).
+    // While the idle detector lends the GPU to a batch job llama is stopped by design; the next
+    // request reclaims it, so a lend reads as up.
+    probe: async () => {
+      try {
+        return `${await firstOk(["http://127.0.0.1:8099/health"])} ok`;
+      } catch (e) {
+        const lanes = (await (await get("http://127.0.0.1:8099/__lanes"))?.json().catch(() => null)) as { idle?: { lent?: boolean } } | null;
+        if (lanes?.idle?.lent === true) return "GPU lent to batch job (reclaims on next request)";
+        throw e;
+      }
+    },
   },
   {
     id: "webui",
