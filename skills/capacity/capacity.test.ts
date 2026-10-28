@@ -120,6 +120,8 @@ describe("vendor meter (claude /api/oauth/usage) beats inference", () => {
     expect(meterOf(win(0.3, null))).toEqual({ util: 0.3, limited: false });
     expect(meterOf(null)).toBeNull();
     expect(meterOf(win(null, null))).toBeNull();
+    expect(meterOf(win(NaN, null))).toBeNull(); // API dropped `percent`
+    expect(meterOf(win(0.2, 1))).toEqual({ util: 1, limited: true });
   });
 
   test("util 0.25 → run; util 0.95 → standard parks, critical escalates", () => {

@@ -49,7 +49,8 @@ try {
     const cutoff = Math.floor(Date.now() / 1000) - RETAIN_DAYS * 86400;
     const rows = d.query("SELECT ts, provider, tokens, status FROM outcomes WHERE ts > ?").all(cutoff) as Outcome[];
     // claude reports its own window: the vendor meter overrides the 429-inferred estimate.
-    const claudeMeter = cmd !== "stats" && [arg("provider"), ...rows.map((r) => r.provider)].includes("claude")
+    const wantsClaude = arg("provider") ? arg("provider") === "claude" : rows.some((r) => r.provider === "claude");
+    const claudeMeter = cmd !== "stats" && wantsClaude
       ? meterOf(await readClaudeWindow()) : null;
     const est = (p: string) => (p === "claude" ? withMeter(estimate(rows, p), claudeMeter) : estimate(rows, p));
     if (cmd === "stats") {
