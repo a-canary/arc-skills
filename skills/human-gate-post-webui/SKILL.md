@@ -107,7 +107,7 @@ a reply.** Immediately:
 The developer's reply arrives async. Accept/reject swaps `human`→`decided` and
 adds a `DECISION <verb>: …` comment (`bd list --label decided`, `bd comments
 <id>`); defer sets status `deferred` with a `DECISION defer until …` comment and
-resurfaces later. Act on it, then `bd close <gate> --reason "<what you did>"` so
+resurfaces later (leave it open). After accept/reject, act on it, then `bd close <gate> --reason "<what you did>"` so
 dependents unblock. Or a fresh instruction — you act on it *when it comes*, not by blocking now. A gate
 that stalled the agent until the human replied is a broken use of this skill
 (it re-couples throughput to human latency, the exact thing ADR-0011 cut).
