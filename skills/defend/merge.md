@@ -41,23 +41,31 @@ The status is self-attested: anyone with write access can post it, so it stops c
 skips, not deliberate forgery.
 
 **Champion check (repos with a bench).** "Results meet or exceed the champion" lives in the
-repo's own `scripts/merge-gate.sh`; a CLEAR runs it on the reviewed SHA when defend-receipt
-is run from that repo's checkout (elsewhere it prints "project gate skipped" and the check
-does not run). The champion is one number in `bench/CHAMPION`, read from the base branch so
-the PR under review cannot lower it (first adoption falls back to the PR's own file):
+repo's own `scripts/merge-gate.sh` (paste the snippet below; nothing ships it). A CLEAR
+runs that script on the reviewed SHA, but only from the repo's own checkout and only if the
+script exists there: run elsewhere, or with the script deleted, defend-receipt prints
+"project gate skipped" and still posts success — on a bench repo, that line is a BLOCK.
+The champion is one number in `bench/CHAMPION`, read from the freshly fetched base branch
+so the PR under review cannot lower it; the PR's own file counts only on first adoption
+(base exists but has no `bench/CHAMPION`). `bench/run.sh` prints the score as a bare
+decimal on its last line.
 
 ```sh
 set -euo pipefail
+base=${BASE:-main}                         # the PR's base branch
+git fetch -q origin "$base"                # unreachable base -> exit (fail closed)
+ref=refs/remotes/origin/$base; git rev-parse -q --verify "$ref^{commit}" >/dev/null
+if git cat-file -e "$ref:bench/CHAMPION" 2>/dev/null; then champ=$(git show "$ref:bench/CHAMPION")
+else champ=$(cat bench/CHAMPION); fi       # first adoption only
+score=$(bench/run.sh | tail -n 1)          # higher = better
 num='^-?[0-9]+(\.[0-9]+)?$'
-score=$(bench/run.sh | tail -n 1)          # last line = the score, higher = better
-champ=$(git show origin/main:bench/CHAMPION 2>/dev/null || cat bench/CHAMPION)
 [[ $score =~ $num && $champ =~ $num ]] || { echo "bench: non-numeric score '$score' or champion '$champ'" >&2; exit 1; }
-awk -v s="$score" -v c="$champ" 'BEGIN{exit !(s+0>=c+0)}' || { echo "bench $score < champion $champ" >&2; exit 1; }
+awk -v s="$score" -v c="$champ" 'BEGIN{exit !(s+0>=c+0)}' || { echo "bench: $score < champion $champ" >&2; exit 1; }
 ```
 
-Lower-is-better metric: flip to `s+0<=c+0`. The gate runs the PR's own `bench/run.sh` and
-`scripts/merge-gate.sh`, so the reviewer diffs both and `bench/CHAMPION` against base; a
-PR that beats the champion raises `bench/CHAMPION` to its score.
+Lower-is-better metric: flip to `s+0<=c+0`. The gate runs the PR's own code, so the
+reviewer diffs everything under `bench/` and `scripts/merge-gate.sh` against base; a PR
+that beats the champion raises `bench/CHAMPION` to its score.
 
 Enable per repo (operator). PUT replaces the whole protection object, so first merge in any
 contexts the repo already requires (`gh api repos/<owner>/<repo>/branches/main/protection`):
