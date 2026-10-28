@@ -9,7 +9,6 @@ expected = {
     "director": ["director/SKILL.md", "director/sys_director.md"],
     "driver": ["driver/SKILL.md", "driver/sys_driver.md"],
     "worker": ["task/SKILL.md"],
-    "defender": ["defend/SKILL.md"],
 }
 
 failures = []

@@ -15,7 +15,7 @@ When a **design**, **mission**, or **virtue** (see agent-mode table) needs clari
 HITL (operator attached): ask live, one question at a time.
 AFK (no operator attached): post the question as a `human` gate on /decide ([human-gate-post-webui](../human-gate-post-webui/SKILL.md)), park that thread, and continue other work — never block waiting.
 Never substitute /counsel; counsel cannot supply operator intent. Implementation forks (how, not what/why) still go to /counsel.
-Drivers, workers, and defenders never use this rule: their forks go to /counsel.
+Only the director interviews: drivers, workers, and defenders escalate design/mission/virtue questions to the director and send implementation forks to /counsel.
 
 ## Invocation
 
