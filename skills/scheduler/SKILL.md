@@ -1,75 +1,77 @@
 ---
 name: scheduler
-description: Compute allocation and task scheduling for agent estates. Tracks available LLM compute (provider rate limits, local GPU throughput), rations compute per project by timebox or token caps, schedules driver ticks based on priority and availability. Provider- and hardware-aware.
+description: Serial lane scheduler for agent estates — beads are the queue, lanes are resources (claude | v100 | free, plus the human lane), priority comes from the mission. Use when deciding what a Driver runs next, routing a bead to a lane, parking on budget, filing an operator decision, or queueing a V100 batch job.
 ---
 
 # scheduler
 
-Compute allocation and task scheduling for multi-repo agent estates. Decides **when** drivers run based on available compute, project priority, and rate limits.
+One Driver per lane pulls the next ready bead, works it for one timebox, then closes or checkpoints it.
+There is no wall-clock timesharing: rotation comes from timebox → checkpoint → requeue.
+Design: arc-sl5 (review page http://home-lab-1:8080/review/lane-scheduler-design.html).
 
-**Architecture role:**
-- **Director**: sets policy (priority, timebox, which projects matter)
-- **Scheduler**: enforces (rate limits, subscription windows, GPU throughput, provider contention)
-- **Driver**: executes within allocated window
+## Lanes = resources, not projects
 
-## Invocation
+| Lane | How a bead gets there | Consumer |
+| --- | --- | --- |
+| human | bd label `human` (no `lane:hitl`) | operator via `bd human list` / webui `/decide` |
+| claude | default (no lane label) | Claude Driver session |
+| v100 | label `lane:v100` | `workbench bin/lane-run` (pi/Qwen via :8099) |
+| free | label `lane:free` | 9router free tier, colab, kaggle |
+
+Projects never own a lane; they only set priority.
+
+## Priority (bd `-p`)
+
+- P0 incident
+- P1 ndivisible + trading
+- P2 hygiene + dream
+- P3 R&D (route free-first, V100 at lowest priority)
+
+## The Driver loop
+
+`bash ~/vault/director/scripts/driver-next.sh 3` prints the next ready beads; its header is the full protocol.
+It skips human/decided-pending beads, other lanes, epics and decisions.
+It emits `[v100-starved]` when the V100 is up and no `lane:v100` bead is ready: decompose the next bead into ~10-min lane-run beads.
+Each bead is one Sprint: `bun ~/vault/director/scripts/sprint.ts start|end`.
+End states:
+- done → `bd close <id> --reason "<evidence>"`
+- timebox → `bd note <id> "CHECKPOINT done:… next:… state:… branch:…"` then `bd update <id> -s open -a ""`
+- needs operator → new bead `-l human` (one question, options + tradeoffs, recommendation); `bd dep add <id> <new>` only when no safe assumption exists
+- long job → the job is its own bead; `bd dep add`, checkpoint, next
+
+Irreversible steps (destructive delete, force-push, credential/account change, public publish) need the operator's reply to name that step.
+
+## Budget
+
+Meter: `~/.claude/skills/capacity/claude-window.ts` (reads `/api/oauth/usage`, no model call); one meter for all callers.
+`budget-hook.sh` injects `[claude-budget] util=…` after tool calls.
+util ≥ 0.90 → no new Claude beads; dispatch to V100 or park.
+Park = `bash ~/vault/director/scripts/budget-wait.sh` in the background; it exits `BUDGET OK` when util < 0.90.
+Never end a turn while driver-next shows work and util < 0.90.
+Structural guard: `stop-guard.sh` Stop hook (operator installs via `install-stop-guard.sh`).
+
+## V100 lane
+
+lane-run bead contract (description header, then a `---` fence, then the task):
 
 ```
-/scheduler status           # show current allocation, queue, availability
-/scheduler allocate <spec>  # allocate compute for a spec
-/scheduler timebox <spec> <minutes>  # set timebox for a spec
-/scheduler priority <spec> <0-4>     # set priority (0=highest)
-/scheduler pause <project>  # pause all scheduling for a project
-/scheduler resume <project> # resume scheduling for a project
+Branch: <pushed branch whose HEAD is a failing test>
+Test: <command that goes RED → GREEN>
+---
+<one goal, exact files, nothing else>
 ```
 
-## Compute tracking
+Success closes the bead with the GREEN commit; failure labels it `qwen-failed` for re-split, never a blind retry.
+Batch jobs go to `v100-jobs.sh` `ready/` (laneproxy); the name prefix sets priority: `1-ndiv-*`, `2-trading-*`, `3-rnd-*`.
 
-### Provider rate limits
-Track subscription windows per provider:
-- Claude: 5-hour rolling window, token cap per window
-- OpenAI: per-minute/per-day rate limits
-- Vast/AI: wallet balance, per-instance limits
-- Local (V100/P600): throughput in tokens/sec, concurrent request limit
+## Events
 
-### Allocation model
-- Each project gets a **timebox** (minutes per day) or **token cap** (tokens per window)
-- Priority determines queue order when contention exists
-- Critical work (qa.failed critical-failure, security) bypasses timebox
-
-## Scheduling algorithm
-
-1. Query all active drivers for current state (idle, running, paused)
-2. Check compute availability (provider windows, GPU load)
-3. Sort waiting specs by priority (0=highest)
-4. Allocate compute to highest-priority waiting spec
-5. Wake the spec's driver (herdr pane send-keys or beads notify)
-6. Track timebox consumption; pause driver when timebox expires
-
-## Hardware awareness
-
-- **V100**: primary local GPU, ~150 tok/s for 7B models, ~50 tok/s for 70B models
-- **P600**: secondary local GPU, lower throughput, for parallel inference
-- **Provider contention**: if multiple drivers use same provider, serialize or time-slice
-
-**GPU allocation policy:**
-- Open-source R&D work (fine-tuning, training) → V100/P600
-- Private agent LLM calls → provider APIs (don't compete with R&D)
-- If R&D is using V100, private agents wait or use provider fallback
-
-## Beads integration
-
-- Create scheduler beads issues for: allocation decisions, timebox expirations, contention events
-- Use beads to communicate with directors (policy changes) and drivers (wake/pause)
-
-## State
-
-- `~/vault/director/scheduler.json` — current allocation state, timebox consumption, queue
-- Updated every tick; persisted to survive restarts
+An event is a bead becoming ready: job done, operator decided, recurring task due, window reset.
+`wake-director.sh` wakes an idle Driver.
+Mid-task preemption only for a P0 incident or window exhaustion (arc-sl5.7, not built).
+Recurring work: `~/.scheduler/dispatcher.sh` + `registry.json` (minting beads with a dedup key is arc-sl5.4, not built); trade execution stays plain cron.
 
 ## Fail-open
 
-Scheduler is advisory + fail-open. If scheduler fails:
-- Drivers proceed without timebox enforcement (run until complete or paused)
-- Log the fail-open event
-- Do not block work on scheduler failure
+Every scheduler piece is advisory; meter unreachable → treat as near-cap and park.
+Never block a P0 on the scheduler.
