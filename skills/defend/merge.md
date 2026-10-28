@@ -49,8 +49,9 @@ decimal on its last line (higher = better; negate a lower-is-better metric), and
 fresh into a private ref. The PR's own `bench/CHAMPION` must sit between that bar and its
 measured score: a PR may raise the bar to what it measured, and may not lower it. On first
 adoption the PR's file is the bar. The check runs the PR's own `bench/run.sh`, so the reviewer
-still diffs what it executes. Like merge-gate.sh, it runs only when defend-receipt is invoked
-from the repo's checkout.
+still diffs what it executes. In a bench repo, defend-receipt refuses unless it runs from a clean
+checkout of the reviewed SHA whose `origin` is the PR's repo. The verdict holds for the base as of
+CLEAR: if the champion rises before merge, require up-to-date branches or re-run CLEAR.
 
 Enable per repo (operator). PUT replaces the whole protection object, so first merge in any
 contexts the repo already requires (`gh api repos/<owner>/<repo>/branches/main/protection`):
