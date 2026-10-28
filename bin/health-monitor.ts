@@ -127,7 +127,9 @@ export const SERVICES: Service[] = [
     // GPU inference behind provider `v100`. The model runs on ai-lab-02; :8099 here is
     // lane-front, and /health passes front -> laneproxy -> llama-server (502 if any hop is down).
     // While the idle detector lends the GPU to a batch job llama is stopped by design; the next
-    // request reclaims it, so a lend reads as up.
+    // POST reclaims it, so a lend reads as up.
+    // ponytail: a failed reclaim leaves lent=true and reads up here; it surfaces as 502s on the
+    // POST path, not in this probe. Add a reclaim-failure counter to /__lanes if that bites.
     probe: async () => {
       try {
         return `${await firstOk(["http://127.0.0.1:8099/health"])} ok`;
