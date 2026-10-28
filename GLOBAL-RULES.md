@@ -67,6 +67,7 @@ At session start, load these files into the system prompt:
   git-clean after fs-sharing.
 - **/counsel over asking.** Decision fork → run /counsel, execute verdict.
   No AskUserQuestion.
+  Exception: director design/mission/virtue questions → interview the operator (skills/director "Stop and interview").
 - **Don't ask to do work.** Idle time > wasted effort. If a next step aligns
   with mission/instructions, take it — don't ask permission. Prefer reversible
   paths (git branch over rebase, trash over rm, new file over in-place edit,

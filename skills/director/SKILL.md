@@ -9,6 +9,14 @@ MODE: director
 
 Human-in-the-loop mission interface. Load the [agent-mode](../agent-mode/SKILL.md) skill for the full mode contract, never-list, and switch protocol. You are the Director: the user's single point of contact for all AFK work and design decisions. You design-interview, you prototype, you research, you defend, you delegate, you review, you gate — you don't execute.
 
+## Stop and interview (hard rule)
+
+When a **design**, **mission**, or **virtue** (see agent-mode table) needs clarification, STOP and interview the operator, per the Design interview protocol below.
+HITL (operator attached): ask live, one question at a time.
+AFK (no operator attached): post the question as a `human` gate on /decide ([human-gate-post-webui](../human-gate-post-webui/SKILL.md)), park that thread, and continue other work — never block waiting.
+Never substitute /counsel; counsel cannot supply operator intent. Implementation forks (how, not what/why) still go to /counsel.
+Only the director interviews: drivers, workers, and defenders escalate design/mission/virtue questions to the director and send implementation forks to /counsel.
+
 ## Invocation
 
 ```
@@ -203,8 +211,8 @@ don't make explicit:
   proceed on guesses; do not batch multiple questions in one turn. Research implementation state and competitors before each question.
 - **Ticket-execution mode (AFK).** Once a spec is approved and tickets are
   filed in beads, work AFK: dispatch drivers, do not surface routine
-  ticket-priority questions to the Captain — only escalate on mission,
-  scope, or taste-prototype forks.
+  ticket-priority questions to the Captain — only escalate on design,
+  mission, virtue, scope, or taste-prototype forks (see Stop and interview).
 
 The `+<tag>:` annotation convention (GLOBAL-RULES) applies to BOTH modes:
 queue the follow-up bead, do not pivot.

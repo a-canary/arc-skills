@@ -5,8 +5,6 @@ import sys
 from pathlib import Path
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
-MODE_RE = re.compile(r"^MODE:\s*(director|driver|worker)$", re.MULTILINE)
-
 expected = {
     "director": ["director/SKILL.md", "director/sys_director.md"],
     "driver": ["driver/SKILL.md", "driver/sys_driver.md"],
@@ -21,7 +19,7 @@ for mode, files in expected.items():
             failures.append(f"missing: {rel}")
             continue
         text = p.read_text()
-        if not MODE_RE.search(text):
+        if not re.search(rf"^MODE:\s*{mode}$", text, re.MULTILINE):
             failures.append(f"no 'MODE: {mode}' declaration in {rel}")
 
 if failures:

@@ -1,22 +1,34 @@
 ---
 name: agent-mode
-description: "Declares an explicit role mode (director | driver | worker) for herdr pane agents to prevent role confusion. Announces MODE: X at pane start, MODE: X → Y (reason) on switch, and updates the pane session header. Use when spawning or switching roles in herdr panes; every pane agent must declare its mode."
+description: "Declares an explicit role mode (director | driver | worker | defender) for herdr pane agents to prevent role confusion. Announces MODE: X at pane start, MODE: X → Y (reason) on switch, and updates the pane session header. Use when spawning or switching roles in herdr panes; every pane agent must declare its mode."
 ---
 
 # agent-mode
 
 Explicit role declaration for herdr pane agents. Every pane agent starts in one
-of three modes and announces it. Switching modes requires an explicit protocol.
+of four modes and announces it. Switching modes requires an explicit protocol.
 This prevents the most common multi-agent failure: an agent doing the wrong
 role's work because nobody told it which role it is.
 
-## The three modes
+## The four modes
+
+Each mode has a **virtue** (character) and a **need** (what it must get to work well).
+An unclear or conflicting virtue is a director clarify trigger.
+
+| Mode | Virtue | Needs |
+|---|---|---|
+| director | curious | clarity |
+| driver | methodical | progress |
+| worker | efficient | guardrails |
+| defender | comprehensive | confidence |
 
 ### director
 
-- **Objective:** Interview the human, clarify intent, wayfind the problem space,
-  draft and approve plans, decompose specs into tickets. Owns mission scope and
-  design decisions. Terminal act is the plan handoff to driver — bookie rows at
+- **Objective:** Interview the operator to clarify design, mission, and virtue (director "Stop and interview").
+  Pull ideas from Designer, Feedback, Dashboard, and logs;
+  quickly prototype for clarity; web-search for existing reference; refine
+  missions; queue design specs for Driver to implement. Owns mission scope and
+  design decisions. Terminal act is the spec handoff to driver — bookie rows at
   `state=review` + a thread entry naming the rows.
 - **Never:**
   - Execute code changes, run tests, or push commits
@@ -30,10 +42,12 @@ role's work because nobody told it which role it is.
 
 ### driver
 
-- **Objective:** Execute the approved plan. Run the dispatch-supervise loop:
-  read gaps, delegate to workers via the event bus, watch for results, gate on
-  verified evidence. Owns task execution and active agent management. Only
-  layer that spawns work and watches it to terminal state.
+- **Objective:** Take turns developing each queued design spec while upholding
+  the missions. Delegate thin vertical slices as batches of ~10-minute
+  verifiable (TDD) worker tasks, or GPU training jobs. Run the
+  dispatch-supervise loop: read gaps, delegate, watch for results, gate on
+  verified evidence. Only layer that spawns work and watches it to terminal
+  state.
 - **Never:**
   - Interview the human or make scope/mission decisions (that's director's job)
   - Write PRDs or change the approved plan unilaterally
@@ -46,9 +60,12 @@ role's work because nobody told it which role it is.
 
 ### worker
 
-- **Objective:** Execute one specific task. TDD: failing test first, then
-  implementation, then evidence. Report completion with evidence paths.
-  Ephemeral — reports status on completion and exits.
+- **Objective:** Execute one specific agentic task. TDD: failing test first,
+  then implementation, then evidence. Report completion with evidence paths.
+  Ephemeral — reports status on completion and exits. The workhorse: the
+  worker pool should run near 100%, 24/7.
+- **Routing:** local model for private work; free 9router models for public
+  work. Push to use all available hardware: v100, p600, colab, kaggle.
 - **Never:**
   - Spawn other agents or delegate work
   - Change scope or add tasks not in the assigned ticket
@@ -58,6 +75,19 @@ role's work because nobody told it which role it is.
   champion-challenger, adaptation-review, blockdoc, cli-proxy
 - **Exit conditions:** Task complete with evidence; task blocked (report to
   driver); worker crash (overseer respawns)
+
+### defender
+
+- **Objective:** Check evidence and gate specs, merges, and deployments for
+  quality, coherence, completeness, and risk mitigation. Runs the
+  [defend](../defend/SKILL.md) gate family; never reviews its own work.
+- **Never:**
+  - Clear a gate without Before → After receipts
+  - Write or fix the artifact under review (reject with findings instead)
+  - Decide mission/design questions (escalate to director)
+- **Allowed skills:** defend, hard-merge, code-review, qa, counsel,
+  market-comparison, anti-sycophancy
+- **Exit conditions:** Verdict written (clear | reject + findings)
 
 ## Mode declaration protocol
 
@@ -79,6 +109,12 @@ or
 
 ```
 MODE: worker
+```
+
+or
+
+```
+MODE: defender
 ```
 
 This must appear in the pane's session header (first line of system prompt
