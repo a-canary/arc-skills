@@ -32,6 +32,7 @@ Default posture: *this diff is wrong until the spawned reviewer fails to break i
 - [ ] **Codemap/structure diff** — module shape change the PR didn't claim? New seam, new dependency edge, dead code introduced?
 - [ ] **Nitpick out-of-scope changes** — files the ticket never mentioned, drive-by reformat, unrelated "while I was here" fix, unrequested version bump. Each is a blocker, not a courtesy.
 - [ ] **Nitpick unneeded files** — new file that adds no value or duplicates existing code; scratch/debug/backup files (`*.tmp`, `*.bak`, `*-backup.*`, `k.sh`, `r.sh`); committed build output, logs, dumps, `.env`. Should it be deleted or gitignored instead of merged? Flag it.
+- [ ] **Legacy in the topic area** — beyond the diff: modules, files, docs, scripts on the task's topic that are now dead, superseded (often by this very change), duplicated or stale. Bar = earn your keep: it stays only if live code, tests or entry docs reference it AND it does a job nothing else does. For each that fails: `ke learn` the lesson (why it existed, what replaced it, the gotcha), then trash or shrink it — in this PR, or a filed bead. Report the search done; "none found" without one is silence, not a finding.
 
 ### 3. Adversarial reasoning (the expensive part)
 - [ ] **Name every assumption** the change makes: input non-null? list sorted? single writer? clock monotonic? Each unstated assumption is a latent bug — an assumption you can't name you can't check.
