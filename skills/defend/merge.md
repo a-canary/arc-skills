@@ -39,6 +39,20 @@ requiring the `defend/merge` status (enforce_admins on), so every merge path —
 Not a command-text hook: those leak and over-block (repos-76u counsel, 2026-10-27).
 The status is self-attested: anyone with write access can post it, so it stops careless
 skips, not deliberate forgery.
+
+**Champion check (repos with a bench).** A CLEAR also runs `bin/champion-check <PR base>` when
+the PR's base or head has `bench/CHAMPION` per the GitHub API (never a possibly-stale local ref or
+checkout); the checkout must then be at the reviewed SHA. A lookup error other than 404 refuses. Deleting `scripts/merge-gate.sh` or
+`bench/` does not skip it. Contract: `bench/run.sh` prints the score as a bare
+decimal on its last line (higher = better; negate a lower-is-better metric), and
+`bench/CHAMPION` holds the champion. The bar is the base branch's `bench/CHAMPION`, fetched
+fresh into a private ref. The PR's own `bench/CHAMPION` must sit between that bar and its
+measured score: a PR may raise the bar to what it measured, and may not lower it. On first
+adoption the PR's file is the bar. The check runs the PR's own `bench/run.sh`, so the reviewer
+still diffs what it executes. In a bench repo, defend-receipt refuses unless it runs from a clean
+checkout of the reviewed SHA whose `origin` is the PR's repo. The verdict holds for the base as of
+CLEAR: if the champion rises before merge, require up-to-date branches or re-run CLEAR.
+
 Enable per repo (operator). PUT replaces the whole protection object, so first merge in any
 contexts the repo already requires (`gh api repos/<owner>/<repo>/branches/main/protection`):
 

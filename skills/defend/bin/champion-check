@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# champion-check — DefendMerge "results meet or exceed the champion" for repos with a bench.
+#
+#   champion-check <base-branch>      run from the repo top-level at the reviewed sha
+#
+# Contract: bench/run.sh prints the score as a bare decimal on its last line (higher = better;
+# negate a lower-is-better metric in run.sh). bench/CHAMPION holds the champion score.
+# The bar is bench/CHAMPION on the base branch, fetched fresh (FETCH_HEAD), so neither the
+# PR nor a stale origin/<base> can move it. The PR's own bench/CHAMPION must stay within
+# [bar, score]: it may raise the bar to what it measured, never lower it or claim more.
+# First adoption (base has no bench/CHAMPION): the PR's file is the bar, still <= score.
+# No bench/CHAMPION on base or in the PR: nothing to check, exit 0.
+set -euo pipefail
+die() { echo "champion-check: $*" >&2; exit 1; }
+[ $# -eq 1 ] && [ -n "$1" ] || die "usage: champion-check <base-branch>"
+base=$1 num='^-?[0-9]+(\.[0-9]+)?$'
+git fetch -q origin "refs/heads/$base" || die "cannot fetch base '$base'"
+ref=$(git rev-parse FETCH_HEAD)   # one immutable commit (FETCH_HEAD is per-worktree), no shared ref
+if git cat-file -e "$ref:bench/CHAMPION" 2>/dev/null; then bar=$(git show "$ref:bench/CHAMPION")
+  [[ $bar =~ $num ]] || die "non-numeric base champion '$bar'"   # empty included: never "first adoption"
+elif [ -f bench/CHAMPION ]; then bar=; echo "champion-check: first adoption (base has no bench/CHAMPION)" >&2
+else echo "champion-check: no bench/CHAMPION — skipped" >&2; exit 0; fi
+# measure the committed tree: nothing modified/untracked anywhere, nothing ignored under bench/
+# ponytail: ignored files outside bench/ (node_modules, data) are trusted — the operator's own box
+[ -z "$(git status --porcelain)" ] || die "uncommitted changes in the checkout"
+[ -z "$(git status --porcelain --ignored -- bench)" ] || die "ignored files under bench/"
+pr=$(cat bench/CHAMPION)
+score=$(bench/run.sh | tail -n 1) || die "bench/run.sh failed"
+[[ $score =~ $num ]] || die "non-numeric score '$score'"
+[[ $pr =~ $num ]] || die "non-numeric bench/CHAMPION '$pr'"
+ge() { LC_ALL=C awk -v a="$1" -v b="$2" 'BEGIN{exit !(a+0>=b+0)}'; }
+if [ -n "$bar" ]; then
+  ge "$score" "$bar" || die "score $score < champion $bar"
+  ge "$pr" "$bar" || die "PR bench/CHAMPION $pr < base champion $bar (lowered, or rebase onto $base)"
+fi
+ge "$score" "$pr" || die "PR bench/CHAMPION $pr > measured score $score"
+echo "champion-check: score $score >= champion ${bar:-$pr (first adoption)}" >&2

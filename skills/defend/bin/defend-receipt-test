@@ -10,8 +10,17 @@ trap 'command rm -r "$T"' EXIT
 export BODY='Rollback: git revert' STUB_HEAD=$HEAD
 cat > "$T/gh" <<'EOF'
 #!/bin/bash
+if [ "$1" = api ] && [[ $2 == */contents/bench/CHAMPION* ]]; then   # champion lookup at a ref
+  [[ $2 == *\?* ]] && { echo 'gh: unencoded ref in path (HTTP 400)' >&2; exit 1; }   # must pass ref via -f
+  [[ " $* " == *" -X GET "* ]] || { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }   # real gh POSTs -f without -X GET
+  [ "${STUB_CHAMP:-}" = err ] && { echo 'gh: Server Error (HTTP 500)' >&2; exit 1; }
+  [ "${STUB_CHAMP:-}" = hide ] && { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }   # private repo, no contents:read
+  ref=; for a in "$@"; do case $a in ref=*) ref=${a#ref=} ;; esac; done
+  for r in ${STUB_REPOS:-}; do git -C "$r" cat-file -e "$ref:bench/CHAMPION" 2>/dev/null && { echo '{}'; exit 0; }; done
+  echo 'gh: Not Found (HTTP 404)' >&2; exit 1
+fi
 if [ "$1 $2" = "pr view" ]; then
-  jq -n --arg h "$STUB_HEAD" --arg u "https://github.com/o/r/pull/7" --arg b "${BODY:-}" '{headRefOid:$h,url:$u,body:$b}'
+  jq -n --arg h "$STUB_HEAD" --arg u "https://github.com/o/r/pull/7" --arg b "${BODY:-}" --arg base "${STUB_BASE:-main}" '{headRefOid:$h,url:$u,body:$b,baseRefName:$base}'
   exit 0
 fi
 echo "$*" >> "$T/calls"
@@ -63,6 +72,57 @@ printf '#!/bin/bash\nexit 0\n' > "$MG/scripts/merge-gate.sh"
 git -C "$MG" commit --allow-empty -q -m second
 (cd "$MG" && : > "$T/calls" && "$R" CLEAR 7 "$MGHEAD" "ok" >/dev/null 2>&1); rc=$?; got=$(cat "$T/calls")
 [ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL merge-gate: refuse on sha mismatch rc=$rc calls=$got"; }
+
+# Bench repo without merge-gate.sh: champion-check still runs (stub gh has no baseRefName -> main)
+BR=$(mktemp -d); trap 'command rm -r "$T" "$MG" "$BR"' EXIT
+mkdir -p "$BR/o"; git init -q --bare -b main "$BR/o/r.git"; git clone -q "$BR/o/r.git" "$BR/w" 2>/dev/null
+mkdir "$BR/w/bench"; echo 0.9 > "$BR/w/bench/CHAMPION"; printf '#!/bin/bash\necho 0.5\n' > "$BR/w/bench/run.sh"; chmod +x "$BR/w/bench/run.sh"
+git -C "$BR/w" add -A; git -C "$BR/w" -c user.email=t@t -c user.name=t commit -qm base; git -C "$BR/w" push -q origin main
+export STUB_REPOS="$BR/o/r.git $BR/w"   # stub GitHub: branch refs resolve in the bare origin, PR shas in the clone
+br() { export STUB_HEAD; STUB_HEAD=$(git -C "$BR/w" rev-parse HEAD)
+  (cd "$BR/w" && : > "$T/calls" && "$R" CLEAR 7 "$(git rev-parse --short=7 HEAD)" ok >/dev/null 2>&1); rc=$?; got=$(cat "$T/calls"); }
+br
+[ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: refuse below champion without merge-gate.sh rc=$rc calls=$got"; }
+printf '#!/bin/bash\necho 0.95\n' > "$BR/w/bench/run.sh"; git -C "$BR/w" -c user.email=t@t -c user.name=t commit -qam better
+br
+[ $rc -eq 0 ] && grep -qF "state=success" <<<"$got" && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: pass above champion rc=$rc calls=$got"; }
+# the base comes from the PR: an absent base branch refuses (a hardcoded main would pass)
+STUB_BASE=nope br
+[ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: refuse when PR base is absent rc=$rc calls=$got"; }
+# invoked by a relative path from a subdir: champion-check must still be found
+(cd "$BR/w/bench" && : > "$T/calls" && "$(realpath --relative-to=. "$R")" CLEAR 7 "$(git rev-parse --short=7 HEAD)" ok >/dev/null 2>&1); rc=$?; got=$(cat "$T/calls")
+[ $rc -eq 0 ] && grep -qF "state=success" <<<"$got" && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: relative \$0 from subdir rc=$rc calls=$got"; }
+# PR deletes bench/ and the local origin/main is gone: GitHub says base has a champion -> refused
+git -C "$BR/w" rm -rq bench; git -C "$BR/w" -c user.email=t@t -c user.name=t commit -qm drop; git -C "$BR/w" update-ref -d refs/remotes/origin/main
+br
+[ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: refuse PR deleting bench/ with stale local ref rc=$rc calls=$got"; }
+# checkout is a passing commit but not the reviewed head: refused by the HEAD check, never benched
+export STUB_HEAD; STUB_HEAD=$(git -C "$BR/w" rev-parse HEAD); git -C "$BR/w" checkout -q HEAD~1
+(cd "$BR/w" && : > "$T/calls" && "$R" CLEAR 7 "${STUB_HEAD:0:7}" ok >/dev/null 2>&1); rc=$?; got=$(cat "$T/calls")
+[ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: refuse when checkout is not the PR head rc=$rc calls=$got"; }
+git -C "$BR/w" checkout -q "$STUB_HEAD"
+export STUB_CHAMP=err; br
+[ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: refuse when champion lookup errors rc=$rc calls=$got"; }
+unset STUB_CHAMP
+# origin is a fork (same history, other repo): refused, else the bar would come from the fork
+git -C "$BR/w" checkout -q HEAD~1; git clone -q --bare "$BR/o/r.git" "$BR/fork.git"; git -C "$BR/w" remote set-url origin "$BR/fork.git"
+br
+[ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: refuse when origin is not the PR repo rc=$rc calls=$got"; }
+git -C "$BR/w" remote set-url origin "$BR/o/r.git"; br
+[ $rc -eq 0 ] && grep -qF "state=success" <<<"$got" && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: control, PR repo origin passes rc=$rc calls=$got"; }
+# API hides the champion (404 on every lookup) but the checkout has one: still benched, below -> refused
+printf '#!/bin/bash\necho 0.5\n' > "$BR/w/bench/run.sh"; git -C "$BR/w" -c user.email=t@t -c user.name=t commit -qam worse
+STUB_CHAMP=hide br
+[ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: refuse below champion when API 404s rc=$rc calls=$got"; }
+# first adoption, checkout left at the base (no CHAMPION locally): the head lookup still finds it -> HEAD check refuses
+FA=$(mktemp -d); trap 'command rm -r "$T" "$MG" "$BR" "$FA"' EXIT
+mkdir -p "$FA/o"; git init -q --bare -b main "$FA/o/r.git"; git clone -q "$FA/o/r.git" "$FA/w" 2>/dev/null
+git -C "$FA/w" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base; git -C "$FA/w" push -q origin main; git -C "$FA/w" checkout -q -b pr
+mkdir "$FA/w/bench"; echo 0.5 > "$FA/w/bench/CHAMPION"; printf '#!/bin/bash\necho 0.9\n' > "$FA/w/bench/run.sh"; chmod +x "$FA/w/bench/run.sh"
+git -C "$FA/w" add -A; git -C "$FA/w" -c user.email=t@t -c user.name=t commit -qm adopt
+export STUB_REPOS="$FA/o/r.git $FA/w"; STUB_HEAD=$(git -C "$FA/w" rev-parse HEAD); git -C "$FA/w" checkout -q main
+(cd "$FA/w" && : > "$T/calls" && "$R" CLEAR 7 "${STUB_HEAD:0:7}" ok >/dev/null 2>&1); rc=$?; got=$(cat "$T/calls")
+[ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: refuse first adoption when checkout is not the head rc=$rc calls=$got"; }
 
 echo "pass=$ok fail=$bad"
 exit $((bad > 0))
