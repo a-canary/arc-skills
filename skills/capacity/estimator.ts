@@ -100,3 +100,11 @@ export function estimate(rows: Outcome[], provider: string): Estimate {
     spendInWindow: spend, headroomFrac, blocks: blocksArr.length,
   };
 }
+
+// Vendor meter beats inference: when the provider reports its own window
+// utilisation (claude: /api/oauth/usage via claude-window.ts), headroom is
+// 1 - util, and an exhausted limit is a block. util null → keep the estimate.
+export function withMeter(est: Estimate, meter: { util: number | null; limited: boolean } | null): Estimate {
+  if (!meter || meter.util === null) return est;
+  return { ...est, known: true, blocked: meter.limited, headroomFrac: Math.min(1, Math.max(0, 1 - meter.util)) };
+}

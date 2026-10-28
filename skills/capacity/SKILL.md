@@ -53,6 +53,14 @@ age out); window length = mode of refill-anchor deltas (first success after a
 blocks and feed `weeklyCapLB` separately. A provider that has
 never 429'd stays `known:false` → always `run`.
 
+**Vendor meter beats inference (claude).** `headroom`/`route` for `claude` read
+the seat window from `GET /api/oauth/usage` (`claude-window.ts`, no model call):
+headroom = 1 − max(5h session, most-used *active* weekly), an exhausted limit =
+blocked. So `route` parks the standard lane at util > 0.9 (the floor). Weekly
+util is `null` while every weekly limit is inactive — expected, not a fault.
+Meter unreachable → the 429-inferred estimate stands (still fail-open).
+`bun claude-window.ts` prints the raw window JSON (exit 2 when unreachable).
+
 ## Director binding
 
 ```

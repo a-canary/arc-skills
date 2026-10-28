@@ -11,7 +11,8 @@
 // DB: $CAPACITY_DB (default ~/vault/capacity.db), bun:sqlite, WAL, single table.
 
 import { Database } from "bun:sqlite";
-import { estimate, type Outcome } from "./estimator.ts";
+import { estimate, withMeter, type Outcome } from "./estimator.ts";
+import { meterOf, readClaudeWindow } from "./claude-window.ts";
 import { arbitrate, type Lane } from "./arbitrate.ts";
 
 const DB_PATH = process.env.CAPACITY_DB ?? `${process.env.HOME}/vault/capacity.db`;
@@ -47,6 +48,10 @@ try {
   } else if (cmd === "headroom" || cmd === "route" || cmd === "stats") {
     const cutoff = Math.floor(Date.now() / 1000) - RETAIN_DAYS * 86400;
     const rows = d.query("SELECT ts, provider, tokens, status FROM outcomes WHERE ts > ?").all(cutoff) as Outcome[];
+    // claude reports its own window: the vendor meter overrides the 429-inferred estimate.
+    const claudeMeter = cmd !== "stats" && [arg("provider"), ...rows.map((r) => r.provider)].includes("claude")
+      ? meterOf(await readClaudeWindow()) : null;
+    const est = (p: string) => (p === "claude" ? withMeter(estimate(rows, p), claudeMeter) : estimate(rows, p));
     if (cmd === "stats") {
       const byProv: Record<string, { rows: number; blocks429: number }> = {};
       for (const r of rows) {
@@ -57,12 +62,12 @@ try {
       console.log(JSON.stringify({ db: DB_PATH, since: cutoff, providers: byProv }));
     } else if (cmd === "headroom") {
       const provs = arg("provider") ? [arg("provider")!] : [...new Set(rows.map((r) => r.provider))].sort();
-      console.log(JSON.stringify(provs.map((p) => estimate(rows, p))));
+      console.log(JSON.stringify(provs.map(est)));
     } else {
       const provider = arg("provider");
       if (!provider) throw new Error("route needs --provider");
       const lane = (arg("lane") ?? "standard") as Lane;
-      const verdict = arbitrate(estimate(rows, provider), lane, {
+      const verdict = arbitrate(est(provider), lane, {
         ctx: arg("ctx") ? Number(arg("ctx")) : undefined,
         parkedMinutes: arg("parked-min") ? Number(arg("parked-min")) : undefined,
       });
