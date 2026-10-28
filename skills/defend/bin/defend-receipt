@@ -38,12 +38,14 @@ p=${url#https://github.com/}; p=${p%/pull/*}
 if [ "$verdict" = CLEAR ]; then
   grep -qiE '^Rollback:[[:space:]]*\S' <<<"$body" || die "CLEAR requires a Rollback: line in the PR body"
   top=$(git rev-parse --show-toplevel 2>/dev/null) || top=
-  # bench repo = bench/CHAMPION on the PR's base per GitHub (never a possibly-stale local ref),
-  # or at the reviewed sha. Only a 404 means "no champion"; any other API error refuses.
+  # bench repo = bench/CHAMPION on the PR's base or its head, per GitHub — never a local ref or
+  # checkout that may be stale. -f lets gh encode the ref (# + & are legal in branch names).
+  # Only a 404 means "no champion"; any other API error refuses.
   bench=
-  if out=$(gh api "repos/$p/contents/bench/CHAMPION?ref=$base" 2>&1); then bench=1
-  else grep -q 'HTTP 404' <<<"$out" || die "cannot check $p@$base for bench/CHAMPION"; fi
-  [ -n "$top" ] && [ -e "$top/bench/CHAMPION" ] && bench=1
+  for ref in "$base" "$head"; do
+    if out=$(gh api "repos/$p/contents/bench/CHAMPION" -X GET -f ref="$ref" 2>&1); then bench=1
+    else grep -q 'HTTP 404' <<<"$out" || die "cannot check $p@$ref for bench/CHAMPION"; fi
+  done
   gate=; [ -n "$top" ] && [ -f "$top/scripts/merge-gate.sh" ] && gate=1
   if [ -n "$gate$bench" ]; then
     [ -n "$top" ] || die "bench repo: run from a checkout of the reviewed sha"

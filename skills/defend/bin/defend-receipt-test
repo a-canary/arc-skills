@@ -10,12 +10,15 @@ trap 'command rm -r "$T"' EXIT
 export BODY='Rollback: git revert' STUB_HEAD=$HEAD
 cat > "$T/gh" <<'EOF'
 #!/bin/bash
-if [ "$1" = api ] && [[ $2 == */contents/bench/CHAMPION* ]]; then   # base champion lookup
-  case ${STUB_CHAMP:-} in 1) echo '{}'; exit 0 ;; err) echo 'gh: Server Error (HTTP 500)' >&2; exit 1 ;;
-    *) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;; esac
+if [ "$1" = api ] && [[ $2 == */contents/bench/CHAMPION* ]]; then   # champion lookup at a ref
+  [[ $2 == *\?* ]] && { echo 'gh: unencoded ref in path (HTTP 400)' >&2; exit 1; }   # must pass ref via -f
+  [ "${STUB_CHAMP:-}" = err ] && { echo 'gh: Server Error (HTTP 500)' >&2; exit 1; }
+  ref=; for a in "$@"; do case $a in ref=*) ref=${a#ref=} ;; esac; done
+  for r in ${STUB_REPOS:-}; do git -C "$r" cat-file -e "$ref:bench/CHAMPION" 2>/dev/null && { echo '{}'; exit 0; }; done
+  echo 'gh: Not Found (HTTP 404)' >&2; exit 1
 fi
 if [ "$1 $2" = "pr view" ]; then
-  jq -n --arg h "$STUB_HEAD" --arg u "https://github.com/o/r/pull/7" --arg b "${BODY:-}" '{headRefOid:$h,url:$u,body:$b}'
+  jq -n --arg h "$STUB_HEAD" --arg u "https://github.com/o/r/pull/7" --arg b "${BODY:-}" --arg base "${STUB_BASE:-main}" '{headRefOid:$h,url:$u,body:$b,baseRefName:$base}'
   exit 0
 fi
 echo "$*" >> "$T/calls"
@@ -73,6 +76,7 @@ BR=$(mktemp -d); trap 'command rm -r "$T" "$MG" "$BR"' EXIT
 git init -q --bare -b main "$BR/o.git"; git clone -q "$BR/o.git" "$BR/w" 2>/dev/null
 mkdir "$BR/w/bench"; echo 0.9 > "$BR/w/bench/CHAMPION"; printf '#!/bin/bash\necho 0.5\n' > "$BR/w/bench/run.sh"; chmod +x "$BR/w/bench/run.sh"
 git -C "$BR/w" add -A; git -C "$BR/w" -c user.email=t@t -c user.name=t commit -qm base; git -C "$BR/w" push -q origin main
+export STUB_REPOS="$BR/o.git $BR/w"   # stub GitHub: branch refs resolve in the bare origin, PR shas in the clone
 br() { export STUB_HEAD; STUB_HEAD=$(git -C "$BR/w" rev-parse HEAD)
   (cd "$BR/w" && : > "$T/calls" && "$R" CLEAR 7 "$(git rev-parse --short=7 HEAD)" ok >/dev/null 2>&1); rc=$?; got=$(cat "$T/calls"); }
 br
@@ -80,14 +84,22 @@ br
 printf '#!/bin/bash\necho 0.95\n' > "$BR/w/bench/run.sh"; git -C "$BR/w" -c user.email=t@t -c user.name=t commit -qam better
 br
 [ $rc -eq 0 ] && grep -qF "state=success" <<<"$got" && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: pass above champion rc=$rc calls=$got"; }
+# the base comes from the PR: an absent base branch refuses (a hardcoded main would pass)
+STUB_BASE=nope br
+[ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: refuse when PR base is absent rc=$rc calls=$got"; }
 # invoked by a relative path from a subdir: champion-check must still be found
 (cd "$BR/w/bench" && : > "$T/calls" && "$(realpath --relative-to=. "$R")" CLEAR 7 "$(git rev-parse --short=7 HEAD)" ok >/dev/null 2>&1); rc=$?; got=$(cat "$T/calls")
 [ $rc -eq 0 ] && grep -qF "state=success" <<<"$got" && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: relative \$0 from subdir rc=$rc calls=$got"; }
 # PR deletes bench/ and the local origin/main is gone: GitHub says base has a champion -> refused
 git -C "$BR/w" rm -rq bench; git -C "$BR/w" -c user.email=t@t -c user.name=t commit -qm drop; git -C "$BR/w" update-ref -d refs/remotes/origin/main
-export STUB_CHAMP=1; br
+br
 [ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: refuse PR deleting bench/ with stale local ref rc=$rc calls=$got"; }
-STUB_CHAMP=err; br
+# checkout is a passing commit but not the reviewed head: refused by the HEAD check, never benched
+export STUB_HEAD; STUB_HEAD=$(git -C "$BR/w" rev-parse HEAD); git -C "$BR/w" checkout -q HEAD~1
+(cd "$BR/w" && : > "$T/calls" && "$R" CLEAR 7 "${STUB_HEAD:0:7}" ok >/dev/null 2>&1); rc=$?; got=$(cat "$T/calls")
+[ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: refuse when checkout is not the PR head rc=$rc calls=$got"; }
+git -C "$BR/w" checkout -q "$STUB_HEAD"
+export STUB_CHAMP=err; br
 [ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL champion: refuse when champion lookup errors rc=$rc calls=$got"; }
 unset STUB_CHAMP
 
