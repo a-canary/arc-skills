@@ -39,6 +39,21 @@ requiring the `defend/merge` status (enforce_admins on), so every merge path —
 Not a command-text hook: those leak and over-block (repos-76u counsel, 2026-10-27).
 The status is self-attested: anyone with write access can post it, so it stops careless
 skips, not deliberate forgery.
+
+**Champion check (repos with a bench).** "Results meet or exceed the champion" lives in the
+repo's own `scripts/merge-gate.sh`, which a CLEAR already runs on the reviewed SHA — no
+separate contract file. The champion score is committed in the repo (e.g. `bench/CHAMPION`,
+one number), and the gate exits non-zero below it:
+
+```sh
+score=$(bench/run.sh)                      # prints one number, higher = better
+champ=$(cat bench/CHAMPION)
+awk -v s="$score" -v c="$champ" 'BEGIN{exit !(s>=c)}' || { echo "bench $score < champion $champ" >&2; exit 1; }
+```
+
+Raising the champion is a commit to `bench/CHAMPION` in the PR that beat it, so it goes
+through review like any other change. Keep the bench in the gate short; one that needs the
+V100 or runs for hours belongs in champion-challenger, not in every merge.
 Enable per repo (operator). PUT replaces the whole protection object, so first merge in any
 contexts the repo already requires (`gh api repos/<owner>/<repo>/branches/main/protection`):
 
