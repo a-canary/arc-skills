@@ -4,6 +4,10 @@
 // handled by notify's --dedupe-key, so tests assert raw alert calls.
 
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { get, runHealthMonitor, type Service } from "./health-monitor";
 
 const svc = (id: string, ok: boolean, detail?: string): Service => ({
@@ -65,4 +69,17 @@ test("get retries once on a transient network error", async () => {
   } finally {
     globalThis.fetch = real;
   }
+});
+test("sendAlert hands a webhook resolved after start-up to the notify child (repos-bm5)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "hm-env-"));
+  const stub = join(dir, "notify-stub.ts");
+  const out = join(dir, "seen");
+  writeFileSync(stub, `require("node:fs").writeFileSync(${JSON.stringify(out)}, process.env.DISCORD_WEBHOOK_URL ?? "UNSET");`);
+  // child process: start WITHOUT the var, set it at runtime (as discordWebhook() does from pass), then alert
+  const env = { ...process.env, NOTIFY_BIN: stub };
+  delete env.DISCORD_WEBHOOK_URL;
+  const code = `process.env.DISCORD_WEBHOOK_URL = "stub-url"; const m = await import(${JSON.stringify(join(import.meta.dir, "health-monitor.ts"))}); console.log(await m.sendAlert("down", "x", "d"));`;
+  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env, timeout: 30_000 });
+  expect(r.stdout.trim()).toBe("true");
+  expect(readFileSync(out, "utf8")).toBe("stub-url");
 });
