@@ -41,19 +41,24 @@ The status is self-attested: anyone with write access can post it, so it stops c
 skips, not deliberate forgery.
 
 **Champion check (repos with a bench).** "Results meet or exceed the champion" lives in the
-repo's own `scripts/merge-gate.sh`, which a CLEAR already runs on the reviewed SHA — no
-separate contract file. The champion score is committed in the repo (e.g. `bench/CHAMPION`,
-one number), and the gate exits non-zero below it:
+repo's own `scripts/merge-gate.sh`; a CLEAR runs it on the reviewed SHA when defend-receipt
+is run from that repo's checkout (elsewhere it prints "project gate skipped" and the check
+does not run). The champion is one number in `bench/CHAMPION`, read from the base branch so
+the PR under review cannot lower it (first adoption falls back to the PR's own file):
 
 ```sh
-score=$(bench/run.sh)                      # prints one number, higher = better
-champ=$(cat bench/CHAMPION)
-awk -v s="$score" -v c="$champ" 'BEGIN{exit !(s>=c)}' || { echo "bench $score < champion $champ" >&2; exit 1; }
+set -euo pipefail
+num='^-?[0-9]+(\.[0-9]+)?$'
+score=$(bench/run.sh | tail -n 1)          # last line = the score, higher = better
+champ=$(git show origin/main:bench/CHAMPION 2>/dev/null || cat bench/CHAMPION)
+[[ $score =~ $num && $champ =~ $num ]] || { echo "bench: non-numeric score '$score' or champion '$champ'" >&2; exit 1; }
+awk -v s="$score" -v c="$champ" 'BEGIN{exit !(s+0>=c+0)}' || { echo "bench $score < champion $champ" >&2; exit 1; }
 ```
 
-Raising the champion is a commit to `bench/CHAMPION` in the PR that beat it, so it goes
-through review like any other change. Keep the bench in the gate short; one that needs the
-V100 or runs for hours belongs in champion-challenger, not in every merge.
+Lower-is-better metric: flip to `s+0<=c+0`. The gate runs the PR's own `bench/run.sh` and
+`scripts/merge-gate.sh`, so the reviewer diffs both and `bench/CHAMPION` against base; a
+PR that beats the champion raises `bench/CHAMPION` to its score.
+
 Enable per repo (operator). PUT replaces the whole protection object, so first merge in any
 contexts the repo already requires (`gh api repos/<owner>/<repo>/branches/main/protection`):
 
