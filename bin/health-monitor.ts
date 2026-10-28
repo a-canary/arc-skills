@@ -124,16 +124,20 @@ export const SERVICES: Service[] = [
   {
     id: "v100",
     project: "llm-hosting",
-    // Local GPU inference (llama-server / vllm / sglang) behind provider `v100`.
+    // GPU inference behind provider `v100`. The model runs on ai-lab-02; :8099 here is
+    // lane-front, and /health passes front -> laneproxy -> llama-server (502 if any hop is down).
+    // While the idle detector lends the GPU to a batch job llama is stopped by design; the next
+    // POST reclaims it, so a lend reads as up.
+    // ponytail: a failed reclaim leaves lent=true and reads up here; it surfaces as 502s on the
+    // POST path, not in this probe. Add a reclaim-failure counter to /__lanes if that bites.
     probe: async () => {
-      const proc = sh("pgrep", ["-f", "llama-server|vllm|sglang"]);
-      if (proc.rc !== 0) return fail("no llama-server/vllm/sglang process");
-      const url = await firstOk([
-        "http://127.0.0.1:8099/health",
-        "http://127.0.0.1:8092/health",
-        "http://127.0.0.1:1234/health",
-      ]);
-      return `${url} ok (pid ${proc.out.split("\n")[0]})`;
+      try {
+        return `${await firstOk(["http://127.0.0.1:8099/health"])} ok`;
+      } catch (e) {
+        const lanes = (await (await get("http://127.0.0.1:8099/__lanes"))?.json().catch(() => null)) as { idle?: { lent?: boolean } } | null;
+        if (lanes?.idle?.lent === true) return "GPU lent to batch job (reclaims on next request)";
+        throw e;
+      }
     },
   },
   {
