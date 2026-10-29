@@ -1,0 +1,143 @@
+{
+ "approach": "elephant-gold",
+ "case": "deploy-04",
+ "rep": 2,
+ "wallMs": 206767,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "Share links embed the owner's raw project API key in the URL and the public share page returns it to any visitor as `replayKey`. The key then persists in browser history, referrers, Open Graph unfurl and crawler fetches, and logs, and deleting the share does not invalidate it.",
+   "evidence": "url.searchParams.set(\"k\", project.apiKey); ... return { messages: share.messages, model: share.model, replayKey: url.searchParams.get(\"k\") };"
+  },
+  {
+   "lens": "authz",
+   "severity": "blocker",
+   "claim": "Anyone holding a share link, including unauthenticated viewers, can replay inference against the owner's project quota with no per-link or per-viewer limit. A single link posted on HN or X can drain a paying project's quota and billing.",
+   "evidence": "// Viewers without an account replay against the owner's project quota. / Anyone with the link can view the conversation and re-run it, even without a Lumen account."
+  },
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "The free pool can scale to 24 H100s at $2.49/h, about $43.6k/month, roughly 11x the stated hard $4k/month budget. Scale-out is driven only by queue depth, the replica alert pages but does not stop scaling, and nothing caps spend.",
+   "evidence": "free-8b: gpu: h100-80g, min_replicas: 2, max_replicas: 24, scale_on: queue_depth > 8 for 60s; \"within the $4k/month free-tier budget\""
+  },
+  {
+   "lens": "authz",
+   "severity": "major",
+   "claim": "The shipped free rate limit is 20 requests per second with burst 40, but the public promise is 20 requests per minute. The staging 429 test used `per: minute`, so the production limit was never exercised.",
+   "evidence": "rate_limit: { requests: 20, per: second, burst: 40 } vs. \"Free accounts get **20 requests per minute**\" and \"(staging config used `per: minute`)\""
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The advertised 100k tokens/day free cap has no enforcement in the config. The free block has no daily_tokens field (pro sets daily_tokens: null), and max_tokens_per_request does not bound daily spend.",
+   "evidence": "free: { models: [...], rate_limit: {...}, max_tokens_per_request: 4096, pool: free-8b } (no daily_tokens) vs. \"100k tokens per day\""
+  },
+  {
+   "lens": "authz",
+   "severity": "major",
+   "claim": "Email-only, card-free signup with per-key limits lets one actor mint many keys to multiply the rate and token allowances, which defeats the hard budget. The artifact describes no per-IP, per-account, or per-domain controls.",
+   "evidence": "\"Sign up with email, no card required.\" ABSENT: per-IP, per-account, or per-domain abuse controls"
+  },
+  {
+   "lens": "capacity",
+   "severity": "major",
+   "claim": "The '$3.6k within budget' claim rests on an unvalidated '<30% utilization' figure. There is no load or spike test for launch-day HN/X traffic, and the ~126M tokens/month projection is not linked to any throughput arithmetic.",
+   "evidence": "\"Two H100 replicas serve the projected free load at < 30% utilization; at the GPU provider's on-demand rate of $2.49/h that is ~$3.6k/month\" ABSENT: load test or spike scenario"
+  },
+  {
+   "lens": "observability",
+   "severity": "major",
+   "claim": "Alerting covers only replica count and error rate. There is no alert on spend, token volume, or quota enforcement, so budget overrun would be visible only after it has accrued.",
+   "evidence": "\"Alerting: free pool replicas > 6 pages on-call; error rate > 2% pages on-call.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Rollback only closes new signups and leaves existing free keys working. There is no kill switch for the free pool or share links, and no key rotation path for keys already leaked through share URLs.",
+   "evidence": "\"Rollback: `free_signup_open` off stops new signups; existing free keys keep working.\" ABSENT: share-feature kill switch or key rotation"
+  },
+  {
+   "lens": "isolation",
+   "severity": "major",
+   "claim": "The claim that free traffic cannot degrade paid latency is supported only by GPU pool separation. Shared gateway, auth, and rate-limit components are not shown to be isolated, and no paid-latency test exists.",
+   "evidence": "\"Free pool is isolated from `shared-h100`, so free traffic cannot degrade paid latency.\" ABSENT: shared gateway/auth/rate-limiter isolation or paid-latency test"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Shared conversations are publicly viewable by anyone with the link, with no stated consent, expiry, or retention limit, and they may contain third-party personal data.",
+   "evidence": "\"Anyone with the link can view the conversation and re-run it, even without a Lumen account.\" messages: session.messages, createdAt: new Date()"
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Email signups and submitted prompts are collected with no privacy notice, ToS acceptance, or data-processing disclosure. The GPU provider receiving the traffic is unnamed, with no stated jurisdiction, region, or DPA.",
+   "evidence": "ABSENT: privacy notice, ToS, DPA, provider name, or region; \"at the GPU provider's on-demand rate of $2.49/h\""
+  },
+  {
+   "lens": "ui",
+   "severity": "major",
+   "claim": "Release copy says recipients can re-run a conversation but does not disclose that re-runs spend the owner's project quota, which misleads users about cost and who is charged.",
+   "evidence": "\"Anyone with the link can view the conversation and re-run it\" vs. \"Viewers without an account replay against the owner's project quota.\""
+  },
+  {
+   "lens": "dependency",
+   "severity": "minor",
+   "claim": "The free tier and paid pool depend on one unnamed GPU provider with no fallback or capacity reservation, so a provider shortage would hit both tiers.",
+   "evidence": "\"serves open-weight models on rented H100 GPUs\"; ABSENT: fallback provider or capacity reservation"
+  },
+  {
+   "lens": "scope",
+   "severity": "minor",
+   "claim": "Three independent changes (free tier GA, share links, /v1/usage) ship in one deploy behind a single signup flag, so they cannot be gated or reverted separately.",
+   "evidence": "\"Release proposal: Lumen Gateway — Free tier GA + Playground share links\"; \"New `GET /v1/usage` endpoint\"; single flag `free_signup_open`"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Share creation is not transactional: the DB insert and URL construction have no failure handling, so a failed step can leave orphaned share rows.",
+   "evidence": "const share = await db.shares.insert({ ... }); const url = new URL(\"/s/\" + share.id, PLAYGROUND_ORIGIN);"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "The public share page and its re-run control have no stated keyboard, screen-reader, or contrast verification.",
+   "evidence": "ABSENT: accessibility requirements or verification for `/s/[id]` in QA summary"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "The named open-weight models carry license terms (for example Llama community license conditions) that the public hosted launch does not reference or confirm compliance with.",
+   "evidence": "models: [llama-3.1-8b-instruct, qwen2.5-7b-instruct]"
+  },
+  {
+   "lens": "logging",
+   "severity": "minor",
+   "claim": "Share URLs containing `k=` may be captured by playground or proxy access logs, and the 'unchanged from current prod' logging claim is not tested for the new share and free paths.",
+   "evidence": "\"Gateway access logs redact the `Authorization` header and drop request bodies\" ABSENT: test for `k=` query logging"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Share records copy full message history with no size limit, TTL, or per-project share cap, so storage grows without bound.",
+   "evidence": "db.shares.insert({ ..., messages: session.messages, ... }) ABSENT: retention, size limit, or cap"
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "Users are not told the daily quota reset boundary or the error returned on token exhaustion, which causes trial-and-error friction.",
+   "evidence": "\"New `GET /v1/usage` endpoint returns your current daily token usage.\" ABSENT: reset boundary and token-cap error shape"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 58422,
+  "tokOut": 26684,
+  "usd": 0.017423760000000003,
+  "critMs": 47835
+ }
+}

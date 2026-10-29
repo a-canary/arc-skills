@@ -1,0 +1,77 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "merge-07",
+ "rep": 1,
+ "wallMs": 238730,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "injection",
+   "severity": "blocker",
+   "claim": "`_upload` builds a gsutil command by f-string with `shell=True`. `src.stem` comes from partner-chosen SFTP filenames globbed with `*.csv`, so shell metacharacters in a filename can run arbitrary commands on a worker holding write credentials for the whole raw bucket. Names with spaces also break the copy.",
+   "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True) ... _upload(chunk, partner, dt, src.stem)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "Per-file failures are caught and counted, but `write_success_marker` is written unconditionally. Dashboards read the partition as soon as `_SUCCESS` appears, so a partition with failed or partial files is published as complete. The task also exits normally, so Airflow shows success.",
+   "evidence": "except Exception:\n            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n            failed += 1\n    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+  },
+  {
+   "lens": "spec-mismatch",
+   "severity": "blocker",
+   "claim": "`partition_date()` changed from UTC to naive local time. Workers run with TZ=America/Los_Angeles and the job fires at 01:30 UTC, which is the previous calendar day in Pacific time. Data lands in the previous UTC day's `dt=` partition, which dashboards read as the UTC date. The PR does not mention this change.",
+   "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")"
+  },
+  {
+   "lens": "logic",
+   "severity": "major",
+   "claim": "When a file fails mid-way, chunks already uploaded stay in GCS with no cleanup or rollback. Local chunk files and the open gzip handle are not closed or removed on the exception path, because `unlink()` runs only after a successful upload. Partial state accumulates on the partition and on worker disk, and partner data containing personal information stays on local disk.",
+   "evidence": "for chunk in _write_chunks(src, work_dir):\n                _upload(chunk, partner, dt, src.stem)\n                chunk.unlink()\n            ok += 1\n        except Exception:"
+  },
+  {
+   "lens": "logic",
+   "severity": "major",
+   "claim": "Re-running the same dt never clears earlier objects under the per-file prefix. If a rerun produces fewer chunks, stale higher-numbered chunks remain and are read alongside the new ones, duplicating rows. The object layout also changed from one flat object per file to a per-file subdirectory with chunks, each with its own header. The PR does not mention this, and downstream readers may miss or double-count data.",
+   "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\"  (was raw/{partner}/dt={dt}/{src.stem}.csv.gz)"
+  },
+  {
+   "lens": "hidden-coupling",
+   "severity": "major",
+   "claim": "The PR says normalisation is unchanged, but `normalise_row` now receives a plain dict from `csv.DictReader` instead of a pandas Series, and missing values are '' rather than NaN. The output header is also taken from the first row's keys per chunk. No test or comparison supports the claim.",
+   "evidence": "Schema normalisation is unchanged (same `normalise_row`). ... norm = normalise_row(row) ... writer = csv.DictWriter(out, fieldnames=list(norm.keys()))"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The gsutil subprocess has no timeout, so a hung transfer blocks the nightly run indefinitely. Failures are only logged, with no metric or alert, and there is no retry.",
+   "evidence": "subprocess.run(..., shell=True, check=True,)  ABSENT: timeout= argument, metric, or alert on failed > 0"
+  },
+  {
+   "lens": "other",
+   "severity": "major",
+   "claim": "`ingest_partner` gained a required `work_dir` parameter, but the diff shows no caller updates. Existing DAG callers would raise TypeError at runtime.",
+   "evidence": "-def ingest_partner(partner: str, drop_dir: Path) -> None:\n+def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None:"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "`_write_chunks` writes all gzip chunks for a whole source file to local disk before any upload starts, so peak disk use equals the compressed size of the largest file. The 150M composite-upload threshold also likely never triggers for 500k-row chunks, undermining the stated reason for using gsutil.",
+   "evidence": "chunks: list[Path] = [] ... return chunks; CHUNK_ROWS = 500_000 ... parallel_composite_upload_threshold=150M"
+  },
+  {
+   "lens": "edge-case",
+   "severity": "minor",
+   "claim": "File I/O no longer specifies an encoding, so it depends on the locale default, whereas pandas used UTF-8. A source file with zero data rows also yields no chunks and is counted ok with nothing written.",
+   "evidence": "with src.open(newline=\"\") as fh: ... out = gzip.open(path, \"wt\", newline=\"\")"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 58019,
+  "tokOut": 33190,
+  "usd": 0.09847412,
+  "critMs": 31810
+ }
+}

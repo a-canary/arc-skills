@@ -1,0 +1,65 @@
+{
+ "approach": "clustered-panel",
+ "case": "merge-08",
+ "rep": 2,
+ "wallMs": 239181,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "The go.mod adds `replace go.uber.org/zap => ../zap`, which points outside the repo at a local directory. A clean CI checkout has no ../zap, so the build fails or, where a sibling exists, unreviewed local code is compiled into the static binary distributed to on-call laptops. The pinned pseudo-version and its go.sum verification are bypassed.",
+   "evidence": "+replace go.uber.org/zap => ../zap"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "printPlan diverges from computeBatches. It iterates over all hosts, so with --canary the canary appears in batch 0 and again in a later batch. It also sizes batches with int(len(hosts)*MaxSurge) instead of ceil(len(rest)*MaxSurge), so the printed batch membership and counts can differ from the real rollout. The plan on-call uses to verify a run is therefore wrong.",
+   "evidence": "per := int(float64(len(hosts)) * o.MaxSurge) ... for i := 0; i < len(hosts); i += per {  vs.  size := int(math.Ceil(float64(len(rest)) * o.MaxSurge))"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "printPlan re-implements the batching algorithm instead of calling computeBatches. The two copies already diverge, as the canary bug shows, and future batching changes will silently desynchronize the dry-run from the real rollout.",
+   "evidence": "func printPlan(w io.Writer, hosts []string, o Options) { ... per := int(float64(len(hosts)) * o.MaxSurge) ... }"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The go.mod change contradicts its stated purpose. The replace directive overrides the zap pseudo-version bump, so the upstreamed JSON encoder fix does not reach the built binary. No go.sum entries are added for the pseudo-version.",
+   "evidence": "bumps zap to pick up the JSON encoder fix we upstreamed. ... +replace go.uber.org/zap => ../zap"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "No test covers printPlan or dry-run output, and none checks the plan against computeBatches for the canary and non-canary cases. This is the path where the divergence above lives.",
+   "evidence": "ABSENT: no test file in the diff for printPlan or dry-run behavior"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "printPlan calls strings.Join, but the diff shows no change to the rollout.go import block adding \"strings\" (or \"io\"/\"fmt\" if they are also new). The package may not compile.",
+   "evidence": "ABSENT: import change in internal/rollout/rollout.go; only the hunk at line 18 is shown"
+  },
+  {
+   "lens": "docs",
+   "severity": "minor",
+   "claim": "The PR description and flag text say dry-run exits without touching the orchestrator API, but Run still calls api.Hosts before the dry-run check. The call is read-only, but the stated guarantee is inaccurate.",
+   "evidence": "hosts, err := api.Hosts(ctx, o.Service) ... if o.DryRun { printPlan(w, hosts, o)"
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "The output has no DRY RUN marker in the header, so a plan copied into a log looks like the start of a real rollout. Each batch is also one long comma-joined line with no per-batch count, which is hard to scan for 60+ host services.",
+   "evidence": "fmt.Fprintf(w, \"rollout plan: %s -> %s (%d hosts)\\n\", o.Service, o.Version, len(hosts))"
+  }
+ ],
+ "usage": {
+  "calls": 6,
+  "tokIn": 20011,
+  "tokOut": 11412,
+  "usd": 0.007106469999999999,
+  "critMs": 19398
+ }
+}

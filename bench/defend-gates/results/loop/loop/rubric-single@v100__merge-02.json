@@ -1,0 +1,317 @@
+{
+ "approach": "rubric-single@v100",
+ "case": "merge-02",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "blocker",
+     "claim": "The duplicate-ballot log line records the voter's email and choice, and logs ship to a third-party host readable by the whole support team. This creates a record linkable to the voter's identity outside the tally, directly violating the app's core anonymity promise.",
+     "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value)"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The new results.csv endpoint has no admin authorization. Any authenticated user (or possibly unauthenticated, depending on current_user) can download the tally for any measure, violating the stated 'admin-only' intent.",
+     "evidence": "async def export_results(\n    measure_id: int,\n    db: Session = Depends(get_db),\n):"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1520,
+    "tokOut": 195,
+    "usd": 0,
+    "critMs": 67037
+   },
+   "wallMs": 79007
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The duplicate-ballot log line records user_id alongside measure_id, and these logs ship to a third-party host readable by the entire support team. This violates the core anonymity promise that a resident's identity must never be linkable to their voting activity outside the tally. A support agent can now see exactly which users attempted to vote (or re-vote) on which measures, creating an identity-to-voting-activity link.",
+     "evidence": "logger.info(\"duplicate ballot rejected measure=%s user_id=%s\", measure_id, user.id)"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The results.csv export is admin-gated but exposes the complete vote distribution for closed measures. While intended for clerks, this aggregates sensitive voting data into a downloadable file that could be shared beyond the intended audience. Consider adding audit logging for who downloads results.",
+     "evidence": "@router.get(\"/measures/{measure_id}/results.csv\")... Depends(require_role(\"admin\"))"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The export iterates over `Choice` enum values but the Ballot table stores choice as a string. If `Choice.value` doesn't exactly match the stored string representation, counts.get(choice, 0) will always return 0 for all rows.",
+     "evidence": "for choice in Choice: writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1589,
+    "tokOut": 315,
+    "usd": 0,
+    "critMs": 18674
+   },
+   "wallMs": 18674
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "blocker",
+     "claim": "Logging the measure id on every duplicate rejection creates a linkable signal between a resident's identity and their voting activity. Support tickets already contain the voter's identity and the measure they tried to vote on; the log entry 'duplicate ballot rejected measure=X' at that timestamp lets anyone with log access (the whole support team per the context) confirm that a specific identified person attempted to vote on that measure, violating the core promise that 'a resident's choice must never be linkable to their identity anywhere outside the tally.' The PR description even acknowledges that 'a resident's identity must never be linkable to their voting activity outside the tally' and that logs are 'readable by the whole support team,' yet adds exactly this linkable signal. The rationale that it 'cannot identify who hit one' is wrong — it doesn't need to name them; correlating the timestamped log entry with the support ticket from that same person at that same time on that same measure achieves the link.",
+     "evidence": "logger.info(\"duplicate ballot rejected measure=%s\", measure_id) ... 'logs ship to a third-party host readable by the whole support team and a resident's identity must never be linkable to their voting activity outside the tally'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The CSV export iterates over Choice enum values but the Ballot.choice column stores whatever was submitted; if the enum doesn't cover all possible stored values (or if legacy data has values not in the current enum), those ballots are silently excluded from the export. Conversely, if Choice has values never used, they appear with 0 votes, which is fine, but the asymmetry means the export can undercount without any error or warning.",
+     "evidence": "for choice in Choice: writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The export does not verify the measure is closed before allowing the CSV download. An admin could export results for an open measure, which may be undesirable or even a policy violation if partial results are sensitive. The PR description says the export is for 'closed measures' but the code has no such check.",
+     "evidence": "if measure is None: raise HTTPException(404) ... # no is_open() or closed check before export"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The CSV filename is derived from measure.slug without sanitization. If a slug contains quotes, newlines, or other special characters, it could break the Content-Disposition header or enable header injection. While slugs are typically safe, this is an unvalidated string going into an HTTP header.",
+     "evidence": "headers={'Content-Disposition': f'attachment; filename=\"{measure.slug}-results.csv\"'}"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1638,
+    "tokOut": 593,
+    "usd": 0,
+    "critMs": 33516
+   },
+   "wallMs": 301525
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The CSV export uses StreamingResponse with a fully in-memory StringIO buffer, defeating the purpose of streaming; for large measures this loads the entire result set into memory before sending, and the response body is not an async iterator as StreamingResponse expects.",
+     "evidence": "buf = io.StringIO() ... return StreamingResponse(buf, media_type=\"text/csv\", ...)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The duplicate-ballot log line is placed before the 409 is raised, but the receipt check uses db.query(Receipt).filter_by(token=receipt).first() — if the receipt exists for a different measure (token collision or reused token), it would incorrectly log and reject; the token should be scoped to measure_id in the query.",
+     "evidence": "receipt = voter_receipt(user.id, measure_id) ... if db.query(Receipt).filter_by(token=receipt).first():"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The Content-Disposition header interpolates measure.slug directly into the filename without sanitization; a slug containing quotes, newlines, or path separators could enable header injection or break the attachment filename.",
+     "evidence": "\"Content-Disposition\": f'attachment; filename=\"{measure.slug}-results.csv\"'"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "While the log line claims to record only the measure id, the timestamp combined with the fact that it fires only on duplicate attempts creates a narrow time window that, if a resident reports 'I tried at exactly 14:32', could help narrow down which account hit it — though this is acknowledged in the PR description as acceptable.",
+     "evidence": "the log entry carries no identity, and a resident who files a ticket has already told support they tried to vote on that measure and were rejected"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The CSV export manually iterates the Choice enum and then separately handles legacy values; this logic duplicates what could be a single aggregation pass and would break if Choice enum values change order or are renamed without migration.",
+     "evidence": "for choice in Choice: known.add(choice.value) ... for key in sorted(k for k in counts if k not in known):"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1913,
+    "tokOut": 480,
+    "usd": 0,
+    "critMs": 34958
+   },
+   "wallMs": 37478
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The duplicate-ballot log line enables a correlation attack that links a resident's identity to their voting activity, violating the core anonymity promise. The PR's own reasoning is internally contradictory: it claims 'Matching a ticket to a log line therefore reveals nothing beyond what the resident reported themselves,' but this is false. If a resident files a ticket saying 'I tried to vote on measure 42 and got rejected,' the support team can now query the logs for 'duplicate ballot rejected measure=42' around the ticket's timestamp and confirm the rejection occurred — but more critically, if multiple residents file tickets or if support proactively scans logs, the timestamp of the duplicate rejection is logged. Combined with the fact that the resident must have attempted to vote (which requires authentication and is presumably logged elsewhere in the system with their identity), the duplicate-rejection log line provides a correlatable event timestamp that can be joined with authentication logs to identify who voted. The PR itself acknowledges this risk ('Logging the user id would show support which individuals voted') but the timestamp-correlation attack achieves the same linkability without the user id in the log line.",
+     "evidence": "The PR states: 'the log entry carries no identity, and a resident who files a ticket has already told support they tried to vote on that measure and were rejected. Matching a ticket to a log line therefore reveals nothing beyond what the resident reported themselves.' This reasoning is flawed because the log line creates a server-side event that can be correlated with authentication/session logs that DO contain identity."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The CSV export uses `measure.slug` in the data rows but `measure_id` in the filename, creating an inconsistency that could confuse clerks. More importantly, if `measure.slug` contains a comma or other CSV-special character, the CSV will be malformed. The `csv.writer` handles quoting, but the slug is used as a data value without validation. Additionally, the filename uses only the numeric id, so if two measures have the same id across different deployments or if the id is reused, the filename is ambiguous.",
+     "evidence": "writer.writerow([measure.slug, choice.value, counts.get(choice.value, 0)]) — slug is written directly into CSV data without validation for CSV-special characters, and the filename uses measure_id while data rows use slug."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The CSV export builds the entire result in memory. The PR claims 'one small row per choice' so this is acceptable, but if a measure has an unexpectedly large number of distinct choice values (e.g., due to a data integrity issue or a free-text choice field being misused), the in-memory buffer could grow unbounded. This is a minor risk given the expected data shape but worth noting.",
+     "evidence": "The PR states: 'The CSV is one small row per choice, so it is built in memory and returned as a plain Response rather than streamed.'"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2067,
+    "tokOut": 632,
+    "usd": 0,
+    "critMs": 40249
+   },
+   "wallMs": 41708
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The CSV export endpoint is missing a `db.commit()` or `db.refresh()` call after querying ballot counts, which could return stale results if the database session has pending changes. More critically, there is no pagination or limit on the number of ballots processed, which could cause memory issues for measures with very high vote counts.",
+     "evidence": "rows = ( db.query(Ballot.choice, func.count(Ballot.id)) .filter(Ballot.measure_id == measure_id) .group_by(Ballot.choice) .all() )"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The export includes `measure.slug` in every row. While the slug itself isn't personal data, if slugs contain identifiable information about the measure topic or if the CSV is shared externally, it could provide context that reduces anonymity. The PR acknowledges this trade-off but doesn't provide an alternative for truly anonymous exports.",
+     "evidence": "writer.writerow([measure.slug, choice.value, counts.get(choice.value, 0)])"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The code assumes `Choice` is an iterable enum, but if `Choice` is a SQLAlchemy enum type rather than a Python enum, the iteration `for choice in Choice` will fail or iterate over unexpected values. The PR doesn't specify the type of `Choice`.",
+     "evidence": "for choice in Choice:"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "If `db.query(Ballot.choice, func.count(Ballot.id))` returns a very large result set (many distinct choice values), the in-memory construction of the CSV could consume excessive memory. There's no streaming or chunking mechanism for large exports.",
+     "evidence": "buf = io.StringIO() writer = csv.writer(buf)"
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The CSV filename uses only the numeric measure ID, which makes it difficult for users to identify which measure the file belongs to without cross-referencing. Including the slug in the filename (with proper sanitization) would improve usability.",
+     "evidence": "\"Content-Disposition\": f'attachment; filename=\"measure-{measure_id}-results.csv\"'"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR claims \"Any stored choice value that isn't in the current Choice enum is also emitted as its own row\", but the code only handles this for values in `counts` that aren't in `known`. If a stored value is None or an empty string, it might not be properly handled or could cause issues with the CSV writer.",
+     "evidence": "for key in sorted(k for k in counts if k not in known): writer.writerow([measure.slug, key, counts[key]])"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2044,
+    "tokOut": 724,
+    "usd": 0,
+    "critMs": 43245
+   },
+   "wallMs": 79286
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The CSV writer is created with the default line terminator, which is CRLF (\\r\\n). If the receiving system or downstream tooling expects Unix newlines (LF only), or if the file is processed in a way sensitive to line endings, this could cause parsing issues. More critically, the artifact claims 'csv.writer quotes commas, quotes and newlines' but does not verify that embedded newlines within choice values or slugs are properly handled by the reader on the other end.",
+     "evidence": "writer = csv.writer(buf)"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The Content-Disposition header uses f-string interpolation with measure_id. While measure_id is a path parameter validated as int by FastAPI, the filename construction does not escape any potential special characters that might be present in measure_id if the type validation is bypassed or if the database returns unexpected data. More importantly, there is no validation that measure_id corresponds to an existing measure before constructing the filename, though the 404 check happens before that.",
+     "evidence": "headers={\"Content-Disposition\": f'attachment; filename=\"measure-{measure_id}-results.csv\"'}"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The endpoint builds the entire CSV in memory using io.StringIO. While the artifact argues this is bounded by the number of distinct choices, if a measure has a large number of distinct stored choice values (e.g., due to data corruption, injection, or legacy data migration issues), this could consume significant memory. There is no upper bound check or pagination for the number of distinct choices.",
+     "evidence": "buf = io.StringIO()"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The code uses `getattr(stored, \"value\", stored)` to handle both enum values and raw stored values. However, if `stored` is a string (a raw stored value), `getattr` will return the string itself. But if `stored` is None, `getattr(None, \"value\", None)` returns None, and then `key = \"\"` is set. This is correct. However, if `stored` is a string that happens to have a `.value` attribute (unlikely but possible in some Python environments or with certain string subclasses), this could behave unexpectedly. More practically, the code assumes that enum members have a `.value` attribute, which is true for Python's Enum, but this is an implicit assumption.",
+     "evidence": "key = getattr(stored, \"value\", stored)"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The artifact states that the slug is 'a public measure identifier, not voter data' and 'says nothing about who voted or how'. However, if the slug contains information that could be correlated with voter identity (e.g., if slugs are generated from voter-submitted measure titles that include personal information), this could create a privacy risk. The artifact does not provide evidence that slugs are sanitized or that they cannot contain personally identifiable information.",
+     "evidence": "writer.writerow([measure.slug, choice.value, counts.get(choice.value, 0)])"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The artifact claims 'The count query uses GROUP BY on the choice, so it returns one row per distinct stored choice value, not one per ballot. Memory use and the CSV size are bounded by the number of distinct choices, not the number of votes.' However, this assumes that the number of distinct choices is small and bounded. There is no evidence provided that this is a reasonable assumption, nor is there any protection against a scenario where a large number of distinct choice values exist.",
+     "evidence": "rows = (db.query(Ballot.choice, func.count(Ballot.id)).filter(Ballot.measure_id == measure_id).group_by(Ballot.choice).all())"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2313,
+    "tokOut": 810,
+    "usd": 0,
+    "critMs": 45524
+   },
+   "wallMs": 46857
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The 'no silent undercount' guarantee is false: if legacy data has more than 100 distinct choice values, the endpoint returns 500 and produces no export at all, so the clerk cannot export a complete tally. The stated guarantee that stored values 'cannot silently undercount' is violated by design.",
+     "evidence": "\"Any stored choice value that isn't in the current Choice enum is also emitted as its own row, so the export cannot silently undercount.\" vs \"if the cap is exceeded the endpoint fails with a 500 rather than exporting a partial or oversized file.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The 500 response on exceeding MAX_DISTINCT_CHOICES is a silent data-corruption sentinel: it tells the operator nothing about which measure or how many distinct values were found, and there is no logging, making debugging a real export failure (vs. a cap hit) difficult.",
+     "evidence": "\"raise HTTPException(500, 'unexpected number of distinct stored choices')\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The LIMIT is applied before aggregation in the Python loop, but the check `len(rows) > MAX_DISTINCT_CHOICES` only detects if the DB returned more rows than allowed. If exactly MAX_DISTINCT_CHOICES+1 distinct values exist, the 500 fires, but the intent was to detect 'many distinct values' as corruption — this conflates legitimate measures with many choices with data corruption.",
+     "evidence": "\".limit(MAX_DISTINCT_CHOICES + 1)\" and \"if len(rows) > MAX_DISTINCT_CHOICES: raise HTTPException(500, 'unexpected number of distinct stored choices')\""
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The CSV header row uses lowercase column names ('measure', 'choice', 'votes') which may be less discoverable for non-technical clerks assembling council packets; 'Choice' and 'Votes' would be clearer.",
+     "evidence": "\"writer.writerow(['measure', 'choice', 'votes'])\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2715,
+    "tokOut": 453,
+    "usd": 0,
+    "critMs": 31454
+   },
+   "wallMs": 48639
+  }
+ ],
+ "artifact": "PR #231: Results CSV export for closed measures\n\nClerks have asked for a downloadable tally once a measure closes so they can attach it to the council packet.\nAdds GET /measures/{id}/results.csv for admins only (`Depends(require_role(\"admin\"))`), returning one row per choice with counts. The export is only available once the measure is closed; requests for a still-open measure get a 409 so partial results are never exported. Any stored choice value that isn't in the current `Choice` enum is also emitted as its own row, so the export cannot silently undercount. A NULL stored value is emitted as a row with an empty choice, and mixed value types are sorted by their string form so odd legacy data cannot raise an error. `Choice` is the Python `Enum` imported from `app.models`, so iterating it yields its members. Enum members are unwrapped with an explicit `isinstance(stored, Enum)` check rather than a duck-typed `getattr`. The CSV is one small row per choice, so it is built in memory and returned as a plain `Response` rather than streamed. The download filename uses the numeric measure id, not the slug, so no user-controlled text goes into the `Content-Disposition` header.\n\nNote on size and freshness: the count query uses `GROUP BY` on the choice, so it returns one row per distinct stored choice value, not one per ballot. Memory use and the CSV size are bounded by the number of distinct choices, not the number of votes, so pagination or streaming is unnecessary. We don't assume that number is small, though: the query is capped at `MAX_DISTINCT_CHOICES + 1` rows, and if the cap is exceeded the endpoint fails with a 500 rather than exporting a partial or oversized file. This keeps the \"no silent undercount\" guarantee and bounds memory even if corrupt or legacy data produced many distinct values. The endpoint only reads, so it needs no `commit()` or `refresh()`. The measure is closed by the time we query, and ballots are no longer accepted for it, so the counts are final.\n\nNote on the slug column: the rows carry `measure.slug` so the file is readable in a packet, while the filename uses the numeric id for header safety. The slug is the measure's own public label, not voter data. It is a property of the measure, is not tied to any individual ballot or voter, and says nothing about who voted or how, so it does not affect ballot anonymity, and the export contains only the aggregate tally. The slug is written through `csv.writer`, which quotes commas, quotes and newlines, so special characters cannot malform the CSV. The id is the table's primary key, so the filename is unambiguous within a deployment.\n\nNote on line endings: `csv.writer` uses CRLF (`\\r\\n`) as its default row terminator. This is the RFC 4180 standard and what spreadsheet tools such as Excel expect, so it is left as is. Embedded newlines inside a field are quoted by the writer, and any RFC 4180-compliant reader handles them correctly.\n\nNote on the filename: `measure_id` is declared `int` in the route, so FastAPI rejects anything else with a 422 before the handler runs. The existence check (404) also runs before the response and its header are built. The only text in the header is the literal prefix and suffix plus an integer, so there is nothing to escape.\n\nNote on duplicate-ballot diagnostics: an earlier version of this PR added a log line when a duplicate ballot is rejected. It has been removed. The line carried no identity, but its timestamp could be joined with access or authentication logs that do carry identity. That would let someone with log access work out who voted on a given measure, which breaks the anonymity promise. Support's \"it says I already voted\" tickets need a different mechanism, such as an in-process per-measure counter with no timestamps or identity. That is left for a follow-up, and nothing in this PR writes duplicate-ballot events to the shared logs.\n\nNote on the receipt check: the receipt token is already scoped to the measure. `voter_receipt(user.id, measure_id)` derives the token from both the user and the measure, so a receipt from a different measure cannot match and cannot trigger the duplicate path. No query change is needed.\n\ndiff --git a/app/routes/ballots.py b/app/routes/ballots.py\nindex 4e1b0a7..9c3d2f5 100644\n--- a/app/routes/ballots.py\n+++ b/app/routes/ballots.py\n@@ -1,14 +1,18 @@\n+import csv\n+import io\n import logging\n+from enum import Enum\n\n from fastapi import APIRouter, Depends, HTTPException\n+from fastapi.responses import Response\n+from sqlalchemy import func\n from sqlalchemy.orm import Session\n\n from app.auth import current_user, require_role\n from app.db import get_db\n-from app.models import Ballot, Measure, Receipt, User\n+from app.models import Ballot, Choice, Measure, Receipt, User\n from app.receipts import voter_receipt\n from app.schemas import BallotIn\n\n logger = logging.getLogger(__name__)\n router = APIRouter()\n+\n+# Upper bound on distinct stored choice values we are willing to export.\n+MAX_DISTINCT_CHOICES = 100\n@@ -22,26 +26,73 @@ async def cast_ballot(\n     user: User = Depends(current_user),\n     db: Session = Depends(get_db),\n ):\n     measure = db.get(Measure, measure_id)\n     if measure is None or not measure.is_open():\n         raise HTTPException(404, \"measure not open\")\n     receipt = voter_receipt(user.id, measure_id)\n+    # The token is derived from (user, measure), so it is already scoped to this measure.\n     if db.query(Receipt).filter_by(token=receipt).first():\n         raise HTTPException(409, \"already voted\")\n     db.add(Receipt(token=receipt))\n     db.add(Ballot(measure_id=measure_id, choice=body.choice))\n     db.commit()\n     return {\"ok\": True}\n\n\n @router.post(\"/measures/{measure_id}/close\")\n async def close_measure(\n     measure_id: int,\n     user: User = Depends(require_role(\"admin\")),\n     db: Session = Depends(get_db),\n ):\n     measure = db.get(Measure, measure_id)\n     if measure is None:\n         raise HTTPException(404)\n     measure.close(closed_by=user.id)\n     db.commit()\n     return {\"closed\": True}\n+\n+\n+@router.get(\"/measures/{measure_id}/results.csv\")\n+async def export_results(\n+    measure_id: int,\n+    user: User = Depends(require_role(\"admin\")),\n+    db: Session = Depends(get_db),\n+):\n+    measure = db.get(Measure, measure_id)\n+    if measure is None:\n+        raise HTTPException(404)\n+    if measure.is_open():\n+        raise HTTPException(409, \"results are available once the measure is closed\")\n+    counts = {}\n+    # GROUP BY: one row per distinct stored choice, not per ballot, so this is bounded.\n+    # The LIMIT guards against an unexpectedly large number of distinct values.\n+    rows = (\n+        db.query(Ballot.choice, func.count(Ballot.id))\n+        .filter(Ballot.measure_id == measure_id)\n+        .group_by(Ballot.choice)\n+        .limit(MAX_DISTINCT_CHOICES + 1)\n+        .all()\n+    )\n+    if len(rows) > MAX_DISTINCT_CHOICES:\n+        # Fail loudly rather than export a partial or oversized tally.\n+        raise HTTPException(500, \"unexpected number of distinct stored choices\")\n+    for stored, n in rows:\n+        key = stored.value if isinstance(stored, Enum) else stored\n+        if key is None:\n+            key = \"\"  # NULL stored value: emit as an empty-choice row\n+        counts[key] = counts.get(key, 0) + n\n+    buf = io.StringIO()\n+    writer = csv.writer(buf)  # default CRLF terminator (RFC 4180)\n+    writer.writerow([\"measure\", \"choice\", \"votes\"])\n+    known = set()\n+    # csv.writer quotes commas, quotes and newlines, so the slug cannot malform the CSV.\n+    for choice in Choice:\n+        known.add(choice.value)\n+        writer.writerow([measure.slug, choice.value, counts.get(choice.value, 0)])\n+    # Stored values outside the current enum (e.g. legacy data) must not be dropped.\n+    # key=str keeps the sort safe if legacy values are of mixed types.\n+    for key in sorted((k for k in counts if k not in known), key=str):\n+        writer.writerow([measure.slug, key, counts[key]])\n+    # Output is one small row per choice, so build it in memory and return it whole.\n+    return Response(\n+        content=buf.getvalue(),\n+        media_type=\"text/csv\",\n+        headers={\n+            \"Content-Disposition\": f'attachment; filename=\"measure-{measure_id}-results.csv\"'\n+        },\n+    )",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 22137,
+  "tokOut": 20708,
+  "usd": 0.29560000000000003,
+  "critMs": 128489
+ },
+ "status": "cap"
+}

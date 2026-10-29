@@ -1,0 +1,83 @@
+{
+ "approach": "clustered-panel",
+ "case": "plan-01",
+ "rep": 1,
+ "wallMs": 161941,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "cost/data-feed",
+   "severity": "blocker",
+   "claim": "The chosen Starter tier (5 req/min, 15-min delayed quotes) cannot support the chain_poller design, which needs 160 req/min of real-time polling for 40 underlyings. The data feed fails almost immediately, and the intraday triggers would run on stale quotes.",
+   "evidence": "\"chain_poller (new): every 15 s, fetch a real-time option chain snapshot ... 40 underlyings => 160 requests/min during RTH.\" / \"We stay on Starter.\" / Starter \"5 req/min | 15-min delayed\""
+  },
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "The $250/month cap is not met once the design is made feasible. Only Growth ($199) meets the rate limit with real-time quotes, and Growth plus the $60 VPS totals $259, over the cap. The $139 figure rests on the infeasible Starter tier.",
+   "evidence": "\"Monthly run cost: Optiq Starter $79 + existing VPS $60 = $139, comfortably inside the $250 cap.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "Migration 0042 drops roll_history in production in the same transaction as a 90-day backfill, with no backup, snapshot, down-migration, or verification step. Older history is irreversibly lost, and the stated fallback (roll_eod.py behind ROLLER_V2=false) likely reads the dropped column, so the rollback path is broken by the migration itself.",
+   "evidence": "\"Migration 0042 runs in-place against prod Monday 08:00 ET\" / \"In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.\" / \"roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4.\" / ABSENT: backup, down-migration, restore procedure."
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Discarding trade and roll records older than 90 days may breach record-retention obligations for a managed family-office account (tax lot and cost-basis reporting, regulatory records). The plan does not verify that nothing else depends on the older entries.",
+   "evidence": "\"Backfill copies roll_history entries from the last 90 days into rolls; older entries are not needed by roll_engine.\" / ABSENT: retention policy or archive of removed history."
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Automated, high-frequency options order submission (up to 8 roll orders per day, repriced every 20 s up to 3 times) has no stated review against broker API terms, order-rate rules, or supervisory sign-off for automated trading.",
+   "evidence": "\"order_router ... re-priced every 20 s up to 3 times, then cancelled.\" / ABSENT: broker ToS review or supervisory controls."
+  },
+  {
+   "lens": "security/data-integrity",
+   "severity": "major",
+   "claim": "Vendor option snapshots can drive live orders with no freshness, sanity, or schema validation. The heartbeat guard covers only broker connectivity, so stale or malformed quotes can produce wrong rolls.",
+   "evidence": "\"roll_engine stops emitting intents when the last successful broker heartbeat is > 60 s old.\" / ABSENT: any freshness or validity check on chain_poller snapshots."
+  },
+  {
+   "lens": "reliability/safety",
+   "severity": "major",
+   "claim": "Kill-switch and partial-state behavior are undefined. ROLLER_KILL is read per loop, but the plan does not say what happens to in-flight or repricing combo orders on kill, or how a filled buy-to-close with a rejected sell-to-open or a failed cancel is handled. Partial exposure is possible.",
+   "evidence": "\"plus a ROLLER_KILL env switch read on every loop.\" / \"combo orders are all-or-none at the broker; a rejected combo leaves the original short call untouched.\" / ABSENT: in-flight order handling on kill and cancel-failure behavior."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Daily order limits have no stated persistence, so a restart could reset counters and bypass the 1-per-contract and 8-per-account caps. There is no alerting or monitoring for a runaway loop. The limits also do not account for combo retries and lack an idempotency key against duplicate submits.",
+   "evidence": "\"order_router enforces max 1 roll per contract per day and max 8 roll orders per account per day; both are hard limits checked before submit\" / ABSENT: counter persistence, alerting, idempotency keys."
+  },
+  {
+   "lens": "vendor/sovereignty",
+   "severity": "major",
+   "claim": "Optiq Data is the sole decision input with no fallback feed, exit plan, or rate-limit/backoff handling. A rate-limit breach would silently starve the trigger engine.",
+   "evidence": "\"Current vendor: Optiq Data.\" / ABSENT: alternate source, backoff logic, contract exit terms."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The +3.8% net APR headline is unsupported: no backtest, prototype, or cost model, only anecdotal desk notes. The 30-day success window cannot separate the effect from market-regime noise, and the paper-mode comparison runs on delayed quotes so it cannot validate fills.",
+   "evidence": "\"Expected impact: +3.8% net APR vs. EOD rolling (see §2).\" / \"Desk notes from the last two quarters list several days where a mid-session roll 'would have been better'.\" / \"Week 2-3: paper mode ... compare intents vs. EOD decisions daily.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Trigger and target definitions are ambiguous: extrinsic is not specified as mid or last, and 'credit' for the strike-up rule is not defined net of buyback.",
+   "evidence": "\"DTE <= 5 and extrinsic value < $0.10\" / \"next strike up if the credit is >= $0.05\""
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 20416,
+  "tokOut": 10228,
+  "usd": 0.0091962,
+  "critMs": 21668
+ }
+}

@@ -1,0 +1,89 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "plan-01",
+ "rep": 2,
+ "wallMs": 233687,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "The chain_poller needs about 160 req/min and real-time quotes, but the plan stays on Starter (5 req/min, 15-min delayed). The core data path cannot run as specified, and intraday triggers would fire on stale quotes. Even Growth (100 req/min) is insufficient; only Pro is unlimited.",
+   "evidence": "\"40 underlyings => 160 requests/min during RTH.\" vs \"Starter | $79 | 5 req/min | 15-min delayed\" and \"We stay on Starter.\""
+  },
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "The $139 cost conclusion rests on a tier that cannot support the design. Any tier meeting the real-time requirement breaks the agreed $250 cap (Growth $199+$60=$259, Pro $499+$60=$559), so the plan violates the budget constraint or the feature does not work.",
+   "evidence": "\"Monthly run cost: Optiq Starter $79 + existing VPS $60 = $139, comfortably inside the $250 cap.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "Migration 0042 runs in-place on prod and drops positions.roll_history in the same transaction as a 90-day-only backfill. There is no backup, down-migration, or backfill verification. Older history is permanently destroyed.",
+   "evidence": "\"Migration 0042 runs in-place against prod Monday 08:00 ET\"; \"In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.\"; \"older entries are not needed by roll_engine.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "The declared fallback (roll_eod.py behind ROLLER_V2=false through week 4) presumably reads the column the week-1 migration drops. The rollback path is broken from Monday on, and the plan never repoints or verifies it.",
+   "evidence": "\"roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4.\" vs \"ALTER TABLE positions DROP COLUMN roll_history\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "There is no snapshot validation or freshness check before pricing live orders: no stale-timestamp, crossed or zero quote, or outlier guards. The broker heartbeat guard covers only broker health, not vendor data quality.",
+   "evidence": "ABSENT: snapshot age/sanity check; \"limit at mid minus 1 tick\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The heartbeat guard stops only new intents. Live combo orders keep re-pricing every 20 s, and nothing says what happens to in-flight orders on outage or kill switch, or how positions are reconciled after a cancel/fill race. A cancelled combo leaves the original short call with no escalation path.",
+   "evidence": "\"stops emitting intents when the last successful broker heartbeat is > 60 s old\" vs \"re-priced every 20 s up to 3 times, then cancelled\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "There is no idempotency or in-flight dedupe for RollIntent. Repeated 15 s polls and cancelled or retried orders can re-trigger on the same contract before the daily cap applies. Cap counter storage is unspecified, and intents beyond the cap have no defined handling.",
+   "evidence": "\"roll_engine ... emits RollIntent rows\"; \"max 1 roll per contract per day and max 8 roll orders per account per day\"; ABSENT: dedupe/pending-state rule"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The +3.8% net APR claim is unsupported: no backtest, no cost or slippage model, only anecdotal desk notes. Paper mode compares intents with EOD decisions rather than P&L, and 30 live days is too short to detect the delta.",
+   "evidence": "\"Expected impact: +3.8% net APR vs. EOD rolling (see §2)\"; \"compare intents vs. EOD decisions daily\"; \"first 30 live days\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "There are no observability or alerting specs for poll failures, 429s, heartbeat staleness, limit hits, or kill-switch activation, and no abort criteria for the 5→40 rollout.",
+   "evidence": "ABSENT: metrics/alerts; \"Week 4: ROLLER_V2=true on 5 underlyings, then all 40\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The migration does a backfill and DROP COLUMN in one transaction on the live prod table, with no lock timeout, row-count estimate, or batching.",
+   "evidence": "\"In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.\""
+  },
+  {
+   "lens": "secrets",
+   "severity": "minor",
+   "claim": "Credential handling for the new vendor integration and extended broker client is unspecified, and the kill switch (an env var) may not be re-read at runtime or cancel live orders.",
+   "evidence": "ABSENT: credential storage/rotation; \"ROLLER_KILL env switch read on every loop\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "There is no tax or wash-sale consideration for increased roll frequency, and no check that vendor licensing permits automated trading use.",
+   "evidence": "ABSENT: tax/wash-sale handling; vendor licensing terms"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 59591,
+  "tokOut": 32944,
+  "usd": 0.11463616,
+  "critMs": 28078
+ }
+}

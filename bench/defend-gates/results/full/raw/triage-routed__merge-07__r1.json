@@ -1,0 +1,101 @@
+{
+ "approach": "triage-routed",
+ "case": "merge-07",
+ "rep": 1,
+ "wallMs": 342819,
+ "verdict": "ATTACKS",
+ "confidence": 0.9,
+ "attacks": [
+  {
+   "lens": "partition-semantics",
+   "severity": "blocker",
+   "claim": "partition_date() switched from UTC to naive local time. Workers run with TZ=America/Los_Angeles and the job fires at 01:30 UTC (18:30 PDT the previous day), so each run writes data and the _SUCCESS marker to the previous UTC day's dt partition, which dashboards read.",
+   "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")  ; scheduled 01:30 UTC; TZ=America/Los_Angeles"
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "The _SUCCESS marker is written unconditionally after the loop, even when files failed. Dashboards treat the marker as 'partition complete', so a partial partner drop is published as complete.",
+   "evidence": "except Exception:\n            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n            failed += 1\n    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+  },
+  {
+   "lens": "injection",
+   "severity": "blocker",
+   "claim": "Partner-chosen SFTP filenames (src.stem / src_name) are interpolated unquoted into a shell=True command. A crafted filename containing $(), backticks, or ';' runs arbitrary commands on workers that hold write credentials for the whole raw bucket. Names with spaces also break the command. No validation of filenames exists.",
+   "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True)  /  dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\"; ABSENT: filename validation"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "A per-file failure is caught and counted, but the task returns normally with no raise or non-zero exit. Airflow sees success, so no retry or alert fires; the only signal is a log line.",
+   "evidence": "except Exception: log.exception(...); failed += 1 ... no raise after the loop"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "When a file fails midway, chunks already uploaded stay in the raw bucket with no rollback or cleanup. The partition holds partial data for a failed source, and a retry cannot distinguish those chunks from good ones.",
+   "evidence": "for chunk in _write_chunks(src, work_dir): _upload(chunk, partner, dt, src.stem); chunk.unlink()  -- no cleanup in except branch"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Object names are deterministic (stem plus chunk index) and gsutil cp has no no-clobber or generation precondition. A rerun for the same dt silently overwrites good objects, and if it produces fewer chunks, stale higher-index chunks from the earlier run remain alongside the new ones. The PR does not say bucket versioning is enabled.",
+   "evidence": "path = out_dir / f\"{src.stem}-{len(chunks):04d}.csv.gz\" ... subprocess.run(f\"gsutil -q ... cp {local} {dest}\"); no prefix clearing"
+  },
+  {
+   "lens": "data-contract",
+   "severity": "major",
+   "claim": "The object layout changed from one object per source at raw/{partner}/dt=…/{stem}.csv.gz to a directory of numbered chunks. Downstream readers expecting the old key will miss data or read mixed layouts, and the PR gives no migration or compatibility note.",
+   "evidence": "-        blob = bucket.blob(f\"raw/{partner}/dt={dt}/{src.stem}.csv.gz\")\n+    dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\""
+  },
+  {
+   "lens": "behaviour-change",
+   "severity": "major",
+   "claim": "The PR says normalisation is unchanged, but normalise_row now receives csv.DictReader dicts of raw strings instead of pandas Series read with dtype=str. Empty-field and NaN semantics change, and the PR does not show normalise_row accepts this input. Output reaches raw and is published as complete without validation.",
+   "evidence": "Schema normalisation is unchanged (same `normalise_row`).  ...  norm = normalise_row(row)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "DictWriter fieldnames are fixed from the first normalised row. If a later row yields different keys, writerow raises mid-file. The exception is caught per file, so the file is counted as failed after partial uploads have already happened.",
+   "evidence": "if writer is None:\n                writer = csv.DictWriter(out, fieldnames=list(norm.keys()))"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "A header-only or empty file yields zero chunks, nothing is uploaded, and the file is still counted as ok. The per-file row-count log that existed before was also removed, so silent data loss in the partition is not visible in logs or metrics.",
+   "evidence": "for chunk in _write_chunks(src, work_dir): ... ok += 1  /  removed: log.info(\"uploaded %s rows=%d\", ...)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "gsutil runs with no timeout and no retry. A hung transfer blocks the worker indefinitely, and a single transient failure fails the whole file.",
+   "evidence": "subprocess.run(f\"gsutil -q -o ... cp {local} {dest}\", shell=True, check=True) -- no timeout= argument"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "On exception, the gzip handle is not closed and the partially written local chunk is not removed. Repeated failures can fill work_dir and leave plaintext partner data on the worker's disk.",
+   "evidence": "except Exception: log.exception(...) -- no finally; `out` opened with no try/finally; chunk.unlink() only after successful upload"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "ingest_partner gained a required work_dir parameter. The diff does not show callers being updated, so any existing two-argument call raises TypeError.",
+   "evidence": "-def ingest_partner(partner: str, drop_dir: Path) -> None:\n+def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None:"
+  },
+  {
+   "lens": "testing",
+   "severity": "minor",
+   "claim": "No tests accompany a rewrite of the ingest path, upload mechanism, partition-date logic, and failure semantics.",
+   "evidence": "ABSENT: no test changes in the diff"
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 25994,
+  "tokOut": 22620,
+  "usd": 0.01639815,
+  "critMs": 45886
+ }
+}

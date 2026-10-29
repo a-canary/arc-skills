@@ -1,0 +1,101 @@
+{
+ "approach": "clustered-panel",
+ "case": "merge-07",
+ "rep": 2,
+ "wallMs": 207524,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "`_upload` interpolates partner-chosen filenames (src.stem from SFTP drops) into a shell=True command string. A crafted filename with shell metacharacters can run arbitrary commands on a worker holding write credentials for the whole raw bucket.",
+   "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "partition_date() switched from UTC to naive local time. Workers run with TZ=America/Los_Angeles and the job runs at 01:30 UTC, which is the previous evening in Pacific time, so data lands in the prior UTC day's dt partition while dashboards read the UTC date.",
+   "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")"
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "The _SUCCESS marker is written unconditionally, even when files failed. Dashboards read a partition as soon as the marker appears, so partial or missing partner data is published as complete.",
+   "evidence": "except Exception:\n            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n            failed += 1\n    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "No cleanup or idempotency on partial failure. Chunks already uploaded for a failing file remain under the dt partition, and a rerun with a different chunk count can leave stale higher-numbered chunks, duplicating or mixing rows. Local chunks and the open gzip handle are also left behind on exception.",
+   "evidence": "for chunk in _write_chunks(src, work_dir):\n                _upload(chunk, partner, dt, src.stem)\n                chunk.unlink()  // ABSENT: no deletion of existing raw/{partner}/dt={dt}/{src}/ objects or cleanup on the except path"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "normalise_row now receives a plain dict from csv.DictReader instead of a pandas Series from df.apply, and empty cells are '' rather than NaN. The claim that normalisation is unchanged is unsupported, and any Series-specific or NaN-dependent logic may change behaviour.",
+   "evidence": "Schema normalisation is unchanged (same `normalise_row`).  ...  norm = normalise_row(row)  // ABSENT: normalise_row contract and tests for dict input"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The DictWriter fieldnames are fixed from the first normalised row of each chunk. Rows with differing keys raise ValueError mid-file, failing the whole file. A header-only or empty CSV produces zero chunks and is still counted as ok, hiding an empty partner drop.",
+   "evidence": "writer = csv.DictWriter(out, fieldnames=list(norm.keys()))  ...  ok += 1"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "Partner-controlled src.stem is embedded directly in GCS object keys and local chunk paths with no validation. Names containing slashes or special characters can write outside the intended partner prefix or break the dt layout.",
+   "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Failures are logged and counted but the function returns normally, so the Airflow task exits 0 and a partner run with failed files looks healthy with no alert.",
+   "evidence": "log.info(\"partner=%s dt=%s ok=%d failed=%d\", partner, dt, ok, failed)  // no raise, no non-zero status"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "subprocess.run has no timeout and no retry, so a stalled gsutil transfer can block the nightly job indefinitely.",
+   "evidence": "subprocess.run(f\"...\", shell=True, check=True,)  // no timeout="
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The object layout changed from raw/{partner}/dt=.../{stem}.csv.gz to a per-source directory of numbered chunks. Existing downstream readers expecting the old path will find nothing, and rollback requires rewriting or deleting the new prefix. No migration or consumer update is included.",
+   "evidence": "ABSENT: no migration or consumer update; dest now ends in {src_name}/{local.name}"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "ingest_partner now requires a new work_dir argument, but the diff does not update callers, so existing call sites will break or are unverified.",
+   "evidence": "-def ingest_partner(partner: str, drop_dir: Path) -> None:\n+def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None:"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Gzip chunk encoding is unspecified, and the reader uses the default locale encoding, which can corrupt non-ASCII partner data.",
+   "evidence": "gzip.open(path, \"wt\", newline=\"\")  and  open(...) via csv.DictReader with no encoding="
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The gsutil motivation and the OOM fix are asserted without a benchmark or memory measurement, and gsutil's dependency and bucket permissions are not verified.",
+   "evidence": "ABSENT: no benchmark, memory profile, or test of the 3.1 GB Northwind feed"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "No tests cover the chunker, CHUNK_ROWS boundaries, failure accounting, or marker-on-failure behaviour, and the code shells out directly, which makes it hard to test.",
+   "evidence": "ABSENT: no test changes in the diff"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 20297,
+  "tokOut": 13697,
+  "usd": 0.00882374,
+  "critMs": 31364
+ }
+}

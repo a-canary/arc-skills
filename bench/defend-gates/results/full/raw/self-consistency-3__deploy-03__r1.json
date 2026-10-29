@@ -1,0 +1,232 @@
+{
+ "approach": "self-consistency-3",
+ "case": "deploy-03",
+ "rep": 1,
+ "wallMs": 89393,
+ "verdict": "ATTACKS",
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The 3.2 client reads streak_count from 3.1 clients via dual-write, but the 3.2 client computes streak from streak_events. Dual-write in 2.15 is only verified for the backfill dry-run; no QA covers 3.2 clients writing completions that update streak_count while 3.1 clients still write only to streak_count, so divergence between the two readers is unaddressed.",
+   "evidence": "\"`habits.streak_count` is **kept** and dual-written by 2.15 so 3.1 clients ... keep working unchanged.\" ABSENT: specification of how a 3.1 client's completion (written only to streak_count) is reflected in streak_events, and vice versa."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The streak-to-events backfill runs after full deploy and takes ~22 min on a snapshot, but the gate metric streak_mismatch_total is only defined as server vs client recompute; there is no alert or gate on backfill mismatch vs streak_count on prod, and no rollback if backfill is partial or fails mid-run.",
+   "evidence": "\"Backfill job starts after full deploy.\" and \"0 mismatches vs `streak_count`\" (snapshot only, 18.4M rows)"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The 2.14 rollback is claimed safe against the migrated DB, but 2.15 dual-writes and the backfill inserts streak_events rows; if streak_events accumulates writes from 3.2 clients during the flag ramp and the server is rolled back, those events are orphaned and streak_count may diverge with no reconciliation step.",
+   "evidence": "\"schema is additive and `streak_count` remains authoritative-compatible, so 2.14 runs against the migrated database unchanged (verified in staging).\" ABSENT: reconciliation plan for streak_events rows written during 2.15 that 2.14 cannot see."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The staging QA of rollback 'sync silently disabled, local streak shown' is contradicted by the mismatch gate: if sync is disabled on 3.2 clients, local and server streaks diverge and the mismatch metric is not defined for that state.",
+   "evidence": "\"3.2 client against 2.14 API (server rollback scenario) | staging | Pass (sync silently disabled, local streak shown)\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "Crash-free evidence is 99.87% from a 1,900-user beta over 6 days, which is far below the 400k MAU scale and the 99.5% threshold needs statistically meaningful session volume; the gate is asserted, not demonstrated at full population.",
+   "evidence": "\"Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Staging remote config differed from prod only on streak_sync_v2, but the rollout gates and rollback depend on remote config fetch behavior; prod values for other keys were 'identical during QA' only, meaning the QA snapshot is stale relative to the 2026-11-02 deploy window.",
+   "evidence": "\"prod values for every other key were identical during QA.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The backfill writes 18.4M rows in batches of 5k with a 22 min dry-run, but at 400k MAU the streaks-svc p95 gate (<250ms) is measured during the backfill and canary; no load test of the write path under concurrent backfill plus live completions is reported.",
+   "evidence": "\"streaks-svc p95 < 250ms\" ABSENT: load test with backfill running concurrently."
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "source_device is described as a per-install random ID; the artifact does not state whether the server validates or authorizes that field against the caller's user_id, so one user could write events attributed to another device.",
+   "evidence": "\"`source_device` stores a per-install random ID\" ABSENT: server-side authorization of source_device."
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Notification provisional-then-full authorization on iOS and the POST_NOTIFICATIONS flow are described, but no legal/store review is cited for the pre-prompt copy; this is low-risk but unverified.",
+   "evidence": "\"Want a nudge at 8:00 PM so you don't lose your streak?\" ABSENT: compliance sign-off for pre-prompt copy."
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "The saver disabled-state label hardcodes a date (Nov 28) that is localized copy; the date format and whether it updates for user timezone is unspecified, risking misleading display across locales.",
+   "evidence": "\"Streak saver available again on Nov 28\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Streak events store per-day, per-habit records with created_at and source_device, creating a detailed behavioral record retained indefinitely; no retention period for streak_events is stated.",
+   "evidence": "ABSENT: retention policy for streak_events."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The backfill job starts after full deploy and runs 18.4M row inserts with a 22-minute dry-run, but there is no stated behavior for backfill failure, lag, or interaction with live dual-writes during the job; streak computation from events could read a partially backfilled history, producing wrong streaks for users in flight.",
+   "evidence": "\"Backfill job starts after full deploy.\" / \"resumable job (batches of 5k, checkpointed), dry-run on prod snapshot: 18.4M rows, 22 min\" — ABSENT: what streak reads return for users whose backfill checkpoint has not yet reached them, and any alerting on backfill stall."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Remote config rollout starts at 1% of 3.2 users, but the 3.2 client against 2.14 API and the 2.15 backend dual-write story is only tested in staging; the 3.2 client's streak computation switch over is not described for users who have synced events versus those who have not, creating a possible streak discrepancy at the flip point.",
+   "evidence": "\"3.2 client against 2.14 API (server rollback scenario) | staging | Pass (sync silently disabled, local streak shown)\" — ABSENT: behavior when a user's flag flips on then off, and whether local vs server streak can diverge after re-enable."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The crash-free gate of 99.5% is claimed as met, but the only prod evidence is a 1,900-user internal beta over 6 days, which is far below the 400k MAU scale and does not exercise the staged rollout path that the gate governs.",
+   "evidence": "\"Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The staging remote config was exported from prod with only streak_sync_v2 differing, but the QA was run with that flag on in staging; the claim that prod config matches for all other keys is a snapshot during QA, not a guarantee at rollout time.",
+   "evidence": "\"prod values for every other key were identical during QA.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Rollback for the backend says schema is additive and 2.14 runs unchanged, but the streak_events table and backfilled rows are not removed or reconciled on rollback; if 2.15 writes events that 2.14 ignores, a re-roll-forward could double-count or miss events.",
+   "evidence": "\"schema is additive and `streak_count` remains authoritative-compatible, so 2.14 runs against the migrated database unchanged (verified in staging).\" — ABSENT: plan for reconciling streak_events written during the 2.15 window when rolling back to 2.14."
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The streak saver's server-side limit is described as enforced, but no authorization check is stated for the repair endpoint, so any authenticated caller could potentially repair other users' streaks if user_id is client-supplied.",
+   "evidence": "\"Streak saver: limit 1 per 30 days enforced server-side\" — ABSENT: authz check that user_id on repair is derived from the session token."
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "source_device is a per-install random ID persisted per event, which links every streak event to a stable install identifier across devices; the claim of no new data is not reconciled with the new linkability created by cross-device sync.",
+   "evidence": "\"`source_device` stores a per-install random ID, not a hardware identifier. No new data shared with third parties.\" — ABSENT: retention period for source_device and deletion path on account delete."
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "The iOS permission flow requests provisional authorization on Remind me, which is acceptable, but the Android denial deep link and the copy promising a nudge may need a reviewed statement of what is sent; no review of the store listing text for the reminder is stated.",
+   "evidence": "\"Turn on in system settings\" with a deep link — ABSENT: store review sign-off for the reminder feature copy."
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The backfill writes about 18.4M rows in one run with no stated cost or write-capacity budget, and there is no quota check on the sync path under 10-100x load.",
+   "evidence": "\"18.4M rows, 22 min\" — ABSENT: write capacity, cost estimate, and load test at 10x."
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The p95 gate of 250ms is measured only against the current load; the backfill and dual-write load at full rollout is not tested at scale.",
+   "evidence": "\"streaks-svc p95 < 250ms\" — ABSENT: load test result at 100% rollout volume during backfill."
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "No vendor or data residency concern is raised, and the plan does not state where streak_events data resides relative to the user's region.",
+   "evidence": "ABSENT: data residency statement for streak_events."
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "Accessibility QA is reported as Pass for the streak screen and pre-prompt, but the disabled saver button state label is not listed among the tested elements.",
+   "evidence": "\"disabled state label: Streak saver available again on Nov 28\" — ABSENT: VoiceOver/TalkBack result for the disabled saver button."
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "The disabled-state copy hardcodes a date, which will be wrong for users in other timezones near the 30-day boundary and is not confirmed in the localized strings.",
+   "evidence": "\"Streak saver available again on Nov 28\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "The streak saver's one-per-30-days limit is not explained to users beyond the disabled label; the value of the feature for users who miss more than one day is not addressed.",
+   "evidence": "\"one missed day per 30 days can be repaired from the streak screen.\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Dual-writing streak_count alongside streak_events creates two sources of truth that must stay in sync until 3.4, with no stated test or invariant check beyond the dry-run.",
+   "evidence": "\"`habits.streak_count` is **kept** and dual-written by 2.15\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The rollout timeline sets store submission and backend deploy on the same day with no gap for backfill validation before flag steps begin.",
+   "evidence": "\"Store submission: Mon 2026-11-02 · Backend deploy: Mon 2026-11-02 10:00 UTC\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The 3.2 client-vs-2.14 rollback scenario is marked Pass with 'sync silently disabled, local streak shown', but the backend dual-write and streak_count authority are described inconsistently: 2.15 computes streak from streak_events while also dual-writing streak_count, so after a feature rollback or partial rollout the two sources can diverge and 3.1 clients (which read streak_count) may show a different streak than 3.2 clients.",
+   "evidence": "\"streak is computed from events\" and \"habits.streak_count is **kept** and dual-written by 2.15\"; no ABSENT check: no reconciliation or divergence test between streak_events-derived count and streak_count after mixed-version writes."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The streak_mismatch_total gate measures server vs client recompute, but there is no stated behavior or alert for dual-write failure between streak_events and streak_count, and no partial-failure handling for the backfill's mid-run state where streak_events is incomplete while 3.1 reads streak_count.",
+   "evidence": "\"Backfill job starts after full deploy\" and \"resumable job (batches of 5k, checkpointed)\"; ABSENT: dual-write failure handling, alert on streak_count vs events divergence."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The backend rollback claim is that 2.14 runs unchanged against the migrated DB, but 2.14 does not know about streak_events, so any streak_events writes made by 2.15 during the rollout window are silently lost from the streak computation, and the rollback verification does not cover a DB holding real 2.15-written events.",
+   "evidence": "\"2.14 runs against the migrated database unchanged (verified in staging)\"; QA rows show only staging, with no test of 2.14 after 2.15 has written streak_events."
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The backfill inserts ~18.4M rows in batches with a 22-minute dry-run, but the rollout starts the backfill only after full 2.15 deploy and has no stated throttling against live write traffic on the prod table, nor index/lock behavior for a table that receives per-completion writes.",
+   "evidence": "\"18.4M rows, 22 min\" and \"Backfill job starts after full deploy\"; ABSENT: write-load impact on prod, lock/index plan, batch throttling under load."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The crash-free gate is supported only by an internal beta of 1,900 users over 6 days, which is far below the 400k MAU population and the gate threshold is 99.5%; the QA result cannot establish that the production crash-free rate will stay above the agreed bar.",
+   "evidence": "\"Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The 'Repair yesterday' saver copy promises repair of yesterday specifically, but the rule is one missed day per 30 days; the flow for repairing a missed day that is not yesterday, and the disabled-state date math (Nov 28 relative to the 30-day window), are not specified.",
+   "evidence": "\"Repair yesterday\" and \"Streak saver available again on Nov 28\"; ABSENT: spec for the 30-day window start and non-yesterday repair."
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "The privacy claim relies on the existing nutrition label and data-safety form being unchanged, but cross-device sync and a per-install source_device ID linked to user_id is a new linkability dimension that the claim does not analyze.",
+   "evidence": "\"Privacy nutrition label and Play data-safety form unchanged (verified against the updated data inventory)\"; ABSENT: linkability analysis of source_device with user_id."
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "The iOS flow requests provisional authorization after 'Remind me' and full authorization later; the Android deep-link denial path is described but no check is given that the pre-prompt copy and the 8:00 PM reminder timing comply with the app's notification-consent requirements across the 3 locales.",
+   "evidence": "\"iOS: if the user taps 'Remind me' we request provisional authorization first\"; ABSENT: legal/store-policy review of the pre-prompt."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Dual maintenance of streak_count and streak_events with a planned 3.4 removal creates coupling that is not tracked beyond STR-1244 and has no test that enforces the dual-write invariant.",
+   "evidence": "\"It is scheduled for 3.4\" and \"tracked in STR-1244\"; ABSENT: invariant test for dual-write."
+  }
+ ],
+ "usage": {
+  "calls": 3,
+  "tokIn": 10008,
+  "tokOut": 5685,
+  "usd": 0.0029431199999999996,
+  "critMs": 10607
+ }
+}

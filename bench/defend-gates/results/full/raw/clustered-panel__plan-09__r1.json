@@ -1,0 +1,83 @@
+{
+ "approach": "clustered-panel",
+ "case": "plan-09",
+ "rep": 1,
+ "wallMs": 339793,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "blocker",
+   "claim": "Erasure is not applied to fct_page_events_v2, which is copied over the live table at swap. Rows erased after v2's last rebuild of their partition survive in v2 and are republished by `bq cp -f`. The v2 backfill also stores a full 25-month copy of personal event data outside the erasure and retention job lists. The staging test forces a rebuild from raw, so it never exercises the copy path.",
+   "evidence": "\"privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`\" ... \"`bq cp -f fct_page_events_v2 fct_page_events`\" ... \"the retention and erasure jobs include `fct_page_events_legacy` in their table lists\" (v2 not listed) ... \"backfill it once (one full read of raw\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "If privacy-svc fails between the raw delete and the fact-table delete, the stale rows sit in older partitions. Nightly rebuilds only touch partitions with recently ingested raw rows, so those partitions are never revisited. The planned staging test forces a full 31-day rebuild and does not exercise the nightly selection path, so it would not catch this. The plan defines no retry path.",
+   "evidence": "\"privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`\" ... \"Rebuilds read only `raw.events`\" ... \"New staging integration test: erase a test user, force a 31-day rebuild, assert 0 rows for that user.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The incremental selection rule uses max(ingested_at) in the table, but the plan keeps columns unchanged and never says ingested_at or the watermark is stored in fct_page_events or anywhere else. The selection logic cannot be implemented as written.",
+   "evidence": "ABSENT: where ingested_at or the high-water mark is stored. Artifact says \"every event_date that appears in raw rows with ingested_at > (max ingested_at already in the table − 2 h)\" and \"Columns, types, grain and dedup logic ... are unchanged\"."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Rows that become visible in raw more than 2 h after their ingested_at are never reselected, so their partition is never rebuilt and dashboards and the export silently miss them. Only the p99.9 visibility delay was measured, with no tail alert. Parity coverage is removed after 30 nights, so the gap is then undetected, which violates the no-gaps constraint.",
+   "evidence": "\"The 2 h overlap covers streaming-insert visibility delay (p99.9 measured at 4 min in September)\" ... \"After 30 clean parity nights: drop the legacy model and table (DATA-431).\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The rollback is not gap-free. The legacy table is a nightly snapshot, so restoring it drops events ingested since its last build. Dashboards and the customer export stay missing those events until a full refresh runs, which the rollback does not trigger. This contradicts the stated 'no gap' guarantee.",
+   "evidence": "\"fct_page_events_legacy is still rebuilt nightly from raw\" ... \"Rollback: `bq cp -f fct_page_events_legacy fct_page_events`, then revert the PR; the next run is a full refresh ... No gap, no lost events.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Per-partition dedup is equivalent to global dedup only if an event_id never spans two event_dates. The 0-collision result is a historical check, and the retry argument does not cover offline SDK replays that arrive weeks late with different client event_time, which can move them to another event_date. The only guard is a weekly detection-only test, so cross-date duplicates can reach dashboards and the customer export for up to a week, despite the 'never double count' constraint.",
+   "evidence": "\"Checked over all 4.2B rows: 0 such `event_id`s\" ... \"SDK retries happen within minutes of the original send.\" ... \"on 27 of 30 nights at least one row arrived more than 7 days late (SDK offline replay)\" ... \"New dbt test `unique_event_id` runs weekly on the full table\""
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The production overwrite (`bq cp -f`) and the PR merge are manual steps run by a single owner, with no second approver, no written go/no-go, and no check that parity is still current at swap time. The analytics_write lock is stated only for dbt and privacy-svc, not for these copies. The PR merge is not gated before the 02:20 nightly run, so if it slips, the v1 full-refresh SQL overwrites the swapped table and reverts partitioning and savings without any automated guard.",
+   "evidence": "\"Owner: analytics engineering (1 engineer)\" ... \"Swap at 12:00 UTC\" ... \"`bq cp -f fct_page_events_v2 fct_page_events`\" ... \"privacy-svc and the dbt jobs already share the `analytics_write` lock\" ... \"Merge the PR that points model `fct_page_events` at the incremental SQL\" ... \"the nightly job starts at 02:20, so all three steps land with no build in between\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Erasure is described as complete, but BigQuery time travel and the table copies made at cutover (fct_page_events_legacy, and v2 until dropped) can keep erased rows after the delete. The plan does not address purging these copies.",
+   "evidence": "\"`bq cp` the current table to `fct_page_events_legacy`\" ... \"Erasure: privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`\" (no mention of time travel or copy purge)"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The parity test fingerprints every column of both full tables each night for 30 nights, about 3.8 TiB or roughly $24 per night. That spend is missing from the cost table, so month-1 cost is understated by roughly $700.",
+   "evidence": "\"The nightly parity test keeps running (new vs legacy)\" ... cost table lists only \"Legacy rebuild (first 30 days only) | $1,760\" and \"One-time backfill + 7 parity nights | ~$76\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The Looker savings (61.2 to 8.7 TiB) are extrapolated from dry runs of only the top 20 queries by bytes, and require_partition_filter is disabled, so nothing prevents future full scans. The $54 projection is not supported by the evidence.",
+   "evidence": "\"dry runs of September's top 20 queries by bytes against v2: 61.2 → 8.7 TiB\" and \"`require_partition_filter = false`\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Seven parity nights is a small sample for a late-data distribution in which 27 of 30 nights had late rows. The parity test may never exercise the tail the design depends on.",
+   "evidence": "\"Parity for 7 consecutive nights.\" and \"on 27 of 30 nights in September at least one row arrived more than 7 days late\""
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 24148,
+  "tokOut": 45660,
+  "usd": 0.0276586,
+  "critMs": 78303
+ }
+}

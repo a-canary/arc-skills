@@ -1,0 +1,165 @@
+{
+ "approach": "rubric-stop-early@v100",
+ "case": "merge-01",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The retry loop generates a new client_order_id on each attempt, so if a request times out after the broker accepted it, the retry submits a second distinct order and can double-fill. This directly violates the agreed constraint that submission must be safe to retry without duplicate fills.",
+     "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { const clientOrderId = randomUUID();"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1910,
+    "tokOut": 157,
+    "usd": 0,
+    "critMs": 23064
+   },
+   "wallMs": 26009
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The sizing change from Math.floor to Math.ceil breaks the invariant that orders never exceed the per-symbol maxNotional cap. With lotSize > 1, the ceil rounds up to the next lot, buying more shares than the headroom allows. For example, maxNotional=10000, price=50, currentQty=0, lotSize=10 gives headroom=10000, lots=20 exactly and returns 200 (fine), but if headroom were 9900 (lots=19.8), it would return 200 shares = $10000, which is still within cap in this case; however with currentQty=1 (price 50), headroom=9950, lots=19.9, ceil gives 20 lots = 200 shares = $10000, but current position value is $50, so total notional becomes $10050, exceeding the $10000 cap. The new test 'sizes to the cap in whole lots' passes only because it uses cases where lots is an exact integer, hiding the regression.",
+     "evidence": "const lots = headroom / price / lotSize;\n  return Math.ceil(lots) * lotSize;"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The retry loop has a control-flow bug: after the for loop exits (when attempt > MAX_ATTEMPTS), it reaches 'throw lastErr' which is unreachable because the loop always either returns success or throws inside the catch block when attempt === MAX_ATTEMPTS. This dead code suggests the author intended different logic. More critically, if MAX_ATTEMPTS were changed to 0 or the loop condition changed, the function would throw an undefined lastErr. This is a latent bug that could cause confusing failures during future maintenance.",
+     "evidence": "  throw lastErr;"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1923,
+    "tokOut": 437,
+    "usd": 0,
+    "critMs": 24906
+   },
+   "wallMs": 69018
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The sizing test 'short position frees headroom for the cover' expects sizeBuy to return 120 shares, but the code computes headroom = 10000 - (-20*100) = 12000, then floor(12000/100/1)*1 = 120. However, the function is named sizeBuy and the comment says 'signed: negative when short' — buying 120 shares when short 20 results in a net long of 100 shares, not covering the short. The test asserts the wrong behavior: it should cover the short (buy 20 to reach zero) then optionally add, but the risk cap should be applied to the final gross or net position, not headroom computed as if the short is free equity. The test passes but encodes a risk-calculation bug that lets position size exceed the intended cap when short positions exist.",
+     "evidence": "test(\"short position frees headroom for the cover\", () => {\n  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: -20, lotSize: 1 })).toBe(120);\n});"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2160,
+    "tokOut": 297,
+    "usd": 0,
+    "critMs": 33844
+   },
+   "wallMs": 78879
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The rounding change in sizeBuy is a no-op — it computes the exact same value as the original single-expression formula — so the PR's claim that it 'tidies the sizing helper' to ensure the cap is never exceeded is false; the actual fix (if any) is missing and the risk cap enforcement is unchanged.",
+     "evidence": "Original: `return Math.floor(headroom / price / lotSize) * lotSize;` vs new: `const lots = Math.floor(headroom / price / lotSize); return lots * lotSize;` — algebraically identical. The PR description says 'Rounding is always down (floor), so sized quantity can never push a symbol past its maxNotional cap' as if this is a new guarantee introduced by the change."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2360,
+    "tokOut": 187,
+    "usd": 0,
+    "critMs": 19985
+   },
+   "wallMs": 67121
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The retry logic retries on timeout, but a timeout means the broker may have received and filled the order without responding — the client_order_id dedup claim only holds if the broker actually persists and checks client_order_id for every request, which is not verified here. More critically, the code catches TimeoutError and retries, but if the broker filled the order and the response timed out, the retry will be deduped (good), yet if the broker DID NOT receive it and the original request is still in flight when the retry fires, both could be processed. However, the real blocker is simpler: the PR description claims 'the broker dedupes on it' as a fact, but there is no evidence in the artifact that the broker API supports client_order_id deduplication — this is a load-bearing assumption with no verification, and if wrong, retries after timeout will double-fill real money orders.",
+     "evidence": "'Retries are safe: every order carries a client_order_id that is generated once per order and reused on every retry attempt, and the broker dedupes on it, so a retry after a timeout cannot double-fill.'"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2424,
+    "tokOut": 258,
+    "usd": 0,
+    "critMs": 26328
+   },
+   "wallMs": 346155
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "Retries on timeouts and 504s can double-fill real money because broker-side dedupe on client_order_id is explicitly unverified. The PR itself labels this a merge blocker and states nothing in the diff proves the assumption, yet the retry logic for the most dangerous status codes (timeout, 504) is included and ready to merge.",
+     "evidence": "\"Safety depends on broker-side dedupe, which this PR does not verify.\" ... \"Merge blocker: before merging, confirm against the broker's documentation and a sandbox/paper account that: a second POST with the same client_order_id returns the original order or a duplicate-id error, never a second order\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2714,
+    "tokOut": 171,
+    "usd": 0,
+    "critMs": 20581
+   },
+   "wallMs": 35194
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The short-position test comment misstates the math: 191 shares at $50 is $9,550, not $9,550 <= $10,000 as the comment implies the cap check — but the real bug is the test asserts `sizeBuy` returns 190 for headroom 9950/price 50/lot 10. headroom=9950, 9950/50/10=19.9, floor=19, 19*10=190. That's correct. However, the comment says \"191 * 50 = 9550\" which is wrong (191*50=9550 is true but 191 isn't a multiple of lot 10 and isn't relevant). More critically, the short-position test: currentQty=-20, price=100, maxNotional=10000. headroom = 10000 - (-20*100) = 10000+2000 = 12000. 12000/100/1 = 120. Returns 120. Test passes. But the comment claims \"Short 20 + buy 120 = net long 100 shares = $10,000 notional\" — that's correct. Wait, let me re-examine the ambiguous retry logic. When `dedupeVerified` is false (default), ambiguous errors (timeout/502/504) are NOT retried. That's safe. When true, they ARE retried. The PR says \"No caller passes the flag in this PR\" so default behavior is safe. The real issue: on the LAST attempt (attempt === MAX_ATTEMPTS), if the error is retryable, it throws `err` instead of `lastErr`. But `err` and `lastErr` are the same at that point. Actually, the bigger issue: `throw err` on non-retryable or last-attempt throws the caught error, but if it's the last attempt and it WAS retryable, it still throws — that's correct. Let me look more carefully at the sizing. The test \"rounds down\" comment says \"191 * 50 = 9550 <= 10_000\" but 191 is not the result; 190 is. The comment is confusing but the test is correct. Actually, I see the real bug now: in the short test, the comment says the cap is \"exactly at maxNotional (not above it)\" and the test expects 120. headroom = 10000 - (-20)(100) = 12000. sizeBuy returns floor(12000/100/1)*1 = 120. Final position: -20+120=100 shares long = $10,000. Correct. I'm not finding a blocker in the code. Let me check the retry logic once more. The issue: `throw err` vs `throw lastErr`. On the last attempt, if retryable, it does `throw err`. If not retryable, it does `throw err`. Both throw the current error. That's fine. The defensive fallthrough `throw lastErr` is unreachable as stated. I think this is actually clean. But wait — the comment in the rounding test: \"191 * 50 = 9550 <= 10_000\". 191*50 is actually 9550. That's arithmetically correct. But 191 shares is not what's returned; 190 is. The comment is explaining why 191 would exceed... no, 9550 < 10000. I'm confused by the comment but the code is right. Let me just CLEAR this."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2970,
+    "tokOut": 915,
+    "usd": 0,
+    "critMs": 51437
+   },
+   "wallMs": 69599
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3006,
+    "tokOut": 17,
+    "usd": 0,
+    "critMs": 21398
+   },
+   "wallMs": 45740
+  }
+ ],
+ "artifact": "PR #412: Retry transient broker errors on order submit\n\nDuring the first minutes after the open the broker intermittently returns 502/503 or hangs past our timeout, and we drop the order on the floor.\nThis wraps the submit call in a bounded retry (3 attempts, exponential backoff, 4xx rejections are never retried).\n\n**Retries that could double-fill are off by default.** Every order carries a client_order_id that is generated once per order and reused on every retry attempt. Retrying is only safe against duplicate fills if the broker rejects or deduplicates repeated submits with the same client_order_id, and nothing in this diff proves that. A timeout, or a 502/504, can mean the broker already accepted the order. So:\n- 503 is retried unconditionally (the service refused the request).\n- Timeouts, 502 and 504 (outcome ambiguous) are retried **only** when `submitOrder` is called with `{ dedupeVerified: true }`. The default is `false`, so merging this PR as-is never resubmits an order that may already have been accepted. No caller passes the flag in this PR.\n\n**Before enabling `dedupeVerified`** (follow-up change, not part of this merge), confirm against the broker's documentation and a sandbox/paper account that:\n- a second POST with the same client_order_id returns the original order or a duplicate-id error, never a second order;\n- this holds when the first request is still in flight or has timed out client-side (our 4s abort does not cancel server-side processing), i.e. the dedupe is atomic;\n- the duplicate-id response is not a 4xx that we would surface as a failure and mistake for a rejected order.\n\nRecord the result here. If the broker does not guarantee this, leave the flag off. Retrying ambiguous failures would then have to look up the order by client_order_id before any resubmit.\n\nAlso touches the sizing helper, but with no behavior change. `sizeBuy` already rounded down to the broker's lot size with `Math.floor`, so the cap guarantee (sized quantity never pushes a symbol past its maxNotional) is existing behavior, not something this PR introduces. The change only splits the one-line expression into two statements and adds a comment explaining why it rounds down. The new value is identical to the old one for every input. What this PR adds for sizing is test coverage that pins the existing behavior, including a case where headroom is not a whole number of lots.\n\nNote on the short-position test: `maxNotional` caps the final net position's notional, and `currentQty` is signed. When short 20 at $100, buying 120 shares covers the 20 and leaves a net long of 100 shares = $10,000, exactly at the cap and never above it. The short is not treated as free equity; the first 20 shares only bring the position back to flat. The test asserts this, and sizing semantics are unchanged by this PR.\n\ndiff --git a/src/router/submit.ts b/src/router/submit.ts\nindex 3a1f0c2..8be71d4 100644\n--- a/src/router/submit.ts\n+++ b/src/router/submit.ts\n@@ -1,18 +1,59 @@\n import { randomUUID } from \"node:crypto\";\n import { BrokerClient, BrokerError } from \"../broker/client\";\n import { OrderIntent, SubmittedOrder } from \"../types\";\n+import { sleep } from \"../util/sleep\";\n import { log } from \"../log\";\n\n+// 503: the service refused the request, so the order was not accepted.\n+const SAFE_RETRY_STATUS = new Set([503]);\n+// 502/504 (and client-side timeouts): the broker may already have accepted the order.\n+const AMBIGUOUS_RETRY_STATUS = new Set([502, 504]);\n+const MAX_ATTEMPTS = 3;\n+\n+export interface SubmitOptions {\n+  // Retry ambiguous failures (timeout/502/504) only after broker dedupe on\n+  // client_order_id has been verified (see PR #412). Defaults to false.\n+  dedupeVerified?: boolean;\n+}\n+\n export async function submitOrder(\n   broker: BrokerClient,\n   intent: OrderIntent,\n+  opts: SubmitOptions = {},\n ): Promise<SubmittedOrder> {\n-  const clientOrderId = randomUUID();\n-  const res = await broker.post(\"/v2/orders\", {\n-    symbol: intent.symbol,\n-    qty: intent.qty,\n-    side: intent.side,\n-    type: \"limit\",\n-    limit_price: intent.limitPrice,\n-    client_order_id: clientOrderId,\n-  });\n-  return { id: res.id, clientOrderId, status: res.status };\n+  let lastErr: unknown;\n+  // SAFETY: the id must be generated once, outside the loop, and reused on every\n+  // attempt. Ambiguous failures (timeout/502/504) are retried only when\n+  // opts.dedupeVerified is true, because otherwise a retry can double-fill.\n+  const clientOrderId = randomUUID();\n+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {\n+    try {\n+      const res = await broker.post(\n+        \"/v2/orders\",\n+        {\n+          symbol: intent.symbol,\n+          qty: intent.qty,\n+          side: intent.side,\n+          type: \"limit\",\n+          limit_price: intent.limitPrice,\n+          client_order_id: clientOrderId,\n+        },\n+        { timeoutMs: 4000 },\n+      );\n+      return { id: res.id, clientOrderId, status: res.status };\n+    } catch (err) {\n+      lastErr = err;\n+      const ambiguous =\n+        (err instanceof BrokerError && AMBIGUOUS_RETRY_STATUS.has(err.status)) ||\n+        (err as Error).name === \"TimeoutError\";\n+      const retryable =\n+        (err instanceof BrokerError && SAFE_RETRY_STATUS.has(err.status)) ||\n+        (ambiguous && opts.dedupeVerified === true);\n+      if (!retryable || attempt === MAX_ATTEMPTS) throw err;\n+      log.warn(\"order submit retry\", { symbol: intent.symbol, attempt });\n+      await sleep(250 * 2 ** (attempt - 1));\n+    }\n+  }\n+  // Not reachable while MAX_ATTEMPTS >= 1: the last attempt either returns or\n+  // rethrows inside the catch above. Kept as a defensive fallthrough so the\n+  // function type-checks as always returning or throwing.\n+  throw lastErr;\n }\ndiff --git a/src/risk/sizing.ts b/src/risk/sizing.ts\nindex 77c2e10..a04b9f3 100644\n--- a/src/risk/sizing.ts\n+++ b/src/risk/sizing.ts\n@@ -8,13 +8,15 @@ export interface SizingInput {\n   maxNotional: number; // USD cap per symbol, from risk config\n   price: number;\n   currentQty: number; // signed: negative when short\n   lotSize: number;\n }\n\n export function sizeBuy(input: SizingInput): number {\n   const { maxNotional, price, currentQty, lotSize } = input;\n   const headroom = maxNotional - currentQty * price;\n   if (headroom <= 0) return 0;\n-  return Math.floor(headroom / price / lotSize) * lotSize;\n+  // Round down to whole lots so we never exceed the maxNotional cap.\n+  const lots = Math.floor(headroom / price / lotSize);\n+  return lots * lotSize;\n }\ndiff --git a/src/risk/sizing.test.ts b/src/risk/sizing.test.ts\nindex 19be4c2..2d0a7e1 100644\n--- a/src/risk/sizing.test.ts\n+++ b/src/risk/sizing.test.ts\n@@ -3,6 +3,23 @@ import { sizeBuy } from \"./sizing\";\n test(\"no headroom when at cap\", () => {\n   expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 100, lotSize: 1 })).toBe(0);\n });\n+\n+test(\"sizes to the cap in whole lots\", () => {\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 })).toBe(100);\n+  expect(sizeBuy({ maxNotional: 10_000, price: 50, currentQty: 0, lotSize: 10 })).toBe(200);\n+});\n+\n+test(\"rounds down and never exceeds the cap when headroom is not a whole number of lots\", () => {\n+  // headroom = 10_000 - 1*50 = 9950 -> 19.9 lots -> floor to 19 lots = 190 shares.\n+  // Final position = 1 + 190 = 191 shares * $50 = $9,550 <= $10,000 cap.\n+  expect(sizeBuy({ maxNotional: 10_000, price: 50, currentQty: 1, lotSize: 10 })).toBe(190);\n+});\n+\n+test(\"short position frees headroom for the cover\", () => {\n+  // The cap applies to the final net position. Short 20 + buy 120 = net long 100\n+  // shares = $10,000 notional, exactly at maxNotional (not above it). The first\n+  // 20 shares cover the short; the remaining 100 are the cap-sized long.\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: -20, lotSize: 1 })).toBe(120);\n+});",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 24678,
+  "tokOut": 22997,
+  "usd": 0.328654,
+  "critMs": 131757
+ },
+ "status": "cleared"
+}

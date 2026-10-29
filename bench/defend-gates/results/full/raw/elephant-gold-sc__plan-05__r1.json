@@ -1,0 +1,89 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "plan-05",
+ "rep": 1,
+ "wallMs": 194935,
+ "verdict": "ATTACKS",
+ "confidence": 0.9,
+ "attacks": [
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "Staging benchmark (12,000 users in 41 min) extrapolates linearly to ~630k pantry users (30% of 2.1M MAU) at roughly 36 hours per run, exceeding the 24h nightly cadence. Runs would overlap and saturate the single write primary. The plan never reconciles benchmark and sizing assumption.",
+   "evidence": "\"Staging run: 12,000 synthetic pantry users completed in 41 minutes.\" / \"Adoption assumption for sizing: 30% of MAU create a pantry within 90 days.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The scoring job is a single unbatched SQL statement joining pantry_items x recipe_ingredients across all users and 340k recipes on the write primary. Cost scales as users x recipes with no chunking, per-user cap, incremental recompute, or replica offload. It risks OLTP contention and offers no checkpointing, so a failure or Sidekiq retry restarts the whole run.",
+   "evidence": "\"for each user with a pantry, score every recipe in the catalog (340k recipes) in a single SQL statement joining pantry_items x recipe_ingredients on the primary\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "02:00 UTC is the evening US peak (~18:00-21:00 local) for a ~78% US user base. The heaviest job therefore runs on the primary during peak interactive traffic, with no load-shedding.",
+   "evidence": "\"PantryMatchJob (Sidekiq, nightly 02:00 UTC)\" / \"~78% of them in US time zones\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "There is no overlap lock, max runtime, kill switch, or feature flag for the job, carousel, or push. The week-6 rollout (5% then 100%) has no rollback or halt criteria. Monitoring and analytics are not scheduled until week 5, leaving little signal for the beta.",
+   "evidence": "ABSENT: no job locking, feature flag, circuit breaker, alerting, or rollback criteria; \"Week 6: beta to 5% of users, then 100%.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "pantry_matches is fully upserted nightly at ~50 rows per user, about 31M rows at full adoption. The plan has no pruning of stale rows (users who empty pantries, recipes that fall out of the top 50) and no write-amplification, bloat, or storage budget.",
+   "evidence": "\"top 50 per user.\" / \"then upsert the top 50 into pantry_matches.\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The plan creates a new per-user store of pantry inventory, expiry dates, quantities, and cooking behavior, with analytics events, but specifies no retention, account-deletion cascade, or data-subject deletion handling, and no analytics event schema or privacy notice update.",
+   "evidence": "ABSENT: no retention policy, deletion/cascade behavior for pantry_items or pantry_matches; \"Week 5: notifications, analytics events.\""
+  },
+  {
+   "lens": "authz",
+   "severity": "major",
+   "claim": "The plan never states that pantry_items and pantry_matches are scoped to the owning user or that the API enforces ownership on read and write. Together with the absence of any input validation spec for the user-supplied quantity, unit, and expiry fields, this leaves the write path's authorization undefined.",
+   "evidence": "ABSENT: no ownership checks or authorization rules for pantry_items or pantry_matches; item form fields quantity, unit, expiry date"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "major",
+   "claim": "The feature gates all value behind entering 15 items with expiry dates through a per-item form (ingredient, quantity, unit, expiry). The plan's own top churn reason (38%) is setup and typing friction. There is no bulk entry, skip-expiry path, or pre-unlock value, and no evidence that 15 items is needed for match quality.",
+   "evidence": "\"Pantry Match unlocks once a user has entered at least 15 items with expiry dates.\" / \"Too much setup / typing to get useful suggestions\" — 38%"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "Load-bearing assumptions are unsupported: the 30% adoption driving sizing, the 25% unlock target, and the premise that people who dislike typing will build a pantry. The +3 pt retention metric compares self-selected unlockers to an undefined 'matched control' with no baseline or construction, so it is confounded. No metric measures whether pantry suggestions are actually cooked.",
+   "evidence": "ABSENT: source for \"30% of MAU create a pantry within 90 days\"; \"+3 pts 30-day retention for users who unlock vs. matched control.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The unlock gate counts items with expiry dates, but the progress bar says 'items added', so the label does not match the metric. The scoring formula does not define behavior for missing or past expiry, the expiry weighting function, or how staples enter the numerator and denominator, so core matching cannot be verified.",
+   "evidence": "\"7 of 15 items added\" vs \"at least 15 items with expiry dates\"; \"weighted by expiry proximity, with pantry staples ... always counted as present\""
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "There is no accessibility spec for the autocomplete item form, progress bar, carousel, or 'I made this' prompt (screen reader labels, focus order, keyboard operability, date-picker accessibility).",
+   "evidence": "ABSENT: VoiceOver/TalkBack labels, focus management, keyboard support for the Pantry form and carousel"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The push notification path has no defined source for local time zone, no retry or failure handling, and no kill switch for a mis-triggered expiry alert. The nightly UTC job and the per-day push cap interact ambiguously across time zones.",
+   "evidence": "\"respects existing quiet hours (21:00-08:00 local)\""
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 48084,
+  "tokOut": 16777,
+  "usd": 0.09187922,
+  "critMs": 25951
+ }
+}

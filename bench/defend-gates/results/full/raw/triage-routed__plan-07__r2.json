@@ -1,0 +1,155 @@
+{
+ "approach": "triage-routed",
+ "case": "plan-07",
+ "rep": 2,
+ "wallMs": 266618,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "The input and output costs are computed per day but presented as a monthly total. At 2.28B input tokens/day and $0.50/1M, input is about $1,140/day, or roughly $34,000/month. Output is about $7/day, or about $200/month. The total is roughly $34,000+/month, about 23x the $1,500 budget, so the 'within budget' conclusion is false.",
+   "evidence": "\"Input: 38M lines x 60 tokens = 2.28B tokens -> ~$1,140\" / \"Estimated total: ~$1,150/month, within the $1,500 budget.\""
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The budget check uses average volume only. At the 61M-line peak day, cost scales by about 1.6x, and no spend cap, rate limit, or throttle bounds spend on peak days or retry storms.",
+   "evidence": "\"Application logs: 38M lines/day average across 30 services (peak day 61M).\" / ABSENT: spend cap, rate limit, or throttle on the summarizer."
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The fixed prompt sent with each of the 8,640 daily summary calls is not included in the token math, so input cost is understated.",
+   "evidence": "\"every 5 minutes, sends the last 5 minutes of logs per service to the LLM with a fixed prompt\" / \"Input: 38M lines x 60 tokens = 2.28B tokens\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The 60-tokens-per-line figure, which drives the entire input cost estimate, has no measurement behind it. Stack traces and JSON payloads often run longer.",
+   "evidence": "\"Average line length: ~60 tokens after redaction.\" / ABSENT: sample or measurement supporting this figure."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Staffing assumes both engineers are fully available for 6 weeks (12 eng-weeks), but the charter says on-call and interrupt work averages 50% of their time. Effective build capacity is about half the plan, and no on-call coverage plan is stated for the build period.",
+   "evidence": "\"Staffing: both platform engineers full-time for 6 weeks (2 x 6 = 12 eng-weeks).\" / \"on-call/interrupt work averages 50% of their time\" / ABSENT: on-call coverage during build."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The 12 eng-week estimate and 6-week timeline have no per-item justification.",
+   "evidence": "| log-tap + queue | 2 | ... | Total | 12 | / ABSENT: basis for per-item estimates."
+  },
+  {
+   "lens": "personal-data-exposure",
+   "severity": "major",
+   "claim": "The redaction stage is described as covering only emails, tokens, card numbers and IPs. Names, phone numbers, free-text user input, and account or session identifiers are not addressed, yet every log line is forwarded to an external LLM. The redaction audit's coverage for these fields is not shown.",
+   "evidence": "\"which already masks emails, tokens, card numbers and IPs for our log retention policy (audited in Q1)\" / ABSENT: redaction coverage for names, free text, and identifiers, and test results showing residual PII."
+  },
+  {
+   "lens": "personal-data-exposure",
+   "severity": "major",
+   "claim": "Nothing enforces or tests that log-tap subscribes only downstream of redaction. A misconfiguration could send raw, unredacted logs to the external LLM.",
+   "evidence": "\"log-tap (new): subscribes to the existing Vector pipeline after the redaction stage\" / ABSENT: check preventing upstream subscription and test that forwarded payloads contain no unredacted fields."
+  },
+  {
+   "lens": "consent",
+   "severity": "major",
+   "claim": "Production logs from a B2B SaaS may contain customer data. The plan adds a new sub-processor (Corvid) without confirming that customer contracts permit it or that customers are notified.",
+   "evidence": "\"Corvid account has zero-retention enabled; data processing addendum signed by Legal (ref DPA-0417).\" / ABSENT: confirmation that customer agreements authorize the sub-processor and any notice requirement."
+  },
+  {
+   "lens": "personal-data-exposure",
+   "severity": "major",
+   "claim": "Zero retention is the only stated control on the external copy, but its verification method and the DPA's terms on abuse monitoring, prompt logging, and data residency are not described.",
+   "evidence": "\"Corvid account has zero-retention enabled\" / ABSENT: verification method, DPA retention clause, abuse-monitoring terms, and data residency."
+  },
+  {
+   "lens": "retention",
+   "severity": "major",
+   "claim": "Generated summaries are stored in Postgres and posted to PagerDuty comments, and they quote error text. The plan gives no retention period, access control, or redaction for either store, so residual personal data persists and spreads.",
+   "evidence": "\"stores a structured summary (top errors, new error signatures, affected endpoints, suspected deploy)\" / \"the PagerDuty incident gets an auto-comment with the latest summaries\" / ABSENT: retention, access control, and PagerDuty comment redaction."
+  },
+  {
+   "lens": "retention",
+   "severity": "major",
+   "claim": "The eval replays logs from the last 40 incidents, which may predate current redaction and retention controls. The plan does not say whether this historical data is redacted, its retention basis, or who can access the eval set.",
+   "evidence": "\"Eval set from last 40 incidents\" / \"replay the last 40 incidents: for each, generate the summary\" / ABSENT: redaction status, retention basis, and access controls for replayed logs."
+  },
+  {
+   "lens": "data-minimization",
+   "severity": "minor",
+   "claim": "Every application log line is forwarded rather than a minimized subset needed for triage, which increases external exposure of personal data.",
+   "evidence": "\"forwards every application log line to the summarizer queue\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "log-tap sits in the production Vector pipeline with no stated queue bound, backpressure behavior, drop policy, or isolation from the primary log path. A backlog during peak or incident periods could degrade the logging that on-call depends on.",
+   "evidence": "\"log-tap (new): subscribes to the existing Vector pipeline ... and forwards every application log line to the summarizer queue.\" / ABSENT: queue sizing, backpressure, drop policy, and isolation."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The LLM call path has no stated timeout, retry, rate-limit handling, or degraded mode. Summaries can silently go stale, and the PagerDuty comment carries no freshness marker.",
+   "evidence": "\"every 5 minutes, sends the last 5 minutes of logs per service to the LLM with a fixed prompt and stores a structured summary\" / ABSENT: timeout, retry/backoff, circuit breaker, and freshness marker."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Per-window input size is unbounded. Incident-time log bursts make the 5-minute window largest exactly when the model is most needed. The plan describes no token cap, truncation, or sampling.",
+   "evidence": "\"sends the last 5 minutes of logs per service to the LLM\" / ABSENT: per-window token cap, truncation or sampling strategy, and oversize behavior."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Observability and alerting appear only in the final two weeks of hardening. No metrics or alerts are defined for summarizer lag, queue depth, LLM errors, summary freshness, or PagerDuty comment failures.",
+   "evidence": "\"Hardening, dashboards, runbook | 2\" / ABSENT: summarizer health metrics, freshness SLO, queue-depth alert, and PagerDuty enrichment failure alerting."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The PagerDuty auto-comment depends on the service catalog and the PagerDuty API. The plan does not guarantee that this enrichment is non-blocking with respect to paging, nor does it state timeouts or failure handling.",
+   "evidence": "\"On page: the PagerDuty incident gets an auto-comment with the latest summaries for the paging service and its direct dependencies (from the service catalog).\" / ABSENT: async guarantee, timeouts, and failure handling."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "No kill switch, feature flag, or rollback procedure exists for log-tap or the summarizer. Disabling a misbehaving component that is flooding spend or affecting Vector would require a code change.",
+   "evidence": "\"Summaries are advisory only. Alert rules, paging, and escalation policies are unchanged.\" / ABSENT: feature flag, kill switch, and rollback steps."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The MTTR goal (47 to 30 min) is asserted without a breakdown of current time spent or a prototype showing that summaries save the claimed 15-20 minutes.",
+   "evidence": "\"instead of spending the first 15-20 minutes grepping logs\" / \"Target: median MTTR 47 min -> 30 min within one quarter of launch.\" / ABSENT: prototype, pilot, or time-to-diagnosis measurement."
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The model choice (Corvid-mini) has no quality comparison or prototype output at the stated token budget.",
+   "evidence": "\"Model: Corvid-mini, $0.50 per 1M input tokens, $2.00 per 1M output tokens.\" / ABSENT: model-quality comparison."
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The launch gate uses 40 replayed incidents graded by one commander with no inter-rater check. Wide confidence bounds make the 70% threshold weakly informative.",
+   "evidence": "\"have the incident commander grade it (useful / partially / misleading). Launch gate: >= 70% useful, <= 5% misleading.\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "No baseline measurement or attribution method is defined to separate the copilot's effect on MTTR from other concurrent changes.",
+   "evidence": "\"Target: median MTTR 47 min -> 30 min within one quarter of launch.\" / ABSENT: baseline and attribution plan."
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 21321,
+  "tokOut": 15433,
+  "usd": 0.01000254,
+  "critMs": 43543
+ }
+}

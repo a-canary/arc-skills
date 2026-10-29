@@ -1,0 +1,77 @@
+{
+ "approach": "single-strong",
+ "case": "deploy-08",
+ "rep": 1,
+ "wallMs": 107935,
+ "verdict": "ATTACKS",
+ "confidence": 0.88,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Throttling/transient SES errors are treated as permanent failures. Any batch error records every recipient in send_failures, which excludes them from remaining sends and shows them as 'Not delivered'. There is no retry, backoff or requeue, and the failed batch is never Acked or redriven. A throttle burst at prod scale silently drops subscribers.",
+   "evidence": "if err != nil { for _, r := range batch.Recipients { failures.Record(...) } ... continue }"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Prod config exceeds the SES limit. 48 workers x ~25 msg/s is about 1,200 msg/s against a 300 msg/s account limit, a 4x oversubscription, guaranteeing sustained throttling. Combined with the no-retry failure handling, this will mass-drop recipients. Concurrent large issues across 11k publications compound it.",
+   "evidence": "SEND_WORKERS=48 ... ~25 msg/s sustained ... SES production account limits (us-east-1): 300 messages/second"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "QA never exercised throttling. Staging ran with SES throttling simulated off via a mock, so the 'Pass, 0 failures' result says nothing about prod behaviour. Prod worker count (48) was never tested (4 in staging). The 3-minute target is also unverified: QA measured 11 min, and 50k at 300 msg/s is about 167 s only if the limit is perfectly saturated.",
+   "evidence": "QA ran with SES throttling simulated off via the sandbox mock; 4 workers, batch 50 ... 11 min"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Per-recipient failure indexing and status handling are fragile. The results are indexed by position against batch.Recipients without a length check. Throttled-per-entry statuses are recorded as permanent failures. Also q.Ack is skipped on whole-batch error, so the batch may be redelivered while its recipients are also marked failed, risking double-send or inconsistent state.",
+   "evidence": "batch.Recipients[i].SubscriberID ... continue (no Ack on error path)"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "major",
+   "claim": "Smart Send Time defaults ON for all publications, holding issues up to 18h, while 40% of publications (4,480) are time-sensitive news (breaking news, election results, weather alerts). Delayed delivery is harmful for them, and opt-out is buried in Settings. Prediction accuracy is only 71% within ±1h. The 'Top customer request' was time-zone scheduling, not this.",
+   "evidence": "Enabled by default for all publications; ... 4,480 of them (40%) are news or local-news outlets whose issues are time-sensitive"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The launch post contradicts the rollout plan and overclaims. The plan ramps Smart Send 5%→25%→100% over 3 weeks, gated on lift, but the post says it is live for every publication today. The 'up to 5x faster' claim is unsupported (14→3 min is about 4.7x as a target, and QA measured 11 min). The prod config also has SMART_SEND_DEFAULT=on, contradicting the 5% cohort ramp.",
+   "evidence": "Smart Send Time is live for every publication today ... SMART_SEND_DEFAULT=on vs ramp 5% (week 1)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Monitoring gaps. The bounce alarm at 4% is far above a safe level, and SES typically puts accounts under review at about 5% bounce and 0.1% complaints. Alarming at 0.08% complaints with paging only at 0.1% leaves no margin. There is no alert on send_failures volume or 'Not delivered' rates, which is the actual failure signature of this worker. Risk of SES account suspension affects all publishers.",
+   "evidence": "alarms at 4% / 0.08% ... On-call pager: queue lag > 10 min, complaint rate > 0.1%"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "Sending depends solely on one SES region (us-east-1), with Sidekiq's prior sender idled and removed after 14 days. There is no fallback provider or region, and the single account limit is a single point of failure.",
+   "evidence": "SES_REGION=us-east-1 ... SES production account limits (us-east-1)"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Smart Send Time profiles per-subscriber open behavior over 90 days, a behavioral profile, with no stated consent, retention, or disclosure to publishers or subscribers. Open tracking may be restricted under GDPR/ePrivacy.",
+   "evidence": "predicts each subscriber's most likely open hour from their last 90 days of opens"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Rollback of the pipeline relies on the Sidekiq sender being idle, but failures already recorded as excluded recipients are not restored, and in-flight failures from throttling cannot be un-dropped. Sent emails are irreversible. Rollback drain time (<2 min) is unverified.",
+   "evidence": "those recipients are excluded from the issue's remaining sends ... in-flight batches drain in < 2 min"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3199,
+  "tokOut": 1832,
+  "usd": 0.027633200000000004,
+  "critMs": 13288
+ }
+}

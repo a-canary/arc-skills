@@ -1,0 +1,71 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-01",
+ "rep": 1,
+ "wallMs": 181592,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "retry-idempotency",
+   "severity": "blocker",
+   "claim": "A new randomUUID() is generated on every loop iteration, so retries after a timeout or 502/503/504 are submitted under a different client_order_id. The broker's dedupe on client_order_id cannot match the original attempt, so an order the broker accepted before the error can be submitted again and fill twice. This violates the agreed constraint that submission must be safe to retry.",
+   "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { const clientOrderId = randomUUID(); try { const res = await broker.post(\"/v2/orders\", { ... client_order_id: clientOrderId ... }"
+  },
+  {
+   "lens": "risk-cap",
+   "severity": "blocker",
+   "claim": "Changing Math.floor to Math.ceil lets sizeBuy return a quantity whose notional exceeds maxNotional, which the context says sizing must never exceed. Example: maxNotional 10000, price 33, lotSize 1 gives 304 shares = $10,032. No post-rounding cap check exists, and the new tests only use exact divisions, so they do not catch this.",
+   "evidence": "const lots = headroom / price / lotSize;\n  return Math.ceil(lots) * lotSize;  // ABSENT: any check that result * price <= headroom"
+  },
+  {
+   "lens": "retry-idempotency",
+   "severity": "major",
+   "claim": "The PR asserts retries are safe because the broker dedupes, but nothing reuses the original clientOrderId across attempts or queries the broker for the status of a timed-out or 5xx order before resubmitting. The safety property is asserted, not established.",
+   "evidence": "Retries are safe: every order carries a client_order_id and the broker dedupes on it, so a retry after a timeout cannot double-fill. / ABSENT: reuse of the original clientOrderId or an order-status lookup before retry"
+  },
+  {
+   "lens": "timeouts",
+   "severity": "major",
+   "claim": "The client-side timeout abandons the in-flight request without cancelling it, so the original order may still be accepted and filled while the retry proceeds. Timeouts are the main trigger for the duplicate path.",
+   "evidence": "{ timeoutMs: 4000 }, ... (err as Error).name === \"TimeoutError\""
+  },
+  {
+   "lens": "dependency",
+   "severity": "major",
+   "claim": "The retry path depends on two unverified assumptions: that broker.post accepts a third options argument with timeoutMs, and that a timeout surfaces with err.name === 'TimeoutError'. No change to src/broker/client.ts is in the diff. If either is false, hung orders are not retried and are dropped as before.",
+   "evidence": "ABSENT: no change to src/broker/client.ts; { timeoutMs: 4000 } passed to broker.post and (err as Error).name === \"TimeoutError\" checked with no definition shown"
+  },
+  {
+   "lens": "tests",
+   "severity": "major",
+   "claim": "No test exercises the retry path, 4xx non-retry, backoff, or client_order_id reuse. The only test changes cover sizing with exact divisions, so the retry and idempotency claims rest on assertion alone.",
+   "evidence": "ABSENT: any submit retry test; sizing.test.ts is the only test changed"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "During the open, when the broker is already returning 5xx, every in-flight order retries up to 3 times on a fixed schedule with no jitter, retry budget, or circuit breaker. This multiplies load on the broker's order endpoint at the moment it is least able to absorb it, and synchronized retries can arrive in waves.",
+   "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { ... await sleep(250 * 2 ** (attempt - 1)); }"
+  },
+  {
+   "lens": "timeouts",
+   "severity": "major",
+   "claim": "Worst-case latency has no overall deadline: three 4s timeouts plus backoff is about 12.75s. A limit order submitted that late after the open may be stale, and the caller has no deadline to act on.",
+   "evidence": "MAX_ATTEMPTS = 3; { timeoutMs: 4000 }; await sleep(250 * 2 ** (attempt - 1)); ABSENT: overall deadline for submitOrder"
+  },
+  {
+   "lens": "observability",
+   "severity": "major",
+   "claim": "Retry logging omits clientOrderId and error status, so retried orders cannot be correlated with broker records. Final exhaustion is rethrown with no log line or metric, and no retry-rate or exhausted-submit alert is added, so the team cannot tell whether the fix works or the broker is degraded.",
+   "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, attempt }); ... if (!retryable || attempt === MAX_ATTEMPTS) throw err; / ABSENT: metric or alert"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 56851,
+  "tokOut": 22991,
+  "usd": 0.022862300000000002,
+  "critMs": 17076
+ }
+}

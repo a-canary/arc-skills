@@ -1,0 +1,89 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "plan-10",
+ "rep": 2,
+ "wallMs": 350389,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "External processor erasure runs after the DB transaction commits, but that transaction deletes the rows holding the identifiers those calls need (Stripe customer, Apple refresh token, Amplitude/Customer.io/Zendesk IDs). No durable outbox or pending-processor record is written in the transaction, so a crash, deploy or retry could leave processors holding data with nothing to retry from. This puts Art. 17 completion at risk.",
+   "evidence": "\"each account is one DB transaction across `users` and the 23 tables that reference it.\" / \"After the DB transaction commits: Amplitude: user deletion API ...\" ABSENT: durable outbox or pending-processor record written inside the transaction"
+  },
+  {
+   "lens": "rollback-kill-switch",
+   "severity": "major",
+   "claim": "The nightly destructive purge ignores the feature flag and has no defined pause or kill switch or named owner. If a defect such as a bad registry entry is found after launch, irreversible deletion continues nightly until a patch is deployed. Dry-run covers only the first batch.",
+   "evidence": "\"the purge job ignores the flag\" / \"The first real purge batch ... runs in dry-run mode first\" ABSENT: a way to pause AccountPurgeJob and who may do it"
+  },
+  {
+   "lens": "backup-restore",
+   "severity": "major",
+   "claim": "The restore protection is circular. `deleted_accounts` lives in the same Postgres database the snapshot restores, so purges made after the snapshot are missing from it and a restore can resurrect deleted accounts. A restore between confirmation and purge also drops the scheduled deletion, contradicting 'no confirmed request is lost'. The drill is only a planned test.",
+   "evidence": "\"the restore runbook re-applies purges from it after any restore, so a restore cannot resurrect a deleted account.\" / \"No confirmed request is lost.\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The registry CI check matches only columns named `user_id` or `*_user_id`. Foreign keys or personal data under other names (owner_id, polymorphic refs, email, IP, device tokens) pass CI and survive the purge, so 'new tables cannot be forgotten' is overstated. The check also verifies presence, not that the delete or nullify action is correct.",
+   "evidence": "\"A CI test fails if any such column in `db/schema.rb` is missing from the registry, so new tables cannot be forgotten.\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The claim 'Nothing else is kept' and 'no other system holds user-level data' conflicts with the plan's own text. Backups hold full data for 35 days, `deleted_accounts` keeps IDs with no retention period, and logs and Sentry keep data for 30 days. The emailed export ZIP and other non-DB stores are not addressed. The backup and `deleted_accounts` retention are not shown to be disclosed.",
+   "evidence": "\"Nothing else is kept.\" vs \"Postgres snapshots roll off after 35 days and are not edited.\" / \"`deleted_accounts` keeps only purged user IDs and dates (no PII)\" / \"Application logs and Sentry error reports have 30-day retention\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Stripe erasure only detaches payment methods and redacts metadata. The Stripe Customer's name, email and address are not addressed, so personal data may remain with no stated legal basis.",
+   "evidence": "\"Stripe: detach payment methods and redact customer metadata; invoices stay as required.\""
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "Subscription handling at deletion is incomplete. App Store and Google Play subscriptions keep billing after the account is purged, with only a notice and no check or block. Web subscriptions are set to cancel at period end, then cancelled at purge with unspecified treatment of prepaid time. Web subscribers also get no specified screen-1 copy saying the subscription will end, which raises consumer-law exposure.",
+   "evidence": "\"we cannot cancel these ... screen 1 says 'Deleting your account does not cancel your App Store subscription'\" / \"At purge, any still-active subscription is cancelled. Refunds follow the existing refund policy\" / \"Subscription notice, only when relevant (§3).\""
+  },
+  {
+   "lens": "partial-failure",
+   "severity": "major",
+   "claim": "The confirm step has several side effects (revoke sessions, deactivate, set Stripe cancel_at_period_end, send email) with no ordering, idempotency or failure handling. A failure midway could lock the user out with no scheduled deletion or notice, or leave the subscription renewing.",
+   "evidence": "\"On confirm: All sessions and refresh tokens are revoked. The account is deactivated ...\" / \"at confirm, the subscription is set to `cancel_at_period_end`\" ABSENT: failure handling for the confirm sequence"
+  },
+  {
+   "lens": "observability",
+   "severity": "major",
+   "claim": "Failures surface only on a dashboard and via a ticket after the 7-day retry window. No alert covers a failed, stalled or lagging nightly purge job, or a processor failing early. The 21-day success metric can't reflect the manual-ticket fallback after retries stop.",
+   "evidence": "\"A dashboard shows pending, completed and failed per processor.\" ABSENT: alerting thresholds or on-call ownership for the purge job and processor failures"
+  },
+  {
+   "lens": "authz",
+   "severity": "major",
+   "claim": "The grace-period undo and abuse defense are underspecified. The plan doesn't say whether password, email or provider changes are blocked during the 14 days, so an attacker with a stolen session could lock the owner out of the cancel path. Signing, expiry and single-use of the web email link, and the fresh-auth requirement for restore, are not defined. The email-only web path is a weaker bar than in-app re-auth.",
+   "evidence": "\"The confirmation email gives the real owner 14 days to cancel even if their password was used.\" / \"we email a confirmation link to the account address, and clicking it counts as re-auth\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The purge has no batching, per-run cap or per-account failure isolation, and runs one 23-table transaction per account. It has no index requirement on the user_id columns and no concurrency or rate-limit budget for vendor calls. Failures open one ticket per account, which could flood the queue in an outage.",
+   "evidence": "\"each account is one DB transaction across `users` and the 23 tables that reference it\" / \"anything still failing opens a `purge-failed` ticket for the privacy lead\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "'Keep my account' and the email cancel link have no stated concurrency control against the nightly purge. 'Restores exactly as it was' also conflicts with cancel_at_period_end if the billing period ends inside the grace window.",
+   "evidence": "\"Logging in during the 14 days shows ... 'Keep my account', which restores the account exactly as it was\" / \"'Keep my account' unsets it.\""
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 72644,
+  "tokOut": 51506,
+  "usd": 0.12718136000000002,
+  "critMs": 64880
+ }
+}

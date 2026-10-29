@@ -1,0 +1,53 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "merge-08",
+ "rep": 2,
+ "wallMs": 214130,
+ "verdict": "ATTACKS",
+ "confidence": 0.96,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "go.mod adds `replace go.uber.org/zap => ../zap`, pointing at a sibling directory outside the repo. CI builds from a clean checkout, so the build either fails or compiles unreviewed local code that is not checksum-verified into the binary distributed to on-call laptops. It also overrides the pinned pseudo-version, so the stated zap bump (the JSON encoder fix) is not what gets built.",
+   "evidence": "+replace go.uber.org/zap => ../zap"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "printPlan does not mirror computeBatches. It sizes batches from len(hosts) instead of len(rest), truncates with int() instead of ceil, and iterates over all hosts without removing the canary. The canary therefore appears in batch 0 and again in a later batch, and batch sizes differ from execution (e.g. 10 hosts at 0.25 gives 2 per batch in the plan, 3 in the real run). The feature exists so on-call can trust the plan before a 60+ host rollout.",
+   "evidence": "per := int(float64(len(hosts)) * o.MaxSurge) ... for i := 0; i < len(hosts); i += per {  (vs computeBatches: rest := without(hosts, o.CanaryHost); size := int(math.Ceil(float64(len(rest)) * o.MaxSurge)))"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The zap bump is an unreleased pseudo-version with no go.sum change in the diff and no provenance. With the replace directive present, the dependency state cannot be verified or reproduced from the artifact.",
+   "evidence": "+\tgo.uber.org/zap v1.27.1-0.20260914181502-9d3e1c0f7a2b ... ABSENT: go.sum hunk"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "Batching logic is duplicated in printPlan instead of reusing computeBatches, and the copies have already diverged. No test asserts that the printed plan equals computeBatches output for canary and non-canary cases, so future drift will also go undetected.",
+   "evidence": "func printPlan(w io.Writer, hosts []string, o Options) { ... } // no call to computeBatches; ABSENT: any test for printPlan or the DryRun branch"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The PR says dry-run exits without touching the orchestrator API, but Run calls api.Hosts before the DryRun check. The call is read-only, but the stated contract is inaccurate.",
+   "evidence": "hosts, err := api.Hosts(ctx, o.Service) ... if o.DryRun { printPlan(w, hosts, o)  // PR text: \"exits without touching the orchestrator API\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "Each batch is printed as one long comma-separated line, which is hard to scan for 60+ host services. The output also has no batch-count summary and no explicit 'dry run, nothing deployed' marker.",
+   "evidence": "fmt.Fprintf(w, \"  batch %d: %s\\n\", n, strings.Join(hosts[i:end], \", \"))"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 17665,
+  "tokOut": 8624,
+  "usd": 0.0419072,
+  "critMs": 15627
+ }
+}

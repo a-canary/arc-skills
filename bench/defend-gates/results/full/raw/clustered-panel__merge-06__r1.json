@@ -1,0 +1,107 @@
+{
+ "approach": "clustered-panel",
+ "case": "merge-06",
+ "rep": 1,
+ "wallMs": 215504,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "rollout",
+   "severity": "major",
+   "claim": "The 20 rps / burst 40 default applies to every tenant on merge, with no feature flag, shadow or log-only mode, or staged rollout. Tenants whose legitimate traffic exceeds 20 rps will start receiving 429s immediately, and the only described mitigation is a full revert.",
+   "evidence": "limits from tenant config, default 20 rps / burst 40; ABSENT: feature flag, shadow mode, or staged rollout"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The upstream 429 retry doubles upstream calls during the overload it is meant to handle. The retry does not call limiter.take(), so a throttled tenant can still generate two upstream calls per request. The fixed Retry-After sleep has no jitter, so requests that were 429'd together retry together, creating a synchronized retry storm.",
+   "evidence": "if (res.status === 429) { ... await new Promise((r) => setTimeout(r, delay)); res = await upstream.chat(req.body, { signal: req.signal }); } — no limiter.take() on retry; ABSENT: jitter, retry budget, or circuit breaker"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Limits are purely per tenant with no global or upstream-aware ceiling. About 120 tenants each at their 20 rps default can sum to roughly 2,400 rps, which can exceed upstream quota. The Tuesday failure mode, where upstream 429s starve everyone, can therefore still occur with this change in place.",
+   "evidence": "ABSENT: any global or upstream-level rate cap; only limiter.take(tenant.id, limitsFor(tenant)) is added"
+  },
+  {
+   "lens": "tests",
+   "severity": "major",
+   "claim": "Only TenantLimiter admission, refill, and isolation are tested. The changed behaviour (the 429 response and Retry-After header, the upstream retry branch, retryAfterMs parsing, LRU eviction, and limitsFor) has no tests. The limiter is a module-level singleton that route tests cannot easily inject.",
+   "evidence": "ABSENT: tests of completions.ts or the retry branch; \"const limiter = new TenantLimiter();\" at module scope"
+  },
+  {
+   "lens": "dependencies",
+   "severity": "major",
+   "claim": "The code imports lru-cache, but the diff shows no package.json or lockfile change. If the dependency is not already declared, the build fails. This needs to be confirmed before merge.",
+   "evidence": "ABSENT: package.json / lockfile change; import { LRUCache } from \"lru-cache\";"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A zero or missing ratePerSec makes the wait Infinity. The response then carries Retry-After: \"Infinity\", which is invalid, and the tenant is blocked permanently. Limits are not validated.",
+   "evidence": "return Math.ceil(((1 - b.tokens) / limits.ratePerSec) * 1000);"
+  },
+  {
+   "lens": "logging",
+   "severity": "minor",
+   "claim": "Every rejection emits an info-level log line with no sampling or aggregation. A tenant at 400 rps against a 20 rps limit produces roughly 380 lines per second, which adds noise and volume during the incident this change targets.",
+   "evidence": "req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, \"tenant rate limited\")"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The key fingerprint is an unsalted, 40-bit truncated SHA-256 of the tenant API key, logged on every rejection. The brief says keys must never appear in logs. The fingerprint is not the key, but it is derived from the secret, and the PR does not argue that it is non-recoverable. The diff also assumes tenant.apiKey exists on the object returned by authenticate, which is not shown.",
+   "evidence": "createHash(\"sha256\").update(apiKey).digest(\"hex\").slice(0, 10); key: keyFingerprint(tenant.apiKey)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "No upstream timeout or overall request deadline is set in the diff. The retry adds up to 5s of sleep plus a second full upstream call, so a hung upstream can hold handlers and sockets for a long time. The upstream module may set its own timeout, but it is not shown.",
+   "evidence": "ABSENT: timeout or deadline on upstream.chat; both calls pass only { signal: req.signal }"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The retry sleep is not tied to client disconnect, so an aborted request still waits and then issues a second upstream call. The first upstream response body is also not cancelled before retrying.",
+   "evidence": "await new Promise((r) => setTimeout(r, delay)); res = await upstream.chat(req.body, { signal: req.signal }); — no signal check, no body cancel"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The limiter uses wall-clock Date.now. A backward clock step makes elapsedSec negative, which drives tokens negative and can produce very large Retry-After values. A monotonic clock is the appropriate source.",
+   "evidence": "constructor(private now: () => number = Date.now) {}; const elapsedSec = (nowMs - b.updatedMs) / 1000;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "retryAfterMs mishandles common Retry-After forms. An HTTP-date becomes NaN and falls back to 1s, an empty header becomes 0 and retries immediately, and the 5s cap can end the single retry before the upstream window reopens.",
+   "evidence": "const secs = Number(header); if (!Number.isFinite(secs) || secs < 0) return 1_000;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "LRU eviction resets an evicted tenant's bucket to full burst, which is a bypass path for active tenants. Bucket state is in process memory only, so a restart or deploy also resets every bucket. Neither behaviour is documented or tested.",
+   "evidence": "private buckets = new LRUCache<string, Bucket>({ max: 10_000 }); ABSENT: documented restart or eviction behaviour"
+  },
+  {
+   "lens": "observability",
+   "severity": "minor",
+   "claim": "There are no metrics or alerts for rate-limit rejections or upstream 429 retries. Operators can only find these events by grepping logs, so they cannot alert on a tenant saturating its limit or on a rising upstream 429 rate.",
+   "evidence": "ABSENT: metrics or alerting for rate-limit rejections and upstream retries"
+  },
+  {
+   "lens": "ux",
+   "severity": "minor",
+   "claim": "The 429 body uses a custom error type and gives no limit, remaining quota, or X-RateLimit headers. OpenAI-compatible clients may not recognise the type and cannot self-throttle from the response.",
+   "evidence": "send({ error: { type: \"rate_limited\", message: \"tenant rate limit exceeded\" } })"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 22773,
+  "tokOut": 25114,
+  "usd": 0.0171106,
+  "critMs": 52433
+ }
+}

@@ -1,0 +1,95 @@
+{
+ "approach": "clustered-panel",
+ "case": "deploy-04",
+ "rep": 1,
+ "wallMs": 175125,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "Share links embed the owner's raw project API key in the URL query string, and the share page returns it to unauthenticated viewers as replayKey. Any link holder gets a live credential that can spend the owner's quota and billing, and the key leaks via browser history, referrers, logs, and Slack/X unfurl fetches.",
+   "evidence": "url.searchParams.set(\"k\", project.apiKey); ... return { messages: share.messages, model: share.model, replayKey: url.searchParams.get(\"k\") };"
+  },
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "Deleting a share does not revoke the project key it exposed. The key remains valid after the share returns 404, so the delete QA check does not address the actual exposure, and key rotation is not mentioned.",
+   "evidence": "Shares can be deleted from Playground → History; deleted shares return 404. ... ABSENT: key rotation or revocation on share delete"
+  },
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "The free pool can scale to 24 H100s, roughly $43k/month at $2.49/h, about 11x the $4k budget. No spend cap, budget alarm, or circuit breaker exists, and email-only signup with a public HN/X launch can trigger scale-out.",
+   "evidence": "min_replicas: 2 max_replicas: 24 scale_on: queue_depth > 8 for 60s ... ABSENT: any free-tier spend cap, budget alarm, or max-spend enforcement"
+  },
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "The 100k tokens/day free cap promised in the changelog is not enforced in the config. The free tier block has no daily token limit, so the budget is not protected by any mechanism.",
+   "evidence": "free: rate_limit: { requests: 20, per: second, burst: 40 }, max_tokens_per_request: 4096 ... ABSENT: daily_tokens for free tier"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Production rate limit is 20 requests per second with burst 40, while the public changelog promises 20 requests per minute. The shipped config is about 60x the advertised limit, and QA validated a different config (per: minute on staging), so the tested behavior is not the deployed behavior.",
+   "evidence": "rate_limit: { requests: 20, per: second, burst: 40 } ... Rate limiting: 21st request inside a minute returned 429 with `Retry-After`: pass (staging config used `per: minute`)."
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "Share-link replay bills the owner's project quota with no per-viewer limit. Anonymous viewers can drain a paying pro customer's per-token budget, since pro has no daily cap.",
+   "evidence": "Viewers without an account replay against the owner's project quota. ... pro: daily_tokens: null"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Shares snapshot full conversation messages and make them publicly viewable and unfurlable with no expiry, no sharer warning about public exposure, and no noindex control. Secrets pasted into prompts become public and are only removable by manual deletion.",
+   "evidence": "messages: session.messages, ... Share pages are server-rendered with Open Graph tags so links unfurl nicely on Slack/X."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Free signups and anonymous replays have no abuse controls described (no CAPTCHA, no per-IP limit, no signup throttling). The rate limit is per key, so signup farming can drive the free pool to its replica ceiling.",
+   "evidence": "Sign up with email, no card required. ... rate_limit: { requests: 20, per: second, burst: 40 }"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The $3.6k/month capacity estimate has no throughput benchmark behind the <30% utilization figure. It also assumes a flat 2-replica footprint while the pool autoscales, so the budget claim is unsupported.",
+   "evidence": "Two H100 replicas serve the projected free load at < 30% utilization; at the GPU provider's on-demand rate of $2.49/h that is ~$3.6k/month, within the $4k/month free-tier budget."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The claim that free traffic cannot degrade paid latency is unevidenced. Only the GPU pool is separated; free and pro share the gateway process and admission path, and no surge test is cited.",
+   "evidence": "Free pool is isolated from `shared-h100`, so free traffic cannot degrade paid latency."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Alerting is insufficient for a budget-bound pool. Paging at more than 6 replicas fires only after scale-out has started, and there is no spend alert, so runaway cost is discovered only from the bill.",
+   "evidence": "Alerting: free pool replicas > 6 pages on-call; error rate > 2% pages on-call."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "Rollback only turns off new signups. Share links, the key leak, and the free-tier config have no independent kill switch, so the leak and spend stay live after rollback.",
+   "evidence": "Rollback: `free_signup_open` off stops new signups; existing free keys keep working."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Launch timing exposes the unbounded free tier and the key leak to the full HN/X traffic spike with no staged ramp. The signup flag opens at 16:45 UTC, 15 minutes before the launch post.",
+   "evidence": "flag `free_signup_open` on at 16:45 UTC. Launch post: Wed 17:00 UTC (blog, HN, X)"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 20423,
+  "tokOut": 8661,
+  "usd": 0.008414099999999999,
+  "critMs": 15816
+ }
+}

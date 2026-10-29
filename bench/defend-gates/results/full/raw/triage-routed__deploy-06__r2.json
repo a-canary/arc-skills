@@ -1,0 +1,119 @@
+{
+ "approach": "triage-routed",
+ "case": "deploy-06",
+ "rep": 2,
+ "wallMs": 367912,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "rollout-sequencing",
+   "severity": "major",
+   "claim": "Step 3 opens v2 to all and publishes the blog before step 4 checks the advance gates (5xx, p95, parity). The launch date also conflicts with the rollout: the blog goes out on launch day at 15:00, but the 48 h canary in step 2 would have to finish before that.",
+   "evidence": "\"3. Publish docs and blog post; open v2 to all. 4. Advance gates: v2 5xx < 0.1%, p95 < 100 ms, parity monitor ≥ 99.9%.\" and \"Launch: Mon 2026-11-16 · Developer blog post: same day 15:00 local\" alongside \"2. Canary: ... for 48 h\""
+  },
+  {
+   "lens": "rollout-sequencing",
+   "severity": "major",
+   "claim": "Irreversible customer-facing actions are scheduled for launch day, before the canary and gates decide whether v2 opens. The v1 deprecation headers and the sunset-date emails to 1,412 key holders would already be out if the gates fail, and the 12-month sunset clock would start before v2 is open.",
+   "evidence": "\"From launch day, v1 responses carry `Deprecation: @1794787200` and `Sunset: ...` headers\" and \"Email to all 1,412 registered key holders on launch day\""
+  },
+  {
+   "lens": "canary",
+   "severity": "major",
+   "claim": "The canary is described as 5% of all /v2/* traffic, but its population is restricted to internal apps and three pilot partners, and the artifact does not say how that selection is made. Gate metrics from this population may not reflect public traffic, per-IP rate limits, or the full mix of clients.",
+   "evidence": "\"Canary: 5% of `/v2/*` traffic for 48 h to new instances (traffic only from internal apps and the 3 pilot partners who opted in).\" ABSENT: how traffic is selected or filtered to those sources, and how the 5% is computed"
+  },
+  {
+   "lens": "contract",
+   "severity": "major",
+   "claim": "The v1 route-scoped endpoint /v1/routes/{id}/stops/{id} is listed as replaced by /v2/arrivals, but v2 arrivals takes only stop_id. Route filtering has no documented equivalent, so clients that depend on it lose functionality even though the migration guide is said to map every field.",
+   "evidence": "\"GET /v2/arrivals?stop_id=…\" | \"/v1/stops/{id}/predictions\", \"/v1/predictions\", \"/v1/routes/{id}/stops/{id}\". ABSENT: a route_id parameter or documented mapping for the route-scoped case"
+  },
+  {
+   "lens": "data-accuracy",
+   "severity": "major",
+   "claim": "New rider-facing fields (crowding, wheelchair_accessible, bike_rack_slots) have no stated data source and no accuracy validation. Schema contract tests and an arrival_time parity check do not show these values are correct, and riders may act on wrong accessibility information.",
+   "evidence": "\"New: `crowding` (`low` / `medium` / `high` / `unknown`), `wheelchair_accessible` (bool), `bike_rack_slots` (int or null)\" with \"Contract tests: 214 cases, v2 schema vs OpenAPI spec | Pass\". ABSENT: source of crowding or accessibility data and any accuracy check"
+  },
+  {
+   "lens": "rollback",
+   "severity": "minor",
+   "claim": "Rollback returns 503 for /v2/* with no Retry-After and no fallback to v1. Apps that already migrated on launch day would lose arrivals even though v1 is healthy, and the artifact does not tell them to fall back.",
+   "evidence": "\"Rollback: gateway route weight for `/v2/*` back to 0 (returns 503 with a link to status page); v1 unaffected.\""
+  },
+  {
+   "lens": "isolation",
+   "severity": "minor",
+   "claim": "The isolation claim is scoped to v2 faults and is accurate as written. However, the shared ingestion pipeline is a common-mode failure point that can degrade both versions, and the artifact gives no v1 behaviour or paging for that case.",
+   "evidence": "\"v2 shares the ingestion pipeline with v1 but runs as a separate deployment and autoscaling group, so a v2 fault cannot take down v1.\" ABSENT: any analysis of an ingestion or AVL fault affecting v1"
+  },
+  {
+   "lens": "degraded-mode",
+   "severity": "minor",
+   "claim": "Degraded mode has no maximum staleness bound. Responses keep returning HTTP success with the last good snapshot indefinitely, and the only signal is the meta.degraded flag and feed_age_seconds, which clients may not check. The 120 s page covers operations, not rider-facing staleness.",
+   "evidence": "\"responses keep serving the last good snapshot with `feed_age_seconds` set and `meta.degraded: true`; on-call is paged at 120 s.\""
+  },
+  {
+   "lens": "observability",
+   "severity": "minor",
+   "claim": "Paging is defined only for AVL feed stall. There are no post-launch alert thresholds for v2 5xx, p95 latency, parity drift, or v1 traffic after the deprecation headers go out, so gate metrics are not monitored once the gate passes.",
+   "evidence": "ABSENT: alert rules or paging thresholds for v2 5xx, p95 latency, parity monitor, or v1 traffic after launch; only \"on-call is paged at 120 s\" for the AVL feed"
+  },
+  {
+   "lens": "rate-limit",
+   "severity": "minor",
+   "claim": "Rate limits are per client IP, but the CDN sits in front of the API and caches responses. The artifact does not say how client IP is derived behind the CDN or whether cache hits count against the origin limit, so the 60/min anonymous limit could hit a shared edge IP or be bypassed on cache hits.",
+   "evidence": "ABSENT: how client IP is determined behind the CDN, and whether cache hits count toward 60 requests/min per IP. Artifact says \"60 requests/min per IP\" and \"CDN caches `/v2/arrivals` per `stop_id` for 10 s\""
+  },
+  {
+   "lens": "cache-staleness",
+   "severity": "minor",
+   "claim": "feed_age_seconds is computed at response generation, but the CDN caches responses for 10 s, so cached responses understate staleness by up to 10 s. This weakens the field's stated purpose of letting apps show staleness.",
+   "evidence": "\"CDN caches `/v2/arrivals` per `stop_id` for 10 s (feed updates every 15 s); `feed_age_seconds` lets apps show staleness.\""
+  },
+  {
+   "lens": "licensing",
+   "severity": "minor",
+   "claim": "The required attribution string \"Contains data from Metro Transit, CC BY 4.0\" is not in the blog excerpt, which asks for a credit only in different wording. The artifact claims the blog carries the required text, which the excerpt does not show.",
+   "evidence": "\"The blog post, API docs and every response's `meta.license` field carry the attribution text \\\"Contains data from Metro Transit, CC BY 4.0\\\"\" vs blog excerpt \"Data is CC BY 4.0. Please credit \\\"Metro Transit\\\" in your app.\""
+  },
+  {
+   "lens": "deprecation-header",
+   "severity": "minor",
+   "claim": "Deprecation: @1794787200 is 2026-11-16 00:00 UTC. In zones west of UTC this falls on the previous local day, before the 15:00 local launch, so the header does not begin on launch day as stated.",
+   "evidence": "\"From launch day, v1 responses carry `Deprecation: @1794787200`\" with \"Developer blog post: same day 15:00 local\""
+  },
+  {
+   "lens": "deprecation-notice",
+   "severity": "minor",
+   "claim": "Direct outreach covers the top 20 consumers (about 81% of v1 traffic) and key holders by email. Anonymous v1 clients, who make up the remaining share, are reached only through response headers, and the artifact does not say how they will be notified.",
+   "evidence": "\"Top 20 consumers by volume (≈ 81% of v1 traffic) get direct outreach from the team.\" ABSENT: notification plan for anonymous clients beyond headers"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "The claim that v1 and v2 carry no operator or driver identifiers is asserted without a sample payload check or data-classification review, even though vehicle_label is described as an internal fleet label.",
+   "evidence": "\"No operator/driver identifiers are present in v1 or v2.\" ABSENT: data-classification review or sample payload check supporting this claim"
+  },
+  {
+   "lens": "cors",
+   "severity": "minor",
+   "claim": "Browser calls that send the custom X-Api-Key header need a CORS preflight that allows that header, but the CORS configuration does not list Access-Control-Allow-Headers. The claim that browser apps can call the API directly is only true for anonymous requests.",
+   "evidence": "\"Optional free key (header `X-Api-Key`) raises the limit to 1,000 requests/min\" and \"Responses send `Access-Control-Allow-Origin: *`\" ABSENT: Access-Control-Allow-Headers configuration or a browser test with X-Api-Key"
+  },
+  {
+   "lens": "migration-guide",
+   "severity": "minor",
+   "claim": "The deprecation plan depends on a migration guide that maps every v1 field, including the replacement for eta_text, but the artifact gives no link, draft, or review record showing it exists.",
+   "evidence": "\"Migration guide maps every v1 field to its v2 equivalent, including how to replace `eta_text`.\" ABSENT: a link, draft, or review record for the guide"
+  }
+ ],
+ "usage": {
+  "calls": 6,
+  "tokIn": 23288,
+  "tokOut": 28543,
+  "usd": 0.0178031,
+  "critMs": 67264
+ }
+}

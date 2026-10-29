@@ -1,0 +1,59 @@
+{
+ "approach": "rubric-calibrated",
+ "case": "merge-10",
+ "rep": 1,
+ "wallMs": 140591,
+ "verdict": "CLEAR",
+ "confidence": 0.72,
+ "attacks": [
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The claim subquery filters on status and locked_until and sorts by created_at on every poll. No index on (status, created_at) is added, so each claim scans and sorts the table. At ~20k rows this is probably tolerable, but it will degrade as the table grows.",
+   "evidence": "ABSENT: migration 0042 only adds locked_by and locked_until; WHERE status = 'queued' OR (status = 'running' AND (locked_until IS NULL OR locked_until < now())) ORDER BY created_at, id LIMIT 1"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "A poison job that crashes or times out the worker is reclaimed forever, since attempts is incremented with no cap. This is explicitly deferred to #215 and matches the old ResetRunning behaviour, so it is not a regression.",
+   "evidence": "attempts = attempts + 1 ... ABSENT: any attempts cap; PR text: 'a poison-job attempts cap (#215) are separate changes'"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The claim that 'a live worker never outlives its lease' depends on render honouring jobCtx, including object-store writes. The render path is not in the diff, so this is asserted rather than shown.",
+   "evidence": "'the job context is cancelled at jobTimeout, so a live worker never outlives its lease' — ABSENT: render implementation and its use of ctx"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Lease identity depends on w.id being unique per process lifetime. Its source is not shown. If it is a constant or reused across restarts, the stale-holder check weakens, although replicas stay at 1 for this change.",
+   "evidence": "Complete(ctx, job.ID, w.id, statusFor(runErr), errText(runErr)) — ABSENT: how w.id is derived"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "There is no down migration. The additive nullable columns are safe for the old code, which ignores them, but a rollback leaves locked_by and locked_until populated on rows.",
+   "evidence": "ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz; — ABSENT: down migration or rollback note"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "On shutdown the worker returns nil without calling Complete. Interrupted jobs now wait up to the 3-minute lease before retry, where the old startup reset recovered them immediately. This is a latency change, and the PR does not mention it.",
+   "evidence": "if ctx.Err() != nil { return nil } // shutting down: leave the lease to expire"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Tests cover concurrent claims and stale-holder completion but not the upgrade path (running rows with NULL locked_until, left by the old worker) or the worker's ErrLeaseLost and shutdown branches.",
+   "evidence": "TestClaimNeverHandsOutAJobTwice and TestExpiredLeaseIsReclaimedAndStaleHolderLosesIt — ABSENT: test for locked_until IS NULL reclaim and worker-level shutdown/ErrLeaseLost handling"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 4824,
+  "tokOut": 8033,
+  "usd": 0.00478578,
+  "critMs": 37952
+ }
+}

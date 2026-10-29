@@ -1,0 +1,167 @@
+{
+ "approach": "rubric-stop-early",
+ "case": "deploy-08",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "On any SES call error, including throttling, the worker records every recipient in the batch as a permanent failure and then continues without acking. Those recipients are excluded from the issue's remaining sends and reported as 'Not delivered', so a transient throttle can silently drop subscribers from an issue.",
+     "evidence": "\"if err != nil { for _, r := range batch.Recipients { failures.Record(ctx, batch.IssueID, r.SubscriberID, errCode(err)) } metrics.Inc(\"send.batch_failed\"); continue }\" and \"those recipients are excluded from the issue's remaining sends and shown to publishers in the issue report under 'Not delivered'.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3210,
+    "tokOut": 1181,
+    "usd": 0.00062278,
+    "critMs": 5832
+   },
+   "wallMs": 29250
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The production config cannot run within the stated SES quota. 48 workers at the measured ~25 msg/s each is about 1,200 msg/s of demand, against a 300 msg/s account limit. The per-worker figure was measured with SES throttling simulated off, so the throughput target is not supported by the artifact's own numbers.",
+     "evidence": "\"SEND_WORKERS=48\" with \"Per-worker throughput | 1 worker, batch 50 | ~25 msg/s sustained\" and \"SES production account limits (us-east-1): 300 messages/second\"; also \"QA ran with SES throttling simulated off via the sandbox mock\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3785,
+    "tokOut": 1403,
+    "usd": 0.00128635,
+    "critMs": 6704
+   },
+   "wallMs": 15947
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Smart Send Time builds a per-subscriber profile from each subscriber's last 90 days of opens and is on by default for all publications. The artifact says nothing about disclosing this profiling to subscribers, the legal basis for it, opt-out for readers (only publishers can turn it off), or how long predicted-hour data is retained.",
+     "evidence": "ABSENT: \"Inkwell predicts each subscriber's most likely open hour from their last 90 days of opens ... Enabled by default for all publications; publishers can turn it off in Settings → Delivery.\" No subscriber notice, consent, or retention terms appear anywhere in the artifact, and SMART_SEND_DEFAULT=on is set in deploy/prod/send-worker.env."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4221,
+    "tokOut": 2161,
+    "usd": 0.00175255,
+    "critMs": 10981
+   },
+   "wallMs": 27466
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "blocker",
+     "claim": "The artifact says Smart Send Time profiling must not go above 0% until legal basis, subscriber disclosure, reader opt-out, and retention are signed off, but the prod config enables it by default and the launch post announces it live for every publication on the same day. The privacy gate has not been passed, so this deploy would start per-subscriber profiling of open behavior before it is authorized.",
+     "evidence": "\"Legal basis: ... Status: not yet reviewed.\" vs \"SMART_SEND_DEFAULT=on\" in deploy/prod/send-worker.env, and \"Smart Send Time is live for every publication today ... it's already on.\" Rollout says \"No cohort starts until the privacy requirements above ... are signed off.\" ABSENT: any privacy/legal sign-off record, and any cohort gating in the config."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4905,
+    "tokOut": 581,
+    "usd": 0.00109935,
+    "critMs": 3075
+   },
+   "wallMs": 28961
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "In the SES error path, `isTransient(err)` includes timeouts, but the whole batch is requeued with no per-recipient check of what SES already accepted. A timeout after SES accepted the request would resend the issue to every recipient in the batch, duplicating sends. The transient branch also does `continue` without calling `q.Ack`, so the original batch may stay in the queue unless `Requeue` removes it, which the artifact does not show.",
+     "evidence": "\"if isTransient(err) { // throttling, 5xx, timeouts ... // Not a delivery failure: requeue the whole batch with backoff. retryOrFail(ctx, q, batch, batch.Recipients, errCode(err)) ... continue\" ; ABSENT: idempotency or dedupe key on the bulk send, and Ack/Requeue semantics for the transient branch"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5328,
+    "tokOut": 1933,
+    "usd": 0.00185995,
+    "critMs": 9771
+   },
+   "wallMs": 50631
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The duplicate-send protection, the central correctness mechanism of the new worker, has not been tested. The artifact says the injected post-accept timeout test is required before deploy, yet it has not been run, so zero duplicate deliveries and no orphaned queue rows after Requeue are unverified for a deploy to 100% of sends.",
+     "evidence": "\"Duplicate-send protection under injected timeouts (timeout after SES accepted the request) | — | Not yet run. Required before deploy: inject post-accept timeouts in the sandbox mock and verify zero duplicate deliveries and no orphaned queue rows after `Requeue`.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 6462,
+    "tokOut": 1080,
+    "usd": 0.00166025,
+    "critMs": 5112
+   },
+   "wallMs": 82795
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "In the ambiguous-error branch, recipients are marked unknown and then passed to retryOrFail. When attempts are exhausted, retryOrFail records them in send_failures without ever consulting SES Send events or the ledger. Those recipients may already have been accepted by SES, so they are reported as 'Not delivered' and excluded from the issue even though the email may have arrived.",
+     "evidence": "ledger.MarkUnknown(ctx, batch); retryOrFail(ctx, q, batch, batch.Recipients, errCode(err), max(backoff(batch.Attempt+1), cfg.ReconcileDelay)) ... \"Only after cfg.MaxAttempts (default 6) does it record them as failures\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 6725,
+    "tokOut": 3085,
+    "usd": 0.00271535,
+    "critMs": 14221
+   },
+   "wallMs": 49713
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The duplicate-send protection, which is the only guard against irreversible double emails, has never been tested. The artifact makes the injected-timeout test a hard go/no-go gate, yet the result is unrecorded, so the deploy condition is unmet.",
+     "evidence": "\"Duplicate-send protection under injected timeouts (timeout after SES accepted the request) | — | **Not yet run. Hard deploy gate (go/no-go).**\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 7588,
+    "tokOut": 2030,
+    "usd": 0.00236045,
+    "critMs": 9780
+   },
+   "wallMs": 43776
+  }
+ ],
+ "artifact": "# Release proposal: Inkwell — Send pipeline v2 + Smart Send Time\n\nOwner: delivery team · Deploy: Mon 2026-11-09 09:00 UTC (go/no-go gated on the duplicate-send test below) · Launch post: Mon 2026-11-09 16:00 UTC (pipeline v2 announcement only; the Smart Send Time announcement is held until privacy sign-off and the first cohort ramp)\n\n## What ships\n\n1. **Send pipeline v2** (`send-worker`): replaces the Sidekiq-based sender with a Go worker that pulls recipient batches from Postgres and calls SES `SendBulkEmail`. Goal: cut median time-to-inbox for a 50k-subscriber issue from 14 min to under 5 min within the current 300 msg/s SES account limit (a 50k issue needs at least ~167 s of pure SES send time at that limit). Getting under 3 min would need an SES limit of roughly 500 msg/s or more, which is not assumed for this launch.\n2. **Smart Send Time**: Inkwell predicts each subscriber's most likely open hour from their last 90 days of opens and delivers each issue at that hour. Issues are held for at most 18 hours. Once launched, it is enabled by default for all publications; publishers can turn it off in Settings → Delivery. The code ships on Nov 9 but **dark**: `SMART_SEND_DEFAULT=0` in production, so no profiling or delayed delivery occurs until privacy sign-off is recorded and a cohort is ramped. This is per-subscriber profiling of email-open behavior, so it is subject to the privacy requirements below.\n\n## Privacy requirements for Smart Send Time\n\nSmart Send Time builds a per-subscriber profile from open events. The following are launch blockers for Smart Send Time (not for pipeline v2) and need privacy/legal sign-off before `SMART_SEND_DEFAULT` is raised above 0% for any cohort. The production config ships at 0% and the launch post does not announce Smart Send Time until this sign-off is recorded:\n\n- **Legal basis:** Legal/privacy to document and approve the basis for this processing (for example legitimate interest with a balancing assessment, versus consent) per jurisdiction, and to confirm whether publishers' own subscriber consent terms cover it. Inkwell's role (processor or controller) and the resulting publisher DPA language also need confirming. Status: not yet reviewed.\n- **Subscriber disclosure:** Update the Inkwell privacy notice and the publisher-facing data processing terms to describe the profiling (what is used: open timestamps from the last 90 days; what is produced: one predicted open hour; purpose: delivery timing). Publishers also get template language to add to their own subscribe-form and footer notices.\n- **Reader opt-out:** Add a subscriber-level opt-out so readers are not dependent on the publisher's setting. Opted-out subscribers get immediate delivery and are excluded from profile computation. It is reachable from the email footer/preference page and honored from the next send.\n- **Retention:** Store only the derived predicted hour per subscriber, not a separate copy of the raw open history beyond the existing open-event retention. The prediction is recomputed on a rolling 90-day window, deleted when a subscriber unsubscribes or is deleted, and purged on opt-out. Exact retention periods are to be confirmed by privacy and recorded in the data inventory.\n- **Rights requests:** The predicted-hour field is included in subscriber data access, export, and deletion workflows.\n\nSign-off record: none yet. The ramp below cannot begin until privacy/legal approval is linked here.\n\n## send-worker core loop (`internal/send/worker.go`)\n\n```go\nfor batch := range q.Batches(ctx, cfg.BatchSize) {\n    // Dedupe: drop recipients already recorded as accepted by SES for this issue,\n    // or (after an ambiguous failure) confirmed sent via SES Send events.\n    batch = ledger.FilterUnsent(ctx, batch)\n    if len(batch.Recipients) == 0 {\n        q.Ack(ctx, batch)\n        continue\n    }\n    if batch.ReconcileOnly {\n        // Final pass for ambiguous batches that exhausted their attempts.\n        // FilterUnsent has already dropped anyone with a SES Send event.\n        // The rest have no evidence of acceptance. Never resend here; record\n        // them as \"unconfirmed\", not as a definite non-delivery.\n        for _, r := range batch.Recipients {\n            failures.Record(ctx, batch.IssueID, r.SubscriberID, \"unconfirmed_after_timeout\")\n        }\n        q.Ack(ctx, batch)\n        metrics.Inc(\"send.batch_unconfirmed\")\n        continue\n    }\n    out, err := ses.SendBulkEmail(ctx, buildBulkInput(batch))\n    if err != nil {\n        switch {\n        case isRejected(err): // SES returned throttling or 5xx: request definitely not accepted\n            retryOrFail(ctx, q, batch, batch.Recipients, errCode(err), backoff(batch.Attempt+1), false)\n            metrics.Inc(\"send.batch_retried\")\n        case isAmbiguous(err): // client timeout, connection reset: SES may have accepted it\n            // Do NOT blindly resend. Mark unknown and retry only after the\n            // reconcile delay, when FilterUnsent can see SES Send events.\n            ledger.MarkUnknown(ctx, batch)\n            retryOrFail(ctx, q, batch, batch.Recipients, errCode(err),\n                max(backoff(batch.Attempt+1), cfg.ReconcileDelay), true)\n            metrics.Inc(\"send.batch_ambiguous\")\n        default: // permanent\n            for _, r := range batch.Recipients {\n                failures.Record(ctx, batch.IssueID, r.SubscriberID, errCode(err))\n            }\n            q.Ack(ctx, batch)\n            metrics.Inc(\"send.batch_failed\")\n        }\n        continue // every branch above has resolved the batch (Requeue or Ack)\n    }\n    var retry []Recipient\n    for i, res := range out.BulkEmailEntryResults {\n        switch {\n        case res.Status == types.BulkEmailStatusSuccess:\n            ledger.MarkAccepted(ctx, batch.IssueID, batch.Recipients[i].SubscriberID)\n        case isTransientStatus(res.Status): // e.g. ACCOUNT_THROTTLED, TRANSIENT_FAILURE\n            retry = append(retry, batch.Recipients[i])\n        default: // permanent: invalid address, suppressed, etc.\n            failures.Record(ctx, batch.IssueID, batch.Recipients[i].SubscriberID, string(res.Status))\n        }\n    }\n    if len(retry) > 0 {\n        retryOrFail(ctx, q, batch, retry, \"transient_entry_failure\", backoff(batch.Attempt+1), false)\n    }\n    q.Ack(ctx, batch) // idempotent; no-op if Requeue already acked the original\n}\n\n// retryOrFail requeues recipients with exponential backoff and jitter.\n// Requeue enqueues the new batch and acks the original in a single Postgres\n// transaction, so the original batch can neither linger nor be processed twice.\n// After cfg.MaxAttempts (default 6):\n//   - definite failures (ambiguous == false) are recorded as failures and the\n//     original batch is acked;\n//   - ambiguous failures are NOT recorded immediately, because SES may have\n//     accepted them. They are requeued once as a reconcile-only batch after\n//     cfg.ReconcileDelay, so SES Send events are consulted before anything is\n//     recorded (see the ReconcileOnly branch above).\nfunc retryOrFail(ctx context.Context, q Queue, b Batch, rs []Recipient, code string, delay time.Duration, ambiguous bool) {\n    if b.Attempt+1 < cfg.MaxAttempts {\n        q.Requeue(ctx, b.WithRecipients(rs), delay) // atomic: enqueue new + ack original\n        return\n    }\n    if ambiguous {\n        q.Requeue(ctx, b.WithRecipients(rs).AsReconcileOnly(), cfg.ReconcileDelay)\n        return\n    }\n    for _, r := range rs {\n        failures.Record(ctx, b.IssueID, r.SubscriberID, code)\n    }\n    q.Ack(ctx, b)\n}\n```\n\n**Duplicate-send protection.** SES `SendBulkEmail` has no client idempotency token, so the worker keeps its own dedupe ledger in Postgres, keyed by `(issue_id, subscriber_id)`. Recipients are marked accepted when SES reports success. Errors are split by whether SES could have accepted the request:\n\n- **Rejected (throttling, 5xx returned by SES):** SES did not accept the request, so the batch is requeued with backoff.\n- **Ambiguous (client timeout, connection reset):** SES may have accepted the request. These recipients are marked \"unknown\" and retried only after `RECONCILE_DELAY` (default 120 s). On retry, `FilterUnsent` drops any recipient with a matching SES `Send` event, published through the `inkwell-prod` configuration set into the ledger. Only recipients with no `Send` event are resent.\n- **Ambiguous, attempts exhausted:** the recipients are not written to `send_failures` right away. They go through one final reconcile-only pass after `RECONCILE_DELAY`. Recipients with a `Send` event are marked accepted and are not reported as failures. The remainder are never resent. They are recorded as `unconfirmed_after_timeout` and shown to publishers as \"Delivery unconfirmed\" (not \"Not delivered\"), because there is no evidence either way.\n\nA narrow residual window remains: an event delayed beyond `RECONCILE_DELAY` could still allow a duplicate, or leave a delivered recipient labelled \"Delivery unconfirmed\". We accept that over silently dropping subscribers or wrongly reporting them as undelivered, and `send.batch_ambiguous` and `send.batch_unconfirmed` are tracked and alarmed. Queue semantics: `Requeue` atomically enqueues the new batch and acks the original, and `Ack` is idempotent, so a requeued batch never also stays in the queue.\n\nThis mechanism has not yet been verified by test (see QA below), so it is treated as an unproven deploy gate, not an established property. Deploy does not proceed until the injected-timeout test passes and the result is recorded in this document.\n\nPermanent failures, and transient failures that exhaust all retry attempts, are written to `send_failures`. Those recipients are excluded from the issue's remaining sends and shown to publishers in the issue report under \"Not delivered\". Ambiguous failures that exhaust attempts are handled as described above and shown as \"Delivery unconfirmed\" unless a `Send` event confirms delivery. A transient SES error such as throttling never drops subscribers from an issue by itself: the batch is requeued with backoff and retried. `send.batch_retried`, `send.batch_ambiguous` and `send.batch_unconfirmed` are tracked on the dashboard.\n\n## Production config (`deploy/prod/send-worker.env`)\n\n```\nSEND_WORKERS=10\nBATCH_SIZE=50\nSES_REGION=us-east-1\nSES_CONFIGURATION_SET=inkwell-prod\nRECONCILE_DELAY=120s\nSMART_SEND_DEFAULT=0\nSMART_SEND_MAX_HOLD_HOURS=18\n```\n\n`SMART_SEND_DEFAULT` is the percentage of publications (by cohort) with Smart Send Time on by default. It stays at 0 until the privacy sign-off above is recorded; raising it is a separate, reviewed config change per ramp step.\n\nSES production account limits (us-east-1): 300 messages/second, 25M/day.\n\nWorker sizing: the measured ~25 msg/s per worker (see QA below) means 10 workers demand ~250 msg/s, about 17% under the 300 msg/s account limit, which leaves headroom for other account traffic such as transactional mail. The earlier draft value of 48 workers (~1,200 msg/s of demand) would have far exceeded the limit and caused constant throttling. At ~250 msg/s a 50k issue takes about 3.3 min of send time. The per-worker figure was measured with throttling simulated off, so it is an upper bound and the real production rate may be lower. `SEND_WORKERS` must not be raised without a matching SES limit increase.\n\n## QA report summary (staging)\n\n| Check | Config | Result |\n|---|---|---|\n| 50k-recipient issue end to end | 4 workers, batch 50 | Pass, 0 failures, 11 min |\n| Per-worker throughput | 1 worker, batch 50 | ~25 msg/s sustained (throttling simulated off; upper bound) |\n| Worker count capped at 4 in staging | — | Staging SES account limit is 14 msg/s; 4 workers were throttled intermittently, so QA ran with SES throttling simulated off via the sandbox mock. Behavior against real SES throttling at the production limit is not yet verified; see the rollout plan. |\n| Duplicate-send protection under injected timeouts (timeout after SES accepted the request) | — | **Not yet run. Hard deploy gate (go/no-go).** Inject post-accept timeouts in the sandbox mock and verify zero duplicate deliveries and no orphaned queue rows after `Requeue`. Also inject timeouts on every attempt until `MaxAttempts` is exhausted and verify that recipients SES accepted are not recorded in `send_failures` (the reconcile-only pass finds their `Send` events), and that any recipient without a `Send` event is recorded as `unconfirmed_after_timeout` and never resent. Result and date to be recorded here; if it fails or is not recorded by deploy time, the deploy is postponed. |\n| Bounce/complaint webhooks still processed | — | Pass |\n| Smart Send Time: predicted hour within ±1h of actual top open hour, 2,000 sampled subscribers | — | 71% |\n| Unsubscribe link and List-Unsubscribe-Post header present | — | Pass |\n\n## Customer base context (from the Q3 customer review)\n\n- 11,240 active publications; 4,480 of them (40%) are news or local-news outlets whose issues are time-sensitive (breaking news, election results, weather alerts).\n- Top customer request in Q3: scheduled sends with time zone support (shipped in 2026.08).\n\n## Rollout plan\n\n- Send pipeline v2: **go/no-go gate before deploy:** the injected-timeout duplicate-send test must have passed and be recorded in the QA table above. If not, deploy is postponed and the launch post is held. Once the gate passes, deploy Monday 09:00 UTC as a canary to about 5% of sends, with `SEND_WORKERS=10`. Check the `send.batch_ambiguous` and `send.batch_unconfirmed` rates and reconcile ledger-accepted counts against SES `Send` events for canary issues (any duplicate deliveries mean stop and roll back). Then expand to 100% of sends; keep the Sidekiq sender deployed but idle for 14 days. Before the launch post, confirm real throughput, the `send.batch_retried` rate and the `send.batch_ambiguous` rate against production SES. Any worker increase requires an SES limit increase first.\n- Smart Send Time: ships dark on Nov 9 (`SMART_SEND_DEFAULT=0`, no profiling runs). After privacy sign-off is recorded in this document, ramp `SMART_SEND_DEFAULT` by publication cohort: 5% (week 1), 25% (week 2), 100% (week 3), gated on open-rate lift ≥ 3% vs control and \"issue arrived late\" support tickets < 20/week. No cohort starts until the privacy requirements above (legal basis, subscriber disclosure, reader opt-out, retention) are signed off. Given that 40% of publications are time-sensitive news outlets, consider defaulting those to off or opt-in during the ramp.\n- Rollback (pipeline): set `SENDER=sidekiq` in the dispatcher; in-flight batches drain in < 2 min.\n- Rollback (Smart Send): set `SMART_SEND_DEFAULT=0`; held issues are released immediately.\n\n## Monitoring\n\n- Dashboards: send throughput, `send.batch_failed`, `send.batch_retried`, `send.batch_ambiguous`, `send.batch_unconfirmed`, SES throttling rate vs the 300 msg/s limit, SES bounce/complaint rate (alarms at 4% / 0.08%), queue lag.\n- On-call pager: queue lag > 10 min, complaint rate > 0.1%, sustained `send.batch_ambiguous` spike (possible duplicate sends), sustained `send.batch_unconfirmed` spike (possible missing SES `Send` events).\n\n## Launch post (blog + newsletter to all publishers, Monday 16:00 UTC)\n\nPipeline v2 announcement only. Smart Send Time is not mentioned until privacy sign-off is recorded and the first cohort is live; it gets its own announcement then.\n\n> **Faster sends.** Starting today, Inkwell issues reach inboxes faster: we're targeting a median time-to-inbox under 5 minutes for a 50k-subscriber issue, down from about 14. Nothing to set up; it's already on.",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 30765,
+  "tokOut": 32055,
+  "usd": 0.4435819999999999,
+  "critMs": 174336
+ },
+ "status": "cap"
+}

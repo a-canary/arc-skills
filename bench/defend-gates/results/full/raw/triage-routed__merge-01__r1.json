@@ -1,0 +1,89 @@
+{
+ "approach": "triage-routed",
+ "case": "merge-01",
+ "rep": 1,
+ "wallMs": 264728,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "idempotency",
+   "severity": "blocker",
+   "claim": "client_order_id is regenerated on every loop iteration, so a retry after a timeout or 502/503/504 is a new order to the broker and cannot be deduplicated. If attempt 1 was accepted, attempt 2 can fill as a second order, violating the agreed safe-to-retry constraint.",
+   "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { const clientOrderId = randomUUID(); try { const res = await broker.post(..., client_order_id: clientOrderId ...)"
+  },
+  {
+   "lens": "risk-limit",
+   "severity": "blocker",
+   "claim": "Switching from Math.floor to Math.ceil lets the sized quantity exceed maxNotional by up to one lot, breaking the invariant that sizing must never exceed the per-symbol cap. Example: maxNotional 10000, price 30, lotSize 1 gives 334 shares = $10,020.",
+   "evidence": "const lots = headroom / price / lotSize; return Math.ceil(lots) * lotSize;"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "No mechanism checks whether a prior attempt already reached the broker (for example by looking up client_order_id) before re-submitting, so the PR has no idempotency guard even if the broker dedupes on ID.",
+   "evidence": "ABSENT: any lookup or reconciliation of the prior attempt before re-submit in the catch branch"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The new sizing tests only cover exact divisions, so they cannot detect the ceil overshoot. No test exercises submitOrder retries, ID reuse, or the 4xx-not-retried path.",
+   "evidence": "expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 })).toBe(100); no test in the diff exercises submitOrder retries"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Retry predicate depends on error name 'TimeoutError' and a timeoutMs option on broker.post, neither of which is shown in the diff. If the client throws a different error or ignores the option, hung requests are not retried or can hang without bound during the open.",
+   "evidence": "ABSENT: BrokerClient.post signature accepting a third options argument, and evidence that timeouts throw an error named 'TimeoutError'. Predicate: (err as Error).name === \"TimeoutError\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Exhausted retries are not logged or alerted. An order dropped after the final attempt fails silently, which is the failure this PR is meant to fix.",
+   "evidence": "if (!retryable || attempt === MAX_ATTEMPTS) throw err; log.warn(\"order submit retry\", { symbol: intent.symbol, attempt });"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Worst-case submit latency is about 12.75s during the open, and the limit price is fixed at intent time. A late retry can fill at a stale price or after the intent has expired. No deadline or staleness check exists.",
+   "evidence": "{ timeoutMs: 4000 } ... await sleep(250 * 2 ** (attempt - 1));  ABSENT: overall deadline or intent staleness check"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The PR deploys to live trading before the open with no feature flag, kill switch, rollback procedure, or canary. Orders already sent cannot be undone by reverting code.",
+   "evidence": "ABSENT: no feature flag, kill switch, rollback procedure, or pre-open canary/shadow plan; the PR states it 'will merge to main and deploy before the next market open'"
+  },
+  {
+   "lens": "other",
+   "severity": "major",
+   "claim": "The PR description calls the sizing change a 'tidy', but it changes rounding direction from floor to ceil, a material behavior change on a risk limit, and this is not disclosed.",
+   "evidence": "\"Also tidies the sizing helper so quantities are rounded to the broker's lot size before submit.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The claim that retries are safe is asserted but not demonstrated. No test or broker-side evidence supports dedupe on client_order_id, and the timeout-after-accept case is untested.",
+   "evidence": "ABSENT: any test or broker-side evidence for dedupe on client_order_id; the only test file changed is sizing.test.ts"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Backoff is deterministic with no jitter, so simultaneous rejected orders retry in lockstep against a struggling broker.",
+   "evidence": "await sleep(250 * 2 ** (attempt - 1));"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The sleep helper in ../util/sleep is imported but neither its existence nor its behavior is shown in the diff.",
+   "evidence": "import { sleep } from \"../util/sleep\";  ABSENT: util/sleep.ts in the diff or its tests"
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 24673,
+  "tokOut": 11689,
+  "usd": 0.01066845,
+  "critMs": 19757
+ }
+}

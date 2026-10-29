@@ -1,0 +1,83 @@
+{
+ "approach": "cascade",
+ "case": "merge-07",
+ "rep": 1,
+ "wallMs": 231713,
+ "verdict": "ATTACKS",
+ "confidence": 0.93,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "gsutil is invoked via shell=True with an f-string containing partner-chosen filenames (src.stem flows into dest and local.name into the command). Shell metacharacters in an SFTP-supplied filename give command execution on a worker holding write credentials for the whole raw bucket. Also, the unvalidated stem is used in the GCS object path.",
+   "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "write_success_marker is called unconditionally after the loop, even when some or all files failed. Dashboards consume the partition as soon as the marker appears, so partial or empty data gets published as complete. The task also returns normally, so Airflow stays green.",
+   "evidence": "except Exception: log.exception(...); failed += 1 ... write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "partition_date() changed from UTC to naive local time. Workers run TZ=America/Los_Angeles and the job fires at 01:30 UTC, which is the previous calendar day locally, so data and marker land in dt=D-1 while dashboards read the UTC date partition.",
+   "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")  +    return datetime.now().strftime(\"%Y-%m-%d\")"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "No idempotency or cleanup on re-run or partial failure. Chunks already uploaded before a failure stay in the partition, and a re-run with different chunk counts can leave stale objects alongside new ones, yielding duplicate or mixed data under the same dt.",
+   "evidence": "for chunk in _write_chunks(src, work_dir): _upload(...); chunk.unlink()  (no deletion of prior outputs on failure or re-run)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Object layout changed from a single {stem}.csv.gz to {stem}/{stem}-NNNN.csv.gz chunks. Downstream readers expecting the old path will miss data. The PR mentions no consumer update.",
+   "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\"  ABSENT: downstream reader or migration plan"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The PR claims normalisation is unchanged, but normalise_row now receives a plain dict from DictReader rather than a pandas Series from df.apply(axis=1). Series-specific behavior (attribute access, NaN handling, return type) could break, and nothing shows it was verified. Header fixed from the first row also makes writerow fail on varying keys.",
+   "evidence": "Schema normalisation is unchanged (same `normalise_row`).  ...  norm = normalise_row(row)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "No retries or timeout on the gsutil subprocess; a transient error permanently drops the file, with only a log line and no alert or non-zero exit when failed>0.",
+   "evidence": "subprocess.run(..., check=True) with no timeout; log.info(\"partner=%s dt=%s ok=%d failed=%d\")"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Cleanup is not exception-safe: the gzip handle is not closed on error and chunk files remain in work_dir when _upload raises, so repeated failures can fill disk.",
+   "evidence": "chunk.unlink() skipped when _upload raises; out.close() only on the normal path"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Empty or header-only CSVs produce no chunks and no object yet are counted ok, silently losing the record that a file arrived.",
+   "evidence": "for i, row in enumerate(reader): ... ok += 1"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The 'much faster' claim is unbenchmarked, and chunks capped by row count may not reach the 150M composite threshold.",
+   "evidence": "parallel composite uploads are much faster ... CHUNK_ROWS = 500_000"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Shelling out to gsutil adds an undeclared runtime dependency and a separate credential path, with no test coverage for _upload.",
+   "evidence": "ABSENT: dependency declaration or tests for _upload"
+  }
+ ],
+ "usage": {
+  "calls": 2,
+  "tokIn": 8670,
+  "tokOut": 8188,
+  "usd": 0.03770525,
+  "critMs": 41535
+ }
+}

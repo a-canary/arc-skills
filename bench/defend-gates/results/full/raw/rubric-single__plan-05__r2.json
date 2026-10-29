@@ -1,0 +1,125 @@
+{
+ "approach": "rubric-single",
+ "case": "plan-05",
+ "rep": 2,
+ "wallMs": 85773,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "Nightly job scores all 340k recipes for every pantry user in one SQL statement. At the stated 30% adoption of 2.1M MAU (~630k pantry users), the job is roughly 52x the 12,000-user staging run (which took 41 min). Linear extrapolation gives ~35 hours, far beyond the 02:00 UTC nightly window, and a single giant statement will hold locks/IO on the primary that also serves the app.",
+   "evidence": "\"Staging run: 12,000 synthetic pantry users completed in 41 minutes.\" / \"Adoption assumption for sizing: 30% of MAU create a pantry within 90 days.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The matching workload runs on the single Postgres primary, which also handles writes and interactive traffic. A long-running analytical join across 340k recipes and all pantries risks replica lag, primary contention, and no stated timeout, retry, or partial-failure handling for the job or upsert.",
+   "evidence": "\"score every recipe in the catalog (340k recipes) in a single SQL statement joining pantry_items x recipe_ingredients on the primary\""
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "No budget or compute estimate is given for the nightly primary load or for the increased storage of pantry_matches (630k users x 50 rows, rewritten nightly) and the upsert churn. The plan does not quantify whether primary sizing or replica capacity must change.",
+   "evidence": "ABSENT: compute/IO budget or capacity math for PantryMatchJob at production scale"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The 'top 50 per user' and carousel 'top 10' are computed from a score that is time-dependent (expiry proximity), yet the job runs nightly, so scores go stale within the day as items expire; no recomputation trigger on pantry edits is specified, meaning users see matches that ignore items they just added or removed until the next run.",
+   "evidence": "\"Score = (pantry ingredients used / recipe ingredients) weighted by expiry proximity\" / \"PantryMatchJob (Sidekiq, nightly 02:00 UTC)\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Pantry staples are 'always counted as present' but the match ratio's denominator and the 'recipe ingredients' set are not defined: it is unclear whether staples count in the numerator and denominator, and how recipes with unmatched-but-trivial ingredients or unit conversions (quantity/unit entered by user) factor in. Scores could be inflated for recipes that are mostly staples.",
+   "evidence": "\"with pantry staples (salt, oil, water, pepper) always counted as present.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The core value hypothesis rests on an unprototyped assumption: that users will enter 15 items with expiry dates before any value is shown. The unlock gate is a 15-item expiry-dated entry barrier, which directly conflicts with the exit survey's #1 complaint (too much setup/typing, 38%). No evidence is given that this gate is tolerated.",
+   "evidence": "\"Pantry Match unlocks once a user has entered at least 15 items with expiry dates.\" vs \"Too much setup / typing to get useful suggestions — 38%\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "major",
+   "claim": "The plan adds friction against the top churn reason: a per-item form with autocomplete, quantity, unit, and expiry date, plus a mandatory-ish quantity update after every cook. This is the same setup burden the survey identified as the largest churn driver.",
+   "evidence": "\"Users add items with a form: ingredient (..), quantity, unit, expiry date.\" / \"Users are asked to update quantities after cooking\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "major",
+   "claim": "The plan targets churn reason #2 but the success metrics measure unlock rate and retention, not whether matched recipes are cooked or whether churn for the target segment falls. The plan may solve the wrong problem and cannot confirm it did.",
+   "evidence": "\"25% of MAU unlock Pantry Match within 60 days.\" / \"+3 pts 30-day retention for users who unlock vs. matched control.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The unlock-vs-control retention comparison is selection-biased: users who invest in 15 expiry-dated items are already more engaged, so +3 pts cannot be attributed to the feature. No randomized holdout is specified for the gate itself, and the 5%-beta design in week 6 is too late to establish this.",
+   "evidence": "\"+3 pts 30-day retention for users who unlock vs. matched control.\" / \"Week 6: beta to 5% of users, then 100%.\""
+  },
+  {
+   "lens": "timeline",
+   "severity": "major",
+   "claim": "Six weeks for data model, three-platform UI, matching at scale, carousel, prompts, notifications, analytics, and a beta with 4 engineers is not credible; the scale-up of the nightly job (the largest risk) is not scheduled at all, and the beta is only in week 6 with no buffer.",
+   "evidence": "\"Week 3: scoring, PantryMatchJob.\" / \"Week 6: beta to 5% of users, then 100%.\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Pantry contents, expiry dates, and cooking-frequency signals (quantity updates after 'I made this') are behavioral data linked to user_id; the plan does not state retention, deletion on account close, or access controls for this data.",
+   "evidence": "ABSENT: retention, deletion, or access policy for pantry_items and pantry_matches"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "No rollback path is specified for the new tables, the carousel, or the nightly job; a bad scoring change would be published to all users with no feature flag mentioned.",
+   "evidence": "ABSENT: feature flag, kill switch, or rollback plan"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "Free-text ingredient entry and autocomplete feed into SQL joins and the upsert; the plan does not state input validation or parameterization requirements for user-supplied ingredient, unit, and quantity fields.",
+   "evidence": "\"ingredient (autocomplete over our 9,400-ingredient catalog), quantity, unit, expiry date.\""
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "Progress bar and carousel are not specified against screen-reader, keyboard, or contrast requirements; the expiry-date picker is a known accessibility pain point and is not addressed.",
+   "evidence": "\"the tab shows a progress bar (\\\"7 of 15 items added\\\")\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Opt-in push notifications are defined, but consent capture, unsubscribe, and platform push-permission handling for iOS/Android are not described; the quiet-hours rule is 'local' time with no stated handling of timezone changes.",
+   "evidence": "\"Opt-in only (off by default), max 1 push per user per day, respects existing quiet hours (21:00-08:00 local).\""
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "Matching logic depends entirely on the in-house Postgres primary and the existing ingredient_aliases table; no exit or self-hosting consideration, though this is low risk at current scale.",
+   "evidence": "\"Ingredient normalization reuses the existing ingredient_aliases table\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Scoring logic lives in a single large SQL statement, which is hard to unit test and tune; no test strategy or golden-set validation of match quality is specified.",
+   "evidence": "\"score every recipe in the catalog (340k recipes) in a single SQL statement\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The 'top 10 matches' carousel is shown only after unlock, but the plan does not say whether the 15-item threshold counts items with expiry dates that have already expired or been removed, so the unlock condition can be gamed or drift.",
+   "evidence": "\"once a user has entered at least 15 items with expiry dates\""
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 2532,
+  "tokOut": 2813,
+  "usd": 0.001432,
+  "critMs": 12785
+ }
+}

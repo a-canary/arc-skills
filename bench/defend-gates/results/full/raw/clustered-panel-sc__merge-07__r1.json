@@ -1,0 +1,71 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "merge-07",
+ "rep": 1,
+ "wallMs": 216716,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "Partner-chosen filenames (via src.stem and local path) are interpolated unquoted into a shell=True command string. A crafted filename can inject arbitrary commands on workers holding GCS write credentials for the whole raw bucket.",
+   "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "partition_date() switched from UTC to naive local time. Workers run with TZ=America/Los_Angeles and the job runs at 01:30 UTC, so the dt partition is the previous day. This misaligns with the UTC-date partition dashboards read and can collide with the prior day's data.",
+   "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")"
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "Per-file failures are swallowed, yet the _SUCCESS marker is written unconditionally. Dashboards read the partition as soon as the marker appears, so a partition missing files, or holding partial chunks, is published as complete. The task also exits successfully with only a log line, so alerting will not notice.",
+   "evidence": "except Exception:\n            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n            failed += 1\n    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "A file that fails mid-upload leaves already-uploaded chunks in the partition with no cleanup or retry. Local chunk files and gzip handles are not cleaned on error because there is no try/finally, and unlink only runs after a successful upload.",
+   "evidence": "for chunk in _write_chunks(src, work_dir):\n                _upload(chunk, partner, dt, src.stem)\n                chunk.unlink()"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Empty or header-only input files produce zero chunks but are counted as ok, so the partner's file is silently dropped with no error.",
+   "evidence": "for chunk in _write_chunks(src, work_dir): ... ok += 1  # _write_chunks returns [] when no rows"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Reruns are not idempotent. Index-named chunks under a per-file prefix are never cleared, so a rerun into the same partition can leave stale chunks from a previous larger run mixed with new ones. Untrusted src.stem also flows unvalidated into the object path.",
+   "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\"  # no clearing of prior prefix"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "The output layout changed from one object per file to a directory of numbered chunks, and ingest_partner gained a required work_dir argument. The diff shows no caller or downstream reader updates, so existing callers and consumers may break.",
+   "evidence": "def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None: ... dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The gsutil subprocess has no timeout or retry, so a hung transfer blocks the nightly run and one transient failure permanently fails the file for the night.",
+   "evidence": "subprocess.run(... shell=True, check=True)  # no timeout, no retry"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "normalise_row now receives a csv.DictReader dict rather than a pandas Series, and the writer header is fixed from each chunk's first normalised row. The claim that normalisation is unchanged is unverified, and no tests were added.",
+   "evidence": "Schema normalisation is unchanged (same `normalise_row`). ... writer = csv.DictWriter(out, fieldnames=list(norm.keys()))"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 19841,
+  "tokOut": 10013,
+  "usd": 0.05452544,
+  "critMs": 26067
+ }
+}

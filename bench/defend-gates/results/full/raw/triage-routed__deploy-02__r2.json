@@ -1,0 +1,101 @@
+{
+ "approach": "triage-routed",
+ "case": "deploy-02",
+ "rep": 2,
+ "wallMs": 252999,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "compliance",
+   "severity": "blocker",
+   "claim": "The scheduled launch announcement makes unqualified fee claims that the release notes contradict. Options carry a $0.50 per-contract fee and regulatory fees apply to sells, so 'zero fees' for options is false, and the post cannot be recalled once published. This also fails the agreed FINRA Rule 2210 fair-and-balanced constraint.",
+   "evidence": "\"trade stocks, ETFs **and options** with zero commissions and zero fees. No catches, no fine print.\" vs release notes: \"options contract fee lowered to $0.50 per contract (was $0.65) ... Regulatory fees (SEC, FINRA TAF) still apply to sells.\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "No evidence that a registered principal approved the blog and X launch announcement before first use, as Rule 2210 requires for retail communications. The change ticket and rollout plan show no sign-off before the 09:00 ET publish.",
+   "evidence": "ABSENT: principal approval record for the launch announcement before the 09:00 ET scheduled publish; CHG-30551 is referenced with no approval shown."
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Multi-leg options templates and Reorder for options are shipped without described gating on options approval level or delivery of the options disclosure document. The artifact may rely on existing controls, but it does not say so.",
+   "evidence": "ABSENT: options account approval or ODD/risk-disclosure gating for Reorder and multi-leg templates; release notes say \"Saved order templates now support multi-leg options strategies.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "Migration 0148 irreversibly drops `legacy_legs` and `legacy_legs_to_json`, and the plan says migrations are forward-only. Rolling orders-svc back to v4.18.2 leaves its template endpoints reading a dropped column, so the stated kubectl rollback does not restore service within the agreed 30-minute SLO. No backup or restore step is documented.",
+   "evidence": "\"ALTER TABLE order_templates DROP COLUMN legacy_legs; DROP FUNCTION legacy_legs_to_json(text);\" and \"Migrations are forward-only; no down migrations are needed for this release.\" and \"`kubectl rollout undo deploy/orders-svc` to v4.18.2\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "Migrations 0147 and 0148 run at 06:00, before any v5 code is deployed or verified, and 0148 destroys legacy data with no pre-migration snapshot, checkpoint, or health gate. A conversion bug found after the drop cannot be recovered.",
+   "evidence": "\"1. 06:00 ET apply migrations 0147, 0148.\" ABSENT: pre-migration backup, snapshot, restore procedure, or ordering that keeps legacy_legs until v5 is verified."
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Migration 0147 sets `legs_json` NOT NULL while 4.18.2 pods and 4.x clients remain live during the rolling deploy and the 6–7 day mobile ramps. Any 4.x template write that sets only `legacy_legs` will violate the constraint, which breaks template creation for old pods and app versions.",
+   "evidence": "\"ALTER TABLE order_templates ALTER COLUMN legs_json SET NOT NULL;\" and \"2. 06:10 ET deploy orders-svc v5.0.0 (rolling, 12 pods).\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "No dual-write is described. During the overlap, 4.x template writes to `legacy_legs` are not mirrored to `legs_json`, so old-client edits diverge from the new data and readers can return stale templates.",
+   "evidence": "\"Saved templates move from `order_templates.legacy_legs` ... to `order_templates.legs_json`\" with no mirroring or sync step described."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Migration 0147 combines ADD COLUMN, a full-table UPDATE over ~2.9M rows, and SET NOT NULL in one transaction on a live table with 4.x traffic. It sets no lock_timeout, statement_timeout, batching, or abort criterion. The 41s dry run was on a snapshot without concurrent write load, so it does not establish safe lock behavior in production.",
+   "evidence": "\"BEGIN; ALTER TABLE order_templates ADD COLUMN legs_json jsonb; UPDATE order_templates SET legs_json = legacy_legs_to_json(legacy_legs);\" and \"41s, 0 conversion errors.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Mobile rollback is not real. Halting the phased release stops new updates but does not revert users already on 5.0, and their only fallback is a 404 check on `/v5/templates`. Once 0148 drops the legacy column, rolling back the backend gives no recovery path for multi-leg templates written by 5.0 clients. The fallback endpoint also does not match the stated design of reusing the existing template prefill path.",
+   "evidence": "\"Mobile: halt phased release; 5.0 clients fall back to hiding Reorder if `/v5/templates` returns 404.\" and \"Reorder from History reuses the template prefill path; no new order-entry endpoint.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Rollback triggers are not operational. The '+50% reject rate over baseline' has no baseline window, which is noisy at 06:00 pre-market volume. No owner or decision authority is named, and there are no alerts on migration lock wait, template insert failures, or 0147 transaction duration.",
+   "evidence": "\"Trigger: orders-svc 5xx > 1% for 5 min, or order reject rate +50% over baseline.\" and \"Monitoring: order reject rate, template endpoint 5xx, crash-free sessions ≥ 99.6%.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The smoke test is weak as a go/no-go gate. It runs only after all 12 pods are already rolled, covers house accounts only, has no canary stage or traffic percentage, and includes no template data-integrity check after conversion.",
+   "evidence": "\"3. 06:30 ET smoke test with house accounts in the paper environment and one live house account.\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The Reorder claim says it preserves 'the same order type', but the engineering notes say market orders default to limit at last close when the market is closed. The customer-facing text omits this documented exception.",
+   "evidence": "\"prefill a new ticket with the same symbol, side, quantity and order type\" vs \"defaults market orders to limit at last close (unchanged behavior from 4.x)\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The 09:00 ET announcement tells users to update 'today', but the phased App Store ramp (7 days) and Play rollout (5% initially) mean most of the base will not see 5.0 that day.",
+   "evidence": "\"Update the app today.\" vs \"App Store phased release (7-day ramp) and Play staged rollout 5% → 20% → 50% → 100% over 6 days.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The rollback command has no verification step, such as confirming v4.18.2 pods are ready or that template endpoints return 200 after undo. The 15-minute target is also not tied to a tested drill.",
+   "evidence": "\"target: complete within 15 min, well inside the 30-minute rollback SLO\""
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 25169,
+  "tokOut": 14356,
+  "usd": 0.009263879999999999,
+  "critMs": 28263
+ }
+}

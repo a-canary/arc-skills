@@ -1,0 +1,71 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "merge-01",
+ "rep": 1,
+ "wallMs": 221677,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "idempotency",
+   "severity": "blocker",
+   "claim": "The retry loop generates a fresh client_order_id via randomUUID() on every attempt, so the broker's dedupe on client_order_id cannot match a retry to an earlier attempt that was accepted but timed out or returned 5xx. This can produce a duplicate live order and double fill, violating the agreed retry-safety constraint and contradicting the PR's own safety claim.",
+   "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { const clientOrderId = randomUUID(); try { const res = await broker.post(... client_order_id: clientOrderId ...)"
+  },
+  {
+   "lens": "sizing-math",
+   "severity": "blocker",
+   "claim": "Changing Math.floor to Math.ceil makes sizeBuy round the lot count up past the headroom, so the order notional can exceed the per-symbol maxNotional cap that sizing must never exceed. Example: maxNotional 10000, price 333, lotSize 1 gives 31 shares, a notional of 10323. The PR describes this as a tidy and does not disclose the behavior change.",
+   "evidence": "const lots = headroom / price / lotSize; return Math.ceil(lots) * lotSize; (previously Math.floor(headroom / price / lotSize) * lotSize)"
+  },
+  {
+   "lens": "test-coverage",
+   "severity": "major",
+   "claim": "The new sizing tests use only inputs that divide evenly into whole lots, where floor and ceil agree, so they cannot detect the cap overshoot. No test asserts notional <= maxNotional for non-divisible headroom.",
+   "evidence": "expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 })).toBe(100); ABSENT: any non-divisible headroom case"
+  },
+  {
+   "lens": "test-coverage",
+   "severity": "major",
+   "claim": "The retry logic has no tests: no coverage of 502/503/504 retry, TimeoutError retry, 4xx non-retry, attempt exhaustion, or reuse of the order ID across attempts. A test for ID stability would have caught the main defect. Hard-wired sleep and constants also make it hard to test without real waits.",
+   "evidence": "ABSENT: no test for submitOrder; the test diff touches only src/risk/sizing.test.ts. import { sleep } from \"../util/sleep\"; await sleep(250 * 2 ** (attempt - 1));"
+  },
+  {
+   "lens": "error-classification",
+   "severity": "major",
+   "claim": "The timeout path depends on a { timeoutMs } option to broker.post and on the client throwing an error named \"TimeoutError\". Neither is shown in the diff, so hangs may never be applied or retried, and the PR's goal of not dropping timed-out orders may not be met.",
+   "evidence": "{ timeoutMs: 4000 } and (err as Error).name === \"TimeoutError\"; ABSENT: any change or reference to src/broker/client.ts"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "A timeout or 5xx is an ambiguous outcome, and nothing reconciles it by querying the broker for the original order before resubmitting. The broker's dedupe behavior is also asserted without any citation, contract test, or sandbox verification. The final failure after the last attempt is thrown with no log or alert, so operators cannot tell an order was dropped.",
+   "evidence": "if (!retryable || attempt === MAX_ATTEMPTS) throw err; ABSENT: order lookup before resubmit, broker dedupe evidence, error log or metric on exhausted retries"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Worst-case latency per order is about 12.75s (3 x 4s timeouts plus backoff) with no overall deadline, so a limit order can go out stale during the volatile open. Backoff has no jitter, so concurrent failing orders retry in synchronized waves against an already struggling broker.",
+   "evidence": "{ timeoutMs: 4000 }, MAX_ATTEMPTS = 3, await sleep(250 * 2 ** (attempt - 1)); ABSENT: total deadline, jitter, or retry budget"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "A live order-path change is deploying right before market open with no feature flag, kill switch, or stated rollback plan, and no evidence of sandbox or staging validation.",
+   "evidence": "ABSENT: rollback plan, feature flag, or sandbox/staging result; \"This PR is about to merge to main and deploy before the next market open.\""
+  },
+  {
+   "lens": "scope-drift",
+   "severity": "major",
+   "claim": "An unrelated sizing behavior change (floor to ceil) is bundled into a retry PR under a \"tidy\" description. It changes risk-relevant output and needs its own review.",
+   "evidence": "Also tidies the sizing helper so quantities are rounded to the broker's lot size before submit."
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 57465,
+  "tokOut": 24432,
+  "usd": 0.07948352,
+  "critMs": 24232
+ }
+}

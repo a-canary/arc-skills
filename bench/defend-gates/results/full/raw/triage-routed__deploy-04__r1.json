@@ -1,0 +1,89 @@
+{
+ "approach": "triage-routed",
+ "case": "deploy-04",
+ "rep": 1,
+ "wallMs": 285240,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "authz/secrets",
+   "severity": "blocker",
+   "claim": "Share links embed the owner's raw project API key in the URL query string (`k`), and the share page returns it to any unauthenticated viewer as `replayKey`. Anyone with the link obtains a usable credential for the owner's project, and the key also leaks through browser history, server/CDN logs, referrers, and Slack/X unfurl fetchers.",
+   "evidence": "url.searchParams.set(\"k\", project.apiKey); ... return { messages: share.messages, model: share.model, replayKey: url.searchParams.get(\"k\") };"
+  },
+  {
+   "lens": "authz",
+   "severity": "blocker",
+   "claim": "Deleting a share does not revoke the embedded key. The QA claim that deleted shares return 404 gives false assurance, because the leaked key stays valid for the project's full quota and access.",
+   "evidence": "Shares can be deleted from Playground → History; deleted shares return 404."
+  },
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "Anonymous share viewers replay against the owner's project quota. Public links, including those posted on HN/X at launch, can spend paying customers' per-token pro quota without bound, and that spend is outside the free-tier budget.",
+   "evidence": "Anyone with the link can view the conversation and re-run it, even without a Lumen account. ... Viewers without an account replay against the owner's project quota."
+  },
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "The free pool autoscales to 24 H100s with no spend ceiling. At $2.49/h, 24 replicas is roughly $43.6k/month, about 11x the $4k hard budget, and launch traffic could trigger that quickly.",
+   "evidence": "min_replicas: 2 / max_replicas: 24 / scale_on: queue_depth > 8 for 60s"
+  },
+  {
+   "lens": "reliability/cost",
+   "severity": "major",
+   "claim": "The production free rate limit is configured as 20 requests per second with burst 40, but the changelog advertises 20 per minute. The staging QA tested `per: minute`, so the shipped config was never validated and permits roughly 60x the advertised rate.",
+   "evidence": "rate_limit: { requests: 20, per: second, burst: 40 } vs \"Free accounts get 20 requests per minute\" and \"(staging config used `per: minute`)\""
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The $3.6k/month figure covers only the 2-replica baseline. Each extra replica adds about $1.8k/month, so 3 replicas already exceeds the $4k budget, and the on-call page does not fire until more than 6 replicas (~$12.7k/month).",
+   "evidence": "Two H100 replicas serve the projected free load at < 30% utilization; ... ~$3.6k/month ... free pool replicas > 6 pages on-call"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The advertised 100k tokens/day cap has no enforcement in the free tier config. daily_tokens is omitted for free (pro explicitly sets null), and the artifact does not describe the daily counter, its reset timezone, or how it is enforced.",
+   "evidence": "\"100k tokens per day\" / free tier block lists models, rate_limit, max_tokens_per_request, pool, with no daily_tokens"
+  },
+  {
+   "lens": "reliability/cost",
+   "severity": "major",
+   "claim": "Signup requires only an email with no card, verification, or per-IP throttle, and nothing caps account creation or total free spend. One actor can multiply per-account limits across many accounts and drain the $4k budget and the 24-replica pool.",
+   "evidence": "Sign up with email, no card required. ... ABSENT: signup abuse controls, email verification, or per-IP limits on account creation"
+  },
+  {
+   "lens": "cost/reliability",
+   "severity": "major",
+   "claim": "Rollback does not stop spend or revoke exposure. Turning off `free_signup_open` leaves existing free keys active and the pool scaling, and it does not revert gateway/pool config, disable the share feature, or invalidate keys already embedded in public share links.",
+   "evidence": "Rollback: `free_signup_open` off stops new signups; existing free keys keep working."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The rollout is a single step with no canary or ramp. The launch spike hits 2 replicas and the 60s scale-out trigger, and there is no load test or fault-injection coverage for launch-scale traffic, rate-limiter outage, or ledger outage. The failure mode of the limiter and ledger (fail-open vs fail-closed) is unstated.",
+   "evidence": "flag `free_signup_open` on at 16:45 UTC / scale_on: queue_depth > 8 for 60s / ABSENT: load or fault-injection results / ABSENT: failure behavior of the rate limiter and usage ledger"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Shares copy full conversation messages into a table linked to projectId, with no expiry or retention policy, and the changelog does not disclose that prompts may contain personal data that becomes publicly viewable and indexable via OG unfurling.",
+   "evidence": "messages: session.messages, ... ABSENT: retention/expiry policy for shares"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Free signup collects email with no stated privacy notice, retention period, or account deletion path for a population being acquired through public marketing.",
+   "evidence": "Sign up with email, no card required. ... ABSENT: privacy notice, data retention period, account deletion path for free accounts"
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 24448,
+  "tokOut": 13555,
+  "usd": 0.01155645,
+  "critMs": 35019
+ }
+}

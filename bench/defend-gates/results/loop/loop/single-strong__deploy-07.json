@@ -1,0 +1,107 @@
+{
+ "approach": "single-strong",
+ "case": "deploy-07",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Zero-config auto-loading executes any installed package carrying the `tasq-plugin` keyword, including transitive and nested dependencies, with no allowlist or opt-in. Any dependency, or a typosquat or compromised package, can gain code execution on every tasq invocation, including in git pre-commit hooks and CI where secrets are present. The 'no postinstall' claim does not address runtime loading.",
+     "evidence": "\"Any installed package with the `tasq-plugin` keyword is picked up automatically. No more `plugins: [...]` array\" and the glob over \"**/node_modules/**/package.json\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Discovery globs and parses every package.json in node_modules on each invocation, so cost grows with installed package count. Measured on the 2,430-package reference monorepo, it adds roughly 1.8-2 s to every command, and larger monorepos will be worse. There is no cache and no bound.",
+     "evidence": "\"for await (const pkgJson of glob(\\\"**/node_modules/**/package.json\\\", { cwd: root }))\" and \"`tasq --version` | 0.11 s | 1.94 s\""
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "major",
+     "claim": "The pre-commit hook (`tasq lint-staged`) slows from 0.38 s to 2.31 s, about 6x. Cache-hit builds slow from 0.21 s to 2.02 s, about 10x. This directly harms the two workflows the docs recommend, editor integrations, and every `tasq --version`/`list` call, and the highlight claims the opposite.",
+     "evidence": "\"`tasq lint-staged` (3 staged files) | 0.38 s | 2.31 s\"; \"`tasq run build` (cache hit) | 0.21 s | 2.02 s\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The artifact's own numbers contradict its claims. Cache-hit is claimed to complete in under 50 ms of task time, yet the measured wall time is 2.02 s. The cold build improves only 2.6 s of 48.7 s, which is not a 'graph cache' benefit. The statement that discovery is negligible ignores that cached and incremental runs are the common case, where discovery dominates.",
+     "evidence": "\"Discovery is a fixed per-invocation cost and becomes negligible relative to real build work, so overall build time improves thanks to the new graph cache.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The glob spans every nested node_modules, so it picks up duplicate copies and versions of the same plugin and plugins from unrelated nested dependencies. There is no dedupe, no resolution against the root's declared dependencies, and no ordering. Scoped packages and symlinked workspace packages may also be missed or double-counted. The result is nondeterministic or duplicate registration of subcommands. Discovery also runs before argument parsing, so a malformed package.json (JSON.parse unguarded) crashes every command, including `--version`.",
+     "evidence": "\"JSON.parse(await readFile(join(root, pkgJson), \\\"utf8\\\"))\" with no try/catch; \"walks `node_modules` (including nested `node_modules` in workspaces)\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback plan is weak. The `plugins` array is silently ignored, and migrate 'installs nothing new', so users who explicitly listed plugins that lack the keyword, or who were deliberately not loading an installed plugin, silently change behavior. Re-pointing `latest` does not undo the ESM-only and config rewrites already applied by `tasq-migrate` in users' repos, and the plan gives no downgrade path for them. The rollback also does nothing for users who pinned or installed 3.0.0 directly.",
+     "evidence": "\"`plugins` array in config ignored | Auto-discovery replaces it; `tasq-migrate` removes the array and installs nothing new\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The staged rollout is undermined: the blog post and Discord announcement go live at publish, while the artifact says 3.0.0 is on `next` for 7 days before promotion. Promoting the announcement drives adoption of an unpromoted tag. The plan has no gate beyond 'no P1 issues' and no definition of P1 for the perf regression.",
+     "evidence": "\"Publish `3.0.0` under `next` dist-tag; promote to `latest` after 7 days\" vs. \"Blog post and changelog go live at publish; Discord announcement links the migration guide.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The date and the QA evidence are loosely tied to the shipped artifact. QA and perf figures are from 3.0.0-rc.2, not the final build, and the artifact does not say whether the code changed since.",
+     "evidence": "\"3.0.0-rc.2\" in the performance table versus publishing \"3.0.0\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2995,
+    "tokOut": 1724,
+    "usd": 0.025737200000000002,
+    "critMs": 12815
+   },
+   "wallMs": 29896
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The illustrative discoverPlugins snippet does not match the described behavior. It dedupes by realpath rather than plugin name, so the 'root wins plus warning' rule for duplicate names is not implemented. It also sorts discovered plugins only, with no config-array-first ordering, and does not check autoDiscover. The snippet is only illustrative, and the tests for duplicate copies and ordering are required before publish.",
+     "evidence": "seen.set(await realpath(dir), { name: pkg.name, dir }); ... const found = [...seen.values()].sort(...)"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The discovery cache is read and trusted before any validation. A tampered cache file in node_modules/.cache would cause arbitrary directories to be loaded as plugins. Write access to node_modules already implies code execution, so the risk is low.",
+     "evidence": "const cached = await readCache(root); if (cached) return cached;"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The migration run on 40 repos and the top-15 plugin smoke test were done against the old behavior and are marked 'to be re-run'. Neither is listed as an explicit publish gate. Because the first publish goes to the `next` dist-tag and promotion to `latest` is gated, the exposure is limited.",
+     "evidence": "To be re-run against the revised migration behavior. / To be re-run with the declared-dependency scoping."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4670,
+    "tokOut": 1131,
+    "usd": 0.0265072,
+    "critMs": 8814
+   },
+   "wallMs": 56316
+  }
+ ],
+ "artifact": "# Release proposal: tasq 3.0.0 (npm)\n\nMaintainers: core team · Publish: Thu 2026-11-12 · Tracking: #1840 · Blog: \"tasq 3: plugins for everyone\"\n\n**Status: revised after review. The plugin discovery design and the performance numbers below are not release-ready as originally written. This revision changes the design and gates the release on re-measurement.**\n\n## Highlights\n\n- **Plugin auto-discovery, opt-in and scoped.** Plugins are discovered only from the project root's declared dependencies (`dependencies`, `devDependencies`, `optionalDependencies` of the root `package.json`, and of each workspace's own `package.json`) that carry the `tasq-plugin` keyword. Transitive and nested dependencies are never loaded. Discovery is enabled by `\"autoDiscover\": true` in `tasq.config.ts` (set by `tasq-migrate` only after showing the user the list of plugins it would load and getting confirmation). The explicit `plugins: [...]` array remains supported and is the way to load plugins without the keyword.\n- **Task graph caching** keyed on input file hashes. The claim of \"under 50 ms of task time\" refers only to task execution time, not wall time; the wall-time target for a cache-hit `tasq run build` is stated in the Performance section and is a release gate.\n- **ESM-only**, Node 20+.\n\n## Breaking changes\n\n| Change | Migration |\n|---|---|\n| Node 18 support dropped | Node 18 is EOL since April 2025; `engines` field enforces `>=20` |\n| CommonJS `require('tasq')` removed | `npx tasq-migrate` rewrites config files and `require` calls; tested on 40 public repos, 38 fully automatic, 2 needed manual edits (documented) |\n| Auto-discovery is opt-in (`autoDiscover`) | The `plugins` array continues to work. `tasq-migrate` leaves it in place, and offers to enable `autoDiscover` and list keyworded dependencies, without removing anything or changing which plugins load |\n| `tasq lint-staged` output format | JSON reporter unchanged; pretty reporter shows grouped output |\n\n## How plugin discovery works\n\nWhen `autoDiscover` is enabled, the CLI reads the root `package.json` (and workspace `package.json` files), resolves each declared dependency with Node resolution (`require.resolve`-style from the declaring package, so scoped packages, symlinked workspace packages, and hoisting are handled), reads that package's `package.json`, and loads it if `keywords` includes `tasq-plugin`. Work is proportional to the number of declared dependencies, not to everything installed. Results are deduplicated by resolved real path and ordered deterministically (config `plugins` array first, in order, then discovered plugins sorted by package name). If two different versions of the same plugin name resolve, the one resolved from the root wins and a warning is printed.\n\nDiscovery is lazy: it does not run for `--version`, `--help`, or `tasq list` unless plugin subcommands are requested. It runs before argument parsing only when the invocation names a subcommand not built in. The result is cached in `node_modules/.cache/tasq/plugins.json`, keyed on the mtime and hash of the lockfile and the relevant `package.json` files, and invalidated when they change. Malformed or unreadable `package.json` files are skipped with a warning and never crash the CLI. Loading a plugin is never silent: the first run after a new plugin appears prints its name and version, and `tasq plugins` lists what is loaded and why. `--no-plugins` and `TASQ_NO_PLUGINS=1` disable all plugin loading, and CI/pre-commit documentation recommends the explicit `plugins` array for locked-down environments.\n\n```ts\n// src/plugins/discover.ts\nexport async function discoverPlugins(root: string): Promise<PluginRef[]> {\n  const cached = await readCache(root);\n  if (cached) return cached;\n  const seen = new Map<string, PluginRef>();\n  for (const dep of await declaredDependencies(root)) {\n    try {\n      const dir = resolvePackageDir(dep, root);\n      const pkg = JSON.parse(await readFile(join(dir, \"package.json\"), \"utf8\"));\n      if (pkg.keywords?.includes(\"tasq-plugin\")) seen.set(await realpath(dir), { name: pkg.name, dir });\n    } catch (err) {\n      warn(`tasq: skipping ${dep}: ${(err as Error).message}`);\n    }\n  }\n  const found = [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));\n  await writeCache(root, found);\n  return found;\n}\n```\n\n## Performance\n\nReference monorepo: 61 workspaces, 2,430 installed packages, M2 MacBook Air, warm disk cache.\n\nThe numbers below were measured on **3.0.0-rc.2**, which used the original full `node_modules` glob. They are retained to show why the design changed and are **not** the numbers for this release.\n\n| Command | 2.9.4 | 3.0.0-rc.2 (old glob design) |\n|---|---|---|\n| `tasq --version` | 0.11 s | 1.94 s |\n| `tasq lint-staged` (3 staged files) | 0.38 s | 2.31 s |\n| `tasq run build` (cache hit) | 0.21 s | 2.02 s |\n| `tasq run build` (cold, full build) | 48.7 s | 46.1 s |\n\nDiscovery was a fixed per-invocation cost of roughly 1.8–2 s, which dominates cached and incremental runs (the common case) and is not negligible. The 2.6 s cold-build improvement is within noise and is not attributed to the graph cache. The previous claim that the cost was negligible is withdrawn.\n\n**Release gate:** before publish, re-measure on the same reference monorepo with the new design (cold and warm discovery cache) and publish the table in #1840. 3.0.0 does not ship unless, relative to 2.9.4: `tasq --version` and `tasq list` are within +50 ms, `tasq lint-staged` is within +100 ms, a cache-hit `tasq run build` is within +100 ms of wall time, and the warm-cache discovery path adds under 50 ms. A cold discovery-cache run must stay under +500 ms. Any miss is a P1 and blocks publish. The blog post will include the measured table, not the rc.2 numbers.\n\n## Supply chain and licensing\n\n- Published from GitHub Actions with npm provenance (`--provenance`); 2FA required for all maintainers.\n- No `postinstall` scripts in tasq or its dependencies.\n- Plugins execute code at runtime. This is addressed by limiting auto-discovery to declared dependencies, making it opt-in, printing newly loaded plugins, and offering `--no-plugins`. Security notes are added to the docs and the blog post.\n- New runtime deps: `fast-glob` (MIT), `semver` (ISC). License scan: no copyleft dependencies.\n\n## QA summary\n\n- Unit + integration: 1,912 tests pass on Linux/macOS/Windows, Node 20 and 22. New tests required before publish: duplicate/nested plugin copies, scoped and symlinked workspace plugins, malformed `package.json`, discovery-cache invalidation, `--no-plugins`, and deterministic ordering.\n- `tasq-migrate` on 40 public repos (list in #1840): 38 automatic, 2 manual (Yarn PnP projects, documented). To be re-run against the revised migration behavior.\n- Smoke test of top 15 community plugins under auto-discovery: all load and register subcommands. To be re-run with the declared-dependency scoping.\n\n## Release and support plan\n\n1. Publish `3.0.0` under `next` dist-tag; promote to `latest` after 7 days with no P1 issues. P1 includes: any crash in a core command, any plugin-loading regression, and any breach of the performance gate above on the reference monorepo or on user-reported repos.\n2. `2.x` moves to `latest-2` dist-tag and receives security fixes until 2027-11-12. Announced in the README and blog post.\n3. Rollback: if a P1 is found after promotion, re-point `latest` to `2.9.4` (`npm dist-tag add tasq@2.9.4 latest`) and publish a fix as 3.0.1. Re-pointing `latest` does not affect users who installed or pinned 3.0.0 directly; for them the fix is 3.0.1 and the changelog and README carry explicit instructions to pin `tasq@2.9.4`. `tasq-migrate` does not delete the `plugins` array, writes a `tasq.config.ts.bak` and a `tasq-migrate.log`, and supports `npx tasq-migrate --revert` to restore the backed-up config and `require` calls (ESM-only conversion of user code is the one step users revert via the backup or version control; the migration guide says so).\n4. The blog post, changelog, and Discord announcement are held until promotion to `latest`. At publish on `next`, only the changelog and a \"prerelease available via `tasq@next`\" note in #1840 go out. The blog post \"tasq 3: plugins for everyone\" and the Discord announcement go live after promotion, linking the migration guide.",
+ "fixerUsage": {
+  "calls": 1,
+  "tokIn": 3695,
+  "tokOut": 3149,
+  "usd": 0.046265999999999995,
+  "critMs": 21598
+ },
+ "status": "cleared"
+}

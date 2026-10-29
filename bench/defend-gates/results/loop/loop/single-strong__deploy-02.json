@@ -1,0 +1,132 @@
+{
+ "approach": "single-strong",
+ "case": "deploy-02",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "Migration 0148 drops legacy_legs and the conversion function in the same window, before orders-svc v5.0.0 is deployed. The rollback target v4.18.2 reads legacy_legs, so rollback will break template endpoints. Dropped data cannot be restored without a backup restore, and 'forward-only' migrations contradict the agreed 30-minute rollback requirement.",
+     "evidence": "\"ALTER TABLE order_templates DROP COLUMN legacy_legs;\" vs \"read by the 4.x orders-svc template endpoints\" and \"Migrations are forward-only; no down migrations are needed\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "Migrations run at 06:00 and the new service deploys at 06:10. During those 10+ minutes, and for the whole rolling deploy, the running v4.18.2 pods query a column that no longer exists, so template endpoints fail. Even if the migration is fine, the rollback trigger (5xx>1%) would fire and rollback to v4.18.2 cannot recover. Also, templates created or edited between the UPDATE in 0147 and the deploy get no legs_json (the NOT NULL set could fail, or the old code writes only legacy_legs).",
+     "evidence": "\"06:00 ET apply migrations 0147, 0148.\" / \"06:10 ET deploy orders-svc v5.0.0 (rolling, 12 pods).\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "blocker",
+     "claim": "The launch post claims zero commissions and zero fees for options, which is false: the release notes say options are $0.50 per contract and regulatory fees (SEC, FINRA TAF) apply to sells. 'No catches, no fine print' is misleading and unbalanced under FINRA Rule 2210, which the team already agreed to follow. 'Rebuy your winners' is promotional with no risk balance either.",
+     "evidence": "\"trade stocks, ETFs and options with zero commissions and zero fees. No catches, no fine print.\" vs \"options contract fee lowered to $0.50 per contract\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The 0147 UPDATE and SET NOT NULL are not guarded against legacy_legs rows that are NULL or that fail to convert. The dry run showed 0 errors on a snapshot, but live data can change before the window. Migration 0148 was never dry-run (only 0147 was), and no row-count or validation check sits between 0147 and 0148.",
+     "evidence": "\"Migration 0147 dry run against a prod snapshot (2.9M templates): 41s\" (0148 absent from QA)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The mobile fallback only hides Reorder if /v5/templates returns 404. A rollback of orders-svc does not clearly produce a 404 (v4.18.2 may not know that path at all), and nothing says how 5.0 clients behave against a mismatched backend. Already-installed 5.0 clients are also exposed to multi-leg templates the 4.x backend cannot read.",
+     "evidence": "\"5.0 clients fall back to hiding Reorder if `/v5/templates` returns 404.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "UPDATE on 2.9M rows in one transaction with ALTER TABLE takes an ACCESS EXCLUSIVE lock for the full duration (41s measured), blocking template reads and writes. The measurement came from a snapshot rather than a loaded production system.",
+     "evidence": "\"2.9M templates): 41s\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3064,
+    "tokOut": 1255,
+    "usd": 0.0213232,
+    "critMs": 9004
+   },
+   "wallMs": 43062
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The sync trigger only derives legs_json when NEW.legs_json IS NULL. After the 0147 backfill, every existing row already has legs_json set. When a v4.x pod edits such a template, it updates legacy_legs only, and the UPDATE carries the old legs_json forward unchanged. The trigger does nothing, so legs_json goes stale. This happens during the rolling deploy and again after a rollback. Once v5 reads legs_json, templates edited by 4.x show old legs. Reorder and templates are order-entry inputs, so wrong legs can reach a prefilled ticket. The claim that 4.x-edited templates 'still get legs_json' is true only for inserts.",
+     "evidence": "IF NEW.legs_json IS NULL AND NEW.legacy_legs IS NOT NULL THEN NEW.legs_json := legacy_legs_to_json(NEW.legacy_legs);"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The central safety claim, that mixed v4/v5 pods are safe and rollback needs no DB action, rests on tests that have not yet run. The revised 0147 dry run, the rollback rehearsal and the mixed-version test are all 'to be completed before the window'. The planned tests create templates on both versions but do not edit a pre-existing, backfilled template on v4 and then read it on v5. That is exactly the case that exposes the trigger bug above. The rollout plan nonetheless asserts safety unconditionally.",
+     "evidence": "Mixed v4/v5 pods are safe because of the dual-write and trigger design. / Mixed-version test on staging ... (to be completed before the window)."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The 0147 transaction runs ALTER TABLE, which takes an ACCESS EXCLUSIVE lock, and then a 2.9M-row backfill with a validation scan, all before COMMIT. The lock is held for the whole ~41s+ run. Template reads and writes from v4 pods block or time out during that period, and the plan says v4 pods are 'unaffected'. The 41s figure also comes from the pre-revision migration.",
+     "evidence": "06:00 ET apply migration 0147 (additive only; v4.18.2 pods are unaffected)."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4981,
+    "tokOut": 1646,
+    "usd": 0.032901200000000005,
+    "critMs": 12790
+   },
+   "wallMs": 24428
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The options fee cut to $0.50 is advertised in the release notes and the announcement, but no component, config change, or QA case covers it. If fees are applied in orders-svc, a rollback to v4.18.2 could revert them to $0.65 while the public copy still says $0.50.",
+     "evidence": "ABSENT: fee configuration change in Components table, QA summary, or rollback plan"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "The 09:00 ET announcement says \"Update the app today\", but the mobile rollout is phased over 6-7 days, so many users will not be offered 5.0 yet.",
+     "evidence": "App Store phased release (7-day ramp) and Play staged rollout 5% → 20% → 50% → 100% over 6 days"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "Only the blog and X copy is explicitly routed to Compliance under Rule 2210. The store release notes also make a public fee claim and are not listed for the same review.",
+     "evidence": "Note: the launch copy is subject to review and approval by a registered principal / Compliance under FINRA Rule 2210"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "Rollback safety and the revised 0147 trigger are still unverified. The artifact says so and makes the three staging tests and the revised dry run a hard go/no-go, so this does not block crossing the gate.",
+     "evidence": "Go/no-go: do not start the window unless the revised-0147 dry run, rollback rehearsal, mixed-version test and stale-edit test above have all passed"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5838,
+    "tokOut": 1865,
+    "usd": 0.0385192,
+    "critMs": 14473
+   },
+   "wallMs": 96821
+  }
+ ],
+ "artifact": "# Release proposal: BrokerLite 5.0 — Quick Reorder\n\nRelease manager: M. Okafor · Window: Tue 2026-11-10, 06:00–07:30 ET (pre-market) · Change ticket: CHG-30551\n\n## Components\n\n| Component | From | To |\n|---|---|---|\n| iOS app | 4.18.2 | 5.0.0 (App Store phased release) |\n| Android app | 4.18.2 | 5.0.0 (Play staged rollout) |\n| api (orders-svc) | v4.18.2 | v5.0.0 |\n| DB migrations | 0146 | 0147 (this release); 0148 (follow-up release, after the 5.0 soak period) |\n\n## Release notes (customer-facing, App Store / Play)\n\n- **Quick Reorder**: open any filled order in History and tap \"Reorder\" to prefill a new ticket with the same symbol, side, quantity and order type. You always land on the review sheet with the live quote and estimated cost, and you still slide to submit.\n- **Options pricing update**: options contract fee lowered to $0.50 per contract (was $0.65). Stock and ETF trades remain commission-free. Regulatory fees (SEC, FINRA TAF) still apply to sells.\n- Saved order templates now support multi-leg options strategies.\n- Fixes: watchlist sort order persists across restarts; dark mode chart axis labels.\n\n## Engineering notes\n\n- Saved templates move from `order_templates.legacy_legs` (pipe-delimited text, read by the 4.x orders-svc template endpoints) to `order_templates.legs_json` (jsonb), which is what enables multi-leg templates.\n- Migration strategy is expand/contract so that v4.18.2 stays rollback-compatible: 0147 only adds `legs_json` (nullable) and backfills it; `legacy_legs` is kept untouched. The destructive drop (0148) ships in a later release, only after 5.0 has soaked and rollback to 4.x is no longer needed.\n- v5.0.0 dual-writes: on every template create/edit it writes both `legs_json` and `legacy_legs`, and reads `legs_json`. For multi-leg templates (not representable in 4.x), `legacy_legs` is written with a single-leg-safe placeholder and the template is flagged `requires_v5 = true`; v4.18.2 template endpoints filter out `requires_v5` rows rather than erroring.\n- Until 0148, a DB trigger keeps `legs_json` in sync for any row written by v4.18.2. On INSERT it derives `legs_json` from `legacy_legs` (via `legacy_legs_to_json`) when `legs_json` is NULL. On UPDATE it re-derives `legs_json` whenever `legacy_legs` changed but `legs_json` was left unchanged, which is what a 4.x edit of an already-backfilled template looks like. Because v5.0.0 always writes both columns, its own writes change `legs_json` and are not overridden. Rows flagged `requires_v5` are skipped, since their `legacy_legs` is only a placeholder. This covers templates created or edited by 4.x pods during the rolling deploy or after a rollback.\n- Reorder from History reuses the template prefill path; no new order-entry endpoint.\n- If the market is closed, Reorder prefills but the review sheet shows the existing \"Queued for open\" banner and defaults market orders to limit at last close (unchanged behavior from 4.x).\n\n### Migration 0147_template_legs_json.sql\n\n```sql\nBEGIN;\nALTER TABLE order_templates ADD COLUMN legs_json jsonb;\nALTER TABLE order_templates ADD COLUMN requires_v5 boolean NOT NULL DEFAULT false;\n\n-- Keep legs_json in sync for rows written by v4.x during the rolling deploy / after rollback.\n-- INSERT: derive when legs_json is absent.\n-- UPDATE: a v4.x edit changes legacy_legs but carries the old legs_json forward unchanged,\n--         so re-derive in that case. v5.0.0 writes both columns (legs_json changes), so it is not overridden.\n--         requires_v5 rows hold a placeholder in legacy_legs and must never be re-derived from it.\nCREATE FUNCTION order_templates_sync_legs_json() RETURNS trigger AS $$\nBEGIN\n  IF NEW.legacy_legs IS NULL OR NEW.requires_v5 THEN\n    RETURN NEW;\n  END IF;\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.legs_json IS NULL THEN\n      NEW.legs_json := legacy_legs_to_json(NEW.legacy_legs);\n    END IF;\n  ELSIF NEW.legacy_legs IS DISTINCT FROM OLD.legacy_legs\n        AND NEW.legs_json IS NOT DISTINCT FROM OLD.legs_json THEN\n    NEW.legs_json := legacy_legs_to_json(NEW.legacy_legs);\n  END IF;\n  RETURN NEW;\nEND $$ LANGUAGE plpgsql;\n\nCREATE TRIGGER order_templates_sync_legs_json\n  BEFORE INSERT OR UPDATE ON order_templates\n  FOR EACH ROW EXECUTE FUNCTION order_templates_sync_legs_json();\n\nUPDATE order_templates\n   SET legs_json = legacy_legs_to_json(legacy_legs)\n WHERE legacy_legs IS NOT NULL\n   AND legs_json IS NULL;\n\n-- Validation gate: abort (roll back the transaction) if any row with legacy data failed to convert\nDO $$\nDECLARE missing bigint;\nBEGIN\n  SELECT count(*) INTO missing\n    FROM order_templates\n   WHERE legacy_legs IS NOT NULL AND legs_json IS NULL;\n  IF missing > 0 THEN\n    RAISE EXCEPTION '0147 aborted: % templates missing legs_json', missing;\n  END IF;\nEND $$;\nCOMMIT;\n```\n\n`legs_json` is intentionally left nullable in this release (no `SET NOT NULL`), since v4.18.2 remains a valid writer until 0148.\n\n### Migration 0148_drop_legacy_legs.sql (NOT part of this release; ships in a later release after soak)\n\n```sql\nBEGIN;\n-- Preconditions (checked by the release manager before running):\n--   * no orders-svc pod older than v5.0.0 is running, and rollback to 4.x has been formally retired\n--   * SELECT count(*) FROM order_templates WHERE legs_json IS NULL;  -- must be 0\n--   * a fresh backup/snapshot of order_templates exists\nDROP TRIGGER order_templates_sync_legs_json ON order_templates;\nDROP FUNCTION order_templates_sync_legs_json();\nALTER TABLE order_templates ALTER COLUMN legs_json SET NOT NULL;\nALTER TABLE order_templates DROP COLUMN legacy_legs;\nDROP FUNCTION legacy_legs_to_json(text);\nCOMMIT;\n```\n\n## QA summary\n\n- Regression suite (1,284 cases) on staging: pass.\n- Reorder: equities, ETFs, single-leg and 2/3/4-leg options, fractional shares, closed-market queueing: pass.\n- Migration 0147 dry run against a prod snapshot (2.9M templates): 41s, 0 conversion errors. This run predates the revised trigger; the revised 0147 (trigger and validation gate) must be re-run against a fresh snapshot before the window (**not yet done**).\n- Migration 0148 will be dry-run and gated separately as part of its own release; it is not applied in this window.\n- **Pending, required before the window (not yet run):** the three tests below. Until they pass, the safety of mixed-version serving and of rollback without DB action is a design intent, not a verified result.\n  - Rollback rehearsal on staging: deploy v5.0.0, create single- and multi-leg templates, `kubectl rollout undo` to v4.18.2, confirm template endpoints return 200, single-leg templates are readable, and `requires_v5` templates are hidden without errors.\n  - Mixed-version test on staging: v4.18.2 and v5.0.0 pods serving concurrently during a rolling deploy, with template create/edit on both.\n  - Stale-edit test (covers the backfilled-row case): take a template that existed before 0147 (backfilled `legs_json`), edit its legs on a v4.18.2 pod, then read it on a v5.0.0 pod and via Reorder; confirm the v5 read and the prefilled ticket show the edited legs, not the pre-edit legs. Repeat after a rollback to v4.18.2, and confirm a v5 edit followed by a name-only v4 edit does not change `legs_json`.\n- Accessibility: VoiceOver/TalkBack pass on History and Reorder review sheet.\n\n## Rollout plan\n\nGo/no-go: do not start the window unless the revised-0147 dry run, rollback rehearsal, mixed-version test and stale-edit test above have all passed and are recorded on CHG-30551.\n\n1. 06:00 ET apply migration 0147 (additive only; v4.18.2 pods are unaffected). Verify the validation gate passed and `SELECT count(*) FROM order_templates WHERE legacy_legs IS NOT NULL AND legs_json IS NULL` returns 0.\n2. 06:10 ET deploy orders-svc v5.0.0 (rolling, 12 pods). Mixed v4/v5 pods are expected to be safe because of the dual-write and trigger design, as confirmed by the pre-window mixed-version and stale-edit tests.\n3. 06:30 ET smoke test with house accounts in the paper environment and one live house account.\n4. Mobile: App Store phased release (7-day ramp) and Play staged rollout 5% → 20% → 50% → 100% over 6 days.\n5. Monitoring: order reject rate, template endpoint 5xx, crash-free sessions ≥ 99.6%.\n\n## Rollback plan\n\n- Trigger: orders-svc 5xx > 1% for 5 min, or order reject rate +50% over baseline.\n- Action: `kubectl rollout undo deploy/orders-svc` to v4.18.2 (target: complete within 15 min, well inside the 30-minute rollback SLO). Because 0147 is additive and `legacy_legs` is retained and kept current by v5.0.0's dual-write, v4.18.2 is expected to run correctly against the migrated schema; no DB action is needed on rollback. Templates edited by v4.18.2 after rollback have `legs_json` re-derived by the trigger, so a later roll-forward reads current legs. This is to be confirmed by the rollback rehearsal and stale-edit test.\n- Migrations: 0147 is additive and needs no down migration. The destructive 0148 is excluded from this release, so the 30-minute rollback requirement holds.\n- Mobile: halt phased release. 5.0 clients do not rely on a 404 from `/v5/templates`; they call `GET /version` (or read the `X-Orders-Api-Version` header) and hide Reorder and multi-leg template creation whenever the backend reports a version below 5.0.0, or the version check fails or is unavailable. Multi-leg templates flagged `requires_v5` are hidden by v4.18.2, so already-installed 5.0 clients simply do not see them while the backend is rolled back, and they are shown again after the roll-forward.\n- Mobile fallback behavior against a rolled-back backend will be verified in the staging rollback rehearsal above.\n\n## Launch announcement (blog + X, scheduled 09:00 ET)\n\n> **BrokerLite 5.0 is here.** Quick Reorder lets you prefill a new order from a past filled order in one tap. You always review the live quote and estimated cost before you submit. We also lowered our options contract fee to $0.50 per contract (was $0.65). Stock and ETF trades remain commission-free. Regulatory fees (SEC, FINRA TAF) still apply to sells. Options involve risk and are not suitable for all investors; review the options disclosure document (Characteristics and Risks of Standardized Options) before trading. Past performance does not guarantee future results. Update the app today.\n\nNote: the launch copy is subject to review and approval by a registered principal / Compliance under FINRA Rule 2210 before scheduling.",
+ "fixerUsage": {
+  "calls": 2,
+  "tokIn": 8086,
+  "tokOut": 8308,
+  "usd": 0.11541599999999999,
+  "critMs": 47127
+ },
+ "status": "cleared"
+}

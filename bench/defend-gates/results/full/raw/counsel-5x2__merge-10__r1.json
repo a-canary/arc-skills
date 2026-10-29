@@ -1,0 +1,95 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-10",
+ "rep": 1,
+ "wallMs": 520993,
+ "verdict": "ATTACKS",
+ "confidence": 0.7,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The lease-safety guarantee is asserted but not evidenced. The lease is jobTimeout+1m and only the job context enforces jobTimeout, with no lease renewal. If render, ffmpeg, or upload ignores ctx, the lease expires while the job still runs and a second worker can render the same job concurrently. Output is deterministic, so the harm is duplicated compute and a lost completion, not corruption. Confirm ctx plumbing before merge.",
+   "evidence": "\"the job context is cancelled at jobTimeout, so a live worker never outlives its lease\" — ABSENT: evidence that render/ffmpeg/upload honour ctx or kill subprocesses on cancel, and any lease renewal"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Fencing relies on w.id being unique per live process, but its generation is not in the diff. With replicas=1 and Recreate this is latent, and it becomes live at scale-out.",
+   "evidence": "ABSENT: definition of w.id; \"Complete(ctx, job.ID, w.id, statusFor(runErr), ...)\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Crash-reclaimed jobs have no attempts cap. The artifact explicitly defers this to #215. Before this PR a crash-looping job was also re-selected on every restart, so the added exposure is mainly for hung-but-alive workers.",
+   "evidence": "\"a poison-job attempts cap (#215) are separate changes\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "No test seeds a legacy running row with NULL locked_until, which is the first-deploy path. The NULL predicate looks correct, so this is a test gap, not a logic bug.",
+   "evidence": "ABSENT: test seeding status='running' with locked_until NULL; the only expiry test uses Claim(ctx, \"a\", -time.Second)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The concurrency test counts total claims but does not record distinct job IDs. A double claim is still partly caught because the first holder's Complete returns ErrLeaseLost, but the no-duplicate property is not asserted directly.",
+   "evidence": "\"claims.Add(1)\" with no j.ID recorded; \"if n := claims.Load(); n != 40\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The claim predicate ORs status with lease expiry and orders by created_at, id, with no supporting index. Each poll scans and sorts the table. This is cheap at about 20k rows and should be indexed before volume grows.",
+   "evidence": "ABSENT: CREATE INDEX in 0042_thumbnail_job_leases.sql; migration is \"ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz;\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "On shutdown the worker returns nil before Complete, so a render that finished is discarded. The job stays running until the lease expires, and Run returns nil, which hides the abandonment. This is a delay, not a correctness failure.",
+   "evidence": "\"if ctx.Err() != nil { return nil // shutting down: leave the lease to expire so another worker retries the job }\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The spec says Complete requires the caller to still hold the lease, but the SQL checks only locked_by and status. A holder with an expired but unreclaimed lease can still complete. Output is deterministic, so this is low risk, but the spec and code disagree.",
+   "evidence": "\"Complete requires the caller to still hold the lease\" vs \"WHERE id = $1 AND locked_by = $2 AND status = 'running'\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "NULL-lease reclaim is safe only because Recreate prevents old and new workers from overlapping. A future RollingUpdate would let a new worker take a job an old worker is still rendering. This dependency is not written down.",
+   "evidence": "\"Expired leases (crashed/shut-down worker, or NULL from the old worker) are reclaimed\" alongside \"Replica count stays 1 here\"; ABSENT: note tying NULL reclaim to Recreate"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "A stale render that has lost its lease keeps writing to the shared object key. This is harmless only if uploads are atomic and the output is deterministic, and the artifact states neither.",
+   "evidence": "ABSENT: statement that uploads are atomic or that stale writes cannot land after completion"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "There is no down migration and no rollback note. Rollback is safe because the old binary's startup ResetRunning requeues running rows, but this is not documented for operators.",
+   "evidence": "\"ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz;\" — ABSENT: down step or rollback note"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Lease-lost and reclaim events are logged only at Warn, with no metric or alert, so reclaim storms and crash loops are hard to detect.",
+   "evidence": "\"w.log.Warn(\\\"lease lost before completion\\\", \\\"job\\\", job.ID)\"; ABSENT: metric or alert"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The title promises that more than one worker can run, but the body keeps replicas at 1 and defers scale-out, so readers may assume multi-worker operation is enabled.",
+   "evidence": "\"lease-based job claiming so more than one worker can run\" vs \"Replica count stays 1 here\""
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 107050,
+  "tokOut": 70992,
+  "usd": 0.05514269,
+  "critMs": 132955
+ }
+}

@@ -1,0 +1,911 @@
+{
+ "approach": "rubric-single",
+ "case": "deploy-03",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Backfill dual-write and streak computation are described, but the rollout starts the backfill only after full deploy while the remote-config flag can be enabled at 1% in step 2; 3.2 clients reading synced streaks may see incomplete history for users not yet backfilled, producing wrong streak counts during the rollout window.",
+     "evidence": "\"Backfill job starts after full deploy.\" and \"Remote config `streak_sync_v2`: 1% → 10% → 50% → 100%\" with no stated gate that backfill completion precedes flag enablement."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The backfill dry-run covers 18.4M rows and reports 0 mismatches, but the artifact does not state whether the prod run is gated on completion or what happens to users whose backfill checkpoint is incomplete when the flag advances; the 0-mismatch claim is only for a snapshot.",
+     "evidence": "\"dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches vs `streak_count`.\" — no ABSENT check for live-run verification or per-user completeness gate."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The 3.2 client against 2.14 rollback scenario says sync is 'silently disabled, local streak shown', but the rollout gates do not include a check that the 2.15 dual-write of streak_count stays consistent with streak_events while the flag is partially enabled; divergence between the two sources is not monitored beyond streak_mismatch_total on synced users only.",
+     "evidence": "\"`streak_mismatch_total` (server vs client recompute) < 0.1% of synced users\" — only synced users are measured; 3.1 clients reading streak_count are unmonitored."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The rollback path depends on a remote-config fetch (≤15 min) to disable the feature, but the streaks-svc 2.14 redeploy path is not gated on the flag being off first; rolling back the backend while the flag is at 50%+ leaves 3.2 clients calling a 2.14 API with synced state it can no longer reconcile.",
+     "evidence": "\"Backend: redeploy streaks-svc 2.14\" and \"set `streak_sync_v2` to 0%; 3.2 clients revert ... within one config fetch (≤ 15 min)\" — no ordering requirement stated."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The rollback of store builds 'halt phased/staged rollout' does not revert already-installed 3.2 builds; their flag-off behavior is asserted equivalent to 3.1 but the reminder notification permission flow changes (POST_NOTIFICATIONS, provisional auth) cannot be undone by rollback.",
+     "evidence": "\"3.2 with flag off is functionally equivalent to 3.1 plus copy changes.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "source_device is described as a per-install random ID, but the artifact does not say whether it is reset on reinstall or linked to user_id across devices, which bears on linkability of streak_events rows over time.",
+     "evidence": "\"`source_device` stores a per-install random ID, not a hardware identifier.\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "The disabled saver button label gives a date but no explanation of the 30-day rule; the QA report does not list screen-reader verification of the disabled state specifically.",
+     "evidence": "\"disabled state label: Streak saver available again on Nov 28\""
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "Copy is listed as final in en/es/de/fr/pt-BR but the header format \"12-day streak\" and the reminder pre-prompt's '8:00 PM' hard-codes a time format not shown to be localized for each locale.",
+     "evidence": "\"Want a nudge at 8:00 PM so you don't lose your streak?\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Backfill of 18.4M rows in 5k batches is stated for dry-run only; the live run's impact on streaks-svc p95 (<250ms gate) during the backfill is not measured.",
+     "evidence": "\"Backfill job starts after full deploy.\" with the p95 gate applied to the same service."
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "No vendor-lock or data-residency statement for the streak_events table beyond the existing backend; the artifact is silent on where the new table lives relative to existing regional stores.",
+     "evidence": "ABSENT: data residency or region statement for streak_events."
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Backfill and per-day event writes multiply storage (one row per day per habit) with no budget or retention estimate for the growth.",
+     "evidence": "ABSENT: storage cost or retention policy for streak_events."
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "Notification reminders are opt-in and permission handling is described, but no store-policy review of the pre-prompt sheet against iOS/Play notification guidelines is cited.",
+     "evidence": "ABSENT: App Store / Play review check for the pre-prompt flow."
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Dual-write and streak sync accept client-supplied day and device values; no input validation or authz check on user_id/habit_id ownership is described for the sync endpoint.",
+     "evidence": "ABSENT: authz check that habit_id belongs to the authenticated user_id on streak_events writes."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Dual-write of streak_count alongside streak_events creates two sources of truth until 3.4; the plan to drop it depends on a raised minimum version tracked in STR-1244 with no dated commitment.",
+     "evidence": "\"scheduled for 3.4, after the minimum supported app version is raised past 3.1 (tracked in STR-1244).\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3336,
+    "tokOut": 2035,
+    "usd": 0.0015150199999999997,
+    "critMs": 9114
+   },
+   "wallMs": 16426
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Backfill is described as one streak_events row per day of current streak, but the reconciliation only compares per-habit event-derived streaks to streak_count at the end. Users who completed habits on other devices or during the backfill window may have writes landing in both tables, and the plan does not say how concurrent live writes during backfill are ordered or deduplicated against backfilled rows on the idempotency key (user_id, habit_id, day).",
+     "evidence": "\"Backfill: one `streak_events` row per day of each habit's current streak, run as a resumable job (batches of 5k, checkpointed)\" / ABSENT: handling of live 2.15 writes that hit the same (user_id, habit_id, day) while the backfill is running"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The backfill fallback rule is internally inconsistent: users without a backfill_done marker fall back to streak_count, yet the dual-write divergence gate only checks users with recent writes, so users mid-backfill or with a stale marker could diverge silently and never be caught by the gate that is supposed to guard them.",
+     "evidence": "\"`streak_dualwrite_divergence_total` (a periodic server-side job comparing `habits.streak_count` against the event-derived streak for all users with recent writes\" / ABSENT: any divergence check for users with no recent writes or without backfill_done"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The rollback ordering depends on a client config fetch window of up to 15 minutes, but the document does not state what happens to clients that cannot fetch (offline, backgrounded for long periods, or stuck on old cache) during a backend rollback. The 'if backend is already failing' path relies on the same unverified fetch behaviour.",
+     "evidence": "\"wait for the config fetch window (≤ 15 min, confirm via client fetch metrics)\" / ABSENT: behaviour and metrics for clients that never refetch config before the backend is rolled back"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The QA claim that 3.2 against 2.14 is 'Pass' and that the dry-run gives 0 mismatches is stated only on snapshot or staging, while the live reconciliation that gates the flag has not run. The rollback path and the 2.14 compatibility are presented as verified even though the live data shape after backfill has never been exercised.",
+     "evidence": "\"The dry-run result is from a snapshot only. The live run is verified separately\" / \"schema is additive and `streak_count` remains authoritative-compatible, so 2.14 runs against the migrated database unchanged (verified in staging)\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The stated 99.87% crash-free figure comes from only 1,900 beta users over 6 days, a small sample relative to 400k MAU; the gate threshold of 99.5% is then applied to a rollout that starts at 10% of Play users with no stated confidence interval.",
+     "evidence": "\"Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "source_device is described as a per-install random ID, but the artifact does not say whether it is reset on reinstall or linked to account identity across devices, and streak_events now stores per-device activity history server-side, which the privacy claim of 'no new data shared' does not address as retention or linkability.",
+     "evidence": "\"`source_device` stores a per-install random ID, not a hardware identifier. No new data shared with third parties.\" / ABSENT: retention period for streak_events and linkage of install IDs to user_id"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "The reminder pre-prompt flow requires provisional authorization on iOS and a separate full authorization step for sound, adding permission steps that the 'Remind me' button does not disclose to the user.",
+     "evidence": "\"if the user taps \\\"Remind me\\\" we request provisional authorization first; full authorization is requested only if they enable sound in reminder settings\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Backfill timing is given only for a single snapshot (22 min for 18.4M rows); the plan does not state behaviour under live write contention or the expected duration at the rollout's full user base growth.",
+     "evidence": "\"dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches vs `streak_count`\" / ABSENT: duration under concurrent production writes"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3922,
+    "tokOut": 1548,
+    "usd": 0.00138872,
+    "critMs": 7222
+   },
+   "wallMs": 78670
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The backfill/live-write concurrency guarantee is unproven, and the artifact says so. A staging test of live 3.1/3.2 writes during backfill is required before 2.15 reaches prod, but it is absent from the QA table and not marked done.",
+     "evidence": "\"This concurrency behavior has not yet been exercised; a staging test ... is a required pre-deploy check and must pass before 2.15 goes to prod.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "The post-backfill prod-snapshot rehearsal, including the 2.14-against-migrated-DB and 3.2-client-against-2.14 checks, is not done, yet the 10:00 UTC prod deploy is scheduled. Results are only promised for later.",
+     "evidence": "\"Required before Nov 2 (not yet done): restore a prod snapshot, run the backfill on it ... Results will be appended here. If they fail, the deploy does not proceed.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback claim that streak_count stays correct is false for the window where 2.14 is serving. 2.14 does not write streak_events or dual-write, so any completions it records update streak_count without events, and the event-derived streak then diverges from it. Re-enabling sync after reconciliation is therefore not clean.",
+     "evidence": "\"Events written during the window remain in streak_events and streak_count stays correct from dual-write, so no data is lost\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Mixed-version or rolled-back 2.14 pods do not take the per-user advisory lock and do not write events, so the claimed ordering between backfill's final batch, the backfill_done marker, and live writes breaks during the 10% canary and during any rollback while backfill runs. The guarantee only holds when every writer is on 2.15.",
+     "evidence": "\"live writes for that user also take\" / \"Backend changes (streaks-svc 2.14 → 2.15) ... Backfill starts after full deploy.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "No rollback procedure exists for the backfill itself. If the backfill produces wrong rows, the artifact gives no way to remove backfilled rows (source_device='backfill') or to reset markers at scale, and the marker-clearing path only covers individual users.",
+     "evidence": "ABSENT: a backfill undo/cleanup procedure. Only \"Backfilled rows use source_device = 'backfill' so they are distinguishable in reconciliation\" is stated."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The rollback ordering contradicts itself. It says to wait for the flag to propagate before redeploying 2.14, then says to proceed after 30 minutes even if up to 5% of flag-on clients are still stale. At 400k MAU, 5% is about 20k clients that will keep writing against a backend that no longer supports sync.",
+     "evidence": "\"Proceed with the backend rollback once that share is under 5% or 30 min have elapsed, whichever comes first.\" vs \"Ordering: ... Do not roll back the backend first.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The enablement gate has an escape hatch that allows unexplained mismatches. The streak_mismatch gate also tolerates up to 0.1% of synced users, which is roughly 400 users at 400k MAU, while the reconciliation gate says zero.",
+     "evidence": "\"must be 0 mismatches (or each mismatch explained) before streak_sync_v2 is enabled\" and \"streak_mismatch_total ... < 0.1% of synced users\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The 0-mismatch dry-run and the reconciliation check are circular. Backfill rows are synthesized from streak_count, and reconciliation then compares derived streaks against streak_count, so agreement is largely guaranteed by construction. The artifact does not say how a count is mapped to specific calendar days, so the backfill's correctness is unverified.",
+     "evidence": "\"one streak_events row per day of each habit's current streak\" / \"0 mismatches vs streak_count\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "streak_events grows without bound (one row per habit-day, for every user), and the artifact gives no retention, partitioning, indexing for the read path, or throttling of the backfill's write load against the live prod DB. The sync read path's p95 gate is set without any measurement of this table at scale.",
+     "evidence": "ABSENT: retention/partitioning/index plan for streak_events and backfill throttling. \"18.4M rows, 22 min\" is a snapshot dry-run only."
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "streak_events stores per-day behavioral records linked to user_id and habit_id, and the artifact says nothing about retention limits or deletion when an account is deleted. The privacy section only addresses the device ID and the nutrition label.",
+     "evidence": "ABSENT: retention period and account-deletion handling for streak_events. \"No new data shared with third parties.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The marker-clearing path is internally inconsistent. It says a cleared user returns to the streak_count fallback, but the fallback section says the flag is not honored for users without a marker, which means local-only streaks.",
+     "evidence": "\"has the marker cleared, which returns that user to the streak_count fallback\" vs \"the flag is not honored for that user (client stays on local-only streaks)\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The saver is specified as repairing one missed day per 30 days, but the button copy says \"Repair yesterday,\" which implies only yesterday can be repaired. Either the copy or the spec is wrong.",
+     "evidence": "\"one missed day per 30 days can be repaired from the streak screen\" vs \"Repair yesterday\""
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The localized header \"12-day streak\" is a static string, and the artifact does not address pluralization or grammatical number across en/es/de/fr/pt-BR. The disabled-state date \"Nov 28\" also has no stated date-format or timezone handling per locale.",
+     "evidence": "\"Streak screen header: \\\"12-day streak\\\"\" / \"Streak saver available again on Nov 28\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Several gates depend on metrics and jobs that are not shown to exist or be sized: config_age_seconds, the 24h full divergence sweep over all users, and the incremental job. The sweep's runtime and load at 400k MAU are not estimated.",
+     "evidence": "\"Track the share of flag-on active clients with config age > 15 min (client fetch metric config_age_seconds)\" / \"a full sweep of all users with habits, at least once per 24h and before each flag step\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 99.87% crash-free figure comes from 1,900 beta users over 6 days, a small sample against the 400k-MAU population the 99.5% gate protects.",
+     "evidence": "\"Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "The artifact does not state where streak_events data is stored or whether it stays in a residency region, which matters for a new per-user behavioral table.",
+     "evidence": "ABSENT: data residency statement for streak_events."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4938,
+    "tokOut": 9080,
+    "usd": 0.0053579199999999995,
+    "critMs": 40059
+   },
+   "wallMs": 47433
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The artifact never specifies how 2.15 computes the streak_count value it dual-writes. 2.14 pods (during the canary and any rollback) write the same column without taking the advisory lock, so a 2.15 write derived from events can race with a 2.14 increment and silently lose an update.",
+     "evidence": "'`habits.streak_count` is **kept** and dual-written by 2.15' and '2.14 pods neither write events nor take the advisory lock'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The streak saver has no backend data model. It is not stated where a repair is recorded, whether it becomes a streak_events row, whether it counts toward streak_count, or how the one-per-30-days limit works when the app is in local-only fallback.",
+     "evidence": "'\"Streak saver\": one missed day per 30 days can be repaired' vs. Backend changes, which never mention the saver; 'Streak saver: limit 1 per 30 days enforced server-side' (QA, staging only)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The re-enable path after a rollback has no merge rule. Completions recorded locally on clients in fallback are not in streak_count or streak_events, and the artifact does not say how they reconcile with server state when sync is re-enabled. Tens of thousands of clients may be in this state.",
+     "evidence": "'Those clients degrade through the fallback above: completions they record while on 2.14 stay in local streaks ... and they sync on re-enable after reconciliation.' No conflict-resolution rule is given."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The enablement criterion contradicts itself. It requires 0 reconciliation mismatches before the flag is enabled for any user, but mismatched users are excluded by clearing their markers and are not required to reconcile before enablement. It is unclear whether excluded users count toward the 0.",
+     "evidence": "'the result must be 0 mismatches before `streak_sync_v2` is enabled for any users' vs. 'any mismatched user has the marker cleared and stays excluded until the cause is fixed'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Day keys are computed in the user's stored timezone, but the artifact does not say what happens to existing rows when a user changes timezone mid-streak. The same real completion could map to two days or be double-counted. QA covered this only on staging.",
+     "evidence": "'a habit with `streak_count` N whose most recent completed day is D ... in the user's stored timezone'"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "source_device is described as a per-install random ID but is not stated to be server-generated or validated. A client can send the literal value 'backfill', and the undo procedure deletes every row with that value, so live user completions could be destroyed. Reconciliation also keys on this sentinel.",
+     "evidence": "'`source_device` stores a per-install random ID' and '(4) delete rows with `source_device = 'backfill'` in batches of 5k'"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The artifact contradicts itself on account deletion. It says the existing deletion job already removes streak_events, then says extending that job to cover streak_events is still a pending gate. Until the gate passes, deletion would not erase this personal data, and backups and snapshots are not addressed.",
+     "evidence": "'its `streak_events` rows are removed by the existing account-deletion job within the existing deletion SLA; extending that job to cover `streak_events` and testing it is pre-deploy gate 6.'"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The claim that the nutrition label and Play data-safety form are unchanged is asserted without analysis. The release adds a persistent per-install identifier linked to timestamped habit completions across a user's devices, which is new linkability.",
+     "evidence": "'No new data shared with third parties. Privacy nutrition label and Play data-safety form unchanged (verified against the updated data inventory).'"
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "No data residency or self-hosting statement covers streak_events, which grows without bound per user. For a 400k-MAU consumer base this is a gap, not a verified position.",
+     "evidence": "ABSENT: any statement of region, residency or exit path for streak_events and streaks-svc storage"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Streaks are computed from the full event history on every read, and rows are kept forever. Read cost grows with the length of the longest streak and with table size, and no materialized streak or bound on the read path is defined. The p95 gate is not trusted until the untested load test runs.",
+     "evidence": "'a current streak can span arbitrarily long history; growth is one row per completed habit-day' and 'Before the p95 gate is trusted, a load test runs'"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Storage and compute costs of 18.4M backfilled rows, monthly partitions, unbounded per-habit growth, and the throttled backfill run are not estimated anywhere.",
+     "evidence": "ABSENT: cost or budget figures for storage, partitions, backfill runtime or read load"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The rollback's safety depends on a manual 'pause the backfill job' step. Nothing automated prevents the backfill from running alongside 2.14 pods, which break the advisory-lock ordering. Live backfill duration is also unknown, so the window before the flag can be enabled has no estimate.",
+     "evidence": "'(2) pause the backfill job if it is running (it must not run alongside 2.14 pods, which do not take the advisory lock)' and 'The 22-minute figure is an unthrottled snapshot dry-run; the live run is expected to take longer.'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Support-ticket gate is set at 2x baseline, which is loose enough to let a meaningful regression ramp through.",
+     "evidence": "'support tickets tagged `streak` < 2× 4-week baseline'"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The backfill undo deletes up to 18.4M rows in 5k batches, throttled, with no time bound. Users stay on the fallback for the whole duration, and the store-side rollback cannot reach binaries already installed.",
+     "evidence": "'(4) delete rows with `source_device = 'backfill'` in batches of 5k (throttled as below)'; 'Store builds: halt phased/staged rollout'"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The concurrency guarantee, the undo path, the 2.14-against-migrated-DB check and the account deletion are all asserted in prose but not exercised. The only Pass results are staging-only, and prod remote config was only partly matched.",
+     "evidence": "'This concurrency behavior has not yet been exercised' and 'Live 3.1/3.2 writes during backfill (concurrency) | staging | **Not yet run**'"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "Crash-free evidence comes from a 1,900-user internal beta over 6 days, against a 400k-MAU rollout gate. The sample is small and not representative.",
+     "evidence": "'Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%'"
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The pre-prompt copy hard-codes 8:00 PM, but the feature says the user chooses the reminder time. Shipping four localized strings with a fixed default would mislead users who expect the stated time.",
+     "evidence": "'Want a nudge at 8:00 PM so you don't lose your streak?' vs. 'Optional streak reminder notification at the user's chosen time.'"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "No attack. The feature addresses a stated need (cross-device streaks and a saver), and the artifact gives no evidence the saver or reminder improves retention.",
+     "evidence": "'Streaks now sync across devices.' (no outcome metric is defined)"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "No attack beyond the copy issue above. The permission flow defers prompts until value is shown and adds no extra steps.",
+     "evidence": "'We do not request OS notification permission on launch or on upgrade.'"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "No attack. VoiceOver, TalkBack and large-font passes are recorded on device.",
+     "evidence": "'VoiceOver / TalkBack on streak screen and pre-prompt | device lab | Pass' and 'Dynamic Type XXL / Android font scale 200% | device lab | Pass, no truncation'"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "iOS provisional authorization delivers reminders quietly, but the pre-prompt copy promises a nudge without saying so. This is a disclosure gap.",
+     "evidence": "'if the user taps \"Remind me\" we request provisional authorization first'"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The design layers four interacting mechanisms (dual-write, backfill, per-user locks, a fallback path) plus two divergence jobs. The combined state space is hard to test as a unit and is not covered by a single test plan.",
+     "evidence": "'`streak_dualwrite_divergence_total` comes from two server-side jobs' alongside the backfill, marker, flag and fallback rules"
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "The schedule is not feasible. Six pre-deploy gates, including a load test at 12-month projected size, a 10k-habit validation, an undo rehearsal, and building the account-deletion extension, all need to pass and be appended by Fri 2026-10-30. Today is 2026-10-27, and the artifact says none are done.",
+     "evidence": "'None of these gates are done yet.' and 'all must pass and be appended here before the Fri 2026-10-30 go/no-go'"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 7370,
+    "tokOut": 12994,
+    "usd": 0.00780132,
+    "critMs": 60671
+   },
+   "wallMs": 131872
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The dual-write atomicity argument depends on 2.14's streak_count write being atomic under the row lock, which is unverified. If 2.14 reads streak_count outside the row lock, concurrent 2.14/2.15 writes lose updates, silently corrupting streak_count that 3.1 clients and rollback depend on.",
+     "evidence": "\"This depends on 2.14's write being a single atomic statement or a transaction that reads under the row lock. Confirming that against the 2.14 code ... is gate 7. If 2.14 does not meet this, it gets a hotfix before the canary begins.\" Gate 7 is listed as not yet run."
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The backfill is derived from streak_count, so any existing streak_count error is copied into the event log as truth. The independent check (gate 3) only samples 10,000 habits plus long-streak/timezone cohorts, and a day-level disagreement blocks deploy only if discovered; the enablement criterion itself is circular (reconciles events to streak_count).",
+     "evidence": "\"the backfill derives rows from `streak_count`, and the 0-mismatch dry-run and post-run reconciliation then compare against `streak_count`. They are therefore consistency checks, not independent proof\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The 'one missed day per 30 days' saver limit is enforced via a time window on created_at, not by calendar/repair cadence, and the saver button copy promises 'available again on Nov 28' with no specified timezone or derivation; the disabled-date copy can disagree with server enforcement across timezones and at the boundary.",
+     "evidence": "\"Streak saver available again on Nov 28\" vs \"rejecting a repair if the habit has a `streak_repairs` row with `created_at` in the last 30 days\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Merge rule recomputes streak_count as the consecutive run ending at the most recent completed day, but the saver inserts a 'saver' event for a missed day; repairs and the merge rule can conflict with the 'days are never removed' guarantee, and the spec does not say whether saver days count as completions for the merge union.",
+     "evidence": "\"each uploaded day is inserted into `streak_events` ... `streak_count` is recomputed ... as the consecutive-day run ending at the habit's most recent completed day\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Backfill auto-pause depends on a heartbeat registry; the spec says the job pauses if the registry is unavailable, but the rollback path requires waiting for config fetch and ordering with pod versions, and a stuck or stale registry entry (a 2.14 pod that is dead but still registered) would block the backfill indefinitely with no defined expiry.",
+     "evidence": "\"auto-pauses (alerting on-call) if any 2.14 pod is registered or the registry is unavailable\" with no TTL or deregistration rule stated"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The backfill undo deletes origin='backfill' rows, but live writes that were no-ops due to backfill rows lose their real source_device and created_at; step 5 restores only a synthesized row, so the undo is not information-preserving and the spec admits the loss.",
+     "evidence": "\"If a live write was a no-op because a backfill row already existed for that day, step 4 removes that day's event; the re-run in step 5 restores it from `streak_count`\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The store privacy label review is an unfinished precondition for the Nov 2 submission and the spec asserts new linkability (persistent per-install ID linked to account) without a concluded data-safety declaration, so the submission path is not yet privacy-cleared.",
+     "evidence": "\"Privacy nutrition label and Play data-safety form: not yet concluded as unchanged.\" and \"submission does not proceed without it.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Deleted account data persists in backups under the existing retention and a restore must re-run deletion, but the restore procedure's correctness is only asserted as verified in gate 6, which is not yet run; personal data in prod snapshots used for rehearsal is retained until 'rehearsals complete' with no deadline or owner.",
+     "evidence": "\"deleted rows persist in backups until those age out ... The prod snapshots ... are destroyed when the rehearsals complete.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The event-derived streak computation scans backward from the latest day and stops at the first gap, but for users with very long streaks (e.g., over 1,000 days) it runs on every write and merge; the load test that would quantify this is not yet run and the p95 gate of 250ms is not tied to measured numbers.",
+     "evidence": "\"cost depends on the length of the current streak\" and \"including habits with streaks over 1,000 days (pre-deploy gate)\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Backfill throttle duration is unknown (22 min is unthrottled), yet the flag ramp dates are not committed, and the go/no-go on 2026-11-13 gates 5 and 2 which cannot be finished until after the backfill duration is measured; the schedule has no defined fallback if the estimate is far longer than the window.",
+     "evidence": "\"The flag ramp dates are not committed until gate 5 produces the live backfill duration estimate.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "QA results that the proposal relies on for the rollback and N-1 compatibility were run on staging only, and the crash-free figure is from internal beta on 1,900 users, which is far below the 400k MAU population for the 99.5% gate.",
+     "evidence": "\"Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%\" and \"All sync and rollback rows marked Pass above were run on staging data\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The 'Remind me' pre-prompt and notification permission flow on iOS requests provisional authorization without stating the disclosure copy for the user; not an outright violation but the reminder copy is final without legal review noted.",
+     "evidence": "\"Want a nudge at 8:00 PM so you don't lose your streak?\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The rollout gate threshold 'support tickets tagged streak < 2× 4-week baseline' is relative and will not catch a sustained elevated rate if the baseline is already high.",
+     "evidence": "\"support tickets tagged `streak` < 2× 4-week baseline\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 9946,
+    "tokOut": 2280,
+    "usd": 0.0029595199999999998,
+    "critMs": 14184
+   },
+   "wallMs": 72507
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The live write path does not say whether the increment/reset rule runs when the insert is a no-op. A completion that lands on a day already present as a backfill or saver row could increment streak_count a second time, or a no-op could still increment it.",
+     "evidence": "'(3) inserts the event (ON CONFLICT ... does nothing, except that it promotes...) and (4) applies the same increment/reset rule that 2.14 applies to the locked streak_count value.'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Re-enable after rollback re-runs the backfill with DO NOTHING and merges never remove days. If 2.14 reset streak_count after a missed day, stale event days remain, so event-derived streaks will exceed streak_count. The enablement criterion can then fail for many users with no stated path to delete those events.",
+     "evidence": "'days are never removed or overwritten by a merge' and 're-run the backfill (idempotent via ON CONFLICT DO NOTHING; it fills the missing days from streak_count)'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The merge recompute defines the streak as the consecutive run ending at the most recent completed day. It does not say the streak is zero when that day is older than yesterday. This conflicts with the 2.14 reset rule and could restore a broken streak after a merge.",
+     "evidence": "'streak_count is recomputed ... as the consecutive-day run (completed and saver days) ending at the habit's most recent completed day'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "streak_events.day is a local date but the artifact gives no rule for re-keying days when a user changes timezone. Only saver dates are recomputed. Event days and streak_count can diverge after a timezone change, and QA covered this only on staging.",
+     "evidence": "'If the user changes timezone, the date is recomputed from the stored created_at in the new timezone' (saver only); no equivalent rule for streak_events.day"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The merge accepts any client-uploaded completion day with no bounds: future dates, dates before habit creation, or dates far in the past. Because merged days are never removed, a modified client can permanently fabricate a streak.",
+     "evidence": "'uploads every local completion day since its last successful sync' and 'only its completion days are [trusted]'; ABSENT: day bounds or validation"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The saver repair endpoint takes a missed day but the artifact does not require the server to verify that the day is actually missed, inside the streak window, not in the future, and not already completed. A client could bridge arbitrary gaps.",
+     "evidence": "'A successful repair inserts a streak_events row for the missed day with origin = saver'; ABSENT: server validation of repaired_day"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Saver scope is ambiguous. The copy and rule read as one missed day per 30 days, but the check is keyed on the habit's most recent repair. A user with several habits could repair one per habit in 30 days, while the UI shows a single 'available again' date. Gate 8 does not define the scope.",
+     "evidence": "'one missed day per 30 days can be repaired from the streak screen' vs 'the local date of the habit's most recent streak_repairs.created_at'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The button says 'Repair yesterday' but the data model allows repair of any missed day. The behavior for a missed day older than yesterday is undefined.",
+     "evidence": "'Saver button: Repair yesterday' vs 'repaired_day' with no day-window constraint"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The backfill auto-pauses at p95 above 200 ms, but the rollout gate and load-test pass criterion allow p95 up to 250 ms. A steady-state p95 between 200 and 250 ms passes every gate while the backfill never progresses. The ramp dates cannot be committed under that condition.",
+     "evidence": "'auto-pauses if streaks-svc p95 exceeds 200 ms' vs 'Pass criterion: measured p95 under 250 ms'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The 2.14 guard is check-then-act with no lock or fencing. A 2.14 pod that starts between the registry check and a batch commit can write streak_count without the advisory lock while the backfill reads it. The artifact still says safety does not depend on the guard, which overstates it.",
+     "evidence": "'checks the registry before each batch and auto-pauses' and 'safety does not depend on it'; ABSENT: fencing between registry check and batch commit"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The privacy section contradicts itself. It says the new tables hold the same kind of information as existing habit data, then says 3.2 adds a persistent per-install identifier linked across devices, which is new linkability. The label review that would settle this is not recorded.",
+     "evidence": "'They carry the same kind of information as the existing habit data' vs '3.2 adds a persistent per-install identifier ... which is new linkability'"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "The reminder pre-prompt and OS notification permission flows are not stated to be flag-gated. The artifact says 3.2 behaves like 3.1 until the ramp, but these flows can reach users through the phased store release from Nov 2, before any backend exists. Permission state is hard to reverse.",
+     "evidence": "'3.2 behaves like 3.1 until the ramp starts' vs 'The in-app pre-prompt sheet is shown only after the user reaches a 3-day streak' (no flag reference)"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The rollback path depends on a flag-then-backend sequence with a 30-minute or 5% stopping rule, so the backend can roll back while many flag-on clients still hit the 2.14 fallback. This is designed to degrade gracefully, but the blast radius at 100% flag is not sized.",
+     "evidence": "'Proceed with the backend rollback once that share is under 5% or 30 min have elapsed, whichever comes first'"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The load test is sized to 'projected growth' that the artifact never quantifies (no completions per day, no habit count). The p95 pass criterion cannot be verified against an undefined table size.",
+     "evidence": "'a table sized to the backfilled volume plus 12 months of projected growth'; ABSENT: projected completions/day and habit counts"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "A full daily sweep of all users with habits, plus retention for the life of each habit, has no compute or storage budget. The cost of the sweep and of unbounded growth is unstated.",
+     "evidence": "'a full sweep of all users with habits, at least once per 24h'; ABSENT: cost estimate or budget"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "Gate 7 is load-bearing for the no-lost-update guarantee, but the premise about 2.14's write path is unverified. The hotfix fallback is an untracked prod change with no stated rollout or gates.",
+     "evidence": "'This depends on 2.14's write being a single atomic statement or a transaction that reads under the row lock' and 'it gets a hotfix before the canary begins'"
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The copy is labelled final and localized in five languages, but only English strings are given. The disabled label embeds a hard-coded English date format.",
+     "evidence": "'UI copy (final, localized en/es/de/fr/pt-BR)' followed by English-only strings and 'available again on Nov 28'"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "Data residency for the prod snapshots and live data is not stated, though the locales include de and fr. The privacy section does not address where the new per-user records are stored.",
+     "evidence": "ABSENT: data residency statement for streak_events, streak_repairs, and prod snapshot location"
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "No attack: the artifact makes no vendor, provider, or self-hosting claim that this lens would test.",
+     "evidence": "n/a: no claim in the artifact touches this lens"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "No attack: the flows described (saver, reminder pre-prompt, permission) add no extra steps beyond what is described.",
+     "evidence": "n/a: no efficiency claim in the artifact"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "No attack: VoiceOver/TalkBack and Dynamic Type/font-scale results are reported as passing on the streak screen and pre-prompt.",
+     "evidence": "'VoiceOver / TalkBack on streak screen and pre-prompt | device lab | Pass'"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "No attack: the locking, merge, and conflict rules are described in one place, though the rules are dense and duplicated across 2.14, 2.15, backfill, and merge.",
+     "evidence": "n/a: no design claim in the artifact that would be untestable on its face"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 11282,
+    "tokOut": 23021,
+    "usd": 0.013597220000000002,
+    "critMs": 102929
+   },
+   "wallMs": 134359
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The backfill derives one event row per day for each habit's current streak from streak_count, but the proposal's own backfill and merge logic can silently write wrong days; the dry-run and reconciliation only check against streak_count, which is self-referential. Independent day-level validation is a pre-deploy gate that has not been run, so the backfill cannot be trusted to write correct calendar days.",
+     "evidence": "\"the 0-mismatch dry-run and post-run reconciliation then compare against `streak_count`. They are therefore consistency checks, not independent proof that the right calendar days were written.\" and gate 3: \"None of these are done yet.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The dual-write rule skips the streak_count increment on a conflict with an existing backfill row, but backfill rows were derived from streak_count, so a live completion on a backfilled day is never counted as new and a backfilled day could be double-counted or missed depending on ordering; combined with the unverified 2.14 atomicity assumption, streak_count correctness rests on untested concurrency.",
+     "evidence": "\"If step 3 hit a conflict, whether a no-op on a live or saver row or a promotion of a backfill row, `streak_count` is left unchanged\" and \"This depends on 2.14's write being a single atomic statement or a transaction that reads under the row lock. Confirming that against the 2.14 code ... is pre-deploy gate 7.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "The guard against 2.14 pods writing during backfill is check-then-act with no fencing, and the proposal admits a 2.14 pod can start in the window; the fallback to on-call manual override bypasses the guard entirely, so the advisory-lock ordering guarantee is not actually enforced.",
+     "evidence": "\"the registry check is check-then-act and has no fencing, so a 2.14 pod could in principle start in the window between the pre-commit check and the commit. We do not claim the guard alone is sufficient.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "Backfill and merge writes are not reliably reversible: the stale-event repair deletes event rows from streak_events in batches, and rows promoted to live or merged from clients cannot be restored from streak_count, so a mistaken repair or merge is an effectively one-way write to user data.",
+     "evidence": "\"deletes them from `streak_events` in throttled batches of 5k, and records the count per habit\" and \"days are never removed or overwritten by a merge\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "blocker",
+     "claim": "New per-day timestamped completion data linked to a persistent per-install identifier and user_id is being created before the privacy label review and the account-deletion extension are complete; backups and prod snapshots containing personal data persist past deletion, and the destruction date is set after rehearsals rather than before data exists in quantity.",
+     "evidence": "\"Privacy nutrition label and Play data-safety form: not yet concluded as unchanged.\" and \"Backups and snapshots: deleted rows persist in backups until those age out under the existing backup retention\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Restore from backup can resurrect deleted users' streak_events and streak_repairs before the deletion job re-runs, and the restore procedure is explicitly unverified, so erasure obligations are not met by the stated design.",
+     "evidence": "\"this restore procedure is tested in gate 6 and is not yet verified.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Load test sizing is undefined: the projected 12-month table size, the completions/day input, and the growth factor are not stated, and the pass criteria depend on that test. Partitioned unbounded growth (one row per completed habit-day, retained for life of habit) has no stated capacity plan.",
+     "evidence": "\"this proposal does not yet state the projected volume, so it is defined here and must be filled in before the test runs.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The backfill throttle has a stated contradiction: the 200ms auto-pause threshold is below the 250ms ramp gate, and steady-state p95 under 200ms is required for the backfill to progress at all, so the backfill may never complete on a loaded production system and the schedule is unsupported.",
+     "evidence": "\"Because the auto-pause threshold (200 ms) is below the ramp gate (250 ms), gate 5 requires steady-state p95 without the backfill running to be under 200 ms; otherwise the backfill would never progress and the schedule cannot be committed.\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Backfill cost and runtime are not budgeted: the 22-minute dry-run is explicitly unthrottled and the throttled duration is unknown, and a 72-hour ramp slip is accepted without a cost or on-call ceiling.",
+     "evidence": "\"The 22-minute figure is an unthrottled snapshot dry-run; the live run is expected to take longer.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "Load-bearing safety claims are asserted without evidence: the 2.14 atomicity, the concurrent backfill/live-write behavior, the rollback re-enable path, and the 99.5% crash-free requirement are all untested, and the claimed rollout gates rest on a 1,900-user smoke test the artifact itself says is not evidence.",
+     "evidence": "\"The 1,900-user beta figure is a smoke signal only and is not evidence that the 99.5% crash-free requirement is met at 400k MAU.\" and \"This concurrency behavior has not yet been exercised\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The QA report marks the flag-off release-build check, the privacy label review, and the concurrency/dual-write tests as not run, yet the release is scheduled for store submission on 2026-11-02, six days from the artifact date with the gates unscheduled.",
+     "evidence": "\"Flag-off build shows no pre-prompt / permission request / saver | release build | **Not yet run** (required before 2026-11-02 submission)\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The streak recompute definition returns 0 when the most recent completed day is older than yesterday, but the 'today' case is not addressed for timezone changes; combined with immutable write-time day keys, a timezone change can re-key the streak boundary so event-derived and streak_count streaks diverge, which the proposal claims cannot happen by itself.",
+     "evidence": "\"a timezone change cannot make them diverge by itself. Days after a change are keyed in the new timezone\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Client-supplied completion days in merge uploads are bounded only by the server's last sync time and the habit creation date; the bound window is unspecified, so a modified client can fabricate plausible recent completions and inflate streaks, and the saver rule gives the server only yesterday-based validation.",
+     "evidence": "\"within a bounded window before the server's last recorded successful sync for that user\" (window size not stated)"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The streak saver's one-per-30-days scope across all habits is a product decision that the copy does not communicate per habit, and it may surprise users who repair one habit and lose the saver for others.",
+     "evidence": "\"Repairing one habit makes the saver unavailable for every habit.\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "Accessibility is only verified for the streak screen and pre-prompt; the disabled saver button's date-based label and the permission deep-link flow are not covered by the device lab results.",
+     "evidence": "\"VoiceOver / TalkBack on streak screen and pre-prompt | device lab | Pass\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Persistent per-install identifier linked across devices to a user account and timestamped habit completions is new linkability; the store privacy label and Play data-safety declarations have not been reviewed and recorded, and submission is conditioned on that review.",
+     "evidence": "\"A privacy review of the Apple nutrition label ... must be completed and recorded here before the Mon 2026-11-02 store submission\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "The schedule is internally inconsistent: the proposal says the backend deploy is decoupled from store submission, but the 3.2 client's sync behavior depends on 2.15 being present in the canary and the flag ramp depends on a backfill whose duration is unknown, so the 2026-11-16 deploy date is not supported by any measured number.",
+     "evidence": "\"The flag ramp dates are not committed until gate 5 produces the throttled backfill duration estimate\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Three overlapping consistency mechanisms (advisory locks, row locks, registry guard, daily sweep, marker clearing) increase coupling and make the system hard to test as a unit; the proposal has no single owner for the invariant.",
+     "evidence": "\"The lock order (advisory, then row) is fixed everywhere to avoid deadlocks.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 13935,
+    "tokOut": 3105,
+    "usd": 0.00416982,
+    "critMs": 13143
+   },
+   "wallMs": 73773
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The backend deploy depends on a 2.14 write-atomicity assumption that is explicitly unverified, and the dual-write ordering argument is a design argument only; the canary cannot start until gate 7 passes, yet the schedule still names a fixed 2026-11-16 date.",
+     "evidence": "\"until they pass this is a design argument, not a verified property\" and \"This depends on 2.14's write being a single atomic statement or a transaction that reads under the row lock. Confirming that against the 2.14 code ... is pre-deploy gate 7.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Rollback safety depends on the advisory lock ordering, but 2.14 pods do not take the advisory lock, so the 'no double increment' and 'no lost update' guarantees during canary and rollback are unproven and gate 7 is still 'Not yet run'.",
+     "evidence": "\"2.14 pods (during the canary and any rollback) do not take the advisory lock, but their streak_count update takes the same row lock\" with QA row \"2.14/2.15 dual-write race, saver data model | staging | Not yet run\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The backfill is derived from streak_count, so the 'independent' day-level validation is the only real correctness check, and it is itself not run; the 0-mismatch 22-minute dry-run is circular evidence presented as a validity signal.",
+     "evidence": "\"the backfill derives rows from streak_count, and the 0-mismatch dry-run and post-run reconciliation then compare against streak_count. They are therefore consistency checks, not independent proof\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The backfill-vs-2.14 safety relies on a check-then-act registry guard with no fencing; the deploy lock is the only real fence and the overall safety argument is self-admittedly incomplete.",
+     "evidence": "\"We do not claim the guard alone is sufficient.\" and \"the registry check is check-then-act and has no fencing, so a 2.14 pod could in principle start in the window\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The load-test inputs are not defined; the projected volume, completions/day, and growth factor are blank, and the capacity plan is unspecified, yet the 200ms backfill threshold is said to depend on steady-state p95 that has not been measured.",
+     "evidence": "\"this proposal does not yet state the projected volume, so it is defined here and must be filled in before the test runs\" and \"If steady-state p95 is 200 ms or above, the backfill does not start\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Retention for the life of the habit with monthly partitions and no archival means unbounded growth and an unbounded merge/recompute scan on long streaks; the 1,000+ day streak path is only planned, not tested.",
+     "evidence": "\"Archiving or dropping old partitions is not part of 3.2\" and \"cost depends on the length of the current streak\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "blocker",
+     "claim": "New linkable per-day completion data with a per-install identifier is slated to deploy with no recorded privacy label/data-safety review, and the restore/backup erasure path is untested; the deploy gate depends on these being completed.",
+     "evidence": "\"Privacy nutrition label and Play data-safety form: not yet concluded as unchanged.\" and \"the restore procedure is tested in gate 6 and is not yet verified\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Prod snapshot copies and an audit table holding personal data are retained for rehearsals with a destruction deadline of 2026-11-20 that is set after the deploy date and not tied to a verified event.",
+     "evidence": "\"The proposal owner (mobile squad B) destroys them no later than 2026-11-20 (or sooner when the rehearsals complete)\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Notification permission flows and the reminder pre-prompt are gated only by a flag whose 0% state is verified only on a release build that has not yet been run; store submission precondition is unmet.",
+     "evidence": "\"Flag-off build shows no pre-prompt / permission request / saver | release build | **Not yet run** (required before 2026-11-02 submission)\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Backend rollback to 2.14 after clients have written events leaves stale event days; the stale-event repair deletes rows from streak_events and the rollback path depends on several unrehearsed steps.",
+     "evidence": "\"The job copies the event rows ... deletes them from streak_events in throttled batches of 5k\" and \"Rehearsed in gate 4.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Schema and data migration to 2.15 (18.4M backfilled rows, new tables) has no tested rollback to a non-backfilled state other than the untested undo procedure, and the 'schema is additive' claim is verified only on staging.",
+     "evidence": "\"Verified on the staging schema only; to be re-verified on the post-backfill prod snapshot before deploy (pre-deploy gate 2).\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The QA table's passing rows are staging-only and the 99.5% crash-free requirement is met only by a 1,900-user smoke test that the artifact itself says is not evidence; the claim that the build is 'functionally equivalent to 3.1' is unprototyped against the 2.14 changes.",
+     "evidence": "\"The 1,900-user beta figure is a smoke signal only and is not evidence that the 99.5% crash-free requirement is met at 400k MAU.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The schedule states the 16 Nov deploy 'depends only on the go/no-go gates passing', but the go/no-go is on 13 Nov while gates 1-8 include unscheduled tests (load test, restore, dual-write race), so the date is not credible.",
+     "evidence": "\"None of these are done yet.\" and \"Backend deploy: Mon 2026-11-16 10:00 UTC (conditional: go/no-go on Fri 2026-11-13\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "Saver rule is 'one missed day per 30 days across all habits' but the disabled copy shows a date from server; the limit with calendar-based 30 days is hard to explain and the copy 'Repair yesterday' only allows yesterday, limiting usefulness.",
+     "evidence": "\"Streak saver available again on Nov 28\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "No accessibility evidence for the reminder time picker, the disabled saver state, or the deep-link in settings beyond the VoiceOver/TalkBack label on the streak header.",
+     "evidence": "\"VoiceOver / TalkBack on streak screen and pre-prompt | device lab | Pass\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The artifact is extremely long and tightly coupled across backend, mobile, and rollout; many rules (timezone, merge bounds, stale repair) are duplicated across sections with the risk of drift.",
+     "evidence": "the recompute definition is restated in Backend changes, Rollback, and gate 8"
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "No statement on data residency for streak_events or the prod snapshot copies, which contain personal data outside the production environment.",
+     "evidence": "ABSENT: data residency for the restricted prod-snapshot environment and audit table"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Backfill and rehearsal compute, replica and backup storage cost for 18.4M+ growing rows is not budgeted; the capacity plan is deferred to gate 5.",
+     "evidence": "\"gate 5 also records a capacity plan ... The size alerting threshold is set from this plan\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 15656,
+    "tokOut": 2712,
+    "usd": 0.00431752,
+    "critMs": 14324
+   },
+   "wallMs": 47779
+  }
+ ],
+ "artifact": "# Release proposal: Stride 3.2 — Streak Sync\n\nOwner: mobile squad B · Store submission: Mon 2026-11-02 (flag at 0%, see Rollout plan) · Backend deploy: Mon 2026-11-16 10:00 UTC (conditional: go/no-go on Fri 2026-11-13 against \"Pre-deploy gates\" below; if any gate is not passed, the backend deploy slips) · Epic: STR-1190\n\nScheduling note: the store submission and the backend deploy are decoupled. The 3.2 build ships with `streak_sync_v2` at 0% and is functionally equivalent to 3.1 plus copy changes. Every new user-facing flow (streak sync, streak saver, reminder pre-prompt, and the notification permission requests) is behind `streak_sync_v2`, so with the flag at 0% none of them can appear. The build was QA'd against 2.14 (see QA report), so it does not need streaks-svc 2.15 to be live. The pre-deploy gates (one needs a load test at 12-month projected size, one needs the account-deletion job extended and tested) cannot be completed by 2026-10-30, so the go/no-go moves to 2026-11-13. The flag ramp dates are not committed until gate 5 produces the throttled backfill duration estimate (measured on a prod snapshot before the go/no-go, not after the live backfill). If that estimate is longer than 72 hours, the go/no-go reviews it, and the ramp dates slip rather than the window being compressed. Nothing user-visible is on a deadline because the flag stays at 0% and 3.2 behaves like 3.1 until the ramp starts. The 2026-11-16 deploy date depends only on the go/no-go gates passing, not on the backfill duration. The backfill duration affects only the ramp dates, which are explicitly uncommitted. The 3.2 client has no dependency on 2.15 while the flag is at 0%.\n\n## What ships\n\n- Streaks now sync across devices. A habit completed on the watch or tablet counts toward the same streak on the phone.\n- \"Streak saver\": one missed day per 30 days, per user across all of their habits, can be repaired from the streak screen.\n- Optional streak reminder notification at the user's chosen time.\n\n## UI copy (final, localized en/es/de/fr/pt-BR)\n\n- Streak screen header: \"12-day streak\" (VoiceOver/TalkBack label: \"Current streak, 12 days\").\n- Saver button: \"Repair yesterday\" (disabled state label: \"Streak saver available again on Nov 28\"; the date is the server-returned `saver_available_on` value, see Backend changes).\n- Reminder pre-prompt sheet: \"Want a nudge at 8:00 PM so you don't lose your streak?\" Buttons: \"Remind me\" / \"Not now\".\n\n## Notifications permission\n\n- All flows in this section are gated by `streak_sync_v2`. With the flag at 0% (including every user on a 3.2 build before the ramp), the pre-prompt is never shown and no OS permission is requested. Flag-gating of these flows is verified on the release build before store submission (see the submission precondition below).\n- We do not request OS notification permission on launch or on upgrade.\n- The in-app pre-prompt sheet is shown only after the user reaches a 3-day streak (and the flag is on for that user), and only once per 30 days if they choose \"Not now\".\n- iOS: if the user taps \"Remind me\" we request provisional authorization first; full authorization is requested only if they enable sound in reminder settings.\n- Android 13+: POST_NOTIFICATIONS is requested only after \"Remind me\". Denial is stored and the reminder toggle shows \"Turn on in system settings\" with a deep link.\n- OS permission state cannot be reverted by us. If the flag is later set back to 0%, a permission already granted stays granted, but no reminder is scheduled or shown.\n\n## Backend changes (streaks-svc 2.14 → 2.15)\n\n- New table `streak_events (user_id, habit_id, day, source_device, origin, created_at)`; streak is computed from events, idempotent on `(user_id, habit_id, day)`. `origin` is an enum (`live`, `backfill`, `saver`) set only by the server, never taken from the client.\n- Definition of `day`: `day` is the local calendar date in the user's stored timezone at the time the completion is written (or, for backfill rows, at the time the backfill derives them). It is immutable. A later timezone change never re-keys existing event days and does not change `streak_count`. Both `streak_count` (via the 2.14 rule) and `streak_events` use the same write-time date, so a timezone change is not expected to make them diverge by itself. That expectation is not a verified property: QA covered it on staging only, and it is tested in gates 3 and 8. Days after a change are keyed in the new timezone, and the day-boundary effects are the same for the 2.14 rule and the events. The recompute rule below also defines the case where the user moves west and the most recent event day is later than the new local date. The timezone-change cohort (last 90 days) is validated separately in gate 3.\n- `habits.streak_count` is **kept** and dual-written by 2.15 so 3.1 clients (which read `streak_count` from `/v2/habits`) keep working unchanged.\n- How 2.15 computes the dual-written `streak_count`: it is never derived from events on an ordinary completion. On a completion, 2.15 runs one transaction that (1) takes the per-user advisory lock, (2) takes a row lock on the `habits` row (`SELECT ... FOR UPDATE`), (3) inserts the event (`ON CONFLICT (user_id, habit_id, day)` does nothing, except that it promotes an existing `origin = 'backfill'` row to `live` with the write's real `source_device` and `created_at`), and (4) applies the same increment/reset rule that 2.14 applies to the locked `streak_count` value **only if step 3 inserted a new row**. If step 3 hit a conflict, whether a no-op on a live or saver row or a promotion of a backfill row, `streak_count` is left unchanged, because that day is already counted (backfill rows are derived from `streak_count`, and saver rows update it when written). This prevents a double increment. Ordering check: if a live write lands first, it increments `streak_count` and inserts a live row, and a later backfill reads the already-incremented `streak_count`, so its row for that day is a conflict no-op. If the backfill lands first, `streak_count` already includes that day, so the live write must not increment it. Either order counts each day exactly once. Both orders are tested in gates 1 and 7, and until they pass this is a design argument, not a verified property. The lock order (advisory, then row) is fixed everywhere to avoid deadlocks. 2.14 pods (during the canary and any rollback) do not take the advisory lock, but their `streak_count` update takes the same row lock, so the two versions serialize on the `habits` row and neither loses the other's update. This depends on 2.14's write being a single atomic statement or a transaction that reads under the row lock. Confirming that against the 2.14 code and testing 2.14 and 2.15 pods writing the same habit concurrently is pre-deploy gate 7. If 2.14 does not meet this, it gets a hotfix before the canary begins. The hotfix is deployed and gate 7 re-run before the go/no-go. Gate 7 is part of the go/no-go, so the canary cannot start with this assumption unverified. Gate 7 also covers a completion landing on a day already present as a backfill, live, or saver row (no second increment).\n- Streak saver data model: a repair is recorded in a new table `streak_repairs (user_id, habit_id, repaired_day, created_at)`.\n  - Scope: the limit is one repair per user per 30 days across all of the user's habits, matching the copy and the single `saver_available_on` date on the streak screen. Repairing one habit makes the saver unavailable for every habit.\n  - Limit: it is calendar-based in the user's stored timezone. A repair is rejected if the local date of the user's most recent `streak_repairs.created_at` (any habit, converted to the user's stored timezone) plus 30 days is after the user's current local date. The check runs inside the same transaction as the repair, under the per-user advisory lock, so concurrent repairs on different habits cannot both pass.\n  - Day validation: the client does not choose the day. The server derives `repaired_day` as yesterday in the user's stored timezone (matching the \"Repair yesterday\" copy) and ignores or rejects (HTTP 400) any client-supplied day that differs. The server also requires that yesterday has no event for that habit (it was actually missed), that the day before yesterday is a completed day (live, backfill, or saver) so the repair bridges exactly one gap, and that the habit existed on `repaired_day`. Future days, already-completed days, days outside the streak window, and multi-day gaps are rejected. Together with the one-per-30-days limit, this means a modified client cannot use the saver to fabricate more than one server-derived day per 30 days.\n  - The server returns `saver_available_on` (a local date) with the streak response, and the client renders the disabled label from that value and never computes it locally, so the copy and the enforcement use one derivation. If the user changes timezone, the date is recomputed from the stored `created_at` in the new timezone.\n  - A successful repair inserts a `streak_events` row for the missed day with `origin = 'saver'` and updates `streak_count` under the same advisory and row locks as a merge, recomputing the run per the merge rule below, so 3.1 clients see the repaired streak. Saver rows count as completed days for streak computation, merge, and reconciliation, and are never removed by a merge.\n  - The saver needs the server: in local-only fallback (flag off, 3.2 client on 2.14, or a user without the `backfill_done` marker) the saver button is not shown, so the limit cannot be bypassed offline. No new copy is needed for this.\n- Backfill: one `streak_events` row per day of each habit's current streak, run as a resumable job (batches of 5k, checkpointed), dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches vs `streak_count`.\n- Day mapping: a habit with `streak_count` N whose most recent completed day is D (from existing completion records, in the user's stored timezone) gets one row for each day D−N+1 … D.\n- Validity of the dry-run: the backfill derives rows from `streak_count`, and the 0-mismatch dry-run and post-run reconciliation then compare against `streak_count`. They are therefore consistency checks, not independent proof that the right calendar days were written. The independent check is listed under Pre-deploy gates (gate 3, a blocking gate): backfilled days are compared against the existing per-day completion history for every habit (full population, not a sample), and any day-level disagreement blocks the deploy. The same day-level comparison runs on the live backfill for every user. A user whose backfilled days disagree with completion history has the marker cleared and is excluded exactly like a reconciliation mismatch (see enablement criterion below). No user's backfilled history is read by sync until that user passes.\n- Concurrent live writes during backfill: dual-write starts at the 2.15 deploy, before the backfill job starts, so live writes and backfill rows can target the same `(user_id, habit_id, day)`. The backfill inserts with `ON CONFLICT (user_id, habit_id, day) DO NOTHING` and never updates or deletes an existing event row. A live write that finds an existing `origin = 'backfill'` row for its day promotes that row to `origin = 'live'`, with the live write's real `source_device` and `created_at`, and does not change `streak_count`. A live write that finds a live or saver row is a no-op. So whichever lands first, the live information is never lost and a live row is never overwritten by a synthesized one. Each user's batches run in a transaction that takes a per-user advisory lock, which live writes for that user also take, and reads that user's habit rows under `SELECT ... FOR UPDATE` (the same row lock 2.14 writes take) before reading `streak_count`, so the final batch and the `backfill_done` marker are ordered against live writes. Backfilled rows are marked `origin = 'backfill'` (and `source_device` is a fixed server-set constant), so they are distinguishable in reconciliation and undo. This concurrency behavior has not yet been exercised; a staging test (live writes from 3.1 and 3.2 clients on the same habit-days while the backfill runs) is a required pre-deploy gate and must pass before 2.15 goes to prod.\n- Scope of the ordering guarantee and the 2.14 guard: the advisory-lock ordering holds only while every writer is on 2.15. 2.14 pods neither write events nor take the advisory lock. For that reason the backfill job starts only after the 2.15 rollout is at 100% with no 2.14 pods serving. The guard is automated rather than a manual step: every streaks-svc pod registers its version in a heartbeat registry, and the backfill job checks the registry before each batch and again immediately before committing each batch (inside the batch transaction, after the row locks are held), and auto-pauses (alerting on-call) if any 2.14 pod is registered or the registry is unavailable. Registry entries carry a heartbeat TTL of 60s and are removed on graceful shutdown, so a dead pod that is still registered expires on its own within 60s and cannot block the backfill indefinitely. A registry outage fails closed (pause and alert). On-call may confirm from the orchestrator's pod list that no 2.14 pod is running and resume, but only with a second approver, the deploy lock below still held, and the override logged. The job resumes from its checkpoint when the check passes again.\n  - Limits of the guard: the registry check is check-then-act and has no fencing, so a 2.14 pod could in principle start in the window between the pre-commit check and the commit. We do not claim the guard alone is sufficient. Three other layers cover that window: (a) a deploy lock: while the backfill is running, it holds a lock in the deploy pipeline that rejects any rollout of a 2.14 streaks-svc image (admission rule), so a 2.14 pod cannot be started by a deploy or rollback until the backfill has been paused and the lock released. This is the fencing, since it prevents the start rather than detecting it after the fact, and it is exercised in gate 5, including that a manual override does not bypass it; (b) the backfill reads and 2.14's `streak_count` writes serialize on the `habits` row lock (the property gate 7 verifies), so a racing 2.14 write cannot be lost or torn; and (c) any resulting divergence (a 2.14 write after a user's final batch leaves events behind `streak_count`) is detected by the full divergence sweep, which clears that user's marker and returns them to the `streak_count` fallback. Starting 2.14 pods during the backfill is also prohibited by the rollback runbook, which lists \"pause the backfill\" (and then releasing the deploy lock) as an explicit step before any 2.14 redeploy.\n  - During the 10% canary the backfill is not running; 2.14 pods write only `streak_count`, and because the backfill derives from `streak_count` those writes are picked up when it runs.\n- Backfill completeness is tracked per user (`backfill_done` marker written in the same transaction as that user's final batch). Sync reads and merges for a user without the marker fall back to `streak_count`, and the flag is not honored for that user (client stays on local-only streaks), so a partially backfilled user never sees an incomplete history.\n- `source_device` handling: it is the per-install random ID, but the server does not trust it. The server validates it as a UUID and rejects (HTTP 400) any other value, including the literal `'backfill'`. Undo, reconciliation, and the backfill job key on the server-set `origin` column, never on `source_device`, so a client cannot cause live rows to be treated as backfill rows or deleted by undo.\n- The dry-run result is from a snapshot only. The live run is verified separately: after completion, a reconciliation query compares per-habit event-derived streaks against `streak_count` for every user, and the independent day-level comparison above runs for every user. The event-derived streak uses the same definition as the merge recompute (below), including the zero rule for a run that ended before yesterday. Enablement criterion: `streak_sync_v2` is enabled only when every user holding a `backfill_done` marker reconciles to 0 mismatches and passes the day-level comparison. Mismatches are not waived as \"explained\": any mismatched user has the marker cleared and is excluded (so is not counted in the marker-holder population) until the cause is fixed and that user passes both checks. The excluded count is reported, and if it exceeds 0.1% of users with habits, or any mismatch has an unknown cause, the flag is not enabled for anyone.\n- Backfill undo: if the backfill produces wrong rows, the procedure is (1) set `streak_sync_v2` to 0%, (2) pause the job, (3) clear `backfill_done` markers in bulk (all users, or the affected cohort), (4) delete rows with `origin = 'backfill'` in batches of 5k (throttled as below), (5) fix the cause and re-run the backfill. Between steps 3 and 5, all affected users read `streak_count` (the fallback), so nothing user-visible depends on the deleted rows. Because live writes promote backfill rows to `origin = 'live'` (see concurrent writes above), step 4 never deletes a day that a live write recorded, and the undo loses no live `source_device` or `created_at` information. Deleted backfill rows are fully reconstructible, because the backfill is a deterministic function of `streak_count` and is idempotent on re-run. The undo is a pre-deploy gate: it is rehearsed on the staging and post-backfill snapshot copies.\n- Scale and load: `streak_events` is range-partitioned monthly on `day` (the unique key `(user_id, habit_id, day)` includes the partition key). In 3.2 rows are kept for the life of the habit, because a current streak can span arbitrarily long history; growth is one row per completed habit-day, starting from the 18.4M backfilled rows. The read path is bounded and does not scan history on every read: streak reads return the materialized `streak_count` (a single-row read). Ordinary completion writes apply the incremental rule to the locked `streak_count` and do not scan history. The event-derived streak is computed only on merge (offline/re-enable upload), on saver repair, and in the reconciliation jobs, scanning backward from the latest day and stopping at the first gap, so cost depends on the length of the current streak, not on table size.\n  - Load-test sizing: this proposal does not yet state the projected volume, so it is defined here and must be filled in before the test runs. The test table is the 18.4M backfilled rows plus 12 months of growth, computed as (trailing-90-day average completed habit-days per day, from prod analytics) × 365 × a stated growth factor. The current habit count, the completions/day figure, the growth factor, and the resulting row count are recorded in gate 5 and approved at the go/no-go before the load test is considered valid. The test includes habits with streaks over 1,000 days and runs the read, write, and merge paths (pre-deploy gate 5, with a stated pass criterion).\n  - Capacity plan: because rows are retained for the life of the habit, gate 5 also records a capacity plan derived from the same inputs: projected table and index size per month, partition count, replica and backup storage headroom, and the point at which the plan is revisited. The size alerting threshold is set from this plan, and the plan is approved at the go/no-go together with the load-test inputs. Archiving or dropping old partitions is not part of 3.2, since current streaks can span old history; any such change needs its own proposal.\n  - Backfill throttling: runs off-peak, rate-limited to the batch size above with a pause between batches, and auto-pauses if streaks-svc p95 exceeds 200 ms or replica lag exceeds 5 s, resuming from its checkpoint. The two thresholds serve different purposes: 200 ms is the backfill's own circuit-breaker, deliberately stricter than the 250 ms ramp gate so the backfill can never be the cause of a ramp-gate breach. Because the auto-pause threshold (200 ms) is below the ramp gate (250 ms), gate 5 requires steady-state p95 without the backfill running to be under 200 ms; otherwise the backfill would never progress and the schedule cannot be committed. If steady-state p95 is 200 ms or above, the backfill does not start and the go/no-go reviews the cause. This is checked on the prod snapshot before the go/no-go, so the schedule is not committed on an unmeasured assumption.\n  - The 22-minute figure is an unthrottled snapshot dry-run; the live run is expected to take longer. The throttled duration measured in gate 5 is the estimate used to schedule the flag ramp.\n- Dropping `streak_count` is **not** part of this release. It is scheduled for 3.4, after the minimum supported app version is raised past 3.1 (tracked in STR-1244).\n\n## Pre-deploy gates (all must pass and be appended here before the Fri 2026-11-13 go/no-go)\n\nNone of these are done yet.\n\n1. Staging concurrency test: live writes from 3.1 and 3.2 clients on the same habit-days while the backfill runs, in both orderings (live first, backfill first); no overwritten live rows, backfill rows correctly promoted to `live` without changing `streak_count`, no double or missed increment, correct markers, 0 reconciliation mismatches.\n2. Post-backfill prod-snapshot rehearsal: restore a prod snapshot, run the backfill on it, then re-run the 2.14-against-migrated-DB and 3.2-client-against-2.14 checks against that post-backfill data.\n3. Independent backfill validation (blocking: any day-level disagreement fails the gate): compare backfilled days against the existing per-day completion history for every habit on the post-backfill snapshot (full population), with the long-streak (over 100 days) and timezone-change (last 90 days) cohorts reported separately.\n4. Backfill undo rehearsal (procedure above) and the post-rollback re-enable procedure including the stale-event repair step (and restoring the archived rows from the audit table to undo a mistaken repair) and the offline-completion merge (see Rollback), both on the snapshot. Also verify that a client-supplied `source_device = 'backfill'` is rejected, that undo deletes only `origin = 'backfill'` rows, that promoted live rows survive undo, and that merge uploads outside the day bounds (future days, days before habit creation, days older than the allowed window, oversized batches) are rejected and leave `streak_events` and `streak_count` unchanged.\n5. Load test of the streak read/write/merge paths at the projected table size defined under \"Scale and load\" (inputs and capacity plan recorded here and approved first), including the backfill throttle behavior, the backfill auto-pause on a registered 2.14 pod, expiry of a stale registry entry within the TTL, the deploy lock rejecting a 2.14 rollout while the backfill runs (including with the manual override), and a recorded throttled backfill duration measured on the prod snapshot. Pass criteria: steady-state p95 without the backfill under 200 ms for reads, writes, and merges (including habits with streaks over 1,000 days), and p95 under 250 ms with the backfill running at its throttled rate while it still makes progress, with the numbers appended here.\n6. Account-deletion test: the existing account-deletion job is extended to cover `streak_events` and `streak_repairs`; deleting an account (and deleting a habit) removes their rows (see Privacy). Includes a restore test: restore a backup containing deleted accounts and verify the deletion job is re-run against the deletion log before the restored copy serves traffic.\n7. Dual-write race test: 2.14 and 2.15 pods writing the same habit concurrently (canary and rollback shapes); no lost `streak_count` update; a completion landing on an existing backfill, live, or saver row does not increment `streak_count` a second time. Includes reviewing 2.14's write path for atomicity.\n8. Streak saver tests: the calendar-based 30-day limit enforced per user across multiple habits and under concurrent repairs (including concurrent repairs on different habits), `saver_available_on` matching server enforcement across timezones, timezone changes, and the boundary day, server-derived `repaired_day` (client-supplied differing, future, already-completed, and multi-day-gap days rejected), repair reflected in `streak_events`, `streak_count`, and 3.1 reads, saver days preserved by the merge, and saver hidden in local-only fallback. Also timezone-change recompute cases: moving west so the most recent event day is later than the new local date, and moving east across the today/yesterday boundary, with event-derived and `streak_count` values compared.\n\nIf any gate fails, the deploy does not proceed.\n\nBefore the store submission on Mon 2026-11-02, the privacy label review described under Privacy must also be recorded, and a test on the release build must confirm that with `streak_sync_v2` at 0% no reminder pre-prompt, OS notification permission request, or saver button appears; submission does not proceed without both. Both are owned by mobile squad B and are scheduled to be completed and recorded here by Fri 2026-10-30, so that a slip is visible before 2026-11-02. Gates 1–8 are backend gates and are not submission preconditions, because the build does not depend on 2.15 while the flag is at 0%.\n\n## QA report summary (build 3.2.0 (4410), streaks-svc 2.15.0-rc2)\n\n| Area | Env | Result |\n|---|---|---|\n| Multi-device sync (phone + watch + tablet), offline completion then reconnect | staging | Pass |\n| Timezone change mid-streak (UTC−8 → UTC+9), DST boundary | staging | Pass |\n| 3.1 client against 2.15 API (N-1 compatibility) | staging | Pass |\n| 3.2 client against 2.14 API (server rollback scenario) | staging | Pass (sync silently disabled, local streak shown) |\n| Streak saver: limit 1 per 30 days enforced server-side | staging | Pass (data-model tests are gate 8) |\n| VoiceOver / TalkBack on streak screen and pre-prompt | device lab | Pass |\n| Dynamic Type XXL / Android font scale 200% | device lab | Pass, no truncation |\n| Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87% |\n| Flag-off build shows no pre-prompt / permission request / saver | release build | **Not yet run** (required before 2026-11-02 submission) |\n| Live 3.1/3.2 writes during backfill (concurrency) | staging | **Not yet run** (pre-deploy gate 1) |\n| Post-backfill prod-snapshot rehearsal (2.14 vs migrated DB, 3.2 client vs 2.14) | prod snapshot | **Not yet run** (pre-deploy gate 2) |\n| Backfill undo, load test, account deletion | staging / snapshot | **Not yet run** (gates 3–6) |\n| 2.14/2.15 dual-write race, saver data model | staging | **Not yet run** (gates 7–8) |\n\nAll sync and rollback rows marked Pass above were run on staging data, not on prod data after a live backfill. Staging remote config was exported from prod and only `streak_sync_v2` differed (on in staging, the flag under test, so the difference is intentional); prod values for every other key were identical during QA.\n\nThe 1,900-user beta figure is a smoke signal only and is not evidence that the 99.5% crash-free requirement is met at 400k MAU. That requirement is enforced as a live gate during the staged store rollout and at every flag step (see Rollout plan, step 4), on the real population, and the rollout halts if it is breached. The staging-only results are why the prod-snapshot rehearsal (gate 2) is a blocking gate.\n\nThe not-yet-run rows are deliberately gates, not claims. This proposal asks for approval conditional on them passing, and the backend deploy is blocked until they do. Until a gate passes, the property it covers (2.14 write atomicity, backfill/live-write concurrency, the rollback and re-enable path, day-level backfill correctness) is a design assumption and is not relied on by any schedule commitment. Results of the not-yet-run rows will be appended here. If they fail, the deploy does not proceed.\n\n## Rollout plan\n\n1. Store builds: submit 3.2 on Mon 2026-11-02 with `streak_sync_v2` at 0% (no dependence on 2.15). Only after the go/no-go on 2026-11-13: 10:00 UTC on 2026-11-16 deploy streaks-svc 2.15 (canary 10% of pods for 1h, then full). Backfill job starts only after the deploy is at 100% with no 2.14 pods serving (enforced by the automated guard and deploy lock above).\n2. Remote config `streak_sync_v2` stays at 0% until the backfill job has completed and the live reconciliation (see Backend changes) meets the enablement criterion. Then: 1% → 10% → 50% → 100% of 3.2 users, 24h between steps. Users without a `backfill_done` marker are excluded regardless of flag percentage.\n3. iOS phased release (7 days) and Play staged rollout 10% → 50% → 100% in parallel; the flag gates the feature independently of store rollout.\n4. Gates to advance each step: crash-free sessions ≥ 99.5%, `streak_mismatch_total` (server vs client recompute) < 0.1% of synced users, `streak_dualwrite_divergence_total` = 0 divergences (\"backfill pending\" users are reported separately and are not flag-eligible), streaks-svc p95 < 250ms, support tickets tagged `streak` < 2× 4-week baseline.\n   - `streak_mismatch_total` is a ramp halt threshold measured on live clients; it is not an enablement criterion and does not relax the reconciliation criterion required before the flag is enabled. Every mismatching user is excluded (marker cleared) and root-caused, and a mismatch with an unknown cause halts the ramp regardless of percentage.\n   - `streak_dualwrite_divergence_total` comes from two server-side jobs comparing `habits.streak_count` against the event-derived streak: (a) an incremental job over all users with recent writes, including 3.1 clients and users not in the flag cohort; and (b) a full sweep of all users with habits, at least once per 24h and before each flag step, which includes users with no recent writes, users without a `backfill_done` marker (compared against whatever events exist, with expected gaps reported separately as \"backfill pending\"), and users whose marker is present. A user with a marker whose derived streak diverges from `streak_count` counts as a divergence and has the marker cleared, which returns that user to the `streak_count` fallback.\n\n## Rollback\n\n- Ordering: flag first, then backend. If a backend rollback is needed while `streak_sync_v2` is above 0%: (1) set the flag to 0%, (2) pause the backfill job if it is running and then release its deploy lock (the automated pod-version guard also pauses it, since it must not run alongside 2.14 pods, which do not take the advisory lock), (3) wait for the config fetch window (≤ 15 min, confirm via client fetch metrics), (4) redeploy streaks-svc 2.14. Do not roll back the backend first, except in the failing-backend case below.\n- Clients that have not refetched config: some flag-on clients (offline, backgrounded for long periods, or on a stale cache) will not see the flag change within the window. Correctness does not depend on them fetching: a 3.2 client calling 2.14 gets no sync endpoints and silently reverts to local-only streaks (QA, staging). The wait only reduces how many clients hit that fallback. Track the share of flag-on active clients with config age > 15 min (client fetch metric `config_age_seconds`). Proceed with the backend rollback once that share is under 5% or 30 min have elapsed, whichever comes first. The 5% is of flag-on clients, not of MAU, but at 100% flag it can still be tens of thousands of clients, so size it from the live count at decision time. Those clients degrade through the fallback above: completions they record while on 2.14 stay in local streaks and are not lost, and they are merged on re-enable by the rule below.\n- Data while 2.14 is serving: 2.14 writes only `streak_count`; it does not write `streak_events` or dual-write. `streak_count` therefore stays correct (3.1 clients and 2.14 continue as before), but `streak_events` falls behind for any completion recorded in that window, and event-derived streaks will diverge from `streak_count`. Events written by 2.15 before the rollback remain in `streak_events`, including days that 2.14 may since have reset out of `streak_count` after a missed day (stale event days).\n- Streak recompute definition (used by merge, saver repair, and reconciliation): the streak is the consecutive-day run (completed and saver days) ending at the habit's most recent completed day, **but only if that day is today or yesterday in the user's stored timezone; if the most recent completed day is older than yesterday the streak is 0**, matching the 2.14 reset rule. If the most recent completed day is later than the user's current local date (the user moved west after the day was keyed), it is treated as today, so the streak is neither zeroed nor extended by the timezone change. A merge therefore cannot restore a streak that 2.14 already broke.\n- Merge rule for offline/fallback completions on re-enable: the client keeps a per-day local completion log (day in the user's stored timezone) and, once the user has a `backfill_done` marker and the flag is on, uploads every local completion day since its last successful sync. The server validates every uploaded day before merging: the day must be no later than the user's current local date, no earlier than the habit's creation date, and no more than 45 days before the server's last recorded successful sync for that user (the client's claimed sync time is not trusted), and a single upload is capped at 45 days per habit and 500 days total and rate-limited to 10 uploads per user per hour. The 45-day window is sized to cover a rollback and re-enable period; the exact values are final only once rehearsed in gate 4, and any change is recorded here. Out-of-bounds days are rejected (HTTP 400) and logged, and none of them is written. This limits what a modified client can fabricate to plausible recent days, because merged days are never removed. The server merges the valid days by set union: each uploaded day is inserted into `streak_events` with the same conflict rule as live writes (no-op on an existing live or saver row, promotion of a backfill row), and days are never removed or overwritten by a merge. Because merged rows are `origin = 'live'`, they cannot be separated from real live rows by origin. Every accepted merge is therefore logged (user, habit, request ID, days written), so a bad merge can be reversed by removing exactly the rows from the logged request. Saver days already in `streak_events` count as completed days in the union, so a repair is never undone by a merge; clients do not upload saver days because the saver is hidden in local-only fallback. After the union, `streak_count` is recomputed under the advisory and row locks by the recompute definition above, and the server value is returned to the client, which adopts it. A client's local streak number is never trusted over the server; only its (validated) completion days are. Completions made on 2.14-era `streak_count` that were never evented are filled by the backfill re-run. Rehearsed in gate 4.\n- Re-enable procedure after a rollback: redeploy 2.15 to 100%, clear `backfill_done` markers in bulk (users stay on the `streak_count` fallback meanwhile), then run the stale-event repair and the backfill re-run, then the full reconciliation until the enablement criterion is met, then restart the flag ramp at 1%. Details:\n  - Stale-event repair: because merges and the backfill only add days, a habit whose events run longer than `streak_count` (2.14 reset the count after a missed day while old events remain) is repaired by an operator-run server-side job, which is separate from the merge and never runs on a client request. For each habit where the recompute definition disagrees with `streak_count`, `streak_count` is treated as authoritative (2.14 was the sole writer). The job copies the event rows lying outside the days D−N+1 … D, and contiguous with that run, into a restricted audit table, deletes them from `streak_events` in throttled batches of 5k, and records the count per habit. Rows of every origin are archived before deletion, with `origin = 'live'` rows keeping their `source_device` and `created_at`, so restoring a habit's rows from the audit table is the undo for a mistaken repair (rehearsed in gate 4). The audit table is kept until the repair is verified by the full reconciliation, within the destruction deadline under Privacy.\n  - The backfill re-run is idempotent via `ON CONFLICT DO NOTHING` and fills the missing days from `streak_count`. Habits whose events are behind rather than ahead are fixed by this fill.\n  - The flag stays at 0% until the enablement criterion is met; clients upload their local completion days under the merge rule above. This procedure, including the stale-event repair, is rehearsed on the snapshot (pre-deploy gate 4).\n- If the backend is already failing and cannot wait, the same fallback applies to all 3.2 clients: local-only streaks against 2.14. No completion data is lost (`streak_count` remains authoritative for 3.1 clients and 2.14, local streaks hold the rest), and sync resumes only through the re-enable procedure above. This path has been exercised only on staging; the post-backfill rehearsal (pre-deploy gate 2) covers it against prod-shaped data.\n- Feature: set `streak_sync_v2` to 0%; 3.2 clients revert to local-only streaks within one config fetch (≤ 15 min) for clients that can fetch; see the stale-client handling above for the rest. Verified in QA (staging).\n- Backend: redeploy streaks-svc 2.14 (after the flag step above); schema is additive and `streak_count` is dual-written while 2.15 serves, so 2.14 is expected to run against the migrated database unchanged. Verified on the staging schema only; to be re-verified on the post-backfill prod snapshot before deploy (pre-deploy gate 2).\n- Backfill itself: see \"Backfill undo\" under Backend changes.\n- Store builds: halt phased/staged rollout; 3.2 with flag off is functionally equivalent to 3.1 plus copy changes.\n\n## Privacy\n\n- `source_device` stores a per-install random ID, not a hardware identifier (backfilled rows use a fixed server-set constant, and the server rejects client-supplied values that are not valid UUIDs). No new data shared with third parties.\n- Privacy nutrition label and Play data-safety form: not yet concluded as unchanged. 3.2 adds a persistent per-install identifier stored with timestamped per-day habit completions, linked to the account across a user's devices, which is new linkability. A privacy review of the Apple nutrition label (data types, \"linked to you\", tracking) and the Play data-safety declarations against the updated data inventory must be completed and recorded here before the Mon 2026-11-02 store submission; any required label or form updates ship with that submission. This is intentionally a blocking precondition, not an assertion that the label is unchanged: if the review is not recorded by 2026-11-02, the store submission slips, and the backend schedule is unaffected because the two are decoupled. No per-install identifier is stored with per-day completions until 2.15 deploys, which is after this review and after gate 6.\n- `streak_events` and `streak_repairs` hold per-day completion records linked to `user_id` and `habit_id`. The completion data itself is of the same category as existing habit data, but these tables are new, per-day, timestamped, and carry the per-install identifier above, so they are treated as new linkable data for the label review and are listed in the data inventory as such. Retention: rows are kept for the life of the habit and deleted when the habit is deleted.\n- Account deletion: the existing account-deletion job does not yet cover `streak_events` or `streak_repairs`. Extending it to cover both, and testing that account and habit deletion remove the rows within the existing deletion SLA, is pre-deploy gate 6, and 2.15 does not deploy until it passes, so no `streak_events` data is created before deletion works. Backups and snapshots: deleted rows persist in backups until those age out under the existing backup retention, and any restore must re-run the deletion job against the deletion log before serving traffic; this restore procedure is tested in gate 6 and is not yet verified. Because 2.15 does not deploy until gate 6 passes, including this restore test, no backup contains `streak_events` or `streak_repairs` rows before the restore procedure has been verified, so the erasure obligation cannot be breached by a restore before then. The prod snapshots and copies used for rehearsals and the dry-run contain personal data and stay in the restricted prod-snapshot environment. They are copies of data that already exists (the rehearsals create no new categories of data), and the post-backfill copies hold derived events for the same users. The audit table used by the stale-event repair also contains personal data and is held under the same restrictions and destroyed with them. The proposal owner (mobile squad B) destroys them no later than 2026-11-20 (or sooner when the rehearsals complete) and records the destruction here.",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 60204,
+  "tokOut": 79419,
+  "usd": 1.0349780000000002,
+  "critMs": 485983
+ },
+ "status": "cap"
+}

@@ -1,0 +1,101 @@
+{
+ "approach": "single-strong",
+ "case": "plan-11",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "New sign-ups who pick SMS get `NOTICE_PREV = phone`, and STOP, failure fallback and rollback all restore that value. CallNotify ends 2027-03-31 and its replacement is explicitly out of scope (LIBSYS-330). After that date these patrons are switched to a channel that no longer exists and silently lose hold notices. This breaks the 'no patron may lose hold notices' constraint.",
+     "evidence": "\"new sign-ups who pick SMS get `phone`\"; Out of scope: \"what replaces calls for patrons who stay on phone after March 2027 (LIBSYS-330)\"; the 'print notice once CallNotify has ended' handling exists only in `sms_rollback.pl`, not in the STOP/fallback receiver."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Protection against lost notices depends on a single ~150-line webhook receiver. If it is down or misses a callback, the provider has already blocked the number after STOP, but the patron stays on SMS and gets nothing. The same happens when a carrier drops a message without a status callback. The plan has no retry or reconciliation job, no receiver health check or alerting, and no sweep of stale queued or undelivered SMS rows.",
+     "evidence": "ABSENT: reconciliation/monitoring for receiver downtime or missed callbacks; \"the provider handles carrier-required keyword replies and blocks further sends to that number\" while the switch back to `NOTICE_PREV` happens only in the receiver."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The rollback claim contradicts the design. It says post-launch enrollees end up on exactly the prior channel, but new sign-ups are assigned `phone` regardless of their real prior channel. `NOTICE_PREV` also holds a single value, so patrons who had multiple transports (for example email and phone) would lose one on restore. The restore logic has no handling for this.",
+     "evidence": "\"Patrons who enrolled after launch end up on exactly the channel they had before.\" vs \"new sign-ups who pick SMS get `phone`\"."
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The receiver's DB privileges are listed as UPDATE and INSERT only, yet it must find all patrons by SMS number and re-queue the same notice content. That requires SELECT on `borrowers` and `message_queue`, which is not listed, so either the design is incomplete or broader read access (patron PII) will be granted ad hoc. There is no replay protection beyond signature verification.",
+     "evidence": "\"dedicated DB user with UPDATE only on `borrower_message_transport_preferences` and `borrower_attributes`, and INSERT only on `message_queue` and `messages`\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The $600 budget is protected only by an alert at $450, not a hard cap. The budget math omits confirmation texts, HELP replies and Spanish messages that may split into multiple segments. The Spanish template is claimed to be GSM-7 and one segment, but accented characters can force UCS-2, which would increase segments and cost.",
+     "evidence": "\"a provider spend alert fires at $450\"; \"GSM-7, one segment\" (English, plus Spanish)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The week-3 pilot verifies delivery before the 10DLC campaign is approved (submitted Oct 20, approval 1–3 weeks). Unapproved traffic may be carrier-filtered, which could make the pilot results unreliable or the pilot fail.",
+     "evidence": "\"Week 3: staff pilot... we verify delivery\" vs \"Public launch is gated on approval.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4016,
+    "tokOut": 4449,
+    "usd": 0.057071199999999996,
+    "critMs": 35320
+   },
+   "wallMs": 52339
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The webhook's DB grants look too narrow to do what the receiver is asked to do. Matching patrons by phone number needs SELECT on borrowers and borrower_attributes. Switching transport sets needs INSERT or DELETE on borrower_message_transport_preferences, not just UPDATE. The circulation note needs a write target. This should surface in week 2 testing, but the grants should be settled before the build.",
+     "evidence": "\"dedicated DB user with UPDATE only on `borrower_message_transport_preferences` and `borrower_attributes`, and INSERT only on `message_queue` and `messages`\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Some carriers and VoIP numbers never return delivery receipts. The 2-hour no-status rule would re-queue those notices on the fallback channel, send duplicates, count them as failures, and switch patrons off SMS after 2 of them. The week-3 pilot with one invalid number may not expose this.",
+     "evidence": "\"finds SMS `message_queue` rows still `sent`/pending with no delivery status after 2 hours and re-queues the notice on the fallback channel, counting it as a failure\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The Spanish template is not shown, and accented characters (á, í, ó, ú) fall outside GSM-7. That would push it to UCS-2 and multi-segment sends, which breaks the one-segment cost math. The $450 spend alert is a notification only, with no hard cap against the $600 limit.",
+     "evidence": "\"Template (English, plus Spanish ... ), GSM-7, one segment\"; \"a provider spend alert fires at $450\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 50% uptake among phone patrons is an assumption. The survey says only that 64% would prefer text, not that they will enroll. Budget headroom is about 1.8x ($600 vs about $335), so higher uptake is tolerable but should be watched.",
+     "evidence": "\"Assumed uptake: 50% of phone patrons + 10% of email patrons ≈ 30,500 texts/month.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4698,
+    "tokOut": 2715,
+    "usd": 0.0424592,
+    "critMs": 20661
+   },
+   "wallMs": 105314
+  }
+ ],
+ "artifact": "# Plan: SMS hold-ready notices\n\nTeam: library systems developer (1), circulation lead (0.5) · 4 weeks · Ticket LIBSYS-318\n\n## 1. Why\n- Hold-ready notices today: email 71%, automated phone call 29% (~41,000 calls/month via CallNotify at $0.11/call ≈ $4,500/month). The CallNotify contract ends 2027-03-31 and will not be renewed (board decision, Sep 2026).\n- 18% of calls reach voicemail or no answer. Uncollected-hold expiry rate: 9.2% for phone-notice patrons vs 5.1% for email (Koha reports, Jan–Sep 2026).\n- 2026 patron survey (n = 2,340): 64% of phone-notice patrons would prefer a text message.\n\n## 2. Scope\n- In: an SMS option for the \"Hold filled\" notice only, using Koha's built-in SMS transport.\n- Out: due-date, overdue and fines notices (later phase, separate plan); two-way messaging; what replaces calls for patrons who stay on phone after March 2027 (LIBSYS-330).\n- Fallback channels are chosen so no patron depends on the phone-call channel after it ends: see \"Fallback channel\" in section 4.\n\n## 3. How it works\n- Koha sends SMS through its `SMSSendDriver` system preference (SMS::Send driver interface), configured for the provider selected in RFP LIBSYS-301 (contract signed Oct 2). Switching providers later is a config change, not a code change.\n- Patron messaging preferences already support an SMS transport per notice type; we enable it for \"Hold filled\" only.\n- Template (English, plus Spanish for patrons whose preferred language is Spanish, via `TranslateNotices`), GSM-7, one segment:\n  \"Riverbend Library: 1 item is ready for pickup at Eastside Branch until Nov 4. Reply STOP to opt out, HELP for help.\"\n  - No patron name, title, author or barcode. A reassigned number or shared phone reveals nothing about what the patron requested.\n  - Count, branch and date come from notice template variables; the per-item title loop used in the email template is deliberately left out.\n- HELP auto-reply (configured at the provider): \"Riverbend Library hold notices. Call 555-0142 or visit riverbendlibrary.org/sms. Reply STOP to cancel.\"\n- Quiet hours: `process_message_queue.pl --type sms` runs every 15 minutes between 09:00 and 20:00 local only, so a hold filled after 20:00 is texted at 09:00. Pickup windows are 7 days; the delay costs at most 13 hours.\n\n## 4. Consent and opt-out\n- Opt-in only. Patrons choose SMS in the OPAC under \"Your messaging\", or staff set it at the desk when the patron asks and provides a mobile number. Patron attribute `SMS_CONSENT` records the date and source (opac/desk).\n- Existing phone numbers are not auto-enrolled. Nobody gets a text they did not ask for.\n- Fallback channel: on enrolment, the patron's complete previous \"Hold filled\" transport set (for example email, phone, or both) is saved in patron attribute `NOTICE_PREV`, a list of transports rather than a single value. A patron with no previous transport saved (new sign-ups) gets `email` if they have an email address on file, otherwise `print`. `phone` is never assigned as a fallback for new sign-ups. Whenever the fallback is applied (STOP, failure fallback, rollback), any `phone` entry is dropped once CallNotify has ended (2027-03-31); if that leaves no transport, `email` is used if an address is on file, otherwise `print`. Patrons dropped from `phone` this way are listed for circulation staff so they can be contacted before the cutover.\n- On enrolment, Koha sends one confirmation text: \"Riverbend Library: you'll get a text when holds are ready for pickup. Msg frequency varies. Msg & data rates may apply. Reply STOP to cancel, HELP for help.\"\n- STOP: the provider handles carrier-required keyword replies and blocks further sends to that number. A webhook receiver (~150 lines, on the existing Koha app server behind the existing nginx/TLS) exposes a single rate-limited POST path, verifies the provider's request signature, then:\n  - switches every patron whose SMS number matches (family members can share a phone) from SMS back to their own `NOTICE_PREV` set, so they keep getting notices;\n  - adds a circulation note visible to staff.\n- The receiver uses a dedicated DB user with UPDATE only on `borrower_message_transport_preferences` and `borrower_attributes`, and INSERT only on `message_queue` and `messages`.\n- Delivery failures: on an `undelivered`/`failed` status callback, the receiver queues the same notice on the patron's fallback channel. After 2 consecutive failures it switches the patron back to the fallback set and adds a staff note to verify the number.\n- Reconciliation job (`sms_reconcile.pl`, cron every 15 minutes, built in weeks 1–2): the receiver can be down or a callback can be missed, so callbacks are not the only safety net. The job (a) pulls the provider's opt-out list and message-status API and applies the same STOP switch-back for any number on the list whose patron is still on SMS; (b) finds SMS `message_queue` rows still `sent`/pending with no delivery status after 2 hours and re-queues the notice on the fallback channel, counting it as a failure; (c) is idempotent, so a callback and the job handling the same event do not double-send or double-switch.\n- Monitoring: the receiver exposes a health endpoint checked every minute by the existing monitoring system, which alerts the systems developer and circulation lead if it fails twice in a row or if no callback has been received for 6 hours during sending hours. The provider is also configured to retry callbacks on non-2xx responses, and the reconciliation job covers any it gives up on.\n- 10DLC: brand registration approved Oct 14. The \"Library account notifications\" campaign was submitted Oct 20; typical approval is 1–3 weeks. Public launch is gated on approval.\n\n## 5. Privacy and data handling\n- The provider receives only the phone number and the message body above. The contract includes a DPA and a library-records confidentiality clause reviewed by the city attorney (Oct 1). Message bodies are redacted at the provider after delivery; delivery metadata is kept 90 days per contract.\n- Koha `message_queue` rows are purged after 30 days by the existing `cleanup_database.pl` job (unchanged).\n- Webhook receiver logs status, Koha message id and timestamp only; never message bodies; phone numbers as the last 4 digits.\n\n## 6. Cost\n- ~141,000 hold notices/month (100k email, 41k phone).\n- Assumed uptake: 50% of phone patrons + 10% of email patrons ≈ 30,500 texts/month.\n- ~$0.011 per text including carrier fees → ~$335/month, plus ~$19/month for number and campaign fees.\n- Calls drop by ~20,500/month → ~$2,250/month saved while CallNotify runs.\n- Approved notices budget allows up to $600/month for SMS (finance memo FIN-2026-117); a provider spend alert fires at $450.\n\n## 7. Rollout\n- Weeks 1–2: driver config, en/es templates, webhook receiver, reconciliation job and health check, rollback script, desk procedure and a 1-page staff guide.\n- Week 3: staff pilot. 40 staff cardholders opt in; we verify delivery, quiet hours, STOP, HELP, the failure fallback (one deliberately invalid number), and the reconciliation job (receiver deliberately stopped during a test STOP and a test failure).\n- Week 4, after 10DLC approval: OPAC option enabled systemwide, branch signage, and a line in the email newsletter. No bulk texting.\n\n## 8. Rollback\n- `sms_rollback.pl`, written and tested in week 2 against a staging copy of the patron database:\n  1. For every patron with SMS on \"Hold filled\", restore the full `NOTICE_PREV` set, applying the same rule as section 4 (drop `phone` once CallNotify has ended; fall back to `email`, else `print`).\n  2. Re-queue any pending SMS rows in `message_queue` on the restored channel, so holds filled around the rollback still get a notice.\n  3. Clear `SMSSendDriver`.\n- Consent and opt-out records are kept, so re-enabling later never texts anyone who sent STOP.\n- Patrons who enrolled after launch end up on the transport set they had before enrolling; those who had none end up on `email` (or `print` without an email address), as defined in section 4.\n\n## 9. Measures (90 days after launch)\n- Delivery rate ≥ 97% (provider status callbacks).\n- Uncollected-hold expiry rate for SMS patrons ≤ 5.5% (phone today: 9.2%).\n- STOP and fallback counts reported monthly to the circulation team, plus the number of notices handled by the reconciliation job rather than the receiver.",
+ "fixerUsage": {
+  "calls": 1,
+  "tokIn": 3938,
+  "tokOut": 3114,
+  "usd": 0.046888,
+  "critMs": 17426
+ },
+ "status": "cleared"
+}

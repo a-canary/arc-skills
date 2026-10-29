@@ -1,0 +1,71 @@
+{
+ "approach": "clustered-panel",
+ "case": "merge-08",
+ "rep": 1,
+ "wallMs": 269066,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "The go.mod `replace` points zap at a local sibling directory outside the repo. A clean CI checkout will not contain ../zap, so the build fails or, if it builds locally, the binary distributed to on-call laptops embeds unreviewed local code. The pinned pseudo-version is also overridden, so the claimed zap JSON-encoder bump is not what gets built.",
+   "evidence": "+replace go.uber.org/zap => ../zap"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "printPlan does not reproduce computeBatches. It sizes batches with truncating int(len(hosts)*MaxSurge) instead of ceil(len(rest)*MaxSurge), so batch sizes differ whenever the product is fractional (e.g. 10 hosts at 0.25 prints 2-host batches where the real rollout uses 3). On-call is told to trust this plan, so the dry-run misrepresents the real rollout.",
+   "evidence": "printPlan: \"per := int(float64(len(hosts)) * o.MaxSurge)\" vs computeBatches: \"size := int(math.Ceil(float64(len(rest)) * o.MaxSurge))\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "With --canary set, printPlan iterates over the full hosts list without removing the canary, so the canary host is printed in batch 0 and again in a later batch. The plan lists a host twice, while the real run excludes it from the remaining batches.",
+   "evidence": "printPlan: \"for i := 0; i < len(hosts); i += per {\" with no without() call, while computeBatches does \"rest = without(hosts, o.CanaryHost)\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The zap bump cannot be verified. go.sum is not updated for the new pseudo-version, the replace makes the pin irrelevant, and the PR does not show the upstream fix it claims to pick up.",
+   "evidence": "go.uber.org/zap v1.27.1-0.20260914181502-9d3e1c0f7a2b (no go.sum change in diff)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR says dry-run exits without touching the orchestrator API, but Run calls api.Hosts before the DryRun check. The contract is violated, so a dry-run fails when the orchestrator is down or slow, and on-call running it against production gets an inaccurate description.",
+   "evidence": "Run: \"hosts, err := api.Hosts(ctx, o.Service)\" precedes \"if o.DryRun {\"; description: \"exits without touching the orchestrator API\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "The batch-splitting logic is duplicated in printPlan instead of derived from computeBatches. The two copies have already diverged, and future changes to computeBatches will silently desynchronize the dry-run output.",
+   "evidence": "\"func printPlan(w io.Writer, hosts []string, o Options)\" reimplements the loop instead of calling computeBatches(hosts, o)"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "No tests cover the dry-run path or assert that printPlan output equals computeBatches output. A single equivalence test would have caught the canary and rounding mismatches.",
+   "evidence": "ABSENT: no _test.go changes in the diff"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The imports for strings (and io, if not already present) are not shown in the diff, so the package may not compile.",
+   "evidence": "ABSENT: import block change for internal/rollout/rollout.go; printPlan uses strings.Join"
+  },
+  {
+   "lens": "ux",
+   "severity": "minor",
+   "claim": "Each batch is printed as one comma-joined line with no per-batch count or parameters, which is hard to scan and verify by eye for 60+ host services.",
+   "evidence": "fmt.Fprintf(w, \"  batch %d: %s\\n\", n, strings.Join(hosts[i:end], \", \"))"
+  }
+ ],
+ "usage": {
+  "calls": 6,
+  "tokIn": 20754,
+  "tokOut": 12876,
+  "usd": 0.010071179999999999,
+  "critMs": 27704
+ }
+}

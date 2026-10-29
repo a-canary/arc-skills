@@ -1,0 +1,52 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "deploy-09",
+ "rounds": [
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The fixed announcement copy 'Text alerts for holds, for every cardholder' could read as automatic texting for everyone. The feature is opt-in and the option is hidden on juvenile cards.",
+     "evidence": "Announcement text says exactly: \"Text alerts for holds, for every cardholder. 24/7 pickup lockers at Oak Street, Millbrook and Harbor.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The example text sends one single-use code for '2 holds', and batching merges extra holds into one message. The artifact does not say whether one code opens several cells or how a partial pickup works.",
+     "evidence": "\"2 holds ready at Oak St locker. Code 482913\" vs. \"Codes are single-use, expire at the pickup deadline\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "The locker touchscreen accessibility features and Spanish-language support on the locker screen and audio guidance are not covered by the QA table. The only accessibility test is the web opt-in form.",
+     "evidence": "ABSENT: locker accessibility and Spanish locker UI verification in the QA table"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The artifact states no retention period for the consent record (timestamp, IP, checkbox text version) after STOP. It only specifies deletion if SMS is withdrawn permanently.",
+     "evidence": "\"Phone number and consent record (timestamp, IP, checkbox text version) are stored in the patron record\""
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 22852,
+    "tokOut": 11606,
+    "usd": 0.0560066,
+    "critMs": 27344
+   },
+   "wallMs": 117243
+  }
+ ],
+ "artifact": "# Release proposal: SMS hold alerts and 24/7 pickup lockers\n\nOwner: Patron Services Digital · Launch: Mon 2026-11-09 · Announcement: library site, branch posters and e-newsletter, same day 10:00 · Change: RPL-2291\n\n## Summary\n\nPatrons can choose to get a text when a hold is ready, in addition to (or instead of) the current email. Three branches (Oak Street, Millbrook, Harbor) open 24/7 pickup lockers so holds can be collected outside opening hours. Both ship behind flags `sms_holds` and `locker_pickup` in `config/prod.flags.yaml`.\n\n## SMS opt-in flow\n\n1. My Account > Notifications > \"Text me when a hold is ready\". Phone field plus an unchecked checkbox with the disclosure: \"Riverbend Library will text you about holds. Msg frequency varies. Msg & data rates may apply. Reply STOP to cancel, HELP for help. Consent is not required to borrow.\"\n2. We send a confirmation text; texts start only after the patron replies YES. Unconfirmed numbers are deleted after 72 h.\n3. STOP (and carrier synonyms) is honored by the provider and our signed webhook, which clears the opt-in flag. HELP returns the branch phone number and opt-out instructions.\n- 10DLC brand and campaign are registered and approved (campaign CX7R2Q, use case \"account notifications\").\n- Texts are sent only 08:00-20:00 patron local time; anything later is queued to 08:00. Max 3 texts per patron per day; extra holds are batched into one message.\n- English and Spanish, following the patron's existing language preference.\n- The option appears on adult and teen (13+) cards only; juvenile cards do not show it, and guardians can opt in with their own number on the linked guardian account.\n\n## Message content\n\n> Riverbend Library: 2 holds ready at Oak St locker. Code 482913, pick up by Sat Nov 14. Details: rpl.org/h. Reply STOP to opt out.\n\n- No titles, authors or item counts by format appear in any text. The link opens the account page after normal login.\n- The locker opens only after the patron scans their library card (or enters card number + PIN, existing ILS PIN lockout applies) AND enters the code. Codes are single-use, expire at the pickup deadline, and 5 wrong attempts lock the cell and alert branch staff.\n\n## Data and privacy\n\n- Phone number and consent record (timestamp, IP, checkbox text version) are stored in the patron record; the phone column uses the same column encryption as the existing email field.\n- The notification log stores notification id, patron id, branch, channel, and delivery status. It holds no item or title ids and is purged after 30 days, consistent with our no-borrowing-history policy.\n- The SMS provider is covered by our existing DPA (signed 2025-03); it retains message logs 30 days and is barred from marketing use.\n- Privacy policy section 4 updated to list SMS; legal review complete (ticket LGL-118).\n\n## Lockers\n\n- 3 locker banks (48 cells each) installed and acceptance-tested by the vendor and branch staff on 2026-10-21/22.\n- Touchscreen and card reader mounted within ADA reach range (max 48 in); screen has high-contrast mode, audio guidance through a headphone jack, and adjustable text size. Holds stay collectible at the service desk during opening hours for anyone who prefers it.\n- Items left past the deadline are returned to the holds shelf by staff next morning and the hold is extended 3 days, with a notice on the patron's chosen channel.\n\n## Cost\n\n- Forecast 38,000 texts/month at about $0.012 all-in = ~$460/month, funded from the notifications line (approved, budget memo BM-26-14).\n- Provider account hard spend cap $900/month, alert to ops at 70%. On cap, texts stop and every opted-in patron falls back to their previous notice method (email or automated phone call, which stays on file), so no alert is lost.\n\n## Monitoring\n\n- Dashboard: texts sent, delivery rate, STOP rate, queue depth, locker cell status.\n- Alerts: delivery failures > 5% for 15 min, webhook signature failures > 0, any locker bank offline > 10 min (pages branch manager + vendor; vendor SLA 4 h on-site).\n\n## QA summary\n\nAll QA ran on staging with `config/prod.flags.yaml` copied verbatim, against the production SMS provider account in test mode and a locker bank in the staff room.\n\n| Check | Result |\n|---|---|\n| Opt-in, YES confirm, STOP, HELP, re-opt-in (EN + ES) on 4 carriers | Pass |\n| Quiet hours: hold ready 21:30 → text at 08:00 | Pass |\n| Juvenile card: SMS option not shown; guardian account opt-in works | Pass |\n| Daily cap: 5 holds same day → 1 batched text | Pass |\n| Text body contains no title/author for 500 generated holds | Pass |\n| Locker: card+code, card number+PIN+code, wrong code ×5 lockout + staff alert | Pass |\n| Spend cap reached (test cap $5) → fallback to email / phone call | Pass |\n| Opt-in form with NVDA + Firefox, VoiceOver iOS; 320/768/1280 px layouts | Pass |\n| Staff pilot week (64 staff cards, real holds) | 0 misdelivered texts; 2 copy fixes shipped and re-verified |\n\n## Rollout\n\n1. Nov 2-6: flags on for staff cards only (pilot above).\n2. Nov 9 09:00: flags on for all cardholders; announcement goes out at 10:00 only after a smoke test of one live text and one locker pickup per branch.\n3. Announcement text says exactly: \"Text alerts for holds, for every cardholder. 24/7 pickup lockers at Oak Street, Millbrook and Harbor.\"\n\n## Rollback\n\n- `sms_holds` off: no new texts; every opted-in patron gets hold notices by their previous method (email or automated phone call, kept on file). Opt-in records are kept so turning the flag back on needs no re-consent. If SMS is withdrawn permanently, numbers and consent records are deleted within 30 days and patrons are emailed.\n- `locker_pickup` off: holds currently assigned to a locker (`pickup_location` = `OAK-LKR` / `MIL-LKR` / `HAR-LKR`) are remapped to the branch desk by `scripts/remap_locker_holds.sql` (tested in staging on 1,200 rows), staff move items to the holds shelf, hold deadlines extend 3 days and patrons are notified of the new location.",
+ "fixerUsage": {
+  "calls": 0,
+  "tokIn": 0,
+  "tokOut": 0,
+  "usd": 0,
+  "critMs": 0
+ },
+ "status": "cleared"
+}
