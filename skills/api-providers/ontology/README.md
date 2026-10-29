@@ -8,7 +8,7 @@ Broken into topics; each file is the authority for its layer.
 ```
 consumer (agent profile / cron / pi / curl)
   → alias (planning|hard|easy|bench|driver|hygiene, or pool: smart|fast|…)
-    → router (arc-llm-proxy :8091  |  cli-proxy :7890  |  direct API)
+    → router (laneproxy :8099  |  9router :20128  |  cli-proxy :7890  |  direct API)
       → host (103 GPU box | 159 operator | 100.73.201.58 | cloudflare/Veles | public APIs)
         → model (Bonsai-27B | Qwen3.8-27B | DeepSeek-V4-Flash | MiniMax-M3 | …)
 ```
@@ -32,7 +32,7 @@ consumer (agent profile / cron / pi / curl)
 | anthropic API | ❌ key dead since 2026-07-02 (401) |
 | openrouter | ❌ 401 (rotate key) |
 | cerebras / chutes | ❌ 402 (quota) |
-| arc-llm-proxy :8091 | ✅ up (401 unauth = alive) |
+| arc-llm-proxy :8091 | ⛔ retired 2026-10-29 (director-fqk) |
 | llama-server 192.168.1.103:1234 | ❌ down |
 | cli-proxy :7890 | ❌ down |
 | Veles (cloudflare tunnel) | ? (not probed today) |

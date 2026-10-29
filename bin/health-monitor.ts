@@ -128,16 +128,6 @@ const QUIET = process.argv.includes("--quiet");
 
 export const SERVICES: Service[] = [
   {
-    id: "auto-llm",
-    project: "llm-hosting",
-    // The LLM router: 8090 is the historic bind, 8091 the current one.
-    probe: async () => {
-      const url = await firstOk(["http://localhost:8090/health", "http://127.0.0.1:8091/health"]);
-      const body = (await (await get(url))!.json()) as { ok?: boolean };
-      return body.ok === true ? `${url} ok` : fail(`${url} not ok: ${JSON.stringify(body)}`);
-    },
-  },
-  {
     id: "v100",
     project: "llm-hosting",
     // GPU inference behind provider `v100`. The model runs on ai-lab-02; :8099 here is

@@ -104,7 +104,7 @@ Use the [defend skill](../defend/SKILL.md) gate family at critical junctions:
 - **DefendMerge** (workhorse): worker diff → git merge (same as /hard-merge)
 - **DefendDeploy** (counsel): qa-passed artifact → public deploy
 
-**Minimum capability:** Defense reviews must use the tier specified by the defend skill. If that model tier is unavailable via auto-llm, escalate to director for HITL — do not fall back to a weaker model.
+**Minimum capability:** Defense reviews must use the tier specified by the defend skill. If that model tier is unavailable via the configured provider, escalate to director for HITL — do not fall back to a weaker model.
 
 ATTACKS go back to director for HITL; work proceeds on CLEAR or recorded human override.
 
