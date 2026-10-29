@@ -6,7 +6,7 @@ Every process that fronts an LLM, and the machines underneath.
 
 | Router | Address | Runs on | Auth | Config | Health 2026-08-25 |
 |---|---|---|---|---|---|
-| **arc-llm-proxy** (switchboard) | `http://127.0.0.1:8091/v1` (LAN `192.168.1.159:8091`) | operator box | Bearer `FACTORY_KEY` (`source arc-llm-proxy/deploy/.keys.env`) | `switchboard.default.json` + `deploy/switchboard.local.json` (local wins) | ✅ up |
+| **arc-llm-proxy** (switchboard) | `http://127.0.0.1:8091/v1` (LAN `192.168.1.159:8091`) | operator box | Bearer `FACTORY_KEY` (`source arc-llm-proxy/deploy/.keys.env`) | `switchboard.default.json` + `deploy/switchboard.local.json` (local wins) | ⛔ RETIRED 2026-10-29 (director-fqk): both units disabled; local V100 = laneproxy `:8099`, third-party = 9router `:20128` |
 | **cli-proxy** | `http://127.0.0.1:7890/v1` | operator box (systemd user unit `cli-proxy.service`) | none local | pools in `~/vault/api/models.json` | ❌ down |
 
 ### arc-llm-proxy contract

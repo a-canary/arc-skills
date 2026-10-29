@@ -106,7 +106,7 @@ Once the design is defended and approved:
 Spawn a new herdr pane: `pi --system-prompt <skill>/sys_driver.md`
 - Tab name: `driver:<beads-id>:<short-desc>`
 - Working directory: the repo being worked on
-- Provider: v100/local for private, pool/auto-llm for public
+- Provider: v100/local for private, 9router for public
 - Driver owns: **research** → **develop** → implement → test → PR → DefendDeploy → merge → deploy → QA(e2e) → cleanup → report
 - Director closes driver pane after reviewing completion report
 - Driver researches implementation details, APIs, and best practices before coding
