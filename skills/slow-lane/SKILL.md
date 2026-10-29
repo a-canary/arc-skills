@@ -3,6 +3,8 @@ name: slow-lane
 description: Route LLM calls for long-running, non-user-facing work (cron, pipelines, subagents, ETL, generation) through arc-llm-proxy's slow-lane aliases so they queue behind the local llama-server's idle slots instead of stealing them from interactive work. Use for any background/batch LLM call; NOT for user-facing/interactive requests (those use fast-lane aliases or direct models). Cron jobs must run without claude — slow-lane aliases only.
 ---
 
+> **Endpoint retired 2026-10-29 (director-fqk).** arc-llm-proxy :8091 is down and the `arc-proxy` pi provider is gone. Slow-lane work now goes to laneproxy: `pi --model v100/queue -p ...` or POST `http://127.0.0.1:8099/v1/chat/completions` with `"model":"queue"` (no key locally). The text below is history until this skill is rewritten.
+
 # slow-lane
 
 `arc-llm-proxy` runs on the operator box (LAN `192.168.1.159`, local `127.0.0.1`) on port `8091`, fronting two upstream endpoints: the model box's llama-server (192.168.1.103:1234, Bonsai-27B) and the Veles cloud GPU (Qwen3.8-27B-GGUF via trycloudflare tunnel). One port, six role aliases — `/v1/models` is the whole model surface:

@@ -7,8 +7,8 @@ Who uses what, when. Rules in priority order.
 | Work shape | Route | Why |
 |---|---|---|
 | Interactive / frontier (interviews, planning, hard debugging) | cli-proxy pools `smart`/`fast` (Max quota, no per-token cost) or anthropic/minimax direct | best intelligence, human waiting |
-| Factory workers (ledger-dispatched slices) | arc-proxy aliases via `pi --model arc-proxy/<alias>` (fast lane: `planning`/`hard`/`easy`) | queued, capped, per-project mask |
-| Cron / pipelines / subagents / ETL / generation | arc-proxy **slow-lane** aliases (`bench`/`driver`/`hygiene`) | queues behind interactive idle slots; see `/slow-lane` |
+| Factory workers (ledger-dispatched slices) | laneproxy via `pi --model v100/fast` | queued, capped |
+| Cron / pipelines / subagents / ETL / generation | laneproxy **queue** lane via `pi --model v100/queue` | queues behind interactive idle slots; see `/slow-lane` |
 | Bulk cheap tokens on hot open models | chutes direct | subscription cap, not agentic |
 | Long-tail model variety | openrouter direct | per-model upstream routing |
 | Short-prompt latency (judges, classifiers, extract/rewrite) | cerebras direct | ~2200 tok/s; context + TPM caps forbid agentic use |
