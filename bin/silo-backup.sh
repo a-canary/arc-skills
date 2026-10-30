@@ -3,7 +3,8 @@
 # Each silo keeps its snapshots in its own project dir, untracked by git. This uploads the newest
 # one, age-encrypted, to R2 arc-backup/silos/<silo>/ and prunes R2 copies older than KEEP_DAYS.
 # No key material in git: the CF token and the age private key live in pass; config holds only
-# the public recipient. Restore: aws s3 cp s3://arc-backup/<key> - | age -d -i <private key> > file
+# the public recipient. Restore: derive kid/ksec as below, then
+#   s3 s3 cp s3://arc-backup/<key> - | age -d -i <(pass show cloudflare/r2-age-private-key | sed -n 1p | sed 's/^[^:]*: *//') > file
 # Status per silo → ~/.cache/silo-backup/status.json (health-monitor alerts when a silo is >26h stale).
 set -uo pipefail
 # Cron (nightly, after deploy):
@@ -35,12 +36,19 @@ uid=$(pass show cloudflare/userid) || abort "pass cloudflare/userid unreadable"
 # S3 creds from it (id + sha256(token)). Rename the entry if an S3-native key pair is ever minted.
 tok=$(pass show cloudflare/r2-secret-key) || abort "pass cloudflare/r2-secret-key unreadable"
 # Token goes in via stdin (-H @-), never argv; creds stay unexported so produce commands never inherit them.
-kid=$(printf 'Authorization: Bearer %s\n' "$tok" | curl -s -m 15 -H @- https://api.cloudflare.com/client/v4/user/tokens/verify | python3 -c "import json,sys;print(json.load(sys.stdin)['result']['id'])") || abort "cf token verify failed"
+kid=""
+for try in 1 2 3; do # CF API flaps (empty reply) — retry before failing the whole run
+  kid=$(printf 'Authorization: Bearer %s\n' "$tok" | curl -s -m 15 -H @- https://api.cloudflare.com/client/v4/user/tokens/verify | python3 -c "import json,sys
+try: print(json.load(sys.stdin)['result']['id'])
+except Exception: sys.exit(1)") && break
+  (( try < 3 )) && sleep 30
+done
+[ -n "$kid" ] || abort "cf token verify failed"
 ksec=$(printf '%s' "$tok" | sha256sum | cut -d' ' -f1); unset tok
 s3() { AWS_ACCESS_KEY_ID=$kid AWS_SECRET_ACCESS_KEY=$ksec AWS_DEFAULT_REGION=auto aws --endpoint-url "https://$uid.r2.cloudflarestorage.com" "$@"; }
 
 rc=0
-while IFS='|' read -r silo produce dir glob; do
+while IFS='|' read -r -u3 silo produce dir glob; do # conf on fd 3: nothing in the loop can swallow it
   [[ -z "$silo" || "$silo" == \#* || "$silo" == recipient=* ]] && continue
   dir=${dir/#\~/$HOME}
   if [[ "$produce" != "-" ]] && ! bash -c "$produce" </dev/null; then note "$silo" 0 "" "produce failed"; rc=1; continue; fi
@@ -55,14 +63,17 @@ while IFS='|' read -r silo produce dir glob; do
     for try in 1 2 3; do # R2 endpoint flaps; a partial object from a failed pipe is removed before retrying
       age -r "$recipient" "$f" | s3 s3 cp --only-show-errors - "s3://arc-backup/$key" \
         && s3 s3api head-object --bucket arc-backup --key "$key" >/dev/null 2>&1 && { ok=1; break; }
-      s3 s3 rm --only-show-errors "s3://arc-backup/$key" >/dev/null 2>&1; sleep $((try * 30))
+      s3 s3 rm --only-show-errors "s3://arc-backup/$key" >/dev/null 2>&1; (( try < 3 )) && sleep $((try * 30))
     done
     [[ $ok == 1 ]] || { note "$silo" 0 "$key" "upload failed"; rc=1; continue; }
   fi
   # Never prune the key just verified: an unchanged snapshot (produce "-") may be its only copy.
   cutoff=$(date -u -d "-$KEEP_DAYS days" +%FT%T)
   s3 s3api list-objects-v2 --bucket arc-backup --prefix "silos/$silo/" --query "Contents[?LastModified<'$cutoff'].Key" --output text 2>/dev/null \
-    | tr '\t' '\n' | grep -v -x -e 'None' -e '' -e "$key" | while read -r old; do s3 s3 rm --only-show-errors "s3://arc-backup/$old"; done
+    | tr '\t' '\n' | grep -v -x -F -e 'None' -e '' -e "$key" | while read -r old; do s3 s3 rm --only-show-errors "s3://arc-backup/$old"; done
   note "$silo" 1 "$key" "$(du -h "$f" | cut -f1)"
-done < "$CONF"
+done 3< "$CONF"
+# Retired silos drop out of status so the health check doesn't alert on them forever.
+mapfile -t names < <(silos)
+python3 -c 'import json,os,sys; p=sys.argv[1]; keep=set(sys.argv[2:]); d=json.load(open(p)); json.dump({k:v for k,v in d.items() if k in keep},open(p+".tmp","w"),indent=1); os.replace(p+".tmp",p)' "$STATUS" "${names[@]}"
 exit $rc
