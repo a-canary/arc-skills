@@ -17,6 +17,12 @@ try() { yt-dlp "$@" 2>"$ERR"; }
 run() { # run <label> <yt-dlp args...>
     if try "$@"; then return 0; fi
     echo "ytdlp.sh: rung '$1' failed" >&2
+    # Fail fast on non-bot errors (they won't be fixed by escalation)
+    if grep -qE 'Video unavailable|HTTP Error 404|no subtitles' "$ERR" 2>/dev/null; then
+        echo "ytdlp.sh: non-recoverable error:" >&2
+        cat "$ERR" >&2
+        exit 1
+    fi
     return 1
 }
 
@@ -30,9 +36,11 @@ fi
 if [ -n "${YTDLP_COOKIES:-}" ] && [ -f "${YTDLP_COOKIES}" ]; then
     run cookies-file --cookies "$YTDLP_COOKIES" "$URL" "$@" && exit 0
 fi
-for browser in chrome firefox; do
-    run "cookies=$browser" --cookies-from-browser "$browser" "$URL" "$@" && exit 0
-done
+if [ "${YTDLP_BROWSER_COOKIES:-}" = "1" ]; then
+    for browser in chrome firefox; do
+        run "cookies=$browser" --cookies-from-browser "$browser" "$URL" "$@" && exit 0
+    done
+fi
 
 echo "ytdlp.sh: all rungs failed. Last error:" >&2
 cat "$ERR" >&2
