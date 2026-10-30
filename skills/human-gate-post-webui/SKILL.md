@@ -54,32 +54,31 @@ irreversible; a two-way-door implementation choice almost never is.
 
 State the latency reasoning in the post so the developer sees you did the math.
 
-## 2. Write the gate — one `human` bead
+## 2. Write the gate — one `human` bead in the `<decide>` schema
 
 One bead in a db `/decide` scans: `~/repos` itself, or a `~/repos/<name>` that
 keeps its own `.beads/embeddeddolt`. Pass `-C` explicitly — run from `~` and
-`bd` resolves to `~/.beads`, which `/decide` never reads. The
-developer reads it on mobile ([[response-style-caveman]]): `/decide` shows the
-question, options and recommendation; everything from the first `Footnotes:` /
-`Evidence:` / `Tech:` / `---` line on folds behind "more".
+`bd` resolves to `~/.beads`, which `/decide` never reads. The developer reads it
+on mobile, one card at a time: concise context, a clear question, and options
+whose trade-offs are stated (operator 2026-10-28).
+
+Write the description to a file, then `bd -C ~/repos create "<repo>: <the decision in a few words>" -p <0-3> -t decision -l human --body-file <file>`:
 
 ```
-bd -C ~/repos create "<repo>: <the decision in a few words>" -p <0-3> -t decision -l human \
-  -d "Q: <request/scope-change in 1-2 lines>?
-
-Options:
-A) <option> — <cost>
-B) <option> — <cost>
-
-Recommendation: <A|B> — <one line why>.
+<decide><q>Which model may the agent-pub container use?</q><context>agent-pub moves into a rootless container whose only network path is the lane proxy. Example: today a review shells out to Claude Opus; inside the container that call has no route unless we give it one.</context><option id="A" rec="1" title="Keep Opus">Reviews keep today's quality. Costs Claude budget and puts a Claude credential inside the container.</option><option id="B" title="Qwen only (V100)">No Claude spend and nothing secret in the container. Weaker reviews on hard diffs.</option></decide>
 
 Evidence: <facts that make it a gate, file:line refs>
 Latency: <why gated not defaulted (§1 math)>
-Meanwhile: <the unblocked work you moved to>"
+Meanwhile: <the unblocked work you moved to>
 ```
 
-- Option lines `A) …` / `B) …` (two or more) become the card's buttons; keep them
-  one line each.
+Rules (`/decide` renders the card from them, and shows `card malformed: <why>` in red when broken):
+
+- `<q>`: exactly one question, ending `?`. It is the card's headline.
+- `<context>`: why now, plus one concrete example, ≤6 lines, in plain words. No unexplained bead ids, file paths or jargon — the reader has not seen your session. It is folded by default.
+- `<option>`: 2-5, each with a unique `id` A-E and a `title` of ≤5 words. The body is 1-2 sentences naming the gain AND the cost. An option with no stated cost is not a trade-off.
+- `rec="1"` on at most one option, the one you would pick.
+- Text after `</decide>` (Evidence/Latency/Meanwhile) folds behind "details".
 - If your work depends on the answer, `bd dep add <your-bead> <gate-bead>`: it
   drops out of `bd ready` until the gate bead is **closed** — deciding alone
   leaves it open, so close it once you have acted on the answer (§3).
@@ -104,17 +103,24 @@ a reply.** Immediately:
    developer's next cadence pass; that's fine. Don't serialize your own work on
    them.
 
-The developer's reply arrives async. Accept/reject swaps `human`→`decided` and
-adds a `DECISION <verb>: …` comment (`bd list --label decided`, `bd comments
-<id>`); defer sets status `deferred` with a `DECISION defer until …` comment and
-resurfaces later (leave it open). After accept/reject, act on it, then `bd close <gate> --reason "<what you did>"` so
-dependents unblock. Or a fresh instruction — you act on it *when it comes*, not by blocking now. A gate
+The developer's reply arrives async as a comment on the bead (`bd list --label decided`, `bd comments <id>`). What each button means for you:
+
+| Comment | Bead state | You do |
+| --- | --- | --- |
+| `DECISION accept <X>: <note>` | `human`→`decided` | Execute option X (the note refines it), then `bd close <gate> --reason "<what you did>"` so dependents unblock. |
+| `DECISION reject: <note>` | `human`→`decided` | Drop the proposal; the note usually says why. Close with the reason. |
+| `DECISION reply: <text>` | `human`→`decided` | They deferred WITH a question or concern. Answer it; if a decision remains, close this bead and post a NEW card that resolves the concern ("replaces <old-id>"). |
+| `DECISION refresh` | un-deferred, `decided` | They pulled it back from the revisit list. Still relevant? Moot → close with the reason; else rewrite to current facts and swap `decided`→`human`. |
+| `DECISION skip` | still `human`, back of the queue | Nothing — they will see it again. Do not re-post it. |
+| `DECISION defer until +Nd` | `deferred`, keeps `human` | Nothing until it resurfaces. Leave it open. |
+
+Remove `decided` once you have handled a decision. Or a fresh instruction arrives — you act on it *when it comes*, not by blocking now. A gate
 that stalled the agent until the human replied is a broken use of this skill
 (it re-couples throughput to human latency, the exact thing ADR-0011 cut).
 
 ## Judging done
 
-One concise `human` bead per genuine gate, the §1 latency math shown, evidence
+One concise `human` bead per genuine gate in the `<decide>` schema (renders without `card malformed`), the §1 latency math shown, evidence
 cited real, and the agent already working something else by the end of the same
 turn. A run that posted a self-resolvable question, wrote a ledger feedback row,
 gated a defaultable choice, or *waited* for the reply is broken — redo it.
