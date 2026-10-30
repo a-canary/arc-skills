@@ -12,14 +12,7 @@
 //   1  — usage error (missing args)
 //   2  — every configured transport failed or was skipped
 //
-// Replaces ledger feedback inserts across:
-//   - trading/bin/trade-alert
-//   - trading/bin/trade-rebalance-watchdog  
-//   - trading/tools/{metrics,collect,targets}-watchdog.ts
-//   - arc-agents/bin/{report-error.sh, auto-oversight-watchdog.sh}
-//   - arc-skills/bin/health-monitor.ts
-//   - llm-hosting/e103-watch.sh
-//   - ndivisible deploy/health-monitor.sh + deploy-drift-check.sh
+// Callers: watchdogs, deploy/health scripts and bin/health-monitor.ts exec this CLI.
 import { notify } from "./lib/notify";
 
 const args = process.argv.slice(2);
