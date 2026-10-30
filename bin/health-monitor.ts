@@ -58,6 +58,15 @@ const webuiAuth = (): RequestInit | undefined => {
   try { return { headers: { Authorization: `Bearer ${readFileSync(join(process.env.HOME ?? "", ".config/arc-webui/token"), "utf8").trim()}` } }; } catch { return undefined; }
 };
 
+export function siloBackupCheck(path: string, now = Date.now()): string {
+  let st: Record<string, { at: string; ok: boolean; msg: string }>;
+  try { st = JSON.parse(readFileSync(path, "utf8")); } catch { return fail(`no silo-backup status at ${path}`); }
+  const silos = Object.entries(st);
+  if (!silos.length) return fail("silo-backup status has no silos");
+  const bad = silos.filter(([, v]) => !v.ok || now - Date.parse(v.at) > 26 * 3600_000 || Number.isNaN(Date.parse(v.at)));
+  return bad.length ? fail(`silo-backup: ${bad.map(([k, v]) => `${k} ${v.ok ? "stale" : v.msg} @${v.at}`).join("; ")}`) : `${silos.length} silo(s) fresh`;
+}
+
 /** First URL that answers 200 wins; throws with every attempt listed. */
 async function firstOk(urls: string[], init?: RequestInit): Promise<string> {
   const tried: string[] = [];
@@ -155,6 +164,12 @@ export const SERVICES: Service[] = [
     project: "arc-webui",
     // webui binds the tailscale IP only and gates every route, so probe there with the bearer token.
     probe: async () => `${await firstOk(["http://100.91.151.13:8080/healthz", "http://localhost:8080/healthz"], webuiAuth())} ok`,
+  },
+  {
+    id: "silo-backup",
+    project: "estate",
+    // bin/silo-backup.sh (nightly) writes per-silo status; stale >26h or a failed silo = DOWN.
+    probe: async () => siloBackupCheck(join(process.env.HOME ?? "", ".cache/silo-backup/status.json")),
   },
   {
     id: "discord",

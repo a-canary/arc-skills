@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { get, runHealthMonitor, type Service } from "./health-monitor";
+import { get, runHealthMonitor, type Service, siloBackupCheck } from "./health-monitor";
 
 const svc = (id: string, ok: boolean, detail?: string): Service => ({
   id,
@@ -82,4 +82,22 @@ test("sendAlert hands a webhook resolved after start-up to the notify child (rep
   const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env, timeout: 30_000 });
   expect(r.stdout.trim()).toBe("true");
   expect(readFileSync(out, "utf8")).toBe("stub-url");
+});
+
+test("siloBackupCheck: fresh ok passes; stale, failed, missing, empty fail", () => {
+  const p = join(mkdtempSync(join(tmpdir(), "silo-")), "status.json");
+  const now = Date.parse("2026-10-30T12:00:00Z"), w = (o: object) => writeFileSync(p, JSON.stringify(o));
+  w({ nd: { at: "2026-10-30T02:00:00Z", ok: true, msg: "12M" } });
+  expect(siloBackupCheck(p, now)).toBe("1 silo(s) fresh");
+  w({ nd: { at: "2026-10-29T11:00:00Z", ok: true, msg: "12M" } }); // 25h: inside the 26h window
+  expect(siloBackupCheck(p, now)).toBe("1 silo(s) fresh");
+  w({ nd: { at: "2026-10-29T09:00:00Z", ok: true, msg: "12M" } }); // 27h
+  expect(() => siloBackupCheck(p, now)).toThrow(/nd stale/);
+  w({ nd: { at: "garbage", ok: true, msg: "12M" } });
+  expect(() => siloBackupCheck(p, now)).toThrow(/nd stale/);
+  w({ nd: { at: "2026-10-30T02:00:00Z", ok: false, msg: "upload failed" } });
+  expect(() => siloBackupCheck(p, now)).toThrow(/upload failed/);
+  w({});
+  expect(() => siloBackupCheck(p, now)).toThrow(/no silos/);
+  expect(() => siloBackupCheck(`${p}.missing`, now)).toThrow(/no silo-backup status/);
 });
