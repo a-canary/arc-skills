@@ -5,7 +5,17 @@ description: Safe, reversible file GC. A semantic reason drives scope — what c
 
 # trash-retired-files
 
-Reversible garbage collection for codebases. Files go to `~/trash/`, not `/dev/null`.
+Reversible garbage collection for codebases. Files go to a trash root, not `/dev/null`.
+
+## Trash root
+
+```
+~/vault/director/trash/    # override with TRASH_ROOT
+```
+
+One durable root for every repo, inside the agent write lane.
+Not `/tmp` (reboot wipes it), not `<repo>/.trash/` (`git clean -fdx` wipes it), not a home-level trash dir (outside the write lane, so workers are blocked).
+Every move goes through `bin/to-trash` (see [[to-trash]]), which owns the root, the naming, the sidecar, and the guards.
 
 ## Core principle
 
@@ -20,38 +30,35 @@ Without a reason, refuse to run. A sweep without a thesis turns into a regret.
 ## CLI shape
 
 ```bash
-to-trash <path> --reason "<why>"        # move, log, mark with timestamp
-to-trash <path> --reason "<why>" --dry-run   # preview + list referencing files
-to-trash --restore <trashed-name>       # reverse
+to-trash <path> --reason "<why>"      # write reason.md, move, print the entry
+to-trash <trash-entry> --restore      # reverse
 ```
 
-The skill is the procedure; the CLI is a thin convenience. Implementing a `to-trash` script is left to the consumer (see "Reference implementation" below).
+The skill is the procedure; `bin/to-trash` in arc-skills is the single implementation.
+Do not hand-roll `mv` into the trash root: the handler is what guarantees the sidecar exists, symlinks are trashed as links, and restore never clobbers.
 
 ## Naming convention
 
-Trashed paths get a timestamp + relative-path suffix so concurrent moves and
-basename collisions (e.g. two `CONTEXT.md` files in different dirs) stay
-distinguishable and restores stay traceable:
+Each trashed item gets its own entry directory, named by timestamp + path so concurrent moves and basename collisions (e.g. two `CONTEXT.md` files in different dirs) stay distinguishable and restores stay traceable:
 
 ```
-~/trash/<unix-ts>__<relative-path>/
+<trash-root>/<unix-ts>__<path-relative-to-$HOME>/
+  reason.md
+  <basename>
 ```
 
-`<relative-path>` is the path of the trashed file relative to the repo root
-(or the deepest common ancestor when trashing files from outside a repo),
-with `/` rewritten to `--`. Examples:
+`<path-relative-to-$HOME>` is the item's absolute path with the `$HOME/` prefix dropped (or the leading `/` dropped when outside `$HOME`), `/` rewritten to `--`, and truncated to its last 200 characters.
+Examples:
 
 ```
-~/trash/1782317031__contexts--encounters--CONTEXT.md/
-~/trash/1782317031__contexts--tavern--CONTEXT.md/
-~/trash/1782317031__PRD-v1.md/
+1782317031__repos--game--contexts--encounters--CONTEXT.md/
+1782317031__repos--game--contexts--tavern--CONTEXT.md/
+1782317031__repos--game--PRD-v1.md/
 ```
 
 `__` separates the timestamp from the path; `--` separates path components.
-Neither can appear in normal POSIX paths, so collisions across distinct
-files are impossible. If two files share an *identical* full relative path
-(can only happen via a hardlink duplication), the script appends `-2`, `-3`,
-etc.
+The name is for humans; restore reads the authoritative original path from `reason.md`.
+If an entry name is already taken, the handler appends `-2`, `-3`, etc. (created with an atomic `mkdir`, so two concurrent moves never share an entry).
 
 **Why not just `<ts>_<basename>`?** Two files with the same basename in
 different directories (`contexts/encounters/CONTEXT.md` and
@@ -75,7 +82,10 @@ first — losing recoverable content. Observed in
    - UPDATE if: live code reference, doc that needs the new path
    - SKIP   if: protected (LICENSE, .git, lockfiles), in use, historical record
 
-4. Bulk-trash via mv with timestamp suffix; single files via to-trash.
+4. Trash each item with `to-trash <path> --reason "<reason>"`.
+   Before each, check references and use:
+     grep -rln "$(basename <path>)" . | grep -v '^./\.git'
+     lsof <path>
 
 5. Update live docs that referenced trashed paths.
    grep for the old path → replace → verify with build/test.
@@ -83,18 +93,13 @@ first — losing recoverable content. Observed in
 
 ## Retention
 
-Default: **30 days** in `~/trash/`. After that, a separate cron (see `schedule-hygiene`) hard-deletes if disk pressure exists.
+Default: **30 days** in the trash root. After that, a separate cron (see `schedule-hygiene`) hard-deletes if disk pressure exists.
 
 
 ## Log format
 
-Append a JSONL record per move to `~/trash/.log.jsonl`:
-
-```json
-{"ts":"2026-05-22T20:59:00Z","action":"trash","path":"src/legacy/old.ts","reason":"replaced by src/new.ts","trashed_to":"~/trash/1779389812__src--legacy--old.ts","refs_updated":3}
-```
-
-Sweep summaries get their own line:
+The per-item record is the entry's `reason.md` (`from:`, `when:`, `by:`, `reason:`).
+Sweep summaries append one JSONL line to `<trash-root>/.log.jsonl`:
 
 ```json
 {"ts":"2026-05-22T21:00:00Z","action":"sweep","reason":"deprecated v1 API","trashed":12,"updated":4,"skipped":7}
@@ -102,79 +107,24 @@ Sweep summaries get their own line:
 
 ## Guards
 
-- Refuse `--reason ""` or missing reason
+- Refuse `--reason ""` or missing reason for a sweep
 - Refuse paths inside `.git/`, `node_modules/`, or matching `LICENSE*`
-- Check `lsof` on the path before moving (skip with `--force`)
-- Never recurse into `~/trash/` itself
-
-## Reference implementation
-
-A ~60-line `to-trash` in shell. Computes the relative path from the repo
-root (or first ancestor with `.git`) so concurrent moves of files with the
-same basename in different directories land in distinct trash dirs:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-path="$1"; shift
-reason=""; dry=false; force=false
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --reason) reason="$2"; shift 2;;
-    --dry-run) dry=true; shift;;
-    --force) force=true; shift;;
-    *) echo "unknown flag: $1" >&2; exit 2;;
-  esac
-done
-[[ -z "$reason" ]] && { echo "--reason required" >&2; exit 2; }
-[[ -e "$path" ]] || { echo "no such path: $path" >&2; exit 2; }
-
-# Compute relative path from repo root (or absolute path if outside any repo)
-abs="$(cd "$(dirname "$path")" && pwd)/$(basename "$path")"
-rel="$abs"
-dir="$(dirname "$abs")"
-while [[ "$dir" != "/" ]]; do
-  # -e not -d: in git worktrees, .git is a *file* pointing at the real gitdir
-  if [[ -e "$dir/.git" ]]; then rel="${abs#$dir/}"; break; fi
-  dir="$(dirname "$dir")"
-done
-# Sanitize: / → -- so the trash dir name is a single valid filesystem component
-rel_sanitized="${rel//\//--}"
-
-mkdir -p ~/trash
-ts=$(date +%s)
-dest=~/trash/${ts}__${rel_sanitized}
-# Collision-guard for identical full paths (hardlink duplicates)
-n=2
-while [[ -e "$dest" ]]; do
-  dest=~/trash/${ts}__${rel_sanitized}-${n}
-  n=$((n+1))
-done
-
-if $dry; then
-  echo "would move: $path -> $dest"
-  echo "references:"
-  grep -rln "$(basename "$path")" . 2>/dev/null | grep -v "^./\.git\|^./trash" || true
-  exit 0
-fi
-$force || ! lsof "$path" >/dev/null 2>&1 || { echo "in use" >&2; exit 1; }
-mv "$path" "$dest"
-echo "{\"ts\":\"$(date -u +%FT%TZ)\",\"action\":\"trash\",\"path\":\"$path\",\"reason\":\"$reason\",\"trashed_to\":\"$dest\"}" >> ~/trash/.log.jsonl
-echo "trashed: $dest"
-```
+- Check `lsof` on the path before moving
+- Never recurse into the trash root itself
+- `bin/to-trash` additionally refuses `~/vault`, `$HOME` and its ancestors, the trash root and its ancestors, and newline paths
 
 ## Restore
 
 ```bash
 # 1. Find it
-ls ~/trash/ | grep <name-fragment>
+ls ~/vault/director/trash/ | grep <name-fragment>
 
-# 2. Move it back. <rel-path> is the original relative path
-#    (trash dir name with __<ts>__ prefix stripped and -- restored to /):
-mv ~/trash/<ts>__<rel-with-double-dashes> <rel-path>
+# 2. Move it back to the path recorded in its reason.md.
+#    Refuses (and keeps the trash copy) if something already exists there.
+to-trash <entry> --restore
 
-# Example: 1782317031__contexts--encounters--CONTEXT.md -> contexts/encounters/CONTEXT.md
-mv ~/trash/1782317031__contexts--encounters--CONTEXT.md contexts/encounters/CONTEXT.md
+# Example
+to-trash 1782317031__repos--game--contexts--encounters--CONTEXT.md --restore
 
 # 3. Revert doc updates if needed
 git diff HEAD~ -- '<doc>'

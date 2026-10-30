@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# to-trash — reversible single-item trash with reason sidecar.
+# Spec: skills/to-trash/SKILL.md
+#   to-trash <path> --reason "<why>"
+#   to-trash <trash-entry> --restore [--root <trash-root>]
+#
+# Trash root: $TRASH_ROOT, default ~/vault/director/trash. It must be durable
+# (survives reboot and `git clean -fdx`, so no /tmp and no in-repo .trash/) and
+# inside the agent write lane (~/vault/director/** is).
+#
+# Entry layout: <root>/<unix-ts>__<path-rel-to-home, / as -->/
+#                 reason.md   written BEFORE the move (from:, when:, by:, reason:)
+#                 <name>      the item itself (a symlink stays a symlink)
+set -euo pipefail
+user_umask="$(umask)"
+umask 077   # trash root and entries are private
+
+die() { echo "to-trash: $*" >&2; exit 1; }
+usage() { die "usage: to-trash <path> --reason \"<why>\" | to-trash <trash-entry> --restore [--root <dir>]"; }
+
+# under <a> <b>: a is b or lies below b.
+under() { [[ "$2" == / || "$1" == "$2" || "$1" == "$2"/* ]]; }
+
+# canon <path>: absolute path with the parent directories resolved but the leaf
+# kept as-is, so a symlink argument names the link itself, not its target.
+canon() {
+  local p="$1" dir base
+  while [[ "$p" == */ && "$p" != / ]]; do p="${p%/}"; done
+  base="$(basename -- "$p")"
+  if [[ "$p" == / || "$base" == . || "$base" == .. ]]; then realpath -m -- "$p"; return; fi
+  dir="$(realpath -m -- "$(dirname -- "$p")")"
+  [[ "$dir" == / ]] && dir=""
+  printf '%s/%s' "$dir" "$base"
+}
+
+target=""; reason=""; mode=trash
+root="${TRASH_ROOT:-$HOME/vault/director/trash}"
+while (($#)); do
+  case "$1" in
+    --reason)  [[ $# -ge 2 ]] || die "--reason needs a value"; reason="$2"; shift 2 ;;
+    --restore) mode=restore; shift ;;
+    --root)    [[ -n "${2:-}" ]] || die "--root needs a value"; root="$2"; shift 2 ;;
+    --)        [[ $# -ge 2 && -z "$target" ]] || usage; target="$2"; shift 2 ;;
+    -*)        die "unknown arg: $1" ;;
+    *)         [[ -z "$target" ]] || die "one path at a time"; target="$1"; shift ;;
+  esac
+done
+[[ -n "$target" ]] || usage
+# Newlines would corrupt the line-oriented reason.md, so refuse them up front.
+[[ "$target" != *$'\n'* ]] || die "refusing: path contains a newline; rename it first"
+root="$(realpath -m -- "$root")"
+
+if [[ "$mode" == restore ]]; then
+  if [[ "$target" == */* ]]; then src="$(canon "$target")"; else src="$root/$target"; fi
+  [[ -d "$src" && ! -L "$src" ]] || die "no trash entry: $src"
+  [[ -f "$src/reason.md" ]] || die "no reason.md in $src"
+  from="$(sed -n 's/^from: //p' "$src/reason.md" | head -1)"
+  [[ "$from" == /* ]] || die "reason.md has no absolute 'from:' line"
+  shopt -s nullglob dotglob
+  items=()
+  for e in "$src"/*; do [[ "$e" == "$src/reason.md" ]] || items+=("$e"); done
+  [[ ${#items[@]} -eq 1 ]] || die "expected exactly one item in $src, found ${#items[@]}"
+  item="${items[0]}"
+  if [[ -e "$from" || -L "$from" ]]; then
+    die "refusing: $from exists; move it aside first (trash copy kept at $item)"
+  fi
+  ( umask "$user_umask"; mkdir -p -- "$(dirname -- "$from")" ) \
+    || die "cannot create parent of $from (trash copy kept at $item)"
+  # -n -T: never overwrite, never nest into a directory that appeared meanwhile.
+  mv -n -T -- "$item" "$from" || die "move failed (trash copy kept at $item)"
+  # Only drop the entry once the item has verifiably left it.
+  if [[ -e "$item" || -L "$item" ]] || [[ ! -e "$from" && ! -L "$from" ]]; then
+    die "restore not confirmed (trash copy kept at $item)"
+  fi
+  rm -- "$src/reason.md"
+  rmdir -- "$src"
+  echo "restored: $item -> $from"
+  exit 0
+fi
+
+[[ -n "${reason//[[:space:]]/}" ]] || die "--reason is required (why this is trash)"
+[[ -e "$target" || -L "$target" ]] || die "no such path: $target"
+ap="$(canon "$target")"
+home_real="$(realpath -m -- "$HOME")"
+for v in "$(canon "$HOME/vault")" "$(realpath -m -- "$HOME/vault")"; do
+  under "$ap" "$v" && die "refusing: ~/vault or a path under it ($ap)"
+done
+for h in "$(canon "$HOME")" "$home_real"; do
+  under "$h" "$ap" && die "refusing: \$HOME or an ancestor of it ($ap)"
+done
+under "$root" "$ap" && die "refusing: the trash root or an ancestor of it ($ap)"
+under "$ap" "$root" && die "refusing: already inside the trash root ($ap)"
+case "$ap" in
+  */.git|*/.git/*) die "refusing: inside .git ($ap)" ;;
+esac
+
+mkdir -p -- "$root"
+[[ -d "$root" && -O "$root" ]] || die "trash root $root is not a directory owned by $(id -un)"
+
+name="$(basename -- "$ap")"
+# restore reads the path from reason.md, not the item's name, so a renamed item keeps the sidecar intact
+[[ "$name" == reason.md ]] && name="reason.md.item"
+if under "$ap" "$home_real"; then rel="${ap#"$home_real"/}"; else rel="${ap#/}"; fi
+rel="${rel//\//--}"
+(( ${#rel} <= 200 )) || rel="${rel: -200}"
+stem="$root/$(date +%s)__${rel}"
+dest="$stem"; n=2
+until mkdir -- "$dest" 2>/dev/null; do
+  [[ -e "$dest" ]] || die "cannot create $dest"
+  dest="${stem}-${n}"; n=$((n+1))
+done
+
+reason="${reason//$'\n'/ }"
+{
+  echo "# to-trash"
+  echo "from: $ap"
+  echo "when: $(date -Iseconds)"
+  echo "by: $(id -un)@$(hostname)"
+  echo "reason: $reason"
+} > "$dest/reason.md"
+
+if ! mv -T -- "$ap" "$dest/$name"; then
+  # a cross-filesystem mv can fail after copying: keep the entry (and its sidecar) whenever anything arrived
+  if [[ -e "$dest/$name" || -L "$dest/$name" ]]; then
+    die "move incomplete: trash copy kept at $dest/$name; check what is left at $ap"
+  fi
+  rm -- "$dest/reason.md"; rmdir -- "$dest"
+  die "move failed; nothing trashed"
+fi
+echo "trashed: $ap -> $dest"
