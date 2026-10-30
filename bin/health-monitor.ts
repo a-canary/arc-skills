@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // health-monitor — one cron tick that probes the estate's long-running
 // surfaces and reports DOWN/UP transitions to Discord + director chat via
-// arc-agents/bin/notify.ts.
+// bin/notify.ts.
 //
 // Design (where this shape):
 //   - Drain-don't-spam: state is tracked by notify's `--dedupe-key` flag,
@@ -23,7 +23,7 @@
 // Manual:  bun bin/health-monitor.ts [--quiet] [--dry-run]
 //   --dry-run  probe + print, write no alert/file.
 //
-// Env: VAULT_DIR, HEALTH_DIR, NOTIFY_BIN (default ~/repos/arc-agents/bin/notify.ts),
+// Env: VAULT_DIR, HEALTH_DIR, NOTIFY_BIN (default: bin/notify.ts beside this file),
 //      DISCORD_WEBHOOK_URL (default: `pass show discord/webhook-url`, read by the discord probe / first alert)
 
 import { spawnSync } from "node:child_process";
@@ -33,7 +33,7 @@ import { join } from "node:path";
 const HOME = process.env.HOME ?? "";
 const VAULT = process.env.VAULT_DIR ?? join(HOME, "vault");
 const OUT_DIR = process.env.HEALTH_DIR ?? join(VAULT, "health");
-const NOTIFY_BIN = process.env.NOTIFY_BIN ?? join(HOME, "repos", "arc-agents", "bin", "notify.ts");
+const NOTIFY_BIN = process.env.NOTIFY_BIN ?? join(import.meta.dir, "notify.ts");
 const TIMEOUT_MS = Number(process.env.HEALTH_TIMEOUT_MS ?? 4000);
 
 export type Service = { id: string; project: string; probe: () => Promise<string> };
@@ -111,7 +111,7 @@ export function discordWebhook(): string {
 }
 
 /**
- * Alert via arc-agents/bin/notify.ts. Fan-out to Discord + director chat.
+ * Alert via bin/notify.ts. Fan-out to Discord + director chat.
  * Passes --dedupe-key so notify only fires on state transitions; sustained
  * outages and sustained health stay silent.
  *
