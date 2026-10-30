@@ -89,7 +89,11 @@ test("siloBackupCheck: fresh ok passes; stale, failed, missing, empty fail", () 
   const now = Date.parse("2026-10-30T12:00:00Z"), w = (o: object) => writeFileSync(p, JSON.stringify(o));
   w({ nd: { at: "2026-10-30T02:00:00Z", ok: true, msg: "12M" } });
   expect(siloBackupCheck(p, now)).toBe("1 silo(s) fresh");
-  w({ nd: { at: "2026-10-29T02:00:00Z", ok: true, msg: "12M" } });
+  w({ nd: { at: "2026-10-29T11:00:00Z", ok: true, msg: "12M" } }); // 25h: inside the 26h window
+  expect(siloBackupCheck(p, now)).toBe("1 silo(s) fresh");
+  w({ nd: { at: "2026-10-29T09:00:00Z", ok: true, msg: "12M" } }); // 27h
+  expect(() => siloBackupCheck(p, now)).toThrow(/nd stale/);
+  w({ nd: { at: "garbage", ok: true, msg: "12M" } });
   expect(() => siloBackupCheck(p, now)).toThrow(/nd stale/);
   w({ nd: { at: "2026-10-30T02:00:00Z", ok: false, msg: "upload failed" } });
   expect(() => siloBackupCheck(p, now)).toThrow(/upload failed/);
