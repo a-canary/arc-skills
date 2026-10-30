@@ -14,7 +14,7 @@ Always call via `scripts/ytdlp.sh` — the wrapper auto-escalates past bot-gates
 
 Symptom: `Sign in to confirm you're not a bot` / `This video is unavailable` / `requested format not available`.
 
-The wrapper tries rungs in order; first non-gated win wins. Rungs: vanilla → alt `player_client` (`tv`, `web_safari`, `ios`, `tv_embedded`, `web_poison_syn`) → bgutil PO token (if `127.0.0.1:4416` up) → `$YTDLP_COOKIES` file → `--cookies-from-browser chrome|firefox`.
+The wrapper tries rungs in order; first non-gated win wins. Rungs: vanilla → alt `player_client` (`tv`, `web_safari`, `ios`, `tv_embedded`, `mweb`) → bgutil PO token (if `127.0.0.1:4416` up) → `$YTDLP_COOKIES` file → `--cookies-from-browser chrome|firefox` (opt-in only: `YTDLP_BROWSER_COOKIES=1`; never read browser cookies by default).
 
 Manual ladder when the wrapper isn't enough:
 
@@ -66,7 +66,7 @@ Tunables (env):
 - `SCENE_MAX=N` — max within-segment frame score (any single high-score frame kills the bin). 0.20 tolerates one weird frame per second.
 - `DEDUPE_PSNR=N` — PSNR dB above which consecutive frames are considered duplicates (default 40 = visually identical).
 
-**Manual override:** when the speaker *names* a moment (chapters, transcript cue "look at this chart"), add `HH:MM:SS` to a `manual_segments.txt` file with the same columns, then run `extract_keyframes.sh` after editing segments.txt to inject them — or just use the old per-timestamp ffmpeg path below for one-offs.
+**Manual override:** when the speaker *names* a moment (chapters, transcript cue "look at this chart"), use the per-timestamp ffmpeg path below — `extract_keyframes.sh` only does dwell detection.
 
 ## 4. Screenshots
 

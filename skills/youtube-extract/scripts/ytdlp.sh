@@ -27,7 +27,7 @@ run() { # run <label> <yt-dlp args...>
 }
 
 run vanilla "$URL" "$@" && exit 0
-for client in tv web_safari ios tv_embedded web_poison_syn; do
+for client in tv web_safari ios tv_embedded mweb; do
     run "client=$client" --extractor-args "youtube:player_client=$client" "$URL" "$@" && exit 0
 done
 if curl -fsS -m 1 http://127.0.0.1:4416/ >/dev/null 2>&1; then

@@ -4,7 +4,7 @@
 #
 # Usage: extract_keyframes.sh <video> [outdir]
 #   Defaults: outdir = ./keyframes
-#   Env: MIN_DWELL=3 SCENE_MEAN=0.04 SCENE_VAR=0.001 DEDUPE_PSNR=40
+#   Env: MIN_DWELL=3 SCENE_MEAN=0.04 SCENE_MAX=0.20 DEDUPE_PSNR=40
 #   Output: <outdir>/keyframe_NN.jpg + <outdir>/segments.txt (start,end,mid)
 set -eu
 VIDEO="${1:?usage: extract_keyframes.sh <video> [outdir]}"
