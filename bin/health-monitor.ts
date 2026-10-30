@@ -27,7 +27,7 @@
 //      DISCORD_WEBHOOK_URL (default: `pass show discord/webhook-url`, read by the discord probe / first alert)
 
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const HOME = process.env.HOME ?? "";
@@ -54,11 +54,15 @@ export async function get(url: string, init?: RequestInit, retries = 1): Promise
   }
 }
 
+const webuiAuth = (): RequestInit | undefined => {
+  try { return { headers: { Authorization: `Bearer ${readFileSync(join(process.env.HOME ?? "", ".config/arc-webui/token"), "utf8").trim()}` } }; } catch { return undefined; }
+};
+
 /** First URL that answers 200 wins; throws with every attempt listed. */
-async function firstOk(urls: string[]): Promise<string> {
+async function firstOk(urls: string[], init?: RequestInit): Promise<string> {
   const tried: string[] = [];
   for (const u of urls) {
-    const r = await get(u);
+    const r = await get(u, init);
     if (r?.status === 200) return u;
     tried.push(`${u} → ${r ? r.status : "unreachable"}`);
   }
@@ -149,7 +153,8 @@ export const SERVICES: Service[] = [
   {
     id: "webui",
     project: "arc-webui",
-    probe: async () => `${await firstOk(["http://localhost:8080/"])} ok`,
+    // webui binds the tailscale IP only and gates every route, so probe there with the bearer token.
+    probe: async () => `${await firstOk(["http://100.91.151.13:8080/healthz", "http://localhost:8080/healthz"], webuiAuth())} ok`,
   },
   {
     id: "discord",
