@@ -78,6 +78,7 @@ if [[ "$mode" == restore ]]; then
   exit 0
 fi
 
+[[ -n "${reason//[[:space:]]/}" ]] || die "--reason is required (why this is trash)"
 [[ -e "$target" || -L "$target" ]] || die "no such path: $target"
 ap="$(canon "$target")"
 home_real="$(realpath -m -- "$HOME")"
@@ -97,6 +98,8 @@ mkdir -p -- "$root"
 [[ -d "$root" && -O "$root" ]] || die "trash root $root is not a directory owned by $(id -un)"
 
 name="$(basename -- "$ap")"
+# restore reads the path from reason.md, not the item's name, so a renamed item keeps the sidecar intact
+[[ "$name" == reason.md ]] && name="reason.md.item"
 if under "$ap" "$home_real"; then rel="${ap#"$home_real"/}"; else rel="${ap#/}"; fi
 rel="${rel//\//--}"
 (( ${#rel} <= 200 )) || rel="${rel: -200}"
@@ -113,10 +116,14 @@ reason="${reason//$'\n'/ }"
   echo "from: $ap"
   echo "when: $(date -Iseconds)"
   echo "by: $(id -un)@$(hostname)"
-  echo "reason: ${reason:-<none>}"
+  echo "reason: $reason"
 } > "$dest/reason.md"
 
 if ! mv -T -- "$ap" "$dest/$name"; then
+  # a cross-filesystem mv can fail after copying: keep the entry (and its sidecar) whenever anything arrived
+  if [[ -e "$dest/$name" || -L "$dest/$name" ]]; then
+    die "move incomplete: trash copy kept at $dest/$name; check what is left at $ap"
+  fi
   rm -- "$dest/reason.md"; rmdir -- "$dest"
   die "move failed; nothing trashed"
 fi

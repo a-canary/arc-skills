@@ -42,6 +42,10 @@ test_refuses_missing_path_and_git_internals() {
   refuses "$T/repo/.git/objects/f" --reason t || fail "should refuse inside .git"
   refuses "$T/repo/.git" --reason t || fail "should refuse .git itself"
   refuses "$T/nope.txt" --reason t || fail "should refuse missing path"
+  echo x > "$T/keep.txt"
+  refuses "$T/keep.txt" || fail "should refuse a missing reason"
+  refuses "$T/keep.txt" --reason " " || fail "should refuse a blank reason"
+  [[ -e "$T/keep.txt" ]] || fail "refused item was moved"
 }
 
 # --- hole 2: durable, in-lane root; no /tmp fallback, no in-repo .trash ------
@@ -187,6 +191,29 @@ EOF
   echo x > "$T/f.txt"
   PATH="$T/shim:$PATH" "$BIN" "$T/f.txt" --reason t >/dev/null
   [[ "$(cat "$T/sidecar-first" 2>/dev/null)" == yes ]] || fail "reason.md not written before mv"
+}
+
+# --- review r2: the sidecar survives a reason.md item and a partial move ------
+
+test_item_named_reason_md_keeps_sidecar() {
+  mkdir -p "$T/w"; echo mine > "$T/w/reason.md"
+  "$BIN" "$T/w/reason.md" --reason t >/dev/null
+  d="$(only_entry "$ROOT")"
+  grep -qx "from: $T/w/reason.md" "$d/reason.md" || fail "sidecar overwritten by the item"
+  "$BIN" "$d" --restore >/dev/null
+  [[ "$(cat "$T/w/reason.md")" == mine ]] || fail "item not restored"
+}
+
+test_partial_move_keeps_entry_restorable() {
+  mkdir -p "$T/shim"
+  printf '#!/usr/bin/env bash\n"%s" "$@"; exit 1\n' "$(command -v mv)" > "$T/shim/mv"   # moves, then reports failure
+  chmod +x "$T/shim/mv"
+  echo x > "$T/f.txt"
+  ! PATH="$T/shim:$PATH" "$BIN" "$T/f.txt" --reason t >/dev/null 2>"$T/err" || fail "partial move reported success"
+  d="$(only_entry "$ROOT")"
+  [[ -f "$d/reason.md" && -f "$d/f.txt" ]] || fail "entry lost its sidecar or item"
+  "$BIN" "$d" --restore >/dev/null
+  [[ "$(cat "$T/f.txt")" == x ]] || fail "item not restored"
 }
 
 for t in $(declare -F | awk '{print $3}' | grep '^test_'); do run "$t"; done
