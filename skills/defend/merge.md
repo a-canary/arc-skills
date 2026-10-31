@@ -19,8 +19,9 @@ complete: the gate between Worker (qwen|bonsai thin tasks) and `git merge`.
 - **Failure modes** — what breaks when the dependency/network/user misbehaves?
 - **Scope drift** — files or hunks the ticket never mentioned.
 - **Trust boundaries** — untrusted input reaching a write, exec, or external call.
-- **Legacy** — on the task's topic, what is now dead, superseded, duplicated or stale
-  (code, files, docs)? Lessons → `ke learn`, then trash or shrink. Keep only what earns it.
+- **Legacy** — hard-merge §2's bounded check: what did this diff make dead or
+  superseded? Author removes that in-PR (`ke learn` first); other legacy on the
+  topic → a filed bead, advisory, never a scope blocker.
 
 ## Attack shapes (expected)
 
