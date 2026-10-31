@@ -36,7 +36,7 @@ Each bead is one Sprint: `bun ~/vault/director/scripts/sprint.ts start|end`.
 End states:
 - done → `bd close <id> --reason "<evidence>"`
 - timebox → `bd note <id> "CHECKPOINT done:… next:… state:… branch:…"` then `bd update <id> -s open -a ""`
-- needs operator → new bead `-l human` (one question, options + tradeoffs, recommendation); `bd dep add <id> <new>` only when no safe assumption exists
+- needs operator → one `human` card per human-gate-post-webui §2 (`<decide>` schema, rec first, posted via `lint-card.ts`); `bd dep add <id> <new>` only when no safe assumption exists
 - long job → the job is its own bead; `bd dep add`, checkpoint, next
 
 Irreversible steps (destructive delete, force-push, credential/account change, public publish) need the operator's reply to name that step.

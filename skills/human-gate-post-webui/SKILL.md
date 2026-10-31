@@ -62,7 +62,22 @@ keeps its own `.beads/embeddeddolt`. Pass `-C` explicitly — run from `~` and
 on mobile, one card at a time: concise context, a clear question, and options
 whose trade-offs are stated (operator 2026-10-28).
 
-Write the description to a file, then `bd -C ~/repos create "<repo>: <the decision in a few words>" -p <0-3> -t decision -l human --body-file <file>`:
+A card is **one decision the operator can make in one tap**. Not a card:
+
+- **Status, FYI, "done", "blocked on X"**: `bd note` your own bead. No question means no card.
+- **A task for the operator** (power-cycle a host, rotate a key): still a decision card. Use `<q>Will you <do X> today?</q>` with options `Done` / `Not now`.
+- **Several decisions**: one card each. **Steps of one rollout** (deploy batches 1-8) get ONE card ("all / first N / none"), never N cards.
+- **New facts on an open card**: never append comments. A card that grew 10 update comments drew "Too much context, rewrite" on 10-30. Close it and post a fresh card, with "replaces <old-id>" in the evidence.
+
+Write the description to a file, lint it, then post. The lint exits 1 and prints the reasons:
+
+```
+T="<repo>: <the decision in a few words>"
+bun ~/repos/arc-skills/skills/human-gate-post-webui/lint-card.ts "$T" card.md \
+  && bd -C ~/repos create "$T" -p <0-3> -t decision -l human --body-file card.md
+```
+
+Card body:
 
 ```
 <decide><q>Which model may the agent-pub container use?</q><context>agent-pub moves into a rootless container whose only network path is the lane proxy. Example: today a review shells out to Claude Opus; inside the container that call has no route unless we give it one.</context><option id="A" rec="1" title="Keep Opus">Reviews keep today's quality. Costs Claude budget and puts a Claude credential inside the container.</option><option id="B" title="Qwen only (V100)">No Claude spend and nothing secret in the container. Weaker reviews on hard diffs.</option></decide>
@@ -72,13 +87,14 @@ Latency: <why gated not defaulted (§1 math)>
 Meanwhile: <the unblocked work you moved to>
 ```
 
-Rules (`/decide` renders the card from them, and shows `card malformed: <why>` in red when broken):
+Rules. `/decide` renders the card from them and shows `card malformed: <why>` in red when one is broken. `lint-card.ts` enforces the caps; 0 of the 30 cards posted 10-24..10-31 passed it.
 
-- `<q>`: exactly one question, ending `?`. It is the card's headline.
-- `<context>`: why now, plus one concrete example, ≤6 lines, in plain words. No unexplained bead ids, file paths or jargon — the reader has not seen your session. It is folded by default.
-- `<option>`: 2-5, each with a unique `id` A-E and a `title` of ≤5 words. The body is 1-2 sentences naming the gain AND the cost. An option with no stated cost is not a trade-off.
-- `rec="1"` on at most one option, the one you would pick.
-- Text after `</decide>` (Evidence/Latency/Meanwhile) folds behind "details".
+- Title: ≤70 chars, plain words. No SHAs, paths or bead ids; the reader is on a phone and has not seen your session.
+- `<q>`: exactly one question, ending `?`, ≤140 chars. It is the card's headline.
+- `<context>`: why now, plus one concrete example, ≤400 chars, plain words. It is folded by default.
+- `<option>`: 2-4, each with a unique `id` A-E and a `title` of ≤5 words. The body is ≤200 chars and names the gain AND the cost. An option with no stated cost is not a trade-off.
+- `rec="1"`: on exactly one option, listed first, the one you would pick. No recommendation means you have not done the thinking yet.
+- Whole `<decide>` block: ≤900 chars. SHAs, paths, ids and the long story go after `</decide>` (Evidence/Latency/Meanwhile), folded behind "details".
 - If your work depends on the answer, `bd dep add <your-bead> <gate-bead>`: it
   drops out of `bd ready` until the gate bead is **closed** — deciding alone
   leaves it open, so close it once you have acted on the answer (§3).
