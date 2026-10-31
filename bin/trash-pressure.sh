@@ -2,10 +2,11 @@
 # Low-disk relief (operator ruling repos-eupy, 2026-10-27): when / has < MIN_FREE free,
 # an LLM picks entries under ~/trash and /tmp to delete until ~TARGET is freed.
 # The LLM only chooses; this script enforces the allowlist and does the deletes.
-# Cron: */10. Env: MIN_FREE_GB (1), TARGET_GB (5), DRY=1 to log picks without deleting.
+# Cron: */10. Env: MIN_FREE_GB (1), TARGET_GB (5), MIN_AGE_DAYS (3), DRY=1 to log picks without deleting.
 set -uo pipefail
 MIN_FREE_GB=${MIN_FREE_GB:-1}
 TARGET_GB=${TARGET_GB:-5}
+MIN_AGE_DAYS=${MIN_AGE_DAYS:-3}
 TRASH=${TRASH:-$HOME/trash}
 TMPD=${TMPD:-/tmp}
 LOG=${LOG:-$HOME/.cache/trash-pressure.log}
@@ -25,23 +26,38 @@ live() {
   [ -n "$(find "$1" -mmin -1440 -print -quit 2>/dev/null)" ]
 }
 
-# Candidates: direct children of ~/trash (any age) and /tmp entries we own, untouched >24h.
+# Candidates: direct children of ~/trash and /tmp entries we own, untouched >24h.
+# A trash entry younger than MIN_AGE_DAYS (by its sidecar, else itself: to-trash makes a fresh
+# entry dir) is "young": offered only when the older candidates cannot free TARGET_GB.
+# A to-trash entry marked "status: incomplete" is never offered: its source may hold the rest.
 # NUL-delimited; names with tab/newline are skipped so the tab/newline candidate table stays unambiguous.
-cands=$( { find "$TRASH" -mindepth 1 -maxdepth 1 ! -name '*.REASON' -print0 2>/dev/null
-           find "$TMPD" -mindepth 1 -maxdepth 1 -user "$(id -u)" -mmin +1440 -print0 2>/dev/null; } |
+rows=$( { find "$TRASH" -mindepth 1 -maxdepth 1 ! -name '*.REASON' -print0 2>/dev/null
+          find "$TMPD" -mindepth 1 -maxdepth 1 -user "$(id -u)" -mmin +1440 -print0 2>/dev/null; } |
   while IFS= read -r -d '' p; do
     case $p in *$'\n'*|*$'\t'*) continue;; esac
     case $p in "$TMPD"/*) live "$p" && continue;; esac
+    grep -qs '^status: incomplete' "$p/reason.md" && continue
+    age=old
+    case $p in "$TRASH"/*)
+      ref=$p; [ -e "$p.REASON" ] && ref=$p.REASON
+      [ -n "$(find "$ref" -maxdepth 0 -mmin -$((MIN_AGE_DAYS * 1440)) -print 2>/dev/null)" ] && age=young;;
+    esac
     kb=$(du -sk -- "$p" 2>/dev/null | cut -f1)
     reason=$(cat -- "$p.REASON" "$p/reason.md" 2>/dev/null | head -c 200 | tr '\n\t' '  ')
-    printf '%s\t%sK\t%s\t%s\n' "$p" "${kb:-0}" "$(date -r "$p" +%F)" "$reason"
-  done | sort -t$'\t' -k2 -rn | head -200)
+    [ "$age" = young ] && reason="RECENT ${reason}"
+    printf '%s\t%s\t%sK\t%s\t%s\n' "$age" "$p" "${kb:-0}" "$(date -r "$p" +%F)" "$reason"
+  done)
+old_kb=$(awk -F'\t' '$1 == "old" { s += $3 } END { print s + 0 }' <<<"$rows")
+if [ "$old_kb" -ge $((TARGET_GB * 1024 * 1024)) ]; then rows=$(grep -v $'^young\t' <<<"$rows")
+elif grep -q $'^young\t' <<<"$rows"; then log "age floor relaxed: entries older than ${MIN_AGE_DAYS}d hold only ${old_kb}K"; fi
+cands=$(grep -v '^$' <<<"$rows" | sort -t$'\t' -k1,1 -k3,3rn | cut -f2- | head -200)
 [ -z "$cands" ] && { log "no candidates"; exit 0; }
 paths=$(cut -f1 <<<"$cands")
 
 prompt="Disk / is nearly full. Pick paths to permanently delete, freeing about ${TARGET_GB}G.
 Prefer: oldest ~/trash entries, then stale /tmp build/test dirs, worktree copies, caches, logs.
 Avoid: anything that looks live or shared with other programs.
+Reasons starting RECENT were trashed under ${MIN_AGE_DAYS} days ago: pick them only if the rest cannot free the target.
 Candidates (path<TAB>size<TAB>mtime<TAB>reason):
 $cands
 
