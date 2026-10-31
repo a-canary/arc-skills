@@ -48,8 +48,8 @@ one edit to an agent | skill | tool | pipeline | script
    cron works the backlog down over successive runs. Omit `--limit` only for a
    deliberate full sweep.
 3. For each session, spawn a `collector` agent with the session path and the
-   journal path. Run up to 3 in parallel (haiku is cheap, but cli-proxy has
-   limited concurrency). The collector pages the session with `scripts/page.py`,
+   journal path. Run up to 3 in parallel (haiku is cheap, but parallel
+   collectors share one rate limit). The collector pages the session with `scripts/page.py`,
    digs into ambiguous failures with `Explore`, and appends findings.
 4. After a session is **fully paged to `next_offset: EOF`**, mark it processed:
    ```bash

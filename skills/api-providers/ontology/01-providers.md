@@ -12,7 +12,7 @@ Public API providers. Keys live in the GPG `pass` store — never inline; pull a
 | huggingface | `huggingface` | huggingface.co hub | Bearer | hub API | model downloads, gated repos |
 | vast | `api/vast/api-key` | vast.ai CLI | CLI auth | CLI | GPU leasing — see `/vast-cli`, `/vast-compute` |
 | Veles (self-hosted, cloudflare tunnel) | `api/veles/api-key` | https://cia-balanced-sixth-tmp.trycloudflare.com/v1/ | Bearer | OpenAI-compat | ? (registered in pi as provider `Veles`). **Last-resort fallback endpoint** — captain policy 2026-08-24 |
-| claude (OAuth, via cli-proxy) | `api/claude/oauth-token` | via cli-proxy http://127.0.0.1:7890/v1 | pool-managed | OpenAI-compat | Max quota, no per-token cost. Down with cli-proxy (see 04-hosts) |
+| claude (OAuth, via cli-proxy) | `api/claude/oauth-token` | via cli-proxy http://127.0.0.1:7890/v1 | pool-managed | OpenAI-compat | Max quota, no per-token cost. cli-proxy retired 2026-10-31 (see 04-hosts) |
 
 ## Rules
 

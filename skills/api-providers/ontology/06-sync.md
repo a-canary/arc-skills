@@ -21,7 +21,7 @@ There is no generator. When any one of these changes, **every** one of these mus
 4. `arc-skills/skills/api-providers/ontology/01-providers.md` / `02-models.md` / `04-hosts.md`
 5. `pass` store — key present before anything routes to it
 
-## Change: cli-proxy pools
+## Change: cli-proxy pools (retired 2026-10-31, historical)
 
 1. `~/vault/api/models.json` — `pools` (edit there, restart `cli-proxy.service`)
 2. `arc-skills/skills/api-providers/ontology/03-aliases.md` §B
