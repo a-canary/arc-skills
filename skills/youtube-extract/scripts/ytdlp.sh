@@ -15,8 +15,9 @@ ERR="$(mktemp)"; trap 'rm -f "$ERR"' EXIT
 try() { yt-dlp "$@" 2>"$ERR"; }
 
 run() { # run <label> <yt-dlp args...>
+    local label=$1; shift
     if try "$@"; then return 0; fi
-    echo "ytdlp.sh: rung '$1' failed" >&2
+    echo "ytdlp.sh: rung '$label' failed" >&2
     # Fail fast on non-bot errors (they won't be fixed by escalation)
     if grep -qE 'Video unavailable|HTTP Error 404|no subtitles' "$ERR" 2>/dev/null; then
         echo "ytdlp.sh: non-recoverable error:" >&2

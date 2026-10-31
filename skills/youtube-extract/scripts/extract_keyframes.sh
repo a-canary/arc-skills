@@ -92,13 +92,12 @@ echo "extract_keyframes: grabbed $N keyframes" >&2
 # --- Pass 5: PSNR dedupe consecutive frames (drop near-identical)
 DEDUPE_PSNR=${DEDUPE_PSNR:-40}
 [ "$N" -le 1 ] && exit 0
-LAST=$(ls "$OUT"/keyframe_*.jpg | sort | tail -1)
-KEEP="$LAST"
+FIRST=$(ls "$OUT"/keyframe_*.jpg | sort | head -1)
+KEEP="$FIRST"
 DROPPED=0
-prev="$LAST"
+prev="$FIRST"
 while read -r cur; do
-    [ "$cur" = "$prev" ] && continue
-    PSNR=$(ffmpeg -hide_banner -loglevel error -i "$prev" -i "$cur" \
+    PSNR=$(ffmpeg -nostdin -hide_banner -loglevel error -i "$prev" -i "$cur" \
       -lavfi psnr=stats_file="$TMP/psnr.txt":stats_version=2 -f null - 2>/dev/null \
       && grep -o 'psnr_avg:[^ ]*' "$TMP/psnr.txt" | head -1 | cut -d: -f2)
     if [ "$PSNR" = "inf" ] || awk -v p="${PSNR:-0}" -v t="$DEDUPE_PSNR" 'BEGIN{exit !(p+0>t)}'; then
@@ -106,7 +105,7 @@ while read -r cur; do
     else
         KEEP="$KEEP $cur"; prev="$cur"
     fi
-done < <(ls "$OUT"/keyframe_*.jpg | sort | head -n -1)
+done < <(ls "$OUT"/keyframe_*.jpg | sort | tail -n +2)
 
 echo "extract_keyframes: kept $(echo "$KEEP" | wc -w), dropped $DROPPED (PSNR threshold ${DEDUPE_PSNR}dB)" >&2
 echo "extract_keyframes: output → $OUT" >&2

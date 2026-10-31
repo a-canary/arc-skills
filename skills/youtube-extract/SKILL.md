@@ -58,7 +58,7 @@ scripts/extract_keyframes.sh video.mp4 keyframes
 cat keyframes/segments.txt    # start, end, mid, mean_score, max_score per segment
 ```
 
-What it does: ffmpeg per-frame scene-score → bin by second → keep windows where mean<`SCENE_MEAN` (default 0.04) and max<`SCENE_MAX` (default 0.20) for ≥`MIN_DWELL` seconds (default 3) → grab middle frame per segment → PSNR-dedupe near-identical frames. Talking-head micro-motion scores ~0.05–0.10 (rejected by max-threshold once a slide takes over); cuts/transitions score >0.3 (rejected by mean). Re-shown slides are deduped.
+What it does: ffmpeg per-frame scene-score → bin by second → keep windows where mean<`SCENE_MEAN` (default 0.04) and max<`SCENE_MAX` (default 0.20) for ≥`MIN_DWELL` seconds (default 3) → grab middle frame per segment → PSNR-dedupe near-identical frames. Talking-head micro-motion scores ~0.05–0.10 (rejected by max-threshold once a slide takes over); cuts/transitions score >0.3 (rejected by mean). Consecutive near-identical frames are deduped; a slide shown again after a different one is kept.
 
 Tunables (env):
 - `MIN_DWELL=N` — minimum segment length in seconds (raise to 5 for pure slideshows; lower to 2 for fast-paced screen-shares).
