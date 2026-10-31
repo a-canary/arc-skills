@@ -31,7 +31,7 @@ Projects never own a lane; they only set priority.
 
 `bash ~/vault/director/scripts/driver-next.sh 3` prints the next ready beads; its header is the full protocol.
 It skips human/decided-pending beads, other lanes, epics and decisions.
-It emits `[v100-starved]` when the V100 is up, no `lane:v100` bead is in progress and the lane's queue is empty: decompose the next bead into ~10-min lane-run beads.
+It emits `[v100-unrouted]` when a repo holds ready `lane:v100` beads that lane-drain does not walk: add that repo to `~/vault/director/scripts/lane-repos.txt`.
 Each bead is one Sprint: `bun ~/vault/director/scripts/sprint.ts start|end`.
 End states:
 - done → `bd close <id> --reason "<evidence>"`
