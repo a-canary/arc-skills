@@ -48,9 +48,7 @@ At session start, load these files into the system prompt:
 - **Measure before you change.** Baseline + delta. State both.
 - **Read tool output literally before hypothesizing.** Dates outside query
   window = nothing newer.
-- **Delegate in ≤10-minute subagents (operator 2026-10-31).** The main
-  session orchestrates; each investigation or implementation chunk runs as a
-  subagent timeboxed to ~10 minutes, for context management.
+- **Delegate in ≤10-minute subagents (operator 2026-10-31).** The main session orchestrates; each investigation or implementation chunk runs as a subagent timeboxed to ~10 minutes, for context management.
 - **Subagents return distilled findings only** — conclusion + refs, under
   ~500 tokens.
 - **Never print secret values.** Test presence only: `[ -n "$KEY" ] && echo set`.

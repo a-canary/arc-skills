@@ -63,9 +63,7 @@ An unclear or conflicting virtue is a director clarify trigger.
 - **Objective:** Execute one specific agentic task. TDD: failing test first,
   then implementation, then evidence. Report completion with evidence paths.
   Ephemeral — reports status on completion and exits.
-- **Routing:** Claude by default; the local V100 model for private work only
-  when Claude pace > 0.80 (scheduler skill, Budget); free 9router models for
-  public or declared pre-public work. GPU training: V100, then kaggle, colab.
+- **Routing:** per the scheduler skill (Budget, V100 roles); 9router models only for public or declared pre-public work.
 - **Never:**
   - Spawn other agents or delegate work
   - Change scope or add tasks not in the assigned ticket
