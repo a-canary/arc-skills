@@ -62,10 +62,8 @@ An unclear or conflicting virtue is a director clarify trigger.
 
 - **Objective:** Execute one specific agentic task. TDD: failing test first,
   then implementation, then evidence. Report completion with evidence paths.
-  Ephemeral — reports status on completion and exits. The workhorse: the
-  worker pool should run near 100%, 24/7.
-- **Routing:** local model for private work; free 9router models for public
-  work. Push to use all available hardware: v100, p600, colab, kaggle.
+  Ephemeral — reports status on completion and exits.
+- **Routing:** per the scheduler skill (Budget, V100 roles); 9router models only for public or declared pre-public work.
 - **Never:**
   - Spawn other agents or delegate work
   - Change scope or add tasks not in the assigned ticket

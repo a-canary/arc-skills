@@ -44,11 +44,21 @@ Irreversible steps (destructive delete, force-push, credential/account change, p
 ## Budget
 
 Meter: `~/.claude/skills/capacity/claude-window.ts` (reads `/api/oauth/usage`, no model call); one meter for all callers.
-`budget-hook.sh` injects `[claude-budget] util=…` after tool calls, at most once per 5 min per session.
+`budget-hook.sh` injects `[claude-budget] util=… pace=…` after tool calls, at most once per 5 min per session.
+pace = util ÷ fraction of the window elapsed, floor 0.1, max over the 5h and 7d windows (operator 2026-10-31: offload on rate, not level).
+pace > 0.80 → offload agent work: prepare new beads to the lane-run contract and label `lane:v100`.
 util ≥ 0.90 → no new Claude beads; dispatch to V100 or park.
 Park = `bash ~/vault/director/scripts/budget-wait.sh` in the background; it exits `BUDGET OK` when util < 0.90.
 Never end a turn while driver-next shows work and util < 0.90.
 Structural guard: `stop-guard.sh` Stop hook (operator installs via `install-stop-guard.sh`).
+
+## V100 roles (operator 2026-10-31)
+
+In priority order:
+1. Agent-work spikes: Claude pace > 0.80 (Budget above).
+2. LLM provider for every pipeline and Jev (laneproxy `queue` lane; latency-tolerant).
+3. GPU training whenever idle (`v100-jobs.sh` in laneproxy, preemptible). Training backends: V100 first; Kaggle for overflow and parallel sweeps; Colab for interactive debugging only.
+   A V100 training job must checkpoint at least every 10 min and resume from its last checkpoint, so preemption costs ≤10 min of progress.
 
 ## V100 lane
 
