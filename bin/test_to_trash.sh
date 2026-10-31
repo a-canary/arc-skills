@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for bin/to-trash. Run: bash bin/test_to_trash.sh
 # Each case gets a throwaway $HOME so the default trash root
-# ($HOME/vault/director/trash) and the home/vault guards are exercised for real.
+# ($HOME/trash) and the home/vault guards are exercised for real.
 set -uo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/to-trash"
 R="$(mktemp -d)"; trap 'chmod -R u+w "$R"; rm -rf "$R"' EXIT
@@ -17,7 +17,7 @@ run() {
   T="$(mktemp -d "$R/t.XXXXXX")"
   export HOME="$T/home"; mkdir -p "$HOME"
   unset TRASH_ROOT; PATH="$REAL_PATH"
-  ROOT="$HOME/vault/director/trash"
+  ROOT="$HOME/trash"
   if ( set -e; "$1" ); then echo "ok   $1"; pass=$((pass+1))
   else echo "FAIL $1"; failed=$((failed+1)); failures+=("$1"); fi
 }
@@ -50,7 +50,7 @@ test_refuses_missing_path_and_git_internals() {
 
 # --- hole 2: durable, in-lane root; no /tmp fallback, no in-repo .trash ------
 
-test_hole2_default_root_is_vault_director_trash_for_repo_paths() {
+test_hole2_default_root_is_home_trash_for_repo_paths() {
   mkdir -p "$T/repo/sub"; git -C "$T/repo" init -q
   echo x > "$T/repo/sub/f.txt"
   "$BIN" "$T/repo/sub/f.txt" --reason t >/dev/null
@@ -58,7 +58,7 @@ test_hole2_default_root_is_vault_director_trash_for_repo_paths() {
   d="$(only_entry "$ROOT")"; [[ -f "$d/f.txt" ]] || fail "not in $ROOT"
 }
 
-test_hole2_default_root_is_vault_director_trash_for_loose_paths() {
+test_hole2_default_root_is_home_trash_for_loose_paths() {
   mkdir -p "$T/loose"; echo x > "$T/loose/zcd-loose-$$.txt"
   "$BIN" "$T/loose/zcd-loose-$$.txt" --reason t >/dev/null
   ! ls -d /tmp/trash/*"zcd-loose-$$"* >/dev/null 2>&1 || fail "fell back to /tmp/trash"
@@ -153,6 +153,14 @@ test_hole4_refuses_home_and_its_ancestors() {
   refuses "$T" --reason t || fail "trashed an ancestor of \$HOME"
   [[ -d "$HOME" ]] || fail "\$HOME gone"
   no_debris
+}
+
+test_hole4_refuses_default_root_and_its_entries() {
+  mkdir -p "$ROOT/old-entry"
+  refuses "$ROOT" --reason t || fail "trashed the default root ~/trash itself"
+  refuses "$ROOT/old-entry" --reason t || fail "trashed a path under the default root"
+  [[ -d "$ROOT/old-entry" ]] || fail "default root entry damaged"
+  [[ "$(ls -A "$ROOT")" == old-entry ]] || fail "refusal left debris: $(ls -A "$ROOT")"
 }
 
 test_hole4_refuses_ancestor_of_trash_root() {

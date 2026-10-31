@@ -1,6 +1,6 @@
 ---
 name: to-trash
-description: Reversible single-item trash action — move one path to ~/vault/director/trash/<unix-ts>__<path>/ with a reason sidecar. Use when you want to delete something now and keep a reversal trail. Single-item companion to trash-retired-files (bulk GC). Repo-agnostic; does not touch the ledger.
+description: Reversible single-item trash action — move one path to ~/trash/<unix-ts>__<path>/ with a reason sidecar. Use when you want to delete something now and keep a reversal trail. Single-item companion to trash-retired-files (bulk GC). Repo-agnostic; does not touch the ledger.
 ---
 
 # to-trash
@@ -9,12 +9,12 @@ Reverse before destructive. Single-item deletion with a fingerprint so anything 
 
 ## Trash root
 
-`~/vault/director/trash/`, overridable with the `TRASH_ROOT` env var (tests use this).
-It must be durable and inside the agent write lane:
+`~/trash/`, overridable with the `TRASH_ROOT` env var (tests use this).
+It must be durable, inside the agent write lane (`~/trash/**` is, move-in only — operator ruling arc-ypp), and the one root `bin/trash-pressure.sh` sweeps:
 
 - **Not `/tmp`** — wiped on reboot, so the only copy dies.
 - **Not `<repo>/.trash/`** — `git clean -fdx` deletes it, and every other repo would need a `.gitignore` entry.
-- **Not a home-level trash dir** — outside the write lane, so every worker is blocked.
+- **Not `~/vault/director/trash/`** — invisible to the trash-pressure sweep, and not gitignored in the vault repo.
 
 The root is created mode 700 and must be owned by the invoking user.
 See [[trash-retired-files]] for the shared naming convention and retention rules.

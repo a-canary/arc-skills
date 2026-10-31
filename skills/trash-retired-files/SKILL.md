@@ -10,7 +10,7 @@ Reversible garbage collection for codebases. Files go to a trash root, not `/dev
 ## Trash root
 
 ```
-~/vault/director/trash/    # override with TRASH_ROOT
+~/trash/    # override with TRASH_ROOT
 ```
 
 One durable root for every repo, inside the agent write lane.
@@ -117,7 +117,7 @@ Sweep summaries append one JSONL line to `<trash-root>/.log.jsonl`:
 
 ```bash
 # 1. Find it
-ls ~/vault/director/trash/ | grep <name-fragment>
+ls ~/trash/ | grep <name-fragment>
 
 # 2. Move it back to the path recorded in its reason.md.
 #    Refuses (and keeps the trash copy) if something already exists there.
