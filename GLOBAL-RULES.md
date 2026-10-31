@@ -62,6 +62,9 @@ At session start, load these files into the system prompt:
   visibility to public. File a `human` bead (shows on /decide) and wait for
   the explicit verdict. Third-party/9router models only see public or
   human-declared pre-public repos; unknown = private, fail closed.
+  Exception: operator-trusted endpoints may see private repos — Ollama Cloud
+  (operator 2026-10-30; workbench `worker-sandbox --lane ollama`, provider
+  `ollamacloud` in ~/vault/api/models.json). Only the operator adds one.
 - **Configs and rules live in a git repo, symlinked into place.**
 - **Subagent reports UNTRUSTED.** Verify claims against source. Check
   git-clean after fs-sharing.
