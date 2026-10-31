@@ -62,9 +62,10 @@ req="$(jq -cn --arg s "$SYS" --arg u "$TEXT" --arg m "$MODEL" \
 resp="$(curl -fsS --max-time 25 "$PROXY/chat/completions" -H 'content-type: application/json' -d "$req" 2>/dev/null)" \
   || block 2 '["stage-2 LLM call failed/timed out (fail-closed)"]'
 
-verdict="$(jq -r '.choices[0].message.content // ""' <<<"$resp" 2>/dev/null | head -1 | tr '[:lower:]' '[:upper:]')"
+# Exact first word only (markdown/punctuation stripped): a substring match let "NOT CLEAN" / "UNCLEAN" pass.
+verdict="$(jq -r '.choices[0].message.content // ""' <<<"$resp" 2>/dev/null | head -1 | tr -c 'A-Za-z \n' ' ' | awk '{print toupper($1)}')"
 case "$verdict" in
-  *CLEAN*)     pass ;;
-  *INJECTION*) reason="$(jq -r '.choices[0].message.content // ""' <<<"$resp" | sed -n '2p')"; block 2 "$(jq -cn --arg r "${reason:-flagged by LLM screen}" '["LLM: "+$r]')" ;;
+  CLEAN)       pass ;;
+  INJECTION) reason="$(jq -r '.choices[0].message.content // ""' <<<"$resp" | sed -n '2p')"; block 2 "$(jq -cn --arg r "${reason:-flagged by LLM screen}" '["LLM: "+$r]')" ;;
   *)           block 2 '["stage-2 returned no clear verdict (fail-closed)"]' ;;
 esac
