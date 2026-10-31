@@ -5,15 +5,16 @@ Propose-only tool pruning: which loaded MCP servers were never called.
 Claude Code defers most tools: the model gets one name line per deferred tool on
 every turn (`deferred_tools_delta.addedLines`) and the full schema only once a
 tool is surfaced. Those name lines are the per-turn tool-set cost this measures.
-A server none of whose tools were called across >= --min-sessions top-level
-sessions is proposed as a `permissions.deny` entry (`mcp__<server>` matches every
-tool of it). Subagent transcripts (`.../subagents/*.jsonl`) contribute calls but
-do not count toward the floor: one session with 4 subagents is still one session.
+A server loaded in >= --min-sessions top-level sessions, none of whose tools was
+called (deferred or not), is proposed as a `permissions.deny` entry
+(`mcp__<server>` matches every tool of it). Subagent transcripts
+(`.../subagents/*.jsonl`) contribute calls but do not count toward the floor:
+one session with 4 subagents is still one session.
 
 Propose-only: prints JSON, never writes settings. Partly-used servers are
 reported, not proposed (denying a used tool breaks a workflow). After a human
 applies a deny, check it on sessions STARTED AFTER the deny only (older sessions
-still list the server): the server's names must be absent from `loaded` there,
+still list the server): the server must be absent from `loaded_servers` there,
 or the deny did not shrink the wire and should be reverted.
 
 Usage:
@@ -55,16 +56,20 @@ def scan(path: str):
 
 
 def propose(paths, min_sessions: int) -> dict:
-    sessions, line_bytes, called = 0, {}, set()
+    sessions, line_bytes, called, seen_in = 0, {}, set(), defaultdict(int)
     for p in paths:
         loaded, c = scan(p)
         called |= c  # before any skip: a no-deferral session's calls still save its servers
         if not loaded:  # pre-deferral or non-Claude-Code transcript: nothing loaded to measure
             continue
         line_bytes.update(loaded)
-        sessions += "/subagents/" not in p
+        if "/subagents/" not in p:
+            sessions += 1
+            for srv in {server_of(n) for n in loaded} - {""}:
+                seen_in[srv] += 1
     out = {"sessions": sessions, "loaded": len(line_bytes),
-           "called": len(set(line_bytes) & called), "proposals": [], "partly_used": []}
+           "called": len(set(line_bytes) & called), "loaded_servers": sorted(seen_in),
+           "proposals": [], "partly_used": []}
     if sessions < min_sessions:
         out["skipped"] = f"{sessions} top-level sessions < --min-sessions {min_sessions}"
         return out
@@ -73,9 +78,12 @@ def propose(paths, min_sessions: int) -> dict:
         if server_of(n):
             by_server[server_of(n)].append(n)
     for srv, names in sorted(by_server.items()):
-        used = [n for n in names if n in called]
-        row = {"server": srv, "tools": len(names), "used": len(used),
+        # any call saves the server, incl. a tool that was fully loaded (never deferred)
+        used = {n for n in called if server_of(n) == srv}
+        row = {"server": srv, "tools": len(names), "used": len(used), "sessions": seen_in[srv],
                "bytes_per_turn": sum(line_bytes[n] for n in names if n not in called)}
+        if seen_in[srv] < min_sessions:  # per server: one session's connector is no pattern
+            continue
         if not used:
             out["proposals"].append({**row, "deny": srv})
         else:

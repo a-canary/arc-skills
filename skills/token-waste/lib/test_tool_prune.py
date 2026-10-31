@@ -81,6 +81,18 @@ def test_removed_names_drop_off_the_wire():
     assert "mcp__gmail" not in denies(out) and out["loaded"] == 3
 
 
+def test_floor_is_per_server():
+    pw = ["Read", "mcp__pw__click", "mcp__pw__snap"]
+    out = propose([session([], names=pw) for _ in range(4)] + [session([])], 5)
+    assert denies(out) == ["mcp__pw"], out  # gmail loaded in 1 of 5 sessions: below the floor
+    assert out["loaded_servers"] == ["mcp__gmail", "mcp__pw"]
+
+
+def test_a_call_to_a_never_deferred_tool_saves_its_server():
+    paths = [session([]) for _ in range(4)] + [session(["mcp__gmail__draft"])]  # draft fully loaded
+    assert "mcp__gmail" not in denies(propose(paths, 5))
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
