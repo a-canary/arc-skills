@@ -172,12 +172,39 @@ Combine all confirmed examples into the single output file. Compute:
 
 Write it to `$OUT` with the Write tool.
 
+### Step 5b — Tool-set prune proposal (cross-session, propose-only)
+
+Every turn carries one name line per deferred tool, used or not; none of it is a tool
+result, so Steps 3-5 never see it. `tool_prune.py` measures the name lines over the last
+7 days of Claude Code sessions. It proposes a `permissions.deny` entry for each MCP server
+that was loaded in at least 5 of those top-level sessions and none of whose tools was
+called in the last 30 days. Subagent transcripts add calls but don't count toward the floor:
+
+```bash
+find ~/.claude/projects -name '*.jsonl' -newermt "$(date -d "$DAY - 6 days" +%Y-%m-%d)" \
+  ! -newermt "$NEXT 00:00:00" -print > "$WORK/prune-sessions.txt"
+# calls only, 30 days: a server used monthly must not be proposed off a quiet week
+find ~/.claude/projects -name '*.jsonl' -newermt "$(date -d "$DAY - 29 days" +%Y-%m-%d)" \
+  ! -newermt "$NEXT 00:00:00" -print > "$WORK/prune-calls.txt"
+python3 "$(dirname "$DETECT")/tool_prune.py" "$WORK/prune-sessions.txt" \
+  --calls "$WORK/prune-calls.txt" -o "$WORK/tool-prune.json"
+jq '{sessions, loaded, called, loaded_name_bytes, proposed_bytes_per_turn, skipped, deny: [.proposals[].deny]}' "$WORK/tool-prune.json"
+```
+
+Propose only: never write settings from this step. A server with any called tool is
+reported under `partly_used`, never proposed. After a human applies a deny, check it
+on sessions started after the deny only (`-newermt "<deny time>"`; older sessions in the
+window still list the server): it must be absent from `loaded_servers` there, or the
+deny did not shrink the wire and should be reverted. The sessions pool every project,
+so a deny belongs in user-level `~/.claude/settings.json`, not a project file.
+
 ### Step 6 — Present
 
 Report to the user:
 1. Sessions analyzed and total tokens flagged as wasted
 2. `by_pattern` breakdown (which waste shape dominates)
 3. Top 5–10 examples (target, pattern, tokens wasted, the cheaper alternative)
+4. Tool-set prune proposal from Step 5b: `proposed_bytes_per_turn` against `loaded_name_bytes` (the union of name lines across sessions, an upper bound on one turn), and the `deny` list
 
 Then proceed to Phase 2 — the analysis is the input the adapter acts on.
 
