@@ -175,17 +175,20 @@ Write it to `$OUT` with the Write tool.
 ### Step 5b — Tool-set prune proposal (cross-session, propose-only)
 
 Every turn carries one name line per deferred tool, used or not; none of it is a tool
-result, so Steps 3-5 never see it. `tool_prune.py` measures it over the last 7 days of
-Claude Code sessions (a week, so a server used weekly is not proposed off one quiet day)
-and proposes a `permissions.deny` entry for each MCP server none of whose tools were
-called, among servers loaded in at least 5 top-level sessions (subagent transcripts
-add calls but don't count toward that floor):
+result, so Steps 3-5 never see it. `tool_prune.py` measures the name lines over the last
+7 days of Claude Code sessions. It proposes a `permissions.deny` entry for each MCP server
+that was loaded in at least 5 of those top-level sessions and none of whose tools was
+called in the last 30 days. Subagent transcripts add calls but don't count toward the floor:
 
 ```bash
 find ~/.claude/projects -name '*.jsonl' -newermt "$(date -d "$DAY - 6 days" +%Y-%m-%d)" \
   ! -newermt "$NEXT 00:00:00" -print > "$WORK/prune-sessions.txt"
-python3 "$(dirname "$DETECT")/tool_prune.py" "$WORK/prune-sessions.txt" -o "$WORK/tool-prune.json"
-jq '{sessions, loaded, called, proposed_bytes_per_turn, deny: [.proposals[].deny]}' "$WORK/tool-prune.json"
+# calls only, 30 days: a server used monthly must not be proposed off a quiet week
+find ~/.claude/projects -name '*.jsonl' -newermt "$(date -d "$DAY - 29 days" +%Y-%m-%d)" \
+  ! -newermt "$NEXT 00:00:00" -print > "$WORK/prune-calls.txt"
+python3 "$(dirname "$DETECT")/tool_prune.py" "$WORK/prune-sessions.txt" \
+  --calls "$WORK/prune-calls.txt" -o "$WORK/tool-prune.json"
+jq '{sessions, loaded, called, name_bytes_per_turn, proposed_bytes_per_turn, skipped, deny: [.proposals[].deny]}' "$WORK/tool-prune.json"
 ```
 
 Propose only: never write settings from this step. A server with any called tool is

@@ -18,8 +18,9 @@ still list the server): the server must be absent from `loaded_servers` there,
 or the deny did not shrink the wire and should be reverted.
 
 Usage:
-    python tool_prune.py SESSIONS.txt [--min-sessions 5] [-o OUT.json]
-    (SESSIONS.txt: one session .jsonl path per line)
+    python tool_prune.py SESSIONS.txt [--calls CALLS.txt] [--min-sessions 5] [-o OUT.json]
+    (one session .jsonl path per line; CALLS.txt is a longer window scanned for
+    calls only, so a server used monthly is not proposed off a quiet week)
 """
 import argparse
 import json
@@ -42,21 +43,25 @@ def scan(path: str):
                 r = json.loads(line)
             except ValueError:
                 continue
-            a = r.get("attachment") or {}
-            if a.get("type") == "deferred_tools_delta":
+            if not isinstance(r, dict):  # one odd line must not abort a 1000-file run
+                continue
+            a = r.get("attachment")
+            if isinstance(a, dict) and a.get("type") == "deferred_tools_delta":
                 for n in a.get("removedNames", []):
                     loaded.pop(n, None)
                 for n, l in zip(a.get("addedNames", []), a.get("addedLines", [])):
                     loaded[n] = len(l)
             if r.get("type") == "assistant":
                 for c in (r.get("message") or {}).get("content") or []:
-                    if isinstance(c, dict) and c.get("type") == "tool_use":
-                        called.add(c.get("name"))
+                    if isinstance(c, dict) and c.get("type") == "tool_use" and isinstance(c.get("name"), str):
+                        called.add(c["name"])
     return loaded, called
 
 
-def propose(paths, min_sessions: int) -> dict:
+def propose(paths, min_sessions: int, call_paths=()) -> dict:
     sessions, line_bytes, called, seen_in = 0, {}, set(), defaultdict(int)
+    for p in call_paths:
+        called |= scan(p)[1]
     for p in paths:
         loaded, c = scan(p)
         called |= c  # before any skip: a no-deferral session's calls still save its servers
@@ -67,7 +72,7 @@ def propose(paths, min_sessions: int) -> dict:
             sessions += 1
             for srv in {server_of(n) for n in loaded} - {""}:
                 seen_in[srv] += 1
-    out = {"sessions": sessions, "loaded": len(line_bytes),
+    out = {"sessions": sessions, "loaded": len(line_bytes), "name_bytes_per_turn": sum(line_bytes.values()),
            "called": len(set(line_bytes) & called), "loaded_servers": sorted(seen_in),
            "proposals": [], "partly_used": []}
     if sessions < min_sessions:
@@ -97,12 +102,17 @@ def propose(paths, min_sessions: int) -> dict:
 def main():
     ap = argparse.ArgumentParser(description="Propose permissions.deny for never-called MCP servers")
     ap.add_argument("sessions", help="file listing session .jsonl paths, one per line")
+    ap.add_argument("--calls", help="file listing extra session paths scanned for calls only")
     ap.add_argument("--min-sessions", type=int, default=5)
     ap.add_argument("-o", "--output", help="output JSON path (default stdout)")
     args = ap.parse_args()
     with open(args.sessions) as f:
         paths = [l.strip() for l in f if l.strip()]
-    text = json.dumps(propose(paths, args.min_sessions), indent=2)
+    call_paths = []
+    if args.calls:
+        with open(args.calls) as f:
+            call_paths = [l.strip() for l in f if l.strip()]
+    text = json.dumps(propose(paths, args.min_sessions, call_paths), indent=2)
     if args.output:
         with open(args.output, "w") as f:
             f.write(text + "\n")

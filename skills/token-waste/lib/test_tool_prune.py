@@ -51,6 +51,7 @@ def test_only_fully_unused_servers_are_proposed():
     assert denies(out) == ["mcp__gmail"], out
     assert out["proposals"][0]["bytes_per_turn"] == len("mcp__gmail__search\n") + len("mcp__gmail__send\n")
     assert [r["server"] for r in out["partly_used"]] == ["mcp__pw"]  # a used tool keeps its server
+    assert out["partly_used"][0]["bytes_per_turn"] == len("mcp__pw__snap\n")  # only the uncalled tool
     assert out["called"] == 2 and out["loaded"] == 5
 
 
@@ -83,7 +84,8 @@ def test_removed_names_drop_off_the_wire():
 
 def test_floor_is_per_server():
     pw = ["Read", "mcp__pw__click", "mcp__pw__snap"]
-    out = propose([session([], names=pw) for _ in range(4)] + [session([])], 5)
+    gmail = [f"mcp__gmail__t{i}" for i in range(6)]  # 6 tools in 1 session is still 1 session
+    out = propose([session([], names=pw) for _ in range(4)] + [session([], names=NAMES + gmail)], 5)
     assert denies(out) == ["mcp__pw"], out  # gmail loaded in 1 of 5 sessions: below the floor
     assert out["loaded_servers"] == ["mcp__gmail", "mcp__pw"]
 
@@ -91,6 +93,20 @@ def test_floor_is_per_server():
 def test_a_call_to_a_never_deferred_tool_saves_its_server():
     paths = [session([]) for _ in range(4)] + [session(["mcp__gmail__draft"])]  # draft fully loaded
     assert "mcp__gmail" not in denies(propose(paths, 5))
+
+
+def test_malformed_records_are_skipped():
+    path = session([])
+    with open(path, "a") as f:
+        f.write("[1, 2]\n" + json.dumps({"type": "attachment", "attachment": "x"}) + "\n")
+        f.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use"}]}}) + "\n")
+    assert denies(propose([path] + [session([]) for _ in range(4)], 5)) == ["mcp__gmail", "mcp__pw"]
+
+
+def test_the_longer_call_window_saves_a_server():
+    paths = [session([]) for _ in range(5)]
+    assert "mcp__gmail" in denies(propose(paths, 5))
+    assert "mcp__gmail" not in denies(propose(paths, 5, [session(["mcp__gmail__send"], names=[])]))
 
 
 if __name__ == "__main__":
