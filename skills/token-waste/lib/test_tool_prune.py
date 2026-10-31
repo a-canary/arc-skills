@@ -100,7 +100,11 @@ def test_malformed_records_are_skipped():
     with open(path, "a") as f:
         f.write("[1, 2]\n" + json.dumps({"type": "attachment", "attachment": "x"}) + "\n")
         f.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use"}]}}) + "\n")
-    assert denies(propose([path] + [session([]) for _ in range(4)], 5)) == ["mcp__gmail", "mcp__pw"]
+        f.write(json.dumps({"type": "assistant", "message": "hi"}) + "\n")
+        f.write(json.dumps({"type": "attachment", "attachment": {
+            "type": "deferred_tools_delta", "addedNames": None, "removedNames": None}}) + "\n")
+    out = propose([path] + [session([]) for _ in range(4)], 5, [os.path.join(TMP.name, "gone.jsonl")])
+    assert denies(out) == ["mcp__gmail", "mcp__pw"]
 
 
 def test_the_longer_call_window_saves_a_server():

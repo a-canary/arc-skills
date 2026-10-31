@@ -188,7 +188,7 @@ find ~/.claude/projects -name '*.jsonl' -newermt "$(date -d "$DAY - 29 days" +%Y
   ! -newermt "$NEXT 00:00:00" -print > "$WORK/prune-calls.txt"
 python3 "$(dirname "$DETECT")/tool_prune.py" "$WORK/prune-sessions.txt" \
   --calls "$WORK/prune-calls.txt" -o "$WORK/tool-prune.json"
-jq '{sessions, loaded, called, name_bytes_per_turn, proposed_bytes_per_turn, skipped, deny: [.proposals[].deny]}' "$WORK/tool-prune.json"
+jq '{sessions, loaded, called, loaded_name_bytes, proposed_bytes_per_turn, skipped, deny: [.proposals[].deny]}' "$WORK/tool-prune.json"
 ```
 
 Propose only: never write settings from this step. A server with any called tool is
@@ -204,7 +204,7 @@ Report to the user:
 1. Sessions analyzed and total tokens flagged as wasted
 2. `by_pattern` breakdown (which waste shape dominates)
 3. Top 5–10 examples (target, pattern, tokens wasted, the cheaper alternative)
-4. Tool-set prune proposal from Step 5b: `proposed_bytes_per_turn` of the name-line total, and the `deny` list
+4. Tool-set prune proposal from Step 5b: `proposed_bytes_per_turn` against `loaded_name_bytes` (the union of name lines across sessions, an upper bound on one turn), and the `deny` list
 
 Then proceed to Phase 2 — the analysis is the input the adapter acts on.
 

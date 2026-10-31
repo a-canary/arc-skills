@@ -37,7 +37,11 @@ def server_of(name: str) -> str:
 def scan(path: str):
     """Names on the wire at session end (name -> line bytes) and every tool called."""
     loaded, called = {}, set()
-    with open(path, errors="ignore") as f:
+    try:
+        f = open(path, errors="ignore")
+    except OSError:  # deleted between `find` and the scan: nothing to count
+        return loaded, called
+    with f:
         for line in f:
             try:
                 r = json.loads(line)
@@ -47,12 +51,13 @@ def scan(path: str):
                 continue
             a = r.get("attachment")
             if isinstance(a, dict) and a.get("type") == "deferred_tools_delta":
-                for n in a.get("removedNames", []):
+                for n in a.get("removedNames") or []:
                     loaded.pop(n, None)
-                for n, l in zip(a.get("addedNames", []), a.get("addedLines", [])):
+                for n, l in zip(a.get("addedNames") or [], a.get("addedLines") or []):
                     loaded[n] = len(l)
-            if r.get("type") == "assistant":
-                for c in (r.get("message") or {}).get("content") or []:
+            msg = r.get("message")
+            if r.get("type") == "assistant" and isinstance(msg, dict):
+                for c in msg.get("content") or []:
                     if isinstance(c, dict) and c.get("type") == "tool_use" and isinstance(c.get("name"), str):
                         called.add(c["name"])
     return loaded, called
@@ -72,7 +77,7 @@ def propose(paths, min_sessions: int, call_paths=()) -> dict:
             sessions += 1
             for srv in {server_of(n) for n in loaded} - {""}:
                 seen_in[srv] += 1
-    out = {"sessions": sessions, "loaded": len(line_bytes), "name_bytes_per_turn": sum(line_bytes.values()),
+    out = {"sessions": sessions, "loaded": len(line_bytes), "loaded_name_bytes": sum(line_bytes.values()),  # union over sessions: an upper bound on one turn
            "called": len(set(line_bytes) & called), "loaded_servers": sorted(seen_in),
            "proposals": [], "partly_used": []}
     if sessions < min_sessions:
