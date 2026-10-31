@@ -50,8 +50,11 @@ run() {  # run() <skill> <logfile>
   # 240m: slow local lane (single-slot box, minutes per idle prompt, queue-wait
   # when the box is busy). dream is incremental (processed.json) so a
   # timeout-killed run resumes next night.
-  timeout 240m "$PI" -p --model "$HYGIENE_MODEL" --tools $TOOLS "/$1" \
-    >> "$LOG_DIR/$2" 2>&1
+  # Committer = nightly-<stage>: how gate() tells the stage's commits from the
+  # operator's and other crons' (env beats `-c user.name`; author is left alone).
+  GIT_COMMITTER_NAME="nightly-$1" GIT_COMMITTER_EMAIL="nightly@localhost" \
+    timeout 240m "$PI" -p --model "$HYGIENE_MODEL" --tools $TOOLS "/$1" \
+    < /dev/null >> "$LOG_DIR/$2" 2>&1
   local c=$?
   log_event "$NIGHTLY_LOG" "$1 exit=$c"
   [ "$c" -ne 0 ] && log_fail "$NIGHTLY_LOG" "$1" "$c"
@@ -59,55 +62,55 @@ run() {  # run() <skill> <logfile>
 }
 
 # Defense gate (defend skill, DefendMerge tier): independent fresh-context model
-# attacks the stage's edits before they stand. Adapters commit their own single
-# edit; the gate reviews everything since the snapshot (commits + uncommitted).
-# Not CLEAR => revert ONLY the stage's edits: HEAD back to pre, tracked files back
-# to the snapshot (pre-existing uncommitted work survives; it lost data 08-29..09-22
-# when `checkout -- .` wiped it), and files that appeared during the stage moved to
-# ~/trash. No VERDICT line = GATE_ERROR (infra), logged apart from ATTACKS.
-# ponytail: a pre-existing untracked file the stage edits or deletes is not restored
-# (no content snapshot of untracked files); add a tar of them if that ever bites.
+# attacks the stage's commits before they stand. Not CLEAR => `git revert` ONLY
+# the commits the stage made (committer nightly-<stage>). Revert is additive and
+# refuses rather than overwrite anything, so operator work and other writers are
+# never touched (the old `reset --hard` + `checkout -- .` wiped uncommitted work
+# 08-29..09-22). Anything that cannot be reverted cleanly is left in place and
+# logged REVERT_FAILED / REVERT_REFUSED for a human. Uncommitted or untracked
+# changes that appear during a stage are not attributable: logged as ALERT, never
+# touched. No VERDICT line = GATE_ERROR (infra), logged apart from ATTACKS.
+# ponytail: an adapter that `git add -A`s sweeps operator dirt into its commit;
+# reverting that commit drops the dirt from the tree (it stays in the commit, sha logged).
 snap_heads() {
-  local repo head wip
+  local repo
   for repo in $GATE_REPOS; do
     [ -d "$repo/.git" ] || continue
-    head=$(git -C "$repo" rev-parse HEAD)
-    # stash create: commit object of the dirty tracked tree, no ref, stash stack untouched
-    wip=$(git -C "$repo" stash create)
-    echo "$repo $head ${wip:-$head}"
-    git -C "$repo" ls-files --others --exclude-standard | sort > "$(untracked_list "$repo")"
+    echo "$repo $(git -C "$repo" rev-parse HEAD) $(branch_of "$repo")"
+    git -C "$repo" status --porcelain | sort > "$(dirt_list "$repo")"
   done > "${SNAP_FILE}"
 }
-untracked_list() { echo "${SNAP_FILE}.u.$(printf '%s' "$1" | cksum | cut -d' ' -f1)"; }
-new_untracked() {  # files untracked now that were not untracked at snapshot
-  git -C "$1" ls-files --others --exclude-standard | sort | comm -13 "$(untracked_list "$1")" -
-}
+branch_of() { git -C "$1" symbolic-ref -q --short HEAD || echo DETACHED; }
+dirt_list() { echo "${SNAP_FILE}.d.$(printf '%s' "$1" | cksum | cut -d' ' -f1)"; }
 gate() {  # gate <stage> — call after run(); no-op when the stage edited nothing
-  local stage="$1" repo pre base diff verdict untracked kind q f
-  while read -r repo pre base; do
-    diff=$(git -C "$repo" diff "$base")  # snapshot tree vs working tree: commits + uncommitted
-    untracked=$(new_untracked "$repo")
-    [ -n "$diff" ] || [ -n "$untracked" ] || continue
-    log_event "$NIGHTLY_LOG" "gate $stage: edits in $(basename "$repo") — dispatching DefendGate ($GATE_MODEL)"
-    verdict=$(timeout 30m "$PI" -p --model "$GATE_MODEL" --tools read,bash \
-      "You are an independent defense gate (DefendMerge tier, defend skill). The nightly self-heal stage '$stage' just made these edits in $repo. Contract: at most ONE narrow system improvement; no regression to documented behavior; no rule bloat.\nDIFF (truncated 20k): $(printf '%s' "$diff" | head -c 20000)\nUNTRACKED ADDED: $(printf '%s' "${untracked:-none}" | head -20)\nMandatory lenses — answer each explicitly, 'no findings' is valid per lens: (1) does it break existing documented behavior? (2) is it more than one narrow change? (3) does it contradict AGENTS.md rules? Then free attack on anything else. Your final line must be exactly: VERDICT: CLEAR  or  VERDICT: ATTACKS" \
-      2>&1 | tail -8)
-    if printf '%s' "$verdict" | grep -q "VERDICT: CLEAR"; then
-      log_event "$NIGHTLY_LOG" "gate $stage: $(basename "$repo") CLEAR"
-      continue
+  local stage="$1" repo pre branch mine new name out verdict kind
+  while read -r repo pre branch; do
+    name=$(basename "$repo")
+    mine=$(git -C "$repo" log --format=%H --committer="^nightly-$stage <" "$pre..HEAD")
+    new=$(git -C "$repo" status --porcelain | sort | comm -13 "$(dirt_list "$repo")" -)
+    [ -n "$new" ] && log_event "$NIGHTLY_LOG" "gate $stage: $name ALERT uncommitted changes appeared during the stage (not attributable, not reverted): $(printf '%s' "$new" | head -5 | tr '\n' ' ')"
+    [ -n "$mine" ] || continue
+    log_event "$NIGHTLY_LOG" "gate $stage: $(echo "$mine" | wc -l) commit(s) in $name — dispatching DefendGate ($GATE_MODEL)"
+    out="$LOG_DIR/gate-$stage-$name.log"
+    timeout 30m "$PI" -p --model "$GATE_MODEL" --tools read,bash \
+      "You are an independent defense gate (DefendMerge tier, defend skill). The nightly self-heal stage '$stage' just made these commits in $repo. Contract: at most ONE narrow system improvement; no regression to documented behavior; no rule bloat.\nCOMMITS (truncated 20k): $(git -C "$repo" show $mine | head -c 20000)\nMandatory lenses — answer each explicitly, 'no findings' is valid per lens: (1) does it break existing documented behavior? (2) is it more than one narrow change? (3) does it contradict AGENTS.md rules? Then free attack on anything else. Your final line must be exactly: VERDICT: CLEAR  or  VERDICT: ATTACKS" \
+      < /dev/null > "$out" 2>&1
+    # last VERDICT anywhere: hook chatter after it must not turn a verdict into an error
+    verdict=$(grep -o 'VERDICT: \(CLEAR\|ATTACKS\)' "$out" | tail -1)
+    case "$verdict" in
+      "VERDICT: CLEAR") log_event "$NIGHTLY_LOG" "gate $stage: $name CLEAR"; continue ;;
+      "VERDICT: ATTACKS") kind=ATTACKS ;;
+      *) kind=GATE_ERROR ;;
+    esac
+    log_fail "$NIGHTLY_LOG" "gate-$stage-$name" 1
+    if [ "$(branch_of "$repo")" != "$branch" ]; then
+      log_event "$NIGHTLY_LOG" "gate $stage: $name $kind — REVERT_REFUSED (branch $branch -> $(branch_of "$repo")); commits left for a human: $(echo $mine)"
+    elif git -C "$repo" revert --no-edit $mine > "$out.revert" 2>&1; then  # newest first
+      log_event "$NIGHTLY_LOG" "gate $stage: $name $kind — reverted stage commits $(echo $mine). $(tail -c 300 "$out" | tr '\n' ' ')"
+    else
+      git -C "$repo" revert --abort 2>/dev/null
+      log_event "$NIGHTLY_LOG" "gate $stage: $name $kind — REVERT_FAILED (see $out.revert); commits left for a human: $(echo $mine)"
     fi
-    printf '%s' "$verdict" | grep -q "VERDICT: ATTACKS" && kind=ATTACKS || kind=GATE_ERROR
-    git -C "$repo" reset -q "$pre"              # HEAD + index back; working tree untouched
-    git -C "$repo" checkout -q "$base" -- .     # tracked files back to the snapshot
-    git -C "$repo" reset -q                     # unstage (pre-existing staging becomes unstaged)
-    # after the reset, files the stage added (even committed ones) are untracked: move them out
-    q="$HOME/trash/$(date +%s)_gate-quarantine-$stage/$(basename "$repo")"
-    new_untracked "$repo" | while IFS= read -r f; do
-      mkdir -p "$q/$(dirname "$f")" && mv -- "$repo/$f" "$q/$f"
-    done
-    [ -d "$q" ] && log_event "$NIGHTLY_LOG" "gate $stage: $(basename "$repo") new files quarantined to $q"
-    log_fail "$NIGHTLY_LOG" "gate-$stage-$(basename "$repo")" 1
-    log_event "$NIGHTLY_LOG" "gate $stage: $(basename "$repo") $kind — stage edits reverted. $(printf '%s' "$verdict" | tr '\n' ' ' | tail -c 400)"
   done < "${SNAP_FILE}"
 }
 
@@ -141,6 +144,6 @@ log_event "$NIGHTLY_LOG" "agent-gaps exit=$gc"
 snap_heads
 run gap-remediate gap-remediate.log
 gate gap-remediate
-rm -f "${SNAP_FILE}" "${SNAP_FILE}".u.*
+rm -f "${SNAP_FILE}" "${SNAP_FILE}".d.*
 
 log_event "$NIGHTLY_LOG" "nightly done (WASTE_DAY=$WASTE_DAY)"
