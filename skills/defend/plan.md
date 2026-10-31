@@ -20,6 +20,9 @@ Director** — its verdict reaches the user directly.
   considered?
 - **Cost of wrong** — if the core premise is wrong, what is already spent?
 - **Reversibility** — which early commits make later phases un-reversible?
+- **Legacy first** — what existing modules, files or docs on this topic does the
+  plan supersede or duplicate? The plan names what it deletes (`ke learn` at
+  deletion time). An add-only plan states the prior-art search that found none.
 
 ## Attack shapes (expected)
 
