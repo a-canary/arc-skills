@@ -22,6 +22,6 @@ case_ gone "ERROR: [youtube] x: Video unavailable"
 case_ http404 "ERROR: Unable to download webpage: HTTP Error 404: Not Found"
 [ "$(wc -l <"$T/log")" -eq 1 ] || { echo "FAIL: 404 retried $(wc -l <"$T/log")x"; fail=1; }
 case_ label "Sign in to confirm you're not a bot"
-grep -qvE '^(--extractor-args [^ ]+ )?https://youtu.be/x$' "$T/log" && { echo "FAIL: rung label leaked into yt-dlp args: $(head -1 "$T/log")"; fail=1; }
+{ [ -s "$T/log" ] && ! grep -qvE '^(--extractor-args [^ ]+ )?https://youtu.be/x$' "$T/log"; } || { echo "FAIL: rung label leaked into yt-dlp args: $(head -1 "$T/log")"; fail=1; }
 [ $fail -eq 0 ] && echo PASS
 exit $fail

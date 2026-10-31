@@ -97,7 +97,7 @@ KEEP="$FIRST"
 DROPPED=0
 prev="$FIRST"
 while read -r cur; do
-    PSNR=$(ffmpeg -hide_banner -loglevel error -i "$prev" -i "$cur" \
+    PSNR=$(ffmpeg -nostdin -hide_banner -loglevel error -i "$prev" -i "$cur" \
       -lavfi psnr=stats_file="$TMP/psnr.txt":stats_version=2 -f null - 2>/dev/null \
       && grep -o 'psnr_avg:[^ ]*' "$TMP/psnr.txt" | head -1 | cut -d: -f2)
     if [ "$PSNR" = "inf" ] || awk -v p="${PSNR:-0}" -v t="$DEDUPE_PSNR" 'BEGIN{exit !(p+0>t)}'; then
