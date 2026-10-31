@@ -42,7 +42,7 @@ run_case() {  # run_case <label> <verdict> [mode]: sets R1 R2 L
   mkrepo "$R1"; mkrepo "$R2"
   [ "${3:-}" = busy ] && git -C "$R2" rev-parse HEAD > "$R2/.git/CHERRY_PICK_HEAD"  # operator mid cherry-pick
   HOME="$T/$1" PI="$T/pi" STUB_REPOS="$R1 $R2" STUB_VERDICT="$2" STUB_MODE="${3:-}" GATE_REPOS="$R1 $R2" \
-    LOG_DIR="$L" GAPS=/bin/true bash "$SCRIPT"
+    LOG_DIR="$L" GAPS=/bin/true BENCH=/bin/true HARNESS_BENCH=/tmp bash "$SCRIPT"
   for r in "$R1" "$R2"; do  # operator work survives every outcome
     [ "$(cat "$r/a.txt")" = mine ] || fail "operator edit lost in $(basename "$r")" "$1"
     [ "$(cat "$r/keep.txt" 2>/dev/null)" = keep ] || fail "operator untracked lost in $(basename "$r")" "$1"
