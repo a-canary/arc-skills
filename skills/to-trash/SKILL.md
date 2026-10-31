@@ -40,11 +40,13 @@ It is the same handler `install-to-trash` hooks onto `rm` — same destination, 
 
 ```
 <trash-root>/<unix-ts>__<path-relative-to-$HOME, / as -->/
-  reason.md   from:, when:, by:, reason:  (written BEFORE the move)
+  reason.md   from:, when:, by:, reason:  (written BEFORE the move; + status: after a partial move)
   <name>      the item itself
 ```
 
 A crash between the two steps leaves a labelled empty entry, never an unlabelled item.
+An item itself named `reason.md` is stored as `reason.md.item`; restore reads the path from the sidecar's `from:`, so it goes back under its real name.
+A cross-filesystem `mv` can fail after copying part of the item. Then the entry is kept, not rolled back, and `reason.md` gains a `status: incomplete` line: the original path may still hold a remainder, so check it before restoring or sweeping.
 
 ## Guards
 
