@@ -1,0 +1,52 @@
+{
+ "approach": "single-strong",
+ "case": "plan-06",
+ "rounds": [
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Atomic rename over the running binary fails on Windows, where a running .exe cannot be replaced. The plan treats Windows as a supported platform but its test matrix and design do not cover it. Handle it with a rename-aside approach or document it as unsupported.",
+     "evidence": "\"atomic rename over the current binary\" ... Out of scope: \"Telemetry for kvx running as a Windows service\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Signature verification does not bind the archive to a version or freshness. A replayed older, validly signed release, or a `--version` downgrade, would install a known-vulnerable build. This works against the plan's goal of faster security-fix uptake. Verify the version from the signed trusted comment and warn or refuse on downgrade.",
+     "evidence": "\"the archive is rejected unless the signature verifies\" and \"[--version vX.Y.Z]\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The plan does not say whether the collector or its reverse proxy logs client IPs. The persistent install ID is pseudonymous rather than anonymous, so the \"anonymous\" wording slightly overstates it. State that IP logging is disabled and describe the ID accurately in docs/telemetry.md.",
+     "evidence": "\"random install ID generated locally\" ... \"raw events discarded after aggregation\" (no mention of web or proxy logs)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The payload has a single backend type, but a diff or sync can span two backends (for example Consul to etcd). The plan does not say how that case is reported.",
+     "evidence": "\"backend type (\\\"consul\\\" | \\\"etcd\\\" | \\\"ssm\\\")\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3127,
+    "tokOut": 1681,
+    "usd": 0.025835200000000003,
+    "critMs": 13474
+   },
+   "wallMs": 36857
+  }
+ ],
+ "artifact": "# Plan: kvx self-update + opt-in telemetry\n\nMaintainers: 2 | 3 weeks | Target release: v2.8.0\n\n## 1. Motivation\n- After the v2.6.3 credential-logging fix, 41% of release-asset downloads 60 days later were still for versions <= v2.6.2 (GitHub release download counts, tallied per asset).\n- Issues #812, #845, #903 ask for \"kvx self-update\" (78 combined thumbs-up).\n- Backend prioritisation is currently guesswork: we maintain 3 backends with equal effort and do not know relative use.\n\n## 2. kvx self-update\nCommand: kvx self-update [--check] [--version vX.Y.Z]\n- Queries the GitHub Releases API for the latest non-prerelease tag; --check only prints whether an update exists.\n- Downloads the platform archive and its .minisig signature. The minisign public key is compiled into the binary; the archive is rejected unless the signature verifies. The same key already signs our releases today (documented in SECURITY.md).\n- Writes the new binary to a temp file in the same directory, fsyncs, then atomic rename over the current binary. The previous binary is kept as kvx.prev; kvx self-update --rollback swaps them back.\n- Package-manager installs: if the binary path is under a Homebrew Cellar or is owned by the dpkg/rpm database, self-update refuses and prints the matching brew/apt/dnf command instead, so we never fight the package manager.\n- Startup notice: at most once per 24 h, a single stderr line \"kvx vX.Y.Z available (kvx self-update)\". Suppressed when stderr is not a TTY, when CI=true, or when KVX_NO_UPDATE_CHECK=1. The check is a single HTTPS GET with a 1.5 s timeout run in a goroutine; it never delays the command.\n\n## 3. Telemetry (opt-in)\n- Default is OFF. On first interactive run after upgrade, kvx asks once: \"Share anonymous usage stats (command name, backend type, kvx version, OS/arch)? [y/N]\". Empty answer = no. The prompt is never shown when stdin is not a TTY or CI=true.\n- Changeable any time: kvx telemetry on|off|status; KVX_TELEMETRY=0 hard-disables regardless of config.\n- Payload (complete list, documented in docs/telemetry.md): command name (e.g. \"diff\"), backend type (\"consul\" | \"etcd\" | \"ssm\"), exit code class (ok/user-error/internal-error), kvx version, GOOS/GOARCH, and a random install ID generated locally (not derived from hostname, user, or MAC). No arguments, keys, values, paths, hostnames, or endpoints are ever sent.\n- kvx telemetry status --show-payload prints the exact JSON that would be sent.\n- Transport: batched, at most one POST per day, fire-and-forget with 2 s timeout; failures are dropped, never retried in the foreground.\n- Collector: a ~150-line Go service on the project's existing donated VPS, writing daily aggregate counts only (raw events discarded after aggregation). Aggregates are published monthly in the repo under stats/.\n\n## 4. Testing\n- Self-update: integration tests against a local fake release server covering valid signature, bad signature, truncated download, non-writable directory, rollback, and the Homebrew/dpkg refusal paths.\n- Telemetry: test that nothing is sent when unset, off, CI=true, KVX_TELEMETRY=0, or non-TTY; golden test that the payload schema matches docs/telemetry.md.\n\n## 5. Timeline\n- Week 1: self-update (download, verify, atomic replace, rollback) + tests.\n- Week 2: package-manager detection, startup notice, telemetry client + consent flow.\n- Week 3: collector service, docs/telemetry.md, release notes, v2.8.0-rc1 for 1 week, then v2.8.0.\n\n## 6. Out of scope\n- Auto-installing updates without the user running kvx self-update (we only notify).\n- Delta/binary-diff updates; full archives are < 12 MB.\n- Telemetry for kvx running as a Windows service (no TTY to ask consent); it stays off.\n\n## 7. Success measures\n- 60 days after a release, share of downloads on the latest minor version >= 75% (from 59%).\n- Telemetry opt-in rate reported transparently in stats/; no target, since it is the user's choice.\n",
+ "fixerUsage": {
+  "calls": 0,
+  "tokIn": 0,
+  "tokOut": 0,
+  "usd": 0,
+  "critMs": 0
+ },
+ "status": "cleared"
+}

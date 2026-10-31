@@ -1,0 +1,187 @@
+{
+ "approach": "cascade",
+ "case": "merge-01",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "clientOrderId is generated inside the retry loop, so each attempt uses a new ID. If the first attempt was accepted but the response timed out or returned 5xx, the retry is a distinct order the broker cannot dedupe, causing a duplicate fill. This directly violates the agreed retry-safety constraint and contradicts the PR description.",
+     "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { const clientOrderId = randomUUID();"
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Changing Math.floor to Math.ceil rounds quantity up, so the order notional can exceed the remaining headroom and push the symbol past maxNotional, which sizing must never exceed. E.g. maxNotional 10000, price 30, lot 1: headroom/price = 333.33, ceil gives 334 => 10020 > 10000. The change is framed as a 'tidy' but breaks the risk cap.",
+     "evidence": "const lots = headroom / price / lotSize; return Math.ceil(lots) * lotSize;"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The claim that the broker dedupes on client_order_id (so timeout retries cannot double-fill) is asserted without evidence (dedupe window, scope, behaviour on 5xx/timeouts). The code undermines it by using a fresh ID each attempt.",
+     "evidence": "Retries are safe: every order carries a client_order_id and the broker dedupes on it, so a retry after a timeout cannot double-fill."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "New sizing tests only use exactly divisible inputs, so they pass with both floor and ceil and cannot detect the cap breach. No test asserts notional <= maxNotional for non-divisible prices.",
+     "evidence": "expect(sizeBuy({ maxNotional: 10_000, price: 50, currentQty: 0, lotSize: 10 })).toBe(200);"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Timeout detection relies on an error named 'TimeoutError' with no evidence the broker client throws that; if not, timeouts (the main motivating failure) are not retried. Also no reconciliation lookup of the original order before retrying, and the warn log omits clientOrderId, hindering recovery of ambiguous submits.",
+     "evidence": "(err as Error).name === \"TimeoutError\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The retry path in submitOrder has no tests (502 retry, 4xx no-retry, timeout, ID reuse) for a change touching live-money order submission.",
+     "evidence": "ABSENT: no submit.test.ts changes in the diff"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Deploying right before market open on a live account has no stated rollback, paper-trading validation, or kill switch.",
+     "evidence": "This PR is about to merge to main and deploy before the next market open."
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Backoff has no jitter and no overall deadline; worst case ~12.75s per order and synchronized retries against a struggling broker.",
+     "evidence": "await sleep(250 * 2 ** (attempt - 1));"
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 8250,
+    "tokOut": 4111,
+    "usd": 0.0333052,
+    "critMs": 57515
+   },
+   "wallMs": 171577
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "On a live-money account, the PR retries order submits on timeout or 5xx, where the broker may already have accepted the order. The agreed constraint is no duplicate fills on retry, and the PR admits the dedupe assumption (window, scope, behavior after 5xx or timeout) is unverified. A wrong assumption causes duplicate fills and double exposure that cannot be undone, and it would go live at the open.",
+     "evidence": "\"the claim that the broker dedupes on client_order_id (window, scope, and behavior when the original request hit a 5xx or timeout) has not been confirmed against broker docs or a sandbox... Until confirmed, treat retry safety as unverified.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "If all attempts end ambiguously, the error is thrown and the order may be live at the broker with no automatic reconciliation. The caller or an operator may resubmit under a new client_order_id, bypassing dedupe and creating a duplicate. Recovery depends on a human reading logs during the open.",
+     "evidence": "\"No automatic reconciliation lookup is added in this PR.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR gates itself on a verification that has not been done, yet it is slated to merge and deploy before the next open. The tests mock the broker and confirm only that the ID is reused, not that the broker dedupes.",
+     "evidence": "\"This PR is about to merge to main and deploy before the next market open.\" / \"Please confirm, and confirm that the broker client throws an error named \\\"TimeoutError\\\"\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Timeout retries depend on a string match on err.name. If the real client names its timeout error differently, the main failure mode is silently still dropped. The test hand-builds an Error with that name, so it cannot catch a mismatch.",
+     "evidence": "\"(err as Error).name === \\\"TimeoutError\\\"\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "There is no feature flag or kill switch on the live submit path, so disabling a bad retry behavior requires a redeploy during market hours.",
+     "evidence": "ABSENT: feature flag, kill switch, or rollback plan."
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "During a broker degradation, retries multiply load by up to 3x. Worst-case latency per order is about 12.75s (3×4s timeouts plus backoff), with no jitter or circuit breaker.",
+     "evidence": "\"{ timeoutMs: 4000 }\" and \"await sleep(250 * 2 ** (attempt - 1));\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "sizeBuy has no guard for price<=0 or lotSize<=0, and float division can in edge cases round up to a whole lot above the cap. This is pre-existing code and not changed by this PR.",
+     "evidence": "\"return Math.floor(headroom / price / lotSize) * lotSize;\""
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 12522,
+    "tokOut": 8325,
+    "usd": 0.04792122,
+    "critMs": 43339
+   },
+   "wallMs": 136288
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Ambiguity is an allowlist of 502/503/504 and an error named TimeoutError. Every other failure is rethrown raw and logged as a definitive refusal. That includes a 500, a connection reset or socket hang-up after the request was sent, and a timeout under a different error name, which the PR itself lists as unverified. Each of these can leave the order live at the broker. Callers get no AmbiguousSubmitError and no handoff, and may resubmit under a new client_order_id, which risks a duplicate fill on a live account. This contradicts the PR's own contract and the comment that only a 4xx is definitive.",
+     "evidence": "const ambiguous = (err instanceof BrokerError && RETRYABLE_STATUS.has(err.status)) || (err as Error).name === \"TimeoutError\"; if (!ambiguous) { // Definitive failure (e.g. 4xx): the broker refused the order. log.error(\"order submit failed\" ..."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "On the default path, 5xx and timeouts now surface as AmbiguousSubmitError instead of BrokerError. AmbiguousSubmitError does not extend BrokerError. Existing callers that catch BrokerError or inspect err.status would change behavior at the open. The PR says live behavior is unchanged but does not audit call sites.",
+     "evidence": "\"merging and deploying this PR does not change live retry behavior\" vs throw new AmbiguousSubmitError(clientOrderId, err); ABSENT: audit of submitOrder callers' catch handling."
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 14512,
+    "tokOut": 8675,
+    "usd": 0.053455119999999995,
+    "critMs": 45543
+   },
+   "wallMs": 122060
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The default path changes the error type for 5xx and timeouts from a raw BrokerError to AmbiguousSubmitError. Existing callers are not shown to handle this, so any caller matching on BrokerError or err.status may mis-handle it. The PR describes the new contract but includes no caller audit.",
+     "evidence": "throw new AmbiguousSubmitError(clientOrderId, err); ABSENT: audit of existing submitOrder callers for the changed error type"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "A 408 Request Timeout falls in the 4xx range and is treated as a definitive refusal. A request timeout can leave the order processed, so it is arguably ambiguous.",
+     "evidence": "const definitive = err instanceof BrokerError && err.status >= 400 && err.status < 500;"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Floating-point division in sizeBuy could in rare cases yield a quantity whose notional exceeds the cap by an epsilon. The new tests use only exact or well-behaved values. This is pre-existing sizing code and is outside the changed behavior.",
+     "evidence": "return Math.floor(headroom / price / lotSize) * lotSize;"
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 15611,
+    "tokOut": 9739,
+    "usd": 0.05978912,
+    "critMs": 51592
+   },
+   "wallMs": 156261
+  }
+ ],
+ "artifact": "PR #412: Retry transient broker errors on order submit\n\nDuring the first minutes after the open the broker intermittently returns 502/503 or hangs past our timeout, and we drop the order on the floor.\nThis adds a bounded retry (3 attempts, exponential backoff, 4xx rejections are never retried). Every attempt for a given order reuses the same client_order_id, generated once before the loop.\n\n**Retrying ambiguous failures is off by default.** A 5xx or timeout is ambiguous: the broker may already have accepted the order. Retrying is only safe if the broker dedupes on client_order_id, and that has not been confirmed. So `submitOrder` retries 502/503/504 and timeouts only when the caller passes `{ retryAmbiguous: true }`. The default is a single attempt, so merging and deploying this PR does not change live retry behavior and cannot cause duplicate fills.\n\n**Only a 4xx is treated as definitive. Every other failure is ambiguous.** A `BrokerError` with a 4xx status means the broker refused the order, and it is thrown as the original `BrokerError`. Anything else may have left the order live: a 500, a connection reset or socket hang-up after the request was sent, a timeout under an unrecognized error name, or any unknown error. All of these throw `AmbiguousSubmitError`, which carries `clientOrderId` and the cause. Only 502/503/504 and errors named \"TimeoutError\" are considered for retry (and only with `retryAmbiguous`). Other ambiguous failures are never retried, but they are still surfaced with the ID. Callers must treat `AmbiguousSubmitError` as \"order may be live\" and must not resubmit under a new ID. Any resubmit must reuse `error.clientOrderId`, or look the order up at the broker first. The same ID is also in the error log.\n\nSizing is unchanged in behavior: quantities are still rounded down to the broker's lot size so notional never exceeds maxNotional. This PR adds tests that lock that in.\n\nBefore enabling `retryAmbiguous` (a follow-up change, not part of this merge), someone must confirm against broker docs or a sandbox:\n- The broker dedupes on client_order_id, including its window, its scope, and its behavior when the original request hit a 5xx or timeout.\n- The broker client throws an error named \"TimeoutError\" on timeout. Otherwise timeouts are still reported as `AmbiguousSubmitError`, but they are not retried.\n\nThe tests here mock the broker. They show the ID is reused and that retries are gated. They do not show that the broker dedupes, and only the sandbox check can.\n\nNot in this PR: automatic reconciliation (a lookup by client_order_id after an ambiguous failure). I have not verified the broker's lookup endpoint, so I am not guessing at it. It should land before or together with enabling `retryAmbiguous`. Until then, `AmbiguousSubmitError` with the ID is the handoff to the caller or operator.\n\ndiff --git a/src/router/submit.ts b/src/router/submit.ts\nindex 3a1f0c2..8be71d4 100644\n--- a/src/router/submit.ts\n+++ b/src/router/submit.ts\n@@ -1,18 +1,64 @@\n import { randomUUID } from \"node:crypto\";\n import { BrokerClient, BrokerError } from \"../broker/client\";\n import { OrderIntent, SubmittedOrder } from \"../types\";\n import { sleep } from \"../util/sleep\";\n import { log } from \"../log\";\n\n+const RETRYABLE_STATUS = new Set([502, 503, 504]);\n+const MAX_ATTEMPTS = 3;\n+\n+export interface SubmitOptions {\n+  // Retry 5xx/timeouts. Off by default: the broker may already have accepted\n+  // the order, and retry safety depends on unverified dedupe on client_order_id.\n+  retryAmbiguous?: boolean;\n+}\n+\n+// The order may be live at the broker. Never resubmit under a new client_order_id;\n+// reuse clientOrderId or look the order up first.\n+export class AmbiguousSubmitError extends Error {\n+  constructor(\n+    public readonly clientOrderId: string,\n+    public readonly cause: unknown,\n+  ) {\n+    super(`order submit outcome unknown (clientOrderId=${clientOrderId})`);\n+    this.name = \"AmbiguousSubmitError\";\n+  }\n+}\n+\n export async function submitOrder(\n   broker: BrokerClient,\n   intent: OrderIntent,\n+  opts: SubmitOptions = {},\n ): Promise<SubmittedOrder> {\n+  // Generated once: every retry must reuse the same ID so the broker can dedupe.\n+  const clientOrderId = randomUUID();\n+  let lastErr: unknown;\n+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {\n+    try {\n+      const res = await broker.post(\n+        \"/v2/orders\",\n+        {\n+          symbol: intent.symbol,\n+          qty: intent.qty,\n+          side: intent.side,\n+          type: \"limit\",\n+          limit_price: intent.limitPrice,\n+          client_order_id: clientOrderId,\n+        },\n+        { timeoutMs: 4000 },\n+      );\n+      return { id: res.id, clientOrderId, status: res.status };\n+    } catch (err) {\n+      lastErr = err;\n+      // Only a 4xx BrokerError is definitive: the broker refused the order.\n+      // Everything else (5xx, connection reset, unrecognized timeout, unknown\n+      // errors) may have left the order live, so it is treated as ambiguous.\n+      const definitive =\n+        err instanceof BrokerError && err.status >= 400 && err.status < 500;\n+      if (definitive) {\n+        log.error(\"order submit failed\", {\n+          symbol: intent.symbol,\n+          clientOrderId,\n+          attempt,\n+        });\n+        throw err;\n+      }\n+      // Only these known-transient failures are ever retried.\n+      const retryable =\n+        (err instanceof BrokerError && RETRYABLE_STATUS.has(err.status)) ||\n+        (err as Error)?.name === \"TimeoutError\";\n+      if (!retryable || !opts.retryAmbiguous || attempt === MAX_ATTEMPTS) {\n+        log.error(\"order submit outcome unknown\", {\n+          symbol: intent.symbol,\n+          clientOrderId,\n+          attempt,\n+        });\n+        throw new AmbiguousSubmitError(clientOrderId, err);\n+      }\n+      log.warn(\"order submit retry\", {\n+        symbol: intent.symbol,\n+        clientOrderId,\n+        attempt,\n+      });\n+      await sleep(250 * 2 ** (attempt - 1));\n+    }\n+  }\n+  throw lastErr;\n }\ndiff --git a/src/router/submit.test.ts b/src/router/submit.test.ts\nnew file mode 100644\nindex 0000000..c41d9e2\n--- /dev/null\n+++ b/src/router/submit.test.ts\n@@ -0,0 +1,98 @@\n+import { submitOrder, AmbiguousSubmitError } from \"./submit\";\n+import { BrokerError } from \"../broker/client\";\n+\n+jest.mock(\"../util/sleep\", () => ({ sleep: jest.fn().mockResolvedValue(undefined) }));\n+\n+const intent = { symbol: \"AAPL\", qty: 10, side: \"buy\", limitPrice: 100 } as any;\n+const retry = { retryAmbiguous: true };\n+\n+function brokerWith(...results: Array<Error | object>) {\n+  const post = jest.fn();\n+  for (const r of results) {\n+    if (r instanceof Error) post.mockRejectedValueOnce(r);\n+    else post.mockResolvedValueOnce(r);\n+  }\n+  return { post } as any;\n+}\n+\n+function timeoutError() {\n+  const e = new Error(\"timeout\");\n+  e.name = \"TimeoutError\";\n+  return e;\n+}\n+\n+test(\"by default does not retry a 502; throws AmbiguousSubmitError with the ID\", async () => {\n+  const broker = brokerWith(new BrokerError(502, \"bad gateway\"), { id: \"b0\", status: \"accepted\" });\n+  const err: any = await submitOrder(broker, intent).catch((e) => e);\n+  expect(err).toBeInstanceOf(AmbiguousSubmitError);\n+  expect(err.clientOrderId).toBe(broker.post.mock.calls[0][1].client_order_id);\n+  expect(broker.post).toHaveBeenCalledTimes(1);\n+});\n+\n+test(\"by default does not retry a timeout\", async () => {\n+  const broker = brokerWith(timeoutError(), { id: \"b0\", status: \"accepted\" });\n+  await expect(submitOrder(broker, intent)).rejects.toBeInstanceOf(AmbiguousSubmitError);\n+  expect(broker.post).toHaveBeenCalledTimes(1);\n+});\n+\n+test(\"a 500 is ambiguous: AmbiguousSubmitError with the ID, never retried\", async () => {\n+  const broker = brokerWith(new BrokerError(500, \"internal\"), { id: \"b0\", status: \"accepted\" });\n+  const err: any = await submitOrder(broker, intent, retry).catch((e) => e);\n+  expect(err).toBeInstanceOf(AmbiguousSubmitError);\n+  expect(err.clientOrderId).toBe(broker.post.mock.calls[0][1].client_order_id);\n+  expect(broker.post).toHaveBeenCalledTimes(1);\n+});\n+\n+test(\"a connection reset or unknown error is ambiguous, never retried\", async () => {\n+  const reset = Object.assign(new Error(\"socket hang up\"), { code: \"ECONNRESET\" });\n+  const broker = brokerWith(reset, { id: \"b0\", status: \"accepted\" });\n+  const err: any = await submitOrder(broker, intent, retry).catch((e) => e);\n+  expect(err).toBeInstanceOf(AmbiguousSubmitError);\n+  expect(err.cause).toBe(reset);\n+  expect(broker.post).toHaveBeenCalledTimes(1);\n+});\n+\n+test(\"retries 502 and succeeds when retryAmbiguous is enabled\", async () => {\n+  const broker = brokerWith(new BrokerError(502, \"bad gateway\"), { id: \"b1\", status: \"accepted\" });\n+  const out = await submitOrder(broker, intent, retry);\n+  expect(out.id).toBe(\"b1\");\n+  expect(broker.post).toHaveBeenCalledTimes(2);\n+});\n+\n+test(\"retries timeout and succeeds when retryAmbiguous is enabled\", async () => {\n+  const broker = brokerWith(timeoutError(), { id: \"b2\", status: \"accepted\" });\n+  const out = await submitOrder(broker, intent, retry);\n+  expect(out.id).toBe(\"b2\");\n+  expect(broker.post).toHaveBeenCalledTimes(2);\n+});\n+\n+test(\"does not retry 4xx, even with retryAmbiguous\", async () => {\n+  const broker = brokerWith(new BrokerError(422, \"rejected\"));\n+  await expect(submitOrder(broker, intent, retry)).rejects.toBeInstanceOf(BrokerError);\n+  expect(broker.post).toHaveBeenCalledTimes(1);\n+});\n+\n+test(\"gives up after MAX_ATTEMPTS with AmbiguousSubmitError carrying the ID\", async () => {\n+  const broker = brokerWith(\n+    new BrokerError(503, \"a\"),\n+    new BrokerError(503, \"b\"),\n+    new BrokerError(503, \"c\"),\n+  );\n+  const err: any = await submitOrder(broker, intent, retry).catch((e) => e);\n+  expect(err).toBeInstanceOf(AmbiguousSubmitError);\n+  expect(err.clientOrderId).toBe(broker.post.mock.calls[0][1].client_order_id);\n+  expect(broker.post).toHaveBeenCalledTimes(3);\n+});\n+\n+// Note: these tests mock the broker. They verify ID reuse, not broker-side dedupe.\n+test(\"reuses the same client_order_id across retries\", async () => {\n+  const broker = brokerWith(\n+    new BrokerError(503, \"a\"),\n+    timeoutError(),\n+    { id: \"b3\", status: \"accepted\" },\n+  );\n+  const out = await submitOrder(broker, intent, retry);\n+  const ids = broker.post.mock.calls.map((c: any[]) => c[1].client_order_id);\n+  expect(new Set(ids).size).toBe(1);\n+  expect(ids[0]).toBe(out.clientOrderId);\n+});\ndiff --git a/src/risk/sizing.ts b/src/risk/sizing.ts\nindex 77c2e10..a04b9f3 100644\n--- a/src/risk/sizing.ts\n+++ b/src/risk/sizing.ts\n@@ -8,13 +8,15 @@ export interface SizingInput {\n   maxNotional: number; // USD cap per symbol, from risk config\n   price: number;\n   currentQty: number; // signed: negative when short\n   lotSize: number;\n }\n\n export function sizeBuy(input: SizingInput): number {\n   const { maxNotional, price, currentQty, lotSize } = input;\n   const headroom = maxNotional - currentQty * price;\n   if (headroom <= 0) return 0;\n   return Math.floor(headroom / price / lotSize) * lotSize;\n }\ndiff --git a/src/risk/sizing.test.ts b/src/risk/sizing.test.ts\nindex 19be4c2..2d0a7e1 100644\n--- a/src/risk/sizing.test.ts\n+++ b/src/risk/sizing.test.ts\n@@ -3,6 +3,26 @@ import { sizeBuy } from \"./sizing\";\n test(\"no headroom when at cap\", () => {\n   expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 100, lotSize: 1 })).toBe(0);\n });\n+\n+test(\"sizes to the cap in whole lots\", () => {\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 })).toBe(100);\n+  expect(sizeBuy({ maxNotional: 10_000, price: 50, currentQty: 0, lotSize: 10 })).toBe(200);\n+});\n+\n+test(\"short position frees headroom for the cover\", () => {\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: -20, lotSize: 1 })).toBe(120);\n+});\n+\n+test(\"rounds down on non-divisible prices so notional never exceeds the cap\", () => {\n+  // 10_000 / 30 = 333.33 -> 333, notional 9_990 <= 10_000\n+  const qty = sizeBuy({ maxNotional: 10_000, price: 30, currentQty: 0, lotSize: 1 });\n+  expect(qty).toBe(333);\n+  expect(qty * 30).toBeLessThanOrEqual(10_000);\n+});\n+\n+test(\"lot rounding with non-divisible headroom stays within the cap\", () => {\n+  // headroom 10_000, price 33, lot 10: 303.03 shares -> 30 lots -> 300 shares = 9_900\n+  const qty = sizeBuy({ maxNotional: 10_000, price: 33, currentQty: 0, lotSize: 10 });\n+  expect(qty).toBe(300);\n+  expect(qty * 33).toBeLessThanOrEqual(10_000);\n+});",
+ "fixerUsage": {
+  "calls": 3,
+  "tokIn": 13862,
+  "tokOut": 15047,
+  "usd": 0.20590600000000003,
+  "critMs": 84053
+ },
+ "status": "cleared"
+}

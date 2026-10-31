@@ -1,0 +1,35 @@
+{
+  "id": "deploy-01",
+  "gate": "deploy",
+  "title": "CivicSign petition signing public launch",
+  "context": "CivicSign is a nonprofit civic-engagement web app serving residents in the US and the EU, where organizers run local petitions. This is the release proposal for the public launch of petition signing, going to production on Thursday. Already agreed: all public flows must meet WCAG 2.1 AA; GDPR applies to EU signers; public signer lists may show at most first name, last initial and city.",
+  "artifact": "# Release proposal: CivicSign 2.4.0 — Petition signing (public launch)\n\nOwner: web team · Target: Thu 2026-11-05 14:00 UTC · Ticket: CS-812 · Flag: `petitions_signing`\n\n## What ships\n\n- Residents can sign any open petition with full name, email and postal code.\n- Signature is confirmed by email (double opt-in): unconfirmed signatures are not counted and are purged after 7 days.\n- Public \"Recent signers\" panel on each petition page showing first name + last initial and city, so visitors can see momentum without exposing signers.\n- Optional organizer updates: signers can choose to receive campaign news from the petition organizer.\n- Signature counts update live (polling every 15s, cached at the CDN for 10s).\n\n## Sign form (production template, `petitions/templates/sign.html`)\n\n```html\n<form class=\"sign-form\" action=\"/p/{{ petition.slug }}/sign\" method=\"post\" novalidate>\n  <label for=\"fullname\">Full name</label>\n  <input id=\"fullname\" name=\"full_name\" required autocomplete=\"name\">\n  <label for=\"email\">Email</label>\n  <input id=\"email\" name=\"email\" type=\"email\" required autocomplete=\"email\">\n  <label for=\"postal\">Postal code</label>\n  <input id=\"postal\" name=\"postal_code\" required autocomplete=\"postal-code\">\n  <div class=\"consent\">\n    <input type=\"checkbox\" id=\"news\" name=\"newsletter_opt_in\" value=\"1\" checked>\n    <label for=\"news\">Keep me updated about this campaign and others from {{ petition.organizer.name }}</label>\n  </div>\n  <p class=\"form-error\" aria-live=\"polite\"></p>\n  <button type=\"submit\" class=\"btn-sign\">Sign petition</button>\n</form>\n```\n\n## Client validation (`petitions/static/sign.js`)\n\n```js\nform.addEventListener('submit', async (e) => {\n  e.preventDefault();\n  const res = await fetch(form.action, { method: 'POST', body: new FormData(form) });\n  if (res.status === 422) {\n    const { fields } = await res.json();\n    for (const name of fields) form.elements[name].classList.add('is-invalid');\n    form.elements[fields[0]].focus();\n    return;\n  }\n  if (res.ok) window.location = res.headers.get('Location');\n});\n```\n\n```css\n.sign-form input.is-invalid { border: 2px solid #d93025; background: #fdecea; }\n.form-error { min-height: 1.2em; font-size: 0.875rem; color: #a50e0e; }\n```\n\n## Recent signers panel (`petitions/templates/_recent.html`)\n\n```html\n<section class=\"recent\" aria-labelledby=\"recent-h\">\n  <h2 id=\"recent-h\">Recent signers</h2>\n  <ul class=\"recent-signers\">\n    {% for s in petition.recent_signers(limit=20, confirmed_only=True) %}\n      <li>{{ s.full_name }} <span class=\"loc\">{{ s.city }} {{ s.postal_code }}</span></li>\n    {% endfor %}\n  </ul>\n</section>\n```\n\n## Data handling\n\n- Signer email and postal code are stored in `signatures` (Postgres, eu-central-1 for EU-resolved postal codes, us-east-1 otherwise).\n- Confirmation emails go through Postmark; DPA countersigned 2026-09-14, listed in the public subprocessor page.\n- Organizers can export signers who opted in to updates as CSV; export is rate-limited and audit-logged.\n\n## QA report summary (staging, build 2.4.0-rc3)\n\n| Area | Result |\n|---|---|\n| Sign happy path (Chrome, Safari, Firefox, iOS Safari, Android Chrome) | Pass |\n| Double opt-in: unconfirmed not counted, purge job after 7d | Pass |\n| Duplicate signature (same email) rejected with 409 | Pass |\n| Recent signers renders 20 most recent confirmed | Pass |\n| Organizer CSV export contains only opted-in signers | Pass |\n| Load: 400 signatures/s sustained for 10 min, p95 210ms | Pass |\n| axe-core automated scan on sign page | 0 violations |\n\n## Rollout\n\n1. Thu 14:00 UTC: flag `petitions_signing` to 10% of petition pages.\n2. Watch `sign_submit_error_rate` (< 0.5%) and confirmation email bounce rate (< 2%) for 24h.\n3. Fri 14:00 UTC: 100%.\n4. Rollback: flip `petitions_signing` off; sign form is replaced by the existing \"Follow this petition\" button. No schema changes in this release beyond the additive `signatures` table created in 2.3.",
+  "expected_verdict": "ATTACKS",
+  "defects": [
+    {
+      "id": "d1",
+      "lens": "compliance",
+      "severity": "major",
+      "description": "The organizer-updates consent checkbox ships pre-ticked, and it also bundles consent to 'others from' the organizer. Under GDPR (Planet49), a pre-ticked box is not valid consent, so every EU signer exported to organizers would be marketed to without a lawful basis.",
+      "evidence": "name=\"newsletter_opt_in\" value=\"1\" checked"
+    },
+    {
+      "id": "d2",
+      "lens": "accessibility",
+      "severity": "major",
+      "description": "On a 422 response the client only adds a red border and background (.is-invalid) to the failing fields. It never writes text into the aria-live .form-error element and never sets aria-invalid. Errors are therefore conveyed by color alone and are not announced to screen-reader users, which fails WCAG 1.4.1 and 3.3.1. The axe scan in QA cannot catch this.",
+      "evidence": "for (const name of fields) form.elements[name].classList.add('is-invalid');"
+    },
+    {
+      "id": "d3",
+      "lens": "privacy",
+      "severity": "blocker",
+      "description": "The release notes and the agreed constraint say the public panel shows first name + last initial + city. The production template instead renders each signer's full name plus postal code on a public, CDN-cached page. Exposing political petition signatures this way is irreversible once crawled.",
+      "evidence": "<li>{{ s.full_name }} <span class=\"loc\">{{ s.city }} {{ s.postal_code }}</span></li>"
+    }
+  ],
+  "decoys": [
+    "Signer emails go to a third-party email provider (Postmark), but the 'Data handling' section shows a countersigned DPA listed on the public subprocessor page.",
+    "Organizers can bulk-export signers as CSV, but the export is limited to opted-in signers, rate-limited and audit-logged (Data handling and the QA row on organizer CSV export)."
+  ]
+}

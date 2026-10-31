@@ -1,0 +1,59 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "merge-02",
+ "rep": 2,
+ "wallMs": 188935,
+ "verdict": "ATTACKS",
+ "confidence": 0.96,
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "blocker",
+   "claim": "The duplicate-ballot log line writes the voter's email together with the measure and the attempted choice. Logs ship to a third-party host readable by the whole support team, so a resident's identity becomes linkable to their vote outside the tally, breaking the core anonymity promise. Shipped logs cannot be recalled.",
+   "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value,)"
+  },
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "The results export route has no authentication or role check, although the PR describes it as admin-only and the repo requires Depends(require_role(\"admin\")) on admin routes. Anyone who can reach the URL can download tallies.",
+   "evidence": "async def export_results(\n    measure_id: int,\n    db: Session = Depends(get_db),\n):  (ABSENT: Depends(require_role(\"admin\")))"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The export never checks that the measure is closed, so it serves live interim counts for open measures. This contradicts the stated purpose (closed measures) and can influence voters or leak in-progress results.",
+   "evidence": "measure = db.get(Measure, measure_id)\n    if measure is None:\n        raise HTTPException(404)  (ABSENT: check that measure is closed)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Counts are keyed by the stored Ballot.choice value but looked up with Choice enum members. If the types don't compare equal (e.g. non-str enum or raw strings), every row silently reports 0 votes in a council-packet tally. The definitions of Choice and Ballot.choice are not shown and no test verifies it.",
+   "evidence": "counts.get(choice, 0) with choice iterated from Choice; ABSENT: Choice / Ballot.choice definition"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR adds no tests for the anonymity-sensitive logging change or the new export (auth, open vs closed, zero-count cases).",
+   "evidence": "ABSENT: any test file or test change in the diff."
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The measure slug is interpolated unescaped into the Content-Disposition header and written unsanitised into a CSV cell, risking a malformed header or spreadsheet formula injection.",
+   "evidence": "f'attachment; filename=\"{measure.slug}-results.csv\"' and writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The aggregate query runs on every request with no caching; this is mainly a concern because the endpoint is unauthenticated and should lessen once auth is added.",
+   "evidence": "db.query(Ballot.choice, func.count(Ballot.id)).filter(Ballot.measure_id == measure_id).group_by(Ballot.choice)"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 15714,
+  "tokOut": 7977,
+  "usd": 0.03764468000000001,
+  "critMs": 21440
+ }
+}

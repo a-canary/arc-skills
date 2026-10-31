@@ -1,0 +1,125 @@
+{
+ "approach": "single-strong",
+ "case": "deploy-04",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "createShareLink embeds the project's secret API key in the share URL query string. Anyone with the link, or anyone who sees it in logs, Referer headers, browser history, or Slack/X unfurl fetchers, gets the owner's key. The key is also returned to unauthenticated viewers in the page load data. This is a credential leak by design, and it is about to be announced on HN and X.",
+     "evidence": "url.searchParams.set(\"k\", project.apiKey); ... replayKey: url.searchParams.get(\"k\")"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Share pages are public and unauthenticated, and replay uses the owner's key and quota. Anyone can drain a paid project's budget, and for pro projects (billed per token, all models) this is unbounded spend on the owner. Deleting a share does not revoke the key, which stays valid after leaking.",
+     "evidence": "Viewers without an account replay against the owner's project quota.; Shares can be deleted ... deleted shares return 404."
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Shared conversations are published to anyone with the link and are server-rendered with Open Graph tags, so they are crawled and unfurled by third parties. There is no warning, no redaction of sensitive content, and no expiry. The leaked key also exposes the project.",
+     "evidence": "Anyone with the link can view the conversation and re-run it; server-rendered with Open Graph tags"
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The production free-tier rate limit is configured as 20 requests per second with burst 40, whereas the release notes and the stated intent are 20 per minute. This is a 60x error. QA passed only because staging used a different config (per: minute), so QA did not test what ships. Also, the free tier lacks the daily_tokens: 100000 cap that the release notes promise, and the diff shows none.",
+     "evidence": "rate_limit: { requests: 20, per: second, burst: 40 } vs \"20 requests per minute\"; (staging config used `per: minute`); free block has no daily_tokens"
+    },
+    {
+     "lens": "cost",
+     "severity": "blocker",
+     "claim": "With the per-second limit and no daily token cap, a free account can consume far more than the budgeted load. The pool autoscales to 24 replicas at $2.49/h, about $43k/month, against a $4k hard budget. The budget math also covers only 2 replicas at min. Autoscaling plus a free signup with no card, plus the share-link replay vector, allows runaway spend. The alert pages at replicas > 6 but nothing caps it.",
+     "evidence": "max_replicas: 24; $2.49/h; hard budget of $4k/month; Alerting: free pool replicas > 6 pages on-call"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The cost claim is internally inconsistent. 2 replicas × $2.49 × 730h ≈ $3.6k, which leaves no headroom, and any scale-out breaks the budget. The load of 3,000 DAU × 35 × 1.2k tokens ≈ 126M tokens/day is not backed by any benchmark showing that 2 H100s run at under 30% utilization. The projection also assumes no abuse and no HN-driven spike on launch day.",
+     "evidence": "Two H100 replicas serve the projected free load at < 30% utilization; ~$3.6k/month"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The launch is announced on HN and X, and the signup flag opens at 16:45 for a 17:00 launch with an email-only signup and no card. Signup spikes and abuse like multi-accounting are not addressed. There are no per-IP or signup limits, no email verification, and a scale-on-queue-depth cold start on H100s is slow.",
+     "evidence": "Sign up with email, no card required; flag `free_signup_open` on at 16:45 UTC"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback only stops new signups; it does not stop spend. Existing free keys keep working, and there is no kill switch to disable the free tier or share replay. The leaked keys cannot be revoked by the rollback plan, and the share table and links are published irreversibly.",
+     "evidence": "Rollback: `free_signup_open` off stops new signups; existing free keys keep working."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "There is no spend or token-usage alert on the free pool, only replica count and error rate. The 6-replica alert has no automatic action, and there is no budget circuit breaker.",
+     "evidence": "Alerting: free pool replicas > 6 pages on-call; error rate > 2% pages on-call"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "Email signups and public sharing of user conversations lack any mention of a privacy policy, terms or data retention, and the shares table stores full message content indefinitely.",
+     "evidence": "messages: session.messages ... no retention stated"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2995,
+    "tokOut": 1689,
+    "usd": 0.0253872,
+    "critMs": 12790
+   },
+   "wallMs": 28349
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The load test (projected load plus a 5x spike on 2 replicas) and the QA re-runs are still pending. The artifact makes them pre-deploy conditions, and the 429 shedding and the budget guard bound the downside if capacity is short. The deploy should still be held until the results are attached.",
+     "evidence": "Utilization is not yet benchmarked. Before deploy, load test the free pool ... results will be attached here."
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Two always-on replicas cost about $3.6k against a $4k cap, so headroom is only about $400. The third replica is only allowed while the guard's projected spend stays under budget, and the 'time-sliced use' mechanism is not specified in the config. The spend guard is the main control, so a bug in it would breach the budget.",
+     "evidence": "2 replicas ≈ $3.6k (min), 3 replicas ≈ $5.4k ... allowed only while the guard's projected monthly spend stays under budget (e.g. via time-sliced use)"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Shares are public to anyone with the link, and redaction is pattern-based and best-effort. Expired shares return 404, but the rows (including message content) appear to be retained, since only a read-time check is shown and no purge job. The ID entropy and the authorization check for who may create a share are also not specified.",
+     "evidence": "if (!share || share.deletedAt || share.expiresAt < new Date()) throw error(404); ... ABSENT: purge of expired rows, share ID entropy"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The key-in-URL check is internally inconsistent. The code is said never to have shipped to prod, yet the grep and key rotation cover only staging. If any prod exposure were possible, it would go unchecked.",
+     "evidence": "the key-in-URL code never shipped to prod. Before deploy we grep staging share rows and logs for `k=`"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4260,
+    "tokOut": 1520,
+    "usd": 0.028757200000000004,
+    "critMs": 13401
+   },
+   "wallMs": 25060
+  }
+ ],
+ "artifact": "# Release proposal: Lumen Gateway — Free tier GA + Playground share links\n\nOwner: platform · Deploy: Wed 2026-11-04 16:00 UTC · Launch post: Wed 17:00 UTC (blog, HN, X)\n\n## Release notes (public changelog)\n\n- **Free tier is generally available.** Sign up with email (verification required), no card required. Free accounts get **20 requests per minute** and **100k tokens per day** on `llama-3.1-8b-instruct` and `qwen2.5-7b-instruct`. Signups are capped per IP and per day during launch; a waitlist applies once the cap is reached.\n- **Share from Playground.** Click \"Share\" on a playground session to get a link. Anyone with the link can view a read-only copy of the conversation. Shares expire after 30 days and can be deleted at any time. Re-running a shared conversation requires a Lumen account (free signup) and uses the viewer's own quota, never the owner's.\n- New `GET /v1/usage` endpoint returns your current daily token usage.\n\n## Gateway config change (`deploy/prod/gateway.yaml`, diff)\n\n```diff\n tiers:\n+  free:\n+    models: [llama-3.1-8b-instruct, qwen2.5-7b-instruct]\n+    rate_limit: { requests: 20, per: minute, burst: 5 }\n+    daily_tokens: 100000\n+    max_tokens_per_request: 4096\n+    pool: free-8b\n   pro:\n     models: [\"*\"]\n     rate_limit: { requests: 600, per: minute, burst: 120 }\n     daily_tokens: null\n     pool: shared-h100\n pools:\n+  free-8b:\n+    gpu: h100-80g\n+    min_replicas: 2\n+    max_replicas: 3\n+    scale_on: queue_depth > 8 for 60s\n+    hard_budget: { monthly_usd: 4000, action: shed_free_traffic }\n   shared-h100:\n     gpu: h100-80g\n     min_replicas: 6\n     max_replicas: 40\n```\n\n- Production config is now what QA tests: staging uses a byte-identical `tiers.free` block (`per: minute`, `daily_tokens: 100000`), and the QA items below are re-run against it before deploy.\n- `max_replicas` is hard-capped at 3 and a global free-tier budget guard sheds free traffic (429) when projected monthly spend would exceed $4k. Nothing autoscales past the budget.\n\n## Capacity and cost\n\n- Projection: 3,000 free DAU in month 1, avg 35 requests/day each, ~1.2k tokens per request ≈ 126M tokens/day uncapped. The per-account cap of 100k tokens/day bounds the worst case at 3,000 × 100k = 300M tokens/day only if every user maxes out; realistic usage is well below.\n- Cost at $2.49/h × 730h ≈ $1.8k/replica/month: 2 replicas ≈ $3.6k (min), 3 replicas ≈ $5.4k. The $4k budget therefore leaves almost no headroom for a third replica. Decision: the budget guard sheds free traffic rather than exceeding $4k; the third replica is allowed only while the guard's projected monthly spend stays under budget (e.g. via time-sliced use), otherwise free traffic is rate-shed.\n- Utilization is not yet benchmarked. Before deploy, load test the free pool with the projected load plus a 5x launch-day spike on 2 replicas and record tokens/sec and queue depth; results will be attached here. The < 30% utilization figure is withdrawn until that data exists.\n- Free pool is isolated from `shared-h100`, so free traffic cannot degrade paid latency.\n\n## Playground share links (`apps/playground/src/share.ts`)\n\n```ts\nexport async function createShareLink(session: Session, project: Project): Promise<string> {\n  const share = await db.shares.insert({\n    sessionId: session.id,\n    projectId: project.id,\n    messages: redactSecrets(session.messages),\n    model: session.model,\n    createdAt: new Date(),\n    expiresAt: addDays(new Date(), 30),\n  });\n  // No credentials in the URL. Re-run is performed by the viewer with their own login.\n  return new URL(\"/s/\" + share.id, PLAYGROUND_ORIGIN).toString();\n}\n```\n\n```ts\n// apps/playground/src/routes/s/[id].ts\nexport async function load({ params }) {\n  const share = await db.shares.get(params.id);\n  if (!share || share.deletedAt || share.expiresAt < new Date()) throw error(404);\n  return { messages: share.messages, model: share.model };\n}\n```\n\n- Share links contain an unguessable ID only. No API key is ever placed in a URL or returned in page data. Re-run calls the gateway with the signed-in viewer's own key and quota; anonymous viewers see a read-only page with a sign-up prompt.\n- Existing keys are unaffected by this change, since the key-in-URL code never shipped to prod. Before deploy we grep staging share rows and logs for `k=` and rotate any project key that appeared.\n- Share creation shows a confirmation dialog: \"Anyone with this link can read this conversation.\" Secrets/PII patterns are redacted at creation (`redactSecrets`).\n- Share pages are server-rendered with Open Graph tags that include only the title and model name, not message content, and are served with `noindex` and `Referrer-Policy: no-referrer`.\n- Shares expire after 30 days and can be deleted from Playground → History; deleted or expired shares return 404. Ops can disable all share pages via the `playground_share_enabled` flag.\n\n## Logging\n\n- Gateway access logs redact the `Authorization` header and drop request bodies; we log model, token counts, latency, status and project id only (unchanged from current prod). Query strings on playground URLs are no longer used for credentials.\n\n## Abuse and signup controls\n\n- Email verification is required before a free key is issued; disposable-email domains are blocked.\n- Signup limits: per-IP and per-subnet rate limits, and a global cap on new free accounts per hour/day during launch, with a waitlist when exceeded.\n- Free keys are scoped to the free tier only and cannot be used against pro pool models.\n- Cold start: the free pool keeps min 2 warm replicas; the global cap on signups and request shedding (429 with `Retry-After`) handle spikes rather than waiting for scale-out.\n\n## QA summary (staging, to be re-run against the final config)\n\n- Signup → first free request in < 60s (including email verification): re-run.\n- Free-tier model allow-list: request to `llama-3.1-70b-instruct` with a free key returns 403: re-run.\n- Rate limiting: 21st request inside a minute returns 429 with `Retry-After`, using the identical prod `tiers.free` block: re-run.\n- Daily token cap: request after 100k tokens in a day returns 429: new test.\n- Share link: create, open in incognito (read-only, no key in URL, HTML source, or page data), re-run requires login and uses viewer quota, delete → 404, expired → 404: re-run.\n- Load test described under Capacity and cost: new.\n- `/v1/usage` matches billing ledger within 0.1%: pass.\n\n## Rollout\n\n- Deploy gateway config and playground at 16:00 UTC, flag `free_signup_open` on at 16:45 UTC.\n- Alerting: free pool replicas ≥ 3 pages on-call; projected monthly free spend > 80% of $4k pages on-call; error rate > 2% pages on-call.\n- Rollback / kill switches:\n  - `free_signup_open` off stops new signups.\n  - `free_tier_enabled` off makes the gateway reject all free-tier requests (429/503) immediately and scales the free pool to zero.\n  - `playground_share_enabled` off disables share pages and replay.\n  - Free keys can be bulk-revoked by tier. Shares are deletable in bulk by the ops tooling.",
+ "fixerUsage": {
+  "calls": 1,
+  "tokIn": 3581,
+  "tokOut": 2711,
+  "usd": 0.04143,
+  "critMs": 18573
+ },
+ "status": "cleared"
+}

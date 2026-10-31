@@ -1,0 +1,77 @@
+{
+ "approach": "clustered-panel",
+ "case": "merge-02",
+ "rep": 2,
+ "wallMs": 151275,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "blocker",
+   "claim": "The new duplicate-ballot log line writes the voter's email alongside the measure and chosen option. Logs ship to a third-party host readable by the whole support team, so a named resident is linked to how they voted, breaking the promise that a ballot is never linkable to identity outside the tally.",
+   "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value)"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "Log lines already shipped to the third-party host cannot be recalled from this change. The diff includes no redaction, purge, retention limit, or rollback plan, so the identity-to-choice linkage is effectively irreversible once deployed.",
+   "evidence": "ABSENT: no redaction, scrubbing, retention limit, or rollback plan for log lines already shipped to the third-party host"
+  },
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "The results export route has no authentication or role check, unlike the admin-only routes in this module. Anyone who can reach the URL can fetch per-choice counts for any measure id.",
+   "evidence": "async def export_results(measure_id: int, db: Session = Depends(get_db)): — ABSENT: Depends(require_role(\"admin\"))"
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "The export does not check whether the measure is closed, although it is described as a tally for closed measures. Calling it on an open measure releases in-progress counts, which leaks interim results and may breach election-release rules.",
+   "evidence": "measure = db.get(Measure, measure_id)\n    if measure is None:\n        raise HTTPException(404)  — ABSENT: check of measure.is_open() or closed state"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Counts are keyed by raw Ballot.choice column values but looked up with Choice enum members. If the enum is not str-based or the stored value does not compare equal, every count silently becomes 0 and the council-packet CSV reports zero votes with no error. The PR shows no test of this.",
+   "evidence": "counts = dict(db.query(Ballot.choice, func.count(Ballot.id))...) ... counts.get(choice, 0)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "No tests accompany the change. Nothing verifies the auth requirement, the closed-measure gate, zero-count behaviour, or the log content, and the export has not been shown against real data.",
+   "evidence": "ABSENT: no test file or test diff in the PR; the diff touches only app/routes/ballots.py"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The measure slug is interpolated unsanitized into the Content-Disposition header and the CSV cells. Quotes or CR/LF could break the header, and a leading = + - or @ could trigger spreadsheet formula injection when clerks open the file.",
+   "evidence": "headers={\"Content-Disposition\": f'attachment; filename=\"{measure.slug}-results.csv\"'}"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Each rejected duplicate attempt emits a log line with no throttle or sampling, so a client repeating the request can flood the third-party log host and inflate ingestion cost.",
+   "evidence": "logger.info(...) inside the 409 branch with no throttle"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "The change adds only a log line and leaves the 409 message unchanged, so the 'it says I already voted' tickets are not resolved for the user.",
+   "evidence": "raise HTTPException(409, \"already voted\")  (message unchanged; only a log line added)"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The reporting route sits in the ballots module and duplicates the measure lookup and 404 pattern, coupling reporting to voting logic.",
+   "evidence": "@router.get(\"/measures/{measure_id}/results.csv\") added beneath close_measure in app/routes/ballots.py"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 15989,
+  "tokOut": 8968,
+  "usd": 0.005821079999999999,
+  "critMs": 16575
+ }
+}

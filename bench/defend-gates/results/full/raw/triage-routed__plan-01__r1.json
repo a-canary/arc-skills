@@ -1,0 +1,107 @@
+{
+ "approach": "triage-routed",
+ "case": "plan-01",
+ "rep": 1,
+ "wallMs": 244847,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "data-feasibility",
+   "severity": "blocker",
+   "claim": "The chain_poller design needs about 160 requests/min, but the chosen Optiq Starter tier allows 5 req/min. The data path cannot function as specified at any polling cadence that meets the 15 s design.",
+   "evidence": "\"every 15 s, fetch a real-time option chain snapshot for each held underlying (front expiry + next expiry). 40 underlyings => 160 requests/min during RTH.\" and \"Starter | $79 | 5 req/min\" with \"We stay on Starter.\""
+  },
+  {
+   "lens": "data-feasibility",
+   "severity": "blocker",
+   "claim": "Starter quotes are 15-minute delayed, so triggers (delta >= 0.70, extrinsic < $0.10, 4% gap) and the order re-pricing loop would act on stale prices. The core premise of rolling intraday on the trigger moment is invalidated.",
+   "evidence": "\"Starter | $79 | 5 req/min | 15-min delayed\" alongside \"rolls short calls the moment a roll trigger fires\" and \"We stay on Starter.\""
+  },
+  {
+   "lens": "budget",
+   "severity": "blocker",
+   "claim": "The $139/month cost is only valid for the tier that cannot support the design. Real-time data at the needed rate requires Growth ($199, still short of 160 req/min) or Pro ($499). Growth plus VPS is $259 and Pro plus VPS is $559, both above the $250 cap, so the stated cost claim is false and the constraints are not satisfiable as written.",
+   "evidence": "\"Monthly run cost: Optiq Starter $79 + existing VPS $60 = $139, comfortably inside the $250 cap.\""
+  },
+  {
+   "lens": "migration-safety",
+   "severity": "blocker",
+   "claim": "Migration 0042 runs in place against prod and drops positions.roll_history in the same transaction as a 90-day backfill. Older history is destroyed irreversibly, and the plan has no snapshot, dry run on a restored copy, or rollback migration.",
+   "evidence": "\"Migration 0042 runs in-place against prod Monday 08:00 ET\" and \"Backfill copies roll_history entries from the last 90 days into rolls\" and \"In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.\" ABSENT: any pg_dump, snapshot, dry run, or rollback for 0042."
+  },
+  {
+   "lens": "rollback",
+   "severity": "blocker",
+   "claim": "The claimed fallback is broken. roll_eod.py is kept as the week-4 fallback, but the roll_history column it likely depends on is dropped in week 1, so the fallback cannot run without restoring data.",
+   "evidence": "\"roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4.\" and \"DROP COLUMN roll_history\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "No handling is specified for 429 rate-limit responses, vendor errors, or retry/backoff. Rate-limit rejections would silently starve roll_engine of snapshots. Staleness is checked only for broker heartbeat, not for chain snapshot timestamps, so intents can be emitted from stale or missing data.",
+   "evidence": "\"roll_engine stops emitting intents when the last successful broker heartbeat is > 60 s old.\" ABSENT: any backoff, batching, 429 behaviour, or snapshot-timestamp staleness check."
+  },
+  {
+   "lens": "concurrency",
+   "severity": "major",
+   "claim": "Re-pricing a combo every 20 s for up to 3 times while triggers evaluate every 15 s can produce duplicate RollIntents and multiple live combo orders for the same contract. No idempotency key or single-in-flight lock per position is defined, and the 1-roll-per-contract-per-day limit is checked only before submit.",
+   "evidence": "\"emits RollIntent rows\" and \"re-priced every 20 s up to 3 times, then cancelled.\" ABSENT: idempotency key or in-flight lock."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "No restart reconciliation is specified. A crash or dropped connection between submit and cancel can leave orphaned combo orders, and it is unclear whether the per-day counters and ROLLER_KILL state survive a process restart, so the daily limits could reset.",
+   "evidence": "\"re-priced every 20 s up to 3 times, then cancelled.\" and \"plus a ROLLER_KILL env switch read on every loop.\" ABSENT: where per-day counters are stored, open-order reconciliation on startup."
+  },
+  {
+   "lens": "order-safety",
+   "severity": "major",
+   "claim": "The kill switch is underspecified. It is not stated whether ROLLER_KILL cancels working combo orders or only stops new intents, nor is there a fail-safe default if the env read fails.",
+   "evidence": "\"plus a ROLLER_KILL env switch read on every loop.\""
+  },
+  {
+   "lens": "unsupported-claims",
+   "severity": "major",
+   "claim": "The +3.8% net APR impact has no derivation, backtest, or sample. It rests on anecdotal desk notes and an unsourced claim about peer funds. Trading costs from more frequent rolls (commissions, combo fees, spread crossing on re-prices) are absent from both the expected-impact figure and the success criterion.",
+   "evidence": "\"Expected impact: +3.8% net APR vs. EOD rolling (see §2).\" and \"Desk notes from the last two quarters list several days...\" ABSENT: commission or fee line."
+  },
+  {
+   "lens": "rollout",
+   "severity": "major",
+   "claim": "The success criterion (30 live days beating EOD by 3.8%) is too short and too noisy to detect the claimed effect, has no defined statistical test, and has no rollback trigger for degradation during the week-4 expansion from 5 to 40 underlyings. Paper mode also cannot model fills and runs on delayed data, so the live path is unvalidated.",
+   "evidence": "\"Success criterion: realized net APR over the first 30 live days >= EOD baseline + 3.8%.\" and \"Week 2-3: paper mode (RollIntent written, no orders)\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The roll_intents and rolls tables grow with every 15 s evaluation cycle across 40 underlyings, yet no retention, partitioning, or pruning policy is defined.",
+   "evidence": "\"new tables roll_intents, rolls\" ABSENT: any retention or pruning policy for roll_intents."
+  },
+  {
+   "lens": "assignment-risk",
+   "severity": "major",
+   "claim": "Covered-call-specific risks are unaddressed: early assignment near ex-dividend dates or deep-ITM positions, and the behaviour when a roll is a debit or the credit is negative.",
+   "evidence": "\"Roll target: same strike +1 expiry, or next strike up if the credit is >= $0.05.\" ABSENT: dividend or early-assignment handling, debit-roll rule."
+  },
+  {
+   "lens": "logic",
+   "severity": "minor",
+   "claim": "The 'unchanged semantics' claim for triggers is unverified. The plan does not confirm that EOD thresholds and the extrinsic-value price source match the intraday version. The gap trigger is also ambiguous about its reference price and about reversion within the session.",
+   "evidence": "\"Roll triggers (unchanged semantics, new timing)\" and \"Underlying gaps > 4% through strike within the session.\""
+  },
+  {
+   "lens": "order-safety",
+   "severity": "minor",
+   "claim": "The caps of 1 roll per contract per day and 8 per account per day are unjustified numbers. With 40 underlyings, 8 per day can block legitimate rolls, and the plan does not say what happens when a cap is hit. It is also unclear whether re-price submissions count toward the 8-order cap.",
+   "evidence": "\"max 1 roll per contract per day and max 8 roll orders per account per day\" vs. \"re-priced every 20 s up to 3 times, then cancelled\""
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 24902,
+  "tokOut": 11876,
+  "usd": 0.01080775,
+  "critMs": 23756
+ }
+}

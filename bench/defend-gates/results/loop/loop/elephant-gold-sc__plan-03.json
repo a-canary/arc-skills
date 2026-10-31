@@ -1,0 +1,411 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "plan-03",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "rollback",
+     "severity": "major",
+     "claim": "Rollback re-enables MailPoet and re-imports only new Ghost signups. Unsubscribes, bounces and complaints recorded in Ghost after cutover are not carried back, so a rollback could re-mail opted-out readers, and sent mail cannot be recalled. This is a compliance exposure under CAN-SPAM and, for any EU/UK readers, PECR/GDPR.",
+     "evidence": "\"rollback = repoint DNS and re-enable MailPoet sending, with any new Ghost signups exported and re-imported to MailPoet.\""
+    },
+    {
+     "lens": "stripe-cutover",
+     "severity": "major",
+     "claim": "The plan never says how the old membership and Stripe plugins are disabled at cutover, or how Stripe webhooks are repointed. Without that, paid members risk double billing or duplicate subscriptions. Rollback has no reversal path for Stripe or paid-member state either.",
+     "evidence": "\"Stripe: existing Stripe account connected directly; no change in processor.\" ABSENT: any step to disable the old Stripe/membership plugin or move webhooks, forward or in rollback."
+    },
+    {
+     "lens": "data-freeze",
+     "severity": "major",
+     "claim": "Subscribers are exported and dry-run in week 1 and the final MailPoet send is in week 3, but there is no freeze window or delta sync before the week-4 cutover. Unsubscribes, bounces, signups and paid-status changes in that gap would be missed, and opted-out people could be mailed on the first Ghost send.",
+     "evidence": "\"Dry-run import on staging in week 1; counts reconciled ... before the production import.\" ABSENT: production import date, freeze, or delta re-sync."
+    },
+    {
+     "lens": "deliverability",
+     "severity": "major",
+     "claim": "The Mailgun warm-up covers only DNS authentication (SPF/DKIM/DMARC). There is no volume ramp or account-limit check before a 2,000-recipient seed followed by about 44,000 from a new sending setup. The seed gate also has no defined action or owner if it fails, and a 2-hour window may be too short for complaints to surface.",
+     "evidence": "\"Mailgun domain warm-up (SPF/DKIM/DMARC)\" and \"the remainder sends 2 hours later if bounce rate < 2% and complaint rate < 0.1%\""
+    },
+    {
+     "lens": "consent-records",
+     "severity": "major",
+     "claim": "The plan claims consent source/IP is preserved and lives in the publication's MySQL database. It names no Ghost field for these values and has no test that they survive import or export. The \"where recorded\" qualifier also admits gaps, and the round-trip test checks only the members CSV. This risks losing the proof of consent for the 46k list. The IP data also has no stated retention policy.",
+     "evidence": "\"consent source/IP where recorded\" and \"The member list, consent records, and content live in our MySQL database\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The weekly members and content exports contain PII (emails, consent data, Stripe links) and are stored with the DB dumps. Encryption, access control and retention are stated only for the dumps. The legacy WordPress/MailPoet host also stays internet-facing for 30 days with no hardening or decommission step, and no secrets handling is described.",
+     "evidence": "\"scheduled weekly (cron, stored with the DB dumps)\" vs \"nightly encrypted dumps ... (30-day retention)\"; \"WordPress stays running read-only on the old VPS for 30 days\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The plan is inconsistent about scheduling and proof. The Postmark exit rehearsal is promised for week 2 but absent from the week 2 timeline. The Stripe dry run that found the 37 mismatches is listed again for week 3. No full restore from the nightly dumps is planned. Suppression is verified only by counts, not per address.",
+     "evidence": "\"Week 2: theme port, routes/redirects, export round-trip test, Mailgun domain warm-up\" vs \"In week 2 we rehearse this end to end ... Postmark Broadcasts\"; \"Week 3: Stripe import dry run\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The cost line labels about $140 as VPS cost, though it is really $48 VPS plus $90 Mailgun plus storage. Overlap costs from the old VPS and the rehearsal are not priced. The total still has wide headroom under the $300 cap.",
+     "evidence": "\"Total run cost: ~$140/mo VPS + Mailgun + storage, vs $95/mo today.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "There is no monitoring or alerting for sends or backup jobs. Everything runs on one VPS with no standby, and the success measure \"zero outages\" has no failure definition. Mailgun does take over bulk delivery, which reduces the original contention problem.",
+     "evidence": "\"MySQL 8 on the same box\"; \"Zero send-day outages over the first quarter.\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "Success measures cover only internal operations, with no reader-side checks on opens, retention or paid churn. Legacy unsubscribe links, email template rendering, and reader communication about the move are also not addressed.",
+     "evidence": "\"## 8. Success measures ... Zero send-day outages ... reconciliation time\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 61971,
+    "tokOut": 42273,
+    "usd": 0.1311398,
+    "critMs": 51091
+   },
+   "wallMs": 186035
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Subscribers with no recorded consent source or IP are only counted and labeled `consent-unrecorded`. No rule excludes them from sends or requires re-permission, so EU/UK readers without provable consent could be mailed, and sent mail cannot be recalled.",
+     "evidence": "\"Subscribers with no recorded consent source/IP are counted and labeled `consent-unrecorded` so gaps are known up front rather than hidden.\" ABSENT: any rule excluding them from Ghost sends, or a lawful-basis decision."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The production import rule suppresses unsubscribed and bounced addresses but not complained addresses. Complaints are mentioned only in the delta and rollback steps, so a complainant could be imported as active and mailed.",
+     "evidence": "\"Unsubscribed and bounced addresses are imported as suppressed (never as active)\" versus \"(new signups, unsubscribes, bounces, complaints, paid-status changes)\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The Mailgun warm-up sends to internal and engaged subscribers in weeks 2-3, but the production member import happens on Friday of week 3 and MailPoet is still the live sender. The plan does not say whose list those warm-up sends use or how opt-outs are enforced, so they risk mailing opted-out readers or duplicating the MailPoet issue.",
+     "evidence": "\"internal and engaged-subscriber sends in week 2-3\" versus \"Friday full production subscriber import\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Retention and erasure are defined only for live stored IPs, and the retention period is still unconfirmed. The archived 'untouched' MailPoet export, the weekly members/content exports, and the backups also hold consent IPs and personal data. The plan does not say how purge or erasure reaches them. An untouched proof-of-consent archive conflicts with erasure, and only the nightly dumps are stated as encrypted.",
+     "evidence": "\"proposed 24 months ... to be confirmed by the managing editor\"; \"archived untouched (CSV + DB dump)\"; \"exports are scheduled weekly (cron, stored with the DB dumps)\" vs \"nightly encrypted dumps ... (30-day retention)\""
+    },
+    {
+     "lens": "observability",
+     "severity": "major",
+     "claim": "The migration exists to stop send-day outages, but the plan has no uptime monitoring, send-job alerting, or backup/export failure alerting. A failed send or a missed nightly dump would go unnoticed.",
+     "evidence": "ABSENT: no monitoring or alerting; success measure is only \"Zero send-day outages over the first quarter.\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "Cutover deactivates the Stripe and membership plugins but does not say MailPoet sending and signup forms are disabled at cutover. The old WP stays running for 30 days, so scheduled sends or signups could continue against a stale list.",
+     "evidence": "\"The old membership and Stripe plugins on WordPress are deactivated at cutover\"; \"WordPress stays running read-only on the old VPS for 30 days.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Signups routed to a holding page during the Monday-Tuesday freeze are not captured anywhere, and the delta export covers only MailPoet changes. Those signups could be lost.",
+     "evidence": "\"MailPoet signup forms are disabled or routed to a holding page\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The Postmark exit rehearsal is promised for week 2 in section 3 but is absent from the week 2 timeline. The Ghost-to-MailPoet and Stripe rollback procedures have no scheduled rehearsal.",
+     "evidence": "\"In week 2 we rehearse this end to end ... Postmark Broadcasts\" vs Week 2 timeline listing no rehearsal."
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The $90 Mailgun figure is unsourced, and possible plan, dedicated-IP, or limit-raise costs are unpriced. The cost line is also mislabeled ($140 'VPS + Mailgun + storage', with storage unpriced). There is no spend cap for resends or staged sends.",
+     "evidence": "\"Estimated $90/mo at our volume\"; \"~$140/mo VPS + Mailgun + storage\"; \"any required plan/dedicated-IP setup\""
+    },
+    {
+     "lens": "secrets",
+     "severity": "minor",
+     "claim": "Storage and rotation of Stripe, Mailgun, object-storage, and backup-encryption credentials are unspecified. Staging holds real member data with no stated access control or outbound mail block. Read-only enforcement and patching for the retained WP are also unspecified.",
+     "evidence": "ABSENT: credential management, staging access/mail-blocking, read-only enforcement for the retained WordPress"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "There is no mention of processor agreements or transfer basis for Mailgun, object storage, and Postmark, a privacy notice update, or an email template with the required postal address and unsubscribe footer.",
+     "evidence": "ABSENT: DPA, data region, privacy policy update, CAN-SPAM template requirements"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The WP-cron contention root cause for the four outages is asserted without diagnosis. The success measures are internal and do not track reader-side delivery or retention.",
+     "evidence": "\"MailPoet's WP-cron sending competes with site traffic on the same PHP workers.\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 89938,
+    "tokOut": 40018,
+    "usd": 0.1435496,
+    "critMs": 45294
+   },
+   "wallMs": 194253
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The cutover never says MailPoet's sending jobs, queue, and WP-cron are disabled. Only the membership and Stripe plugins are deactivated, and \"read-only\" WordPress has no stated enforcement mechanism. A queued or scheduled MailPoet send could fire at the migrated list after cutover. That would be an irreversible double-mail, possibly to suppressed addresses.",
+     "evidence": "\"The old membership and Stripe plugins on WordPress are deactivated at cutover\"; ABSENT: a step disabling MailPoet sending/WP-cron on the old VPS. Rollback later says \"re-enable MailPoet sending\"."
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Unsubscribe links in already-sent MailPoet emails point to the old domain's MailPoet endpoints. After DNS is repointed to Ghost, and after the old VPS is retired at day 30, those opt-out clicks have nowhere to land. The plan has no redirect or capture path, so opt-outs from recent issues could be silently lost and later re-mailed.",
+     "evidence": "\"WordPress stays running read-only on the old VPS for 30 days.\"; ABSENT: handling of legacy MailPoet unsubscribe URLs after cutover."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Staging and dry-run Ghost instances are loaded with real subscriber data, and Ghost is configured around Mailgun. The plan never states that staging email sending is disabled or sandboxed. A staging instance could mail live subscribers during weeks 1-2, which cannot be recalled.",
+     "evidence": "\"Dry-run import on staging in week 1\"; ABSENT: a statement that staging sending/Mailgun is disabled."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Paid-member continuity is not specified for the 3,100 paying members. Nothing maps membership-plugin gated posts and access levels to Ghost tiers, and nothing covers member login re-authentication at cutover. Paying readers could lose access to gated content, or be unable to sign in, at cutover.",
+     "evidence": "ABSENT: mapping of member-gated posts to Ghost access tiers and a member login/re-auth plan; the plan covers only Stripe customer-ID mapping."
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The cost line is ambiguous. It says \"~$140/mo VPS + Mailgun + storage\" while the VPS is $48 and Mailgun is $90. It also says monitoring is \"included in the cost estimate below\", but no estimate follows. Dedicated-IP or plan-upgrade costs are not budgeted. Even so, the total stays well under the $300 cap.",
+     "evidence": "\"Total run cost: ~$140/mo VPS + Mailgun + storage\"; \"included in the cost estimate below\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The Postmark exit rehearsal is promised in section 3 for week 2 but does not appear in the week 2 timeline, so it is unscheduled.",
+     "evidence": "\"In week 2 we rehearse this end to end ... through Postmark Broadcasts\" vs Week 2 list without it"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Stripe-originated paid-status changes between the Friday full import and the Tuesday cutover have no explicit reconciliation path into Ghost. The delta sync covers only MailPoet changes.",
+     "evidence": "\"a delta export of all MailPoet changes since the full export (new signups, unsubscribes, bounces, complaints, paid-status changes)\""
+    },
+    {
+     "lens": "secrets",
+     "severity": "minor",
+     "claim": "The plan has no credential storage, rotation, or admin MFA requirements for Stripe, Mailgun, Ghost admin, or object-storage keys. These are hosted on a VPS that serves the public site.",
+     "evidence": "ABSENT: secrets management and admin authentication requirements"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The plan does not confirm that the Ghost newsletter template includes the CAN-SPAM sender postal address and a List-Unsubscribe header before the first bulk send.",
+     "evidence": "ABSENT: footer postal address / List-Unsubscribe verification for the Ghost template"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 118712,
+    "tokOut": 53149,
+    "usd": 0.1687234,
+    "critMs": 62274
+   },
+   "wallMs": 254947
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The 12-month legacy unsubscribe capture is not implementable as written. A 'static redirect' cannot record an address, and MailPoet unsubscribe links identify subscribers by tokens in the MailPoet DB that is retired at day 30. The plan specifies no token-to-address export. It also says WordPress stays reachable 'as long as legacy links may be clicked' while retiring the old VPS at day 30. No uptime monitor or owner covers the handler, so 'opt-outs are never dropped' can fail silently.",
+     "evidence": "\"a minimal, persistent handler (a small endpoint on the Ghost host or a static redirect to a Ghost unsubscribe/contact page that records the address)\" vs \"the old VPS is retired at day 30\"; ABSENT: token mapping export and monitoring of the legacy endpoint"
+    },
+    {
+     "lens": "backup-restore",
+     "severity": "major",
+     "claim": "Backups cover only the MySQL dump and JSON/CSV exports. The Ghost content directory (uploaded images, media, theme files) is never backed up, and the JSON export does not carry media files. A restore would give broken post images, and the monthly restore test of the 'latest dump' would not detect it.",
+     "evidence": "ABSENT: backup of Ghost content/media files. Only \"nightly encrypted dumps to object storage (30-day retention)\" and \"A monthly restore test of the latest dump\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The warm-up send path is ambiguous. Staging has no live Mailgun key, and the real list is imported to production Ghost only after week 3, yet warm-up sends occur in weeks 2-3. The plan does not say which instance sends them or how it is credentialed.",
+     "evidence": "\"Warm-up sends in weeks 2-3 go only to...\" vs \"with no live Mailgun API key present\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The cost line is mislabeled and incomplete. $140 is roughly VPS ($48) plus Mailgun ($90) only. The 'cost estimate below' that supposedly includes monitoring does not exist, and storage, SMTP and any dedicated-IP fees are unpriced. The total is still well under the $300 cap.",
+     "evidence": "\"Total run cost: ~$140/mo VPS + Mailgun + storage\"; \"included in the cost estimate below\""
+    },
+    {
+     "lens": "rollback",
+     "severity": "minor",
+     "claim": "Erasure requests are not explicitly propagated to the live read-only MailPoet DB that rollback re-enables. The old VPS retirement has no final snapshot or secure-wipe step.",
+     "evidence": "\"export from Ghost all unsubscribes, bounces, and complaints recorded since cutover plus new signups\"; \"the old VPS is retired at day 30\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Cutover and MailPoet shutdown are not explicitly gated on confirmed Mailgun limits. The fallback is only to stage the send over several days.",
+     "evidence": "\"If limits or warm-up are not confirmed by the end of week 3, the full send is staged over several days\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "Compliance gaps are unaddressed or only lightly handled: processor agreements and transfer terms for Mailgun and Postmark, CAN-SPAM postal address and sender checks in the Ghost template, and the commercial-email status of the 're-permission' message.",
+     "evidence": "ABSENT: DPA/sub-processor review and template address verification; \"single transactional-style confirmation\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Secret storage and rotation, admin MFA and export permissions, and access controls on staging and scratch instances holding real PII are unspecified.",
+     "evidence": "ABSENT: secrets, MFA, and staging access control"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 152007,
+    "tokOut": 63672,
+    "usd": 0.186019,
+    "critMs": 66056
+   },
+   "wallMs": 138596
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "logic",
+     "severity": "major",
+     "claim": "Warm-up sends in weeks 2-3 have no defined sending instance. Staging and scratch instances have no live Mailgun key, and real subscriber data is not loaded into production Ghost until the Friday of week 3 import. The plan nonetheless requires warm-ups to real engaged subscribers in weeks 2-3. The Mailgun ramp and its limit confirmation, which the first-send plan depends on, cannot be executed as written.",
+     "evidence": "\"Warm-up sends in weeks 2-3 go only to ... a small group of engaged subscribers who are re-exported from MailPoet\" vs. \"Production member-import-based sends begin only after the Friday of week 3 import\" and \"no live Mailgun API key present\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Opt-out capture during days 0-30 relies on the read-only WordPress/MailPoet endpoint, but the explicit uptime check, synthetic test, and send-hold-if-down rule are written only for the post-day-30 handler. If the legacy endpoint fails (for example the proxy path breaks after DNS repoint), opt-outs are silently lost and subscribers can be re-mailed on the first Ghost sends in week 4.",
+     "evidence": "\"Days 0-30 (old VPS still running): ... the dev checks the log before every Ghost send.\" The monitoring and \"the next send is held until it is restored\" language appears only under \"Owner and monitoring\" for the persistent handler."
+    },
+    {
+     "lens": "logic",
+     "severity": "minor",
+     "claim": "The legacy unsubscribe handler schedule is inconsistent. Section 7 says it is built and tested in week 2, while section 4 describes deployment and real-link testing only after day 30. The token mapping can only be finalized at that point.",
+     "evidence": "Week 2: \"design and build the legacy unsubscribe handler and token export so they are tested well before week 4\" vs. \"After day 30 ... The dev then deploys a small real service\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The re-permission path for consent-unrecorded members has no scheduled send or response window before the week 3 import. It is also labeled \"transactional-style,\" which risks misclassifying a consent request for EU/UK addresses. The exclude-by-default rule limits the harm.",
+     "evidence": "\"(b) The member completes a re-permission email (sent once, from the MailPoet side before cutover or as a single transactional-style confirmation ...)\""
+    },
+    {
+     "lens": "scope",
+     "severity": "minor",
+     "claim": "The scope is large for a 0.5 FTE developer over 4 weeks, and the plan gives no capacity check or descope order. Hard cutover dependencies are mixed with nice-to-haves such as the Postmark rehearsal and extensive monitoring.",
+     "evidence": "\"Owner: dev (0.5 FTE) + managing editor | 4 weeks\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The append-only opt-out log, the hashed-email erasure log, and processor-held copies (Mailgun, Postmark, object storage) are not covered by explicit retention or erasure rules, and no DPAs are mentioned. The token mapping is covered, and the plan acknowledges EU/UK addresses.",
+     "evidence": "\"records the address and timestamp in an append-only opt-out log\"; \"minimal erasure log (hashed email)\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The rollback target, WordPress with MailPoet, is retired after 30 days with no final snapshot. The location of the removed MailPoet credentials and the steps to reverse read-only enforcement are not listed.",
+     "evidence": "\"the sending service/SMTP credentials are removed or set to a no-op\"; \"WordPress stays running read-only on the old VPS for 30 days\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Ghost, MySQL, and monitoring share one VPS, and there is no load test at send volume. The cost total is a rough sum with unquantified storage, although it sits well under the $300 cap.",
+     "evidence": "\"MySQL 8 on the same box\"; \"Total run cost: ~$140/mo VPS + Mailgun + storage\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 175473,
+    "tokOut": 89566,
+    "usd": 0.22694369999999997,
+    "critMs": 74711
+   },
+   "wallMs": 165640
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "No load or send-throughput test is planned, although send-day outages are the stated reason for migrating. Mailgun carries the bulk delivery, and a nightly backup/export job could overlap a send window on the same single VPS.",
+     "evidence": "ABSENT: any load test or rule keeping nightly dumps and weekly exports out of send windows"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The pre-send hold on a down legacy unsubscribe endpoint has no maximum duration or override. The legacy-handler check also relies on a single part-time dev, with the managing editor as the only backup.",
+     "evidence": "if the endpoint or handler is found down in either phase, the next send is held until it is restored and the log has been checked."
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Retention and erasure coverage has gaps. The opt-out log, the staging and scratch copies, the mail-catcher inbox, and the old VPS database at retirement are not covered by the erasure and purge rules. The erasure log's email hash is not specified as keyed or salted.",
+     "evidence": "records the address and timestamp in an append-only opt-out log; erasure log (hashed email)"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The cost line says monitoring is 'included in the cost estimate below', but no such breakdown follows, and storage is not sized. The $140 total leaves large headroom under the $300 cap, so this is not blocking.",
+     "evidence": "Total run cost: ~$140/mo VPS + Mailgun + storage, vs $95/mo today."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The proof-of-consent archive is described both as stored with the 30-day-retention weekly backups and as having its own 24-month retention. Separately, staging sign-in tests go through a mail-catcher, so they cannot show real delivery of sign-in links. Production sign-in is spot-checked at cutover.",
+     "evidence": "archived with the weekly backups as the proof-of-consent record vs. same 24-month rule"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Mapping of existing Stripe prices/plans (including grandfathered ones) to Ghost tiers is not stated, and the Stripe import dry run is scheduled late, in week 3.",
+     "evidence": "Ghost's Stripe import then maps existing subscriptions by customer ID; the dev verifies in Stripe that subscription counts are unchanged"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 184010,
+    "tokOut": 69303,
+    "usd": 0.2032417,
+    "critMs": 71251
+   },
+   "wallMs": 194885
+  }
+ ],
+ "artifact": "# Migration plan: WordPress + MailPoet -> Ghost (self-hosted)\n\nOwner: dev (0.5 FTE) + managing editor | 4 weeks | Cutover target: Tuesday after week 3 send\n\n## 1. Why now\n- 4 send-day outages in 2026 (Feb 3, Apr 21, Jun 9, Sep 15), each delaying the newsletter 2-6 hours; MailPoet's WP-cron sending competes with site traffic on the same PHP workers.\n- Paid memberships currently run through 3 plugins (MailPoet, a membership plugin, a Stripe plugin) that each keep their own copy of the member list; reconciling them takes the managing editor ~3 hours/month.\n- Ghost handles posts, newsletter, and paid members in one system with native Stripe support.\n\n## 2. Target setup\n- Ghost 5.x (MIT licensed) self-hosted via the official Docker image on a new 4 vCPU / 8 GB VPS ($48/mo, same provider and region as today). MySQL 8 on the same box, nightly encrypted dumps to object storage (30-day retention).\n- Ghost content directory backup: the JSON export and the DB dump do not include uploaded images, media, files, or theme files, so the Ghost content directory (images, media, files, themes, and the routes.yaml and config files) is backed up separately. A nightly client-side-encrypted sync/archive of the content volume goes to object storage with the same 30-day retention and key handling as the dumps, and the dump and content archive are tagged with the same date so they restore as a pair. The initial WordPress media library is migrated into the content directory in week 1-2 and counted (files in WordPress uploads vs. files in Ghost content) as part of the content reconciliation in section 5.\n- Bulk newsletter delivery: Ghost uses Mailgun for bulk email. Estimated $90/mo at our volume (46k x ~4.3 sends/month).\n- Stripe: existing Stripe account connected directly; no change in processor. Old Stripe/membership plugin handling and webhook moves are specified in section 6.\n- Total run cost: ~$140/mo VPS + Mailgun + storage, vs $95/mo today.\n- Staging and dry-run safety: staging and scratch Ghost instances (week 1 dry runs, week 2 round-trip restore) have bulk email sending disabled or pointed at a sandbox/no-op mail transport, with no live Mailgun API key present, before any real subscriber data is loaded. Transactional mail on those instances is also routed to a capture inbox (e.g., a mail-catcher) rather than real SMTP. The dev verifies this by checking the instance config and sending a test to a seed address, and records it in the week 1 checklist. Real subscriber data is loaded only into instances that have passed this check; the scratch instance is destroyed afterward. Staging and scratch instances never send warm-ups or any other real mail. The only exception is the 50-address Postmark rehearsal, which uses the internal list described in section 3. Warm-up sends (section 7) run from the production instance, under the controls described there.\n- Monitoring and alerting (set up in week 1, tested in week 2): an external uptime check on the home page and a Ghost admin/API health endpoint (1-minute interval) that pages the dev and managing editor by SMS/email; VPS CPU, memory, and disk alerts; a send-job alert for every newsletter send (Mailgun events/webhooks and Ghost email status checked within 30 minutes of send start; alert if the send is not \"sent\" or if the bounce, complaint, or failure rate crosses the section 6 thresholds); and backup/export alerting via a dead-man's-switch check-in (e.g., healthchecks-style) that fires if the nightly dump, the nightly content-directory archive, the weekly members/content exports, or the object-storage upload does not complete, or if a dump or content archive fails a size/restore sanity check. A monthly restore test of the latest dump and content archive together is added to the dev's checklist: it restores both into a scratch instance and confirms that a sample of posts render with their images, that the file count in the restored content directory matches the source, and that the theme loads. Monitoring services are small (free tier or a few $/month) and are included in the cost estimate below. The legacy unsubscribe handler (section 4, both phases) is covered by the same monitoring, as described there.\n\n## 3. Ownership and exit path\n- The member list and content live in our MySQL database and content directory on our VPS; Mailgun only receives per-send recipient batches. Consent records are preserved as described below (not assumed to be carried by default).\n- Consent records: before the week 1 dry run, the dev maps MailPoet's consent source, subscribe date, and IP fields to Ghost member fields (subscribe date -> `created_at`; consent source and IP -> member notes or a dedicated labeled field/side table in our MySQL, decided in week 1). Subscribers with no recorded consent source/IP are counted and labeled `consent-unrecorded` so gaps are known up front rather than hidden. The original MailPoet consent export is also archived with the weekly backups as the proof-of-consent record (see retention and erasure below).\n- Consent-unrecorded handling: `consent-unrecorded` members are excluded from Ghost newsletter sends (held as non-sending/unsubscribed-equivalent, e.g., newsletter subscription off) until one of the following is documented. (a) The managing editor records a lawful-basis decision per segment (e.g., a documented existing-relationship basis for paying members, or confirmation that the address was collected via a signup form that captured consent but not IP), with legal advice sought for EU/UK-resident addresses. (b) The member completes a re-permission email (sent once, from the MailPoet side before cutover or as a single transactional-style confirmation, with no further mailing if there is no response). Addresses with EU/UK indicators (country, IP geolocation where available, or locale) and no recorded consent default to excluded and are never mailed on assumption. The count and the managing editor's decision are recorded before the week 3 production import, and a reconciliation of excluded vs. mailed counts is added to the section 4 reconciliation.\n- Consent verification test: in week 1 and again at the production import, a sample of 200 members (plus all `consent-unrecorded` counts) is checked that consent source/date/IP survive import and appear in the Ghost export; week 2 round-trip test covers the consent fields as well as the members CSV.\n- IP retention and erasure: stored consent IPs are kept only as long as needed to evidence consent, under a retention period of 24 months after last subscriber activity (the managing editor confirms or changes this before the week 1 dry run; the plan does not proceed to the production import without a confirmed period). IPs are purged from live data when the period lapses and removed on erasure requests. This applies to every copy, not just live data: the archived MailPoet consent export, the weekly members/content exports, DB dumps, and the legacy unsubscribe token mapping (section 4) are all stored encrypted (client-side encryption before upload to object storage, keys held by the publication and not stored with the data). The proof-of-consent archive is not kept \"untouched\" indefinitely: it is held in encrypted, access-restricted storage with its own retention limit (same 24-month rule, reviewed annually). On an erasure request, the live record is deleted immediately and the person's identifiers are recorded in a minimal erasure log (hashed email) so they are not restored or re-imported; the archive and exports are purged of that person at the next scheduled rewrite (at most 30 days, matching the dump retention), and rolling backups age out within 30 days. If a legal-hold or proof-of-consent need requires keeping an archive record past erasure, the managing editor documents the basis. The erasure log is applied to any restore (including the week 2 scratch restore and any rollback) before the data is used.\n- Ghost's members CSV export and JSON content export are scheduled weekly (cron, stored encrypted with the DB dumps and subject to the retention above). In week 2 we restore one export, together with the DB dump and the content-directory archive, into a scratch Ghost instance to prove the full site (members, posts, and images/media/theme) round-trips; the scratch instance is destroyed afterward.\n- If Mailgun becomes unsuitable, the exit is: disable Ghost newsletter sending and load the weekly members export into another bulk sender. In week 2 we rehearse this end to end with a 50-address internal list through Postmark Broadcasts (export -> import -> send -> unsubscribe link writes back via Ghost members API).\n- Transactional mail (sign-in links, receipts) goes over plain SMTP and is provider-independent.\n\n## 4. Subscriber migration\n- Export MailPoet subscribers with status, list membership, subscribe date, and consent source/IP where recorded.\n- Unsubscribed, bounced, and complained addresses (spam complaints) are imported as suppressed (never as active), so nobody who opted out or complained is re-mailed. The dry-run reconciliation counts include complained addresses (active / unsubscribed / bounced / complained / paid).\n- Paid members are matched to Stripe customers by Stripe customer ID (not email) using Ghost's Stripe import; 37 members with mismatched emails were identified in a dry run and will be resolved by hand before cutover.\n- Paid-member access continuity (see also section 6): before the week 3 production import, the dev inventories every membership-plugin access level and every gated post/page/category (including any gated archives and member-only newsletter content) and maps each to a Ghost tier and post visibility (public / members / paid / specific tier). The mapping table is reviewed by the managing editor in week 2. A staging check confirms that a sample of paid members of each level can read their gated posts and that free members and logged-out visitors cannot, with counts of gated posts per level reconciled before and after import. Any gated content with no clear mapping is listed and resolved by the managing editor before cutover.\n- Member sign-in at cutover: Ghost uses passwordless email sign-in links, and WordPress passwords/sessions do not carry over, so existing WordPress logins stop working at cutover. The plan therefore (a) tests sign-in for a sample of free and paid members on staging in week 3 (the transactional SMTP path from section 3); (b) tells members in advance, in the last MailPoet issue (Thursday of week 3) and on the site, that sign-in will change to an emailed link and that no password is needed, with instructions and a support address; (c) puts a short sign-in explainer on the Ghost sign-in page and a support rota (dev + managing editor) for the first week; and (d) tracks paid-member sign-in failures and support requests in the first week, with the 3,100 paid members' access verified by spot checks (and a Stripe-vs-Ghost paid-status count) at cutover and after the first renewal batch.\n- Dry-run import on staging in week 1; counts reconciled against MailPoet totals (active / unsubscribed / bounced / complained / paid) before the production import.\n- Freeze and delta sync: the production import is done in week 3 after the final MailPoet send, in two passes. (1) Full import on Friday of week 3. Members already present in the production instance from the warm-up groups (section 7) are matched by email and merged, not duplicated, and the import never re-activates anyone suppressed in the meantime. (2) From Monday of week 4 (the day before cutover) to cutover, a freeze on list changes: MailPoet signup forms are disabled or routed to a holding page, and manual list edits are paused. Immediately before cutover, a delta export of all MailPoet changes since the full export (new signups, unsubscribes, bounces, complaints, paid-status changes) is re-imported, and counts are re-reconciled. The suppression list is re-checked against the MailPoet export immediately before the first Ghost send, and any address that unsubscribed or bounced in the gap is suppressed before sending.\n- Legacy MailPoet unsubscribe links: unsubscribe and manage-preferences links in already-sent MailPoet emails point to MailPoet endpoints on the old domain/WordPress, and they identify the subscriber by a subscriber identifier and token that are validated against the MailPoet database. Opt-outs from recent issues must still be captured after cutover, in two phases:\n  - Days 0-30 (old VPS still running): the dev keeps the MailPoet unsubscribe/manage endpoints working on the read-only WordPress instance, reachable at the same URLs (or via a reverse-proxy rule for those URL paths only), so the existing MailPoet database validates the tokens and records the opt-out. Opt-outs received there are applied to Ghost (unsubscribe/suppress, through the members API or an import) at least daily, and the dev checks the log before every Ghost send. This phase has the same monitoring and send-hold rule as the persistent handler (see Owner and monitoring below), live from the moment of cutover and verified in the cutover checklist after DNS is repointed, since the DNS repoint and proxy rule are the most likely points of breakage.\n  - After day 30 (old VPS retired): before retiring the old VPS, the dev exports the mapping of legacy subscriber identifier + token -> email address from the MailPoet database, for every subscriber ever mailed (including the final delta), and stores it encrypted under the retention and erasure rules in section 3. The dev then deploys a small real service on the Ghost host (not a static redirect, which cannot record anything) that accepts the legacy unsubscribe/manage URLs, validates the identifier + token against the exported mapping, records the address and timestamp in an append-only opt-out log, applies the suppression to Ghost through the Admin/members API, shows the person a confirmation page, and returns a generic page for invalid tokens. The DNS/proxy route for the legacy URL paths is switched to this service before the old VPS is shut down, and the dev tests it with real legacy links from a recent issue (a seed address) before retirement. It stays up for at least 12 months, matching how long old issues are realistically opened, and is reviewed at 12 months by the managing editor.\n  - Owner and monitoring (applies to both phases, from cutover day 0): the dev owns the legacy opt-out capture; the managing editor is the backup. It has an external uptime check (1-minute interval, same paging as section 2) on the legacy unsubscribe URL path as reached through the live DNS/proxy route, plus a synthetic test run daily that uses a real legacy-format link for a seed address (in days 0-30, a real MailPoet token on the read-only WordPress; afterward, a token from the exported mapping), unsubscribes that seed address, and confirms the suppression reaches Ghost. A dead-man's-switch check-in covers the daily opt-out reconciliation job. Failure of any of these pages the dev and managing editor. Opt-outs from the log are reconciled into the Ghost suppression list at least daily during the first 30 days and weekly after, with the count reported in the send-day checklist, and the log is checked before every Ghost send. Opt-outs are never dropped: an address that clicked a legacy unsubscribe link is suppressed before the next Ghost send, and if the endpoint or handler is found down in either phase, the next send is held until it is restored and the log has been checked.\n\n## 5. Content and URLs\n- WordPress posts migrated with Ghost's WP exporter plugin (tested on a full staging copy: 6,812 posts, 0 failed, 41 posts with embedded shortcodes fixed by script).\n- Media: the WordPress uploads library (images and attachments referenced by posts) is copied into the Ghost content directory and post image references are rewritten; the dev reconciles the media file count and checks that images in a sample of posts from each year render on staging. This content directory is covered by the nightly backup in section 2.\n- URL structure kept identical (/YYYY/MM/slug/) via Ghost routes.yaml; 301 redirects for category and tag archives. A crawl of the 2,000 most-visited URLs from analytics must return 200/301 before cutover.\n\n## 6. Cutover and rollback\n- DNS TTL lowered to 300 s one week before cutover.\n- Cutover Tuesday (send day is Thursday), giving 2 days to fix issues before the first Ghost send.\n- Disable legacy sending at cutover: before DNS is repointed, MailPoet sending is stopped on WordPress. The dev pauses/cancels all scheduled and queued MailPoet newsletters and automations, clears the send queue, disables MailPoet's sending method (the sending service/SMTP credentials are removed or set to a no-op), and disables WP-cron for MailPoet (system cron job for it removed on the old VPS) so nothing can fire against the migrated list. The dev verifies that the queue is empty and no scheduled sends exist, and records it in the cutover checklist. MailPoet sending is re-enabled only through the rollback procedure below, after the suppression sync.\n- WordPress read-only enforcement: the old WordPress is made read-only by technical means, not just by convention: public write paths are blocked (comments, registrations, form submissions, and wp-admin/REST write endpoints restricted by IP allow-list or web-server rules), the only exceptions being the legacy MailPoet unsubscribe/manage endpoints described in section 4, which are kept working to record opt-outs. The dev verifies this at cutover by attempting a write and confirming it is blocked, and, after DNS is repointed, by running the legacy unsubscribe synthetic test against the live route and confirming the uptime check is green.\n- Stripe cutover (forward): in Stripe, the old Stripe plugin's webhook endpoint is noted and then disabled (not deleted) at the moment Ghost's webhook endpoint is enabled, so only one system receives events. The old membership and Stripe plugins on WordPress are deactivated at cutover so they cannot create charges, subscriptions, or renewals. Ghost's Stripe import then maps existing subscriptions by customer ID; the dev verifies in Stripe that subscription counts are unchanged and no duplicate subscriptions or double charges exist (checked again after the next renewal batch).\n- Paid access and sign-in at cutover: the gated-content mapping and member sign-in plan in section 4 are verified at cutover (sample sign-ins for paid and free members, gated-post access spot checks, paid-status count Stripe vs. Ghost) before the cutover is declared complete.\n- WordPress stays running read-only on the old VPS for 30 days; the legacy unsubscribe token export and persistent handler (section 4) must be live and tested before it is retired.\n- Rollback: repoint DNS and re-enable MailPoet sending, but only after a mandatory suppression sync: before any MailPoet send, export from Ghost all unsubscribes, bounces, and complaints recorded since cutover plus new signups, and apply them to MailPoet (unsubscribed/bounced/complained addresses marked suppressed), with counts reconciled. MailPoet sending stays disabled until this sync is verified. Mail already sent from Ghost cannot be recalled, but this prevents re-mailing anyone who opted out in the interim, covering CAN-SPAM and, for EU/UK readers, PECR/GDPR obligations.\n- Stripe rollback: Ghost's webhook endpoint is disabled and the old plugin's endpoint re-enabled in the same step, the old plugins are reactivated, and paid-member state changes made in Ghost since cutover (new, canceled, and changed subscriptions) are reconciled against Stripe, the source of truth, and applied to the WordPress membership data before MailPoet sends. Only one webhook endpoint is active at any time.\n- First Ghost send goes to a 2,000-subscriber seed segment. The remainder sends only after a hold of at least 24 hours (not 2) so complaints and bounces can surface, and only if bounce rate < 2% and complaint rate < 0.1% (and no Mailgun throttling or reputation warnings). Owner: the managing editor makes the go/no-go call with the dev. If the gate fails, the remainder is not sent; the dev investigates (list hygiene, authentication, content), the managing editor decides whether to resend via a smaller segment, and the issue goes out later or via MailPoet if rollback is chosen.\n\n## 7. Timeline\n- Week 1: VPS + Ghost + backups (DB dumps and content-directory archive); monitoring and alerting; staging email-sending lockdown verified before any subscriber data is loaded; subscriber and content dry runs on staging; consent field mapping and consent verification test; managing editor confirms the IP retention period and records the consent-unrecorded decision approach; start the gated-content/access-level inventory.\n- Week 2: theme port, routes/redirects, media migration check, gated-content-to-tier mapping reviewed by the managing editor, export round-trip test (members CSV, consent fields, and full restore of dump + content archive with images rendering), monitoring alert tests (simulated failed dump, failed content archive, and failed send), Mailgun domain authentication (SPF/DKIM/DMARC) and sending-volume ramp plan (see below); enable the live Mailgun key on the production instance only (see below), after authentication is verified; design and build the legacy unsubscribe handler and token export so they are tested well before week 4, and set up the days 0-30 endpoint monitoring and synthetic test so they can be exercised before cutover.\n- Week 3: Stripe import dry run, reconciliation, member sign-in tests and advance notice to members in the final MailPoet issue, editor training; final Thursday send on MailPoet; Friday full production subscriber import.\n- Week 4: Monday list-change freeze; Tuesday delta import, suppression re-check, MailPoet sending shutdown, read-only enforcement and legacy unsubscribe endpoint check (uptime check and synthetic test confirmed green on the live route), cutover, and Stripe webhook switch; seeded first send Thursday; 30-day read-only WP retained, then before retiring the old VPS the token mapping export is taken and the persistent legacy unsubscribe handler (with uptime and synthetic-test monitoring) is switched live and tested, per section 4.\n- Mailgun ramp (weeks 2-4): confirm account sending limits and any required plan/dedicated-IP setup with Mailgun before week 3, and request a limit raise sized for ~46k per send. Warm the domain/IP with a gradual ramp, prioritizing most-engaged subscribers first.\n  - Sending instance: warm-up sends go out from the production Ghost instance, the only instance that ever holds a live Mailgun key, enabled in week 2 once domain authentication is verified. Until the Friday of week 3 import, that instance contains only (a) internal staff/test addresses and (b) the filtered warm-up groups described below, loaded as a labeled warm-up segment, not the full member list. The full list is not loaded or mailable until the production import. Staging and scratch instances never receive the live key.\n  - Warm-up recipients in weeks 2-3 are internal staff/test addresses and a small group of engaged subscribers who are re-exported from MailPoet immediately before each warm-up send, with unsubscribed, bounced, and complained addresses, anyone in the erasure log, and all `consent-unrecorded` addresses removed, and a fresh MailPoet suppression export checked before each send.\n  - Warm-up content is not a copy of the live issue (e.g., a short \"we're moving, here's what to expect\" note or a re-send of a past item clearly labeled as such), so it does not duplicate the MailPoet issue; each contains a working unsubscribe link, and opt-outs from these sends are written back to MailPoet (the live system until cutover) by the dev before the next MailPoet send.\n  - Production member-import-based sends begin only after the Friday of week 3 import and the cutover suppression re-check. Then the 2,000 seed in week 4, then the remainder after the hold. If limits or warm-up are not confirmed by the end of week 3, the full send is staged over several days rather than sent at once.\n\n## 8. Success measures\n- Zero send-day outages over the first quarter, with every send-day alert (uptime, send-job, backup) acknowledged within 30 minutes during that period.\n- Member reconciliation time for the managing editor: 3 h/month -> < 30 min/month.\n- Zero re-mails to addresses suppressed before cutover or rollback, and no duplicate Stripe subscriptions or double charges, verified at cutover and after the first renewal batch.\n- Zero Ghost sends to `consent-unrecorded` addresses without a documented lawful-basis decision or re-permission, and zero missed backup/export check-ins going unaddressed.\n- Monthly restore tests of the DB dump plus content archive succeed with images and theme intact.\n- Zero lost opt-outs from legacy MailPoet unsubscribe links (the endpoint's uptime and daily synthetic test pass from cutover day 0 through 12 months, with any failure resolved before the next send), and zero paid members losing access to gated content or unable to sign in without a resolution within one business day during the first month.",
+ "fixerUsage": {
+  "calls": 5,
+  "tokIn": 31920,
+  "tokOut": 32543,
+  "usd": 0.45309,
+  "critMs": 189988
+ },
+ "status": "cleared"
+}

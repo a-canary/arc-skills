@@ -1,0 +1,101 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-09",
+ "rep": 2,
+ "wallMs": 280187,
+ "verdict": "ATTACKS",
+ "confidence": 0.75,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The 5-minute staleness cutoff rejects vendor retries that reuse the original signed timestamp, so readings from a delivery that failed and was retried after the window get a permanent 401 and are lost. The PR does not say whether PlugCloud re-signs retries or what it does after a 401, so the data-loss risk is unresolved.",
+   "evidence": "\"rejects deliveries more than 5 minutes old or in the future\" alongside \"a redelivered batch is harmless\" and TOLERANCE_SECONDS = 300; ABSENT: PlugCloud retry/re-signing behavior and recovery path for readings rejected during a misconfigured window"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Every verification failure (clock drift, missing header, bad signature, wrong secret) returns the same generic 401 and is logged only as a warning. There is no metric or alert, so a sustained failure could silently stop ingestion, and operators must read server logs to diagnose it.",
+   "evidence": "log.warning(\"plugcloud webhook rejected: %s\", exc) followed by raise HTTPException(status_code=401, detail=\"invalid signature\"); ABSENT: any metric, alert, or health signal for rejected deliveries"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The app reads the whole body into memory and runs HMAC over it before any authentication, and it does not cap body size or rate-limit failures. The 1 MB limit lives only in the reverse proxy, so a direct connection to the container or a proxy misconfiguration would allow unbounded buffering and CPU work on an unauthenticated endpoint.",
+   "evidence": "body = await request.body() (no app-level max-size check); \"the reverse proxy caps request bodies at 1 MB\"; ABSENT: app-level body limit or rate limit in this PR"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "A validly signed batch captured in transit can be replayed anywhere within the 5-minute window, since there is no nonce or seen-timestamp check. Because upsert overwrites by (device_id, measured_at), a replay could revert a value that was corrected after the original delivery.",
+   "evidence": "TOLERANCE_SECONDS = 300 ... if abs(current - int(timestamp)) > TOLERANCE_SECONDS: raise SignatureError(\"timestamp outside tolerance\")"
+  },
+  {
+   "lens": "secrets",
+   "severity": "minor",
+   "claim": "The secret validator checks only length, not entropy. An operator could set a 32-character low-entropy value, such as a repeated character or a dictionary word, which would make the HMAC brute-forceable from captured deliveries.",
+   "evidence": "if len(v.get_secret_value()) < 32: raise ValueError(\"must be at least 32 characters\")"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "There is no rotation path. The verifier accepts exactly one secret, so changing it at the vendor or in .env causes ingestion to fail until the operator restarts with the matching value, and deliveries signed with the old secret during the transition are dropped.",
+   "evidence": "plugcloud_secret: SecretStr (single value); verify(secret: bytes, ...) accepts one secret; ABSENT: rotation or dual-secret guidance"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The description says failures return a bare 401, but the code returns a 401 with a JSON detail body. The PR text contradicts the implementation.",
+   "evidence": "PR text: \"returns a bare 401 on any failure\"; diff: raise HTTPException(status_code=401, detail=\"invalid signature\") from None"
+  },
+  {
+   "lens": "scope drift",
+   "severity": "minor",
+   "claim": "The endpoint no longer declares PlugCloudBatch as its body parameter. FastAPI's automatic 422 validation and generated request schema are replaced by a hand-written 422 with detail \"invalid payload\", and the change is not mentioned in the description.",
+   "evidence": "batch = PlugCloudBatch.model_validate_json(body) ... raise HTTPException(status_code=422, detail=\"invalid payload\"); the description covers only signature verification and the 401 response"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The test comment says the 5000-digit timestamp would overflow the int() digit limit, but the [0-9]{1,12} fullmatch rejects it before int() is called. The comment misdescribes the guard that the test actually exercises.",
+   "evidence": "(BODY, \"9\" * 5000, \"v1=00\", 1700000000),  # would overflow int() digit limit"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The route-level test signs requests with the settings fixture's secret, but the diff never shows that the app's get_settings dependency resolves to that fixture. If it reads the environment instead, the signed-accept assertion fails or passes for the wrong reason.",
+   "evidence": "ABSENT: app.dependency_overrides[get_settings] or equivalent in tests/conftest.py; only the Settings(...) constructor call is changed"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The description says a missing or short VOLTLOG_PLUGCLOUD_SECRET makes startup fail, but no test constructs Settings without the secret or with a short one.",
+   "evidence": "ABSENT: any test constructing Settings without plugcloud_secret or with fewer than 32 characters; PR text: \"startup fails if it is missing or short\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "The length validator's message does not name the environment variable or explain how to produce a valid value, so operators must trace the field name back to VOLTLOG_PLUGCLOUD_SECRET themselves.",
+   "evidence": "raise ValueError(\"must be at least 32 characters\")"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The test module re-implements the HMAC construction rather than checking against a fixed vendor test vector. If the production formula changed, the tests would sign with the same formula and still pass, so the wire format is not pinned independently.",
+   "evidence": "def sign(ts, body=BODY, secret=SECRET): return \"v1=\" + hmac.new(secret, ts.encode() + b\".\" + body, hashlib.sha256).hexdigest()"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Making plugcloud_secret a required Settings field couples every construction of Settings, including other tests, scripts, and local runs, to this secret. Only the conftest fixture is updated in the diff, so other call sites may break.",
+   "evidence": "plugcloud_secret: SecretStr added with no default; the only updated constructor is Settings(database_url=TEST_DB_URL, plugcloud_secret=\"t\" * 32)"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 71878,
+  "tokOut": 25917,
+  "usd": 0.0154937,
+  "critMs": 36841
+ }
+}

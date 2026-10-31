@@ -1,0 +1,107 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-04",
+ "rep": 2,
+ "wallMs": 354996,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The up migration adds private_notes empty and drops notes with no copy step, so every existing user-written note is destroyed on auto-deploy from merge. The down migration re-adds an empty notes column and drops private_notes, so rollback after any write cannot recover the text.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text; ALTER TABLE user_recipes DROP COLUMN notes; (vs. 'Pure rename, no data change; the down migration restores the old name.')"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The PR calls this a pure rename, but the SQL is an add plus a drop. A true rename is ALTER TABLE ... RENAME COLUMN, which is metadata-only and preserves data. The description contradicts the migration body.",
+   "evidence": "Pure rename, no data change; the down migration restores the old name."
+  },
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "The main query has no LIMIT and no keyset predicate. Every page request loads all of a user's saved rows including note text, then slices in Node. For 200k+ save users this cannot meet the 300ms p99 budget, and a full scroll is roughly O(N²/limit) in rows read.",
+   "evidence": "WHERE ur.user_id = $1 ORDER BY ur.saved_at DESC, ur.id DESC`, [userId], ... const page = rows.slice(start, start + limit);"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Migrations run automatically on merge but the code is not sequenced with them. During a rolling deploy, old instances still select ur.notes and will error once the column is dropped. No expand/contract plan is described.",
+   "evidence": "Context: 'Migrations run automatically on deploy after merge to main.' Old query selects ur.notes; migration: ALTER TABLE user_recipes DROP COLUMN notes; (ABSENT: expand/contract or deploy ordering)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "DDL on a 140M-row table takes ACCESS EXCLUSIVE with no lock_timeout, so it can queue behind a long transaction and then block all reads and writes on user_recipes.",
+   "evidence": "BEGIN; ALTER TABLE user_recipes ADD COLUMN private_notes text; ... (ABSENT: SET lock_timeout)"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "No index supports the new ORDER BY (user_id, saved_at DESC, id DESC) on a 140M-row table, so each request sorts the user's rows.",
+   "evidence": "ABSENT: CREATE INDEX on user_recipes(user_id, saved_at, id) in 0087_private_notes.up.sql"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "If the cursor row was unsaved or deleted between pages, findIndex returns -1, start becomes 0, and page one is returned again. A client following nextCursor can loop indefinitely, and no 400 signals an invalid cursor.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "limit is clamped only from above. A negative limit yields wrong slices, and on a short list page is empty so page[page.length - 1].id throws a TypeError and returns a 500.",
+   "evidence": "const limit = Math.min(Number(req.query.limit) || 50, 100); ... page[page.length - 1].id"
+  },
+  {
+   "lens": "compatibility",
+   "severity": "major",
+   "claim": "Removing offset is a breaking API change with no fallback or deprecation. Any caller still sending offset silently receives page one on every request.",
+   "evidence": "-  const offset = Math.max(Number(req.query.offset) || 0, 0); (removed, ABSENT: fallback or deprecation plan)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The claim that the client already sends cursor from nextCursor is load-bearing for a breaking change but unsupported: no client diff is shown, and the old response had no nextCursor field.",
+   "evidence": "The client already sends `cursor` from the previous page's `nextCursor`. (ABSENT: client diff; old response was res.json({ items: rows }))"
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Irreversibly deleting user-authored free text with no backup, export, or notice step is a data-deletion event with no documented basis.",
+   "evidence": "notes are user-written free text that users cannot recover elsewhere; ABSENT: backup, export, or retention step"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "No search of other readers or writers of user_recipes.notes (exports, shared views, frontend types, backups) is shown before the column is dropped.",
+   "evidence": "ABSENT: grep or list of references to notes outside server/routes/saved.ts"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "Tests cover only a five-row happy path. They do not test an unknown cursor, negative or zero limit, empty result, or data preservation across the migration.",
+   "evidence": "it(\"pages with cursor\", ...) with fixed r5..r1 fixtures; expect(c.nextCursor).toBeNull();"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "The 'never expose on shared views' protection is a naming convention only. Nothing enforces it through a projection, type, lint rule, or test.",
+   "evidence": "so it is obvious in queries which field must never be exposed on shared views. (ABSENT: enforcement mechanism)"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Bundling a destructive schema migration with an unrelated pagination change means neither can be rolled back independently.",
+   "evidence": "Two small changes bundled because they touch the same table."
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 107778,
+  "tokOut": 47713,
+  "usd": 0.04121774,
+  "critMs": 73744
+ }
+}

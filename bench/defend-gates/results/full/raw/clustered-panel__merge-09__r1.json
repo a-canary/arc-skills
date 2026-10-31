@@ -1,0 +1,83 @@
+{
+ "approach": "clustered-panel",
+ "case": "merge-09",
+ "rep": 1,
+ "wallMs": 318222,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The PR says startup fails if the secret is missing or short, but the diff never constructs Settings at boot. The route resolves it lazily via Depends(get_settings), so a bad secret would more likely surface as a 500 on webhook requests. No test covers the startup failure.",
+   "evidence": "ABSENT: eager Settings construction or startup hook; PR text \"startup fails if it is missing or short\" vs. \"settings: Settings = Depends(get_settings)\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "VOLTLOG_PLUGCLOUD_SECRET is a required field with no default, and the diff adds no preflight check, example .env change, or upgrade-order guidance. Any operator who upgrades without the secret gets a broken instance. Vendor-side signing configuration is also not sequenced with the upgrade.",
+   "evidence": "\"plugcloud_secret: SecretStr\" (no default); ABSENT: changes to the compose .env template, example env file, release notes, or vendor-configuration sequencing"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Signature enforcement goes live immediately with no shadow or log-only mode and no documented rollback. A wrong secret or a wrong header assumption rejects every reading with 401 at once, and readings dropped in that gap are not recoverable.",
+   "evidence": "\"returns a bare 401 on any failure\"; ABSENT: staged rollout, shadow-verification mode, or rollback plan for the enforcement switch"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Rejections are logged only at warning level, with no counter, metric, or alert. A misconfigured secret silently refuses all readings and looks the same as an attack, so the operator has no reliable signal.",
+   "evidence": "log.warning(\"plugcloud webhook rejected: %s\", exc); ABSENT: metric, alert threshold, or runbook entry for 401 spikes"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Making plugcloud_secret required with no default will break any other code path that builds Settings (CLI, migrations, scripts, other tests). Only tests/conftest.py is updated, and the diff shows no audit of other call sites.",
+   "evidence": "\"plugcloud_secret: SecretStr\" (no default); the only construction updated is \"return Settings(database_url=TEST_DB_URL, plugcloud_secret=\\\"t\\\" * 32)\"; ABSENT: list of other Settings(...) call sites"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The handler buffers the full request body with await request.body() before any authentication. The app sets no size bound, so the 1 MB cap relies entirely on the reverse proxy.",
+   "evidence": "body = await request.body() precedes signing.verify(...); \"the reverse proxy caps request bodies at 1 MB\"; ABSENT: in-app max body size"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "A captured valid delivery can be replayed anywhere in the 5-minute tolerance window, since nothing binds a delivery to a nonce or ID. A replayed older batch could overwrite a later correction, because upserts key on (device_id, measured_at).",
+   "evidence": "if abs(current - int(timestamp)) > TOLERANCE_SECONDS: raise SignatureError(...) (no nonce or delivery-ID check in signing.verify); \"Readings are already upserted by (device_id, measured_at)\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "There is one signing secret and no rotation overlap. Rotating it requires vendor and operator to switch simultaneously, and any mismatch causes a rejection window with no fallback key.",
+   "evidence": "plugcloud_secret: SecretStr (single value); ABSENT: rotation procedure or dual-secret acceptance"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The secret validator checks only length (at least 32 characters), not entropy, so a weak 32-character value passes.",
+   "evidence": "if len(v.get_secret_value()) < 32: raise ValueError(\"must be at least 32 characters\")"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The PR description says the endpoint returns a bare 401, but the code returns a JSON detail body. The description and the contract disagree.",
+   "evidence": "\"returns a bare 401 on any failure\" vs. raise HTTPException(status_code=401, detail=\"invalid signature\")"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The validator error message does not name the environment variable. An operator seeing a pydantic error about plugcloud_secret has to map it to VOLTLOG_PLUGCLOUD_SECRET by hand.",
+   "evidence": "raise ValueError(\"must be at least 32 characters\")"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 23980,
+  "tokOut": 18832,
+  "usd": 0.014211,
+  "critMs": 41830
+ }
+}

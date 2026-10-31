@@ -1,0 +1,59 @@
+{
+ "approach": "single-strong",
+ "case": "merge-04",
+ "rep": 1,
+ "wallMs": 77575,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The 'rename' is actually ADD COLUMN then DROP COLUMN with no data copy. On deploy, every user's notes (user-written, unrecoverable elsewhere) are permanently destroyed across ~140M rows. The down migration likewise adds an empty notes column and drops private_notes, so rollback cannot restore data either.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;  /  PR text: 'Pure rename, no data change; the down migration restores the old name.'"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The PR description claims a pure rename, but the SQL is a destructive swap. The description contradicts the code, and reviewers or operators relying on it will not expect data loss. ALTER TABLE ... RENAME COLUMN was the correct, instant, metadata-only operation.",
+   "evidence": "'Pure rename, no data change' vs. ADD COLUMN + DROP COLUMN in 0087_private_notes.up.sql"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Migrations run automatically on deploy, and the old code still reads `notes` while the new code reads `private_notes`. During rolling deploy, old instances will hit 'column notes does not exist' errors, since the rename is not backward-compatible (no expand/contract). There is also no backup or guard before auto-running.",
+   "evidence": "'Migrations run automatically on deploy after merge to main.' Old query: `ur.notes` vs. new `ur.private_notes`"
+  },
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "The cursor pagination fetches ALL of a user's saved recipes (200k+ for heavy users, with join and sort) on every request, then slices in memory. It is O(N) per page, so paging through is O(N²/limit). Memory and latency blow the 300ms p99 budget and create a DoS vector. This is worse than the original LIMIT/OFFSET query.",
+   "evidence": "ORDER BY ur.saved_at DESC, ur.id DESC`, [userId]);  const start = ... rows.findIndex(...) ; rows.slice(start, start + limit)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The cursor is the row id located via findIndex. If the cursor row was deleted or is invalid, findIndex returns -1, so start becomes 0 and the client silently restarts from page one, possibly looping forever. Also, an empty result with a limit set gives page[page.length-1] on an empty array only if start+limit<rows.length, which is unlikely but unguarded. A keyset cursor (saved_at,id) in SQL would be stable.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The existing offset parameter is dropped with no compatibility handling. Tests only cover the happy path, with no tests for an invalid or deleted cursor, the migration, or data preservation.",
+   "evidence": "Test only 'pages with cursor' happy path; no migration test"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Two unrelated changes (a destructive schema change and a pagination rewrite) are bundled in one PR, which makes review and rollback harder.",
+   "evidence": "'Two small changes bundled because they touch the same table.'"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3455,
+  "tokOut": 1208,
+  "usd": 0.022417199999999998,
+  "critMs": 9058
+ }
+}

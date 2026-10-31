@@ -1,0 +1,119 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-06",
+ "rep": 2,
+ "wallMs": 252995,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The upstream 429 retry is a second billable upstream call that never passes through the tenant limiter. Under upstream saturation each admitted request can make two upstream calls for one token, with no jitter and no retry budget, so upstream load can roughly double exactly when the upstream is already overloaded, which is the amplification pattern behind the original incident.",
+   "evidence": "let res = await upstream.chat(req.body, { signal: req.signal });\n    if (res.status === 429) { ... await new Promise((r) => setTimeout(r, delay)); res = await upstream.chat(req.body, { signal: req.signal }); }"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Each upstream-429 request holds its connection and handler open for up to 5s with no in-flight or queue bound. Under sustained upstream throttling, held requests grow with arrival rate (about 2000 at 400 rps), and the sleep does not check req.signal, so a client that disconnects still gets a retry sent upstream.",
+   "evidence": "const MAX_UPSTREAM_RETRY_MS = 5_000; ... await new Promise((r) => setTimeout(r, delay)); ABSENT: any max-in-flight bound or req.signal check during the sleep"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Per-tenant buckets are the only admission control and nothing caps aggregate upstream rate. With about 120 tenants at the 20 rps default, the process can send roughly 2400 rps upstream, so cross-tenant upstream 429s, the stated incident, can still happen with every tenant within its own limit.",
+   "evidence": "\"serving ~120 internal tenants\" and \"default 20 rps / burst 40\"; ABSENT: any process-wide or upstream-level rate or concurrency limit"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Enforcement is unconditional on deploy: every tenant without explicit config gets 20 rps / burst 40 immediately, with no flag, env toggle, rollout, or audit of existing tenant configs. Legitimate tenants that already sustain more than 20 rps will start receiving 429s, and rollback requires a revert and redeploy.",
+   "evidence": "const waitMs = limiter.take(tenant.id, limitsFor(tenant)); ... return reply.code(429) ...; ABSENT: any flag, rollout plan, or audit of existing tenant configs"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The retry-once contract (retry once, honor Retry-After capped at 5s, pass every other error straight through) and the 429 rejection path have no tests. The only tests cover TenantLimiter, and retryAfterMs is not exported, so the new route behavior is unverified.",
+   "evidence": "ABSENT: any test for src/routes/completions.ts; tests are only \"admits burst, then rate-limits, then refills\" and \"tenants are isolated\" in bucket.test.ts"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The bucket computes elapsed time from wall-clock Date.now, which can step backwards. A negative elapsedSec drives tokens below zero, so a backward step of N seconds locks the tenant out for about N × ratePerSec tokens' worth of time. There is no clamp and no monotonic source.",
+   "evidence": "private now: () => number = Date.now) {} ... const elapsedSec = (nowMs - b.updatedMs) / 1000; b.tokens = Math.min(limits.burst, b.tokens + elapsedSec * limits.ratePerSec);"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Eviction from the 10k LRU resets an evicted tenant's bucket to full burst, so a tenant can exceed its configured rate when its bucket is evicted. This is not documented or tested. It is unlikely at about 120 tenants, but it contradicts the stated per-tenant semantics.",
+   "evidence": "private buckets = new LRUCache<string, Bucket>({ max: 10_000 }); ... const b = this.buckets.get(tenantId) ?? { tokens: limits.burst, updatedMs: nowMs };"
+  },
+  {
+   "lens": "observability",
+   "severity": "minor",
+   "claim": "Every rejected request emits an info log line with no sampling or aggregation, so one tenant at 400 rps against a 20 rps limit produces about 380 log writes per second. No counters or metrics are exported for admissions, rejections, or upstream 429 rate, so the starvation incident cannot be alerted on.",
+   "evidence": "req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, \"tenant rate limited\"); ABSENT: counters or metrics"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "retryAfterMs parses only delta-seconds. An HTTP-date Retry-After yields NaN and falls back to a fixed 1s, so the retry can fire before the upstream window reopens and the second 429 reaches the tenant. A value of \"0\" makes the retry immediate.",
+   "evidence": "const secs = Number(header); if (!Number.isFinite(secs) || secs < 0) return 1_000;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A tenant configured with ratePerSec 0 divides by zero, so waitMs becomes Infinity and the response sends Retry-After: \"Infinity\", which is not a valid value. No validation of tenant limits is shown.",
+   "evidence": "return Math.ceil(((1 - b.tokens) / limits.ratePerSec) * 1000); ... .header(\"Retry-After\", String(Math.ceil(waitMs / 1000)))"
+  },
+  {
+   "lens": "secrets",
+   "severity": "minor",
+   "claim": "The key fingerprint is an unkeyed, deterministic SHA-256 of the raw API key, truncated to 40 bits. Anyone with log access who holds a candidate key can confirm a match. A keyed HMAC or a non-key identifier would be safer for logs. The fingerprint itself does not violate the no-keys-in-logs rule.",
+   "evidence": "export function keyFingerprint(apiKey: string): string { return createHash(\"sha256\").update(apiKey).digest(\"hex\").slice(0, 10); }"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The limiter caps requests per second, not tokens or spend. A tenant within 20 rps can send maximum-size prompts with no ceiling on upstream cost. The PR does not claim a spend cap, so this is an unaddressed gap, not a stated-goal failure.",
+   "evidence": "\"limits from tenant config, default 20 rps / burst 40\"; take(tenantId, limits: Limits) with Limits = { ratePerSec; burst }; ABSENT: token, cost, or budget cap"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Over-limit requests get a hard 429 with no queueing or pacing. A batch job at 400 rps under a 20 rps cap will see most requests rejected rather than smoothed, and the PR does not say whether that outcome is intended.",
+   "evidence": "\"returns 429 with Retry-After when a tenant is over\""
+  },
+  {
+   "lens": "compatibility",
+   "severity": "minor",
+   "claim": "The 429 body uses error type \"rate_limited\" in an OpenAI-compatible API. Clients that branch on the upstream error-type convention may mishandle it. Compatibility with the expected error type is not verified.",
+   "evidence": "send({ error: { type: \"rate_limited\", message: \"tenant rate limit exceeded\" } })"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The limiter is a module-level singleton created at import time, and the retry logic is inlined with a hardcoded setTimeout and no injectable clock or sleep. This shared state and untestable sleep make the route hard to test and reset.",
+   "evidence": "const limiter = new TenantLimiter(); ... await new Promise((r) => setTimeout(r, delay));"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The PR bundles two independent features, tenant token-bucket limiting and upstream 429 retry, under one title. They have separate failure modes and could not be reverted or toggled independently.",
+   "evidence": "TITLE: \"Per-tenant token-bucket rate limiting + upstream 429 handling\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Errors thrown by upstream.chat (network failure, timeout, abort) are not caught in either attempt. The spec says other upstream errors are passed straight through, but a thrown error becomes a framework 500 rather than a pass-through, and this path is not shown or tested.",
+   "evidence": "let res = await upstream.chat(req.body, { signal: req.signal });"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 63479,
+  "tokOut": 31134,
+  "usd": 0.018644639999999997,
+  "critMs": 44534
+ }
+}

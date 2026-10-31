@@ -1,0 +1,262 @@
+{
+ "approach": "self-consistency-3",
+ "case": "merge-06",
+ "rep": 1,
+ "wallMs": 101741,
+ "verdict": "ATTACKS",
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The gateway logs an unsalted SHA-256 digest of each tenant's API key on every rate-limit event. The artifact states keys must never appear in logs. A stable digest of a secret is still derived key material and links every log line to one key, so it conflicts with that invariant. A keyed HMAC or the tenant id alone would avoid this.",
+   "evidence": "req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, \"tenant rate limited\")"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Upstream 429 handling parks each admitted request for up to 5s and then doubles the upstream call. There is no in-flight cap, retry budget, or circuit breaker. If the upstream is rate-limiting broadly, held requests and second attempts pile up and amplify the load that caused the 429s.",
+   "evidence": "await new Promise((r) => setTimeout(r, delay)); res = await upstream.chat(req.body, { signal: req.signal });  ABSENT: retry budget, concurrency cap, or circuit breaker"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR presents per-tenant buckets as the fix for starvation, but it adds no global ceiling. The default limit of 20 rps across roughly 120 tenants sums to about 2400 rps, which may exceed the upstream quota. Starvation through upstream 429s could continue even with every tenant within its own limit.",
+   "evidence": "limits from tenant config, default 20 rps / burst 40  ABSENT: upstream quota figures, an aggregate/global limit, or a load test showing the sum of tenant limits fits within upstream capacity"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The retry sleep ignores req.signal, so a client that disconnects during the wait still triggers a retry upstream. The first 429 response body is also never consumed or cancelled before the retry, which can hold a connection.",
+   "evidence": "await new Promise((r) => setTimeout(r, delay)); (first res.body never read or cancelled)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Config values of ratePerSec=0 or burst=0 produce an infinite wait. That yields the header value \"Infinity\", which is not a valid Retry-After. No config validation exists to catch this.",
+   "evidence": "return Math.ceil(((1 - b.tokens) / limits.ratePerSec) * 1000);  ABSENT: validation of limits from tenant config"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A Retry-After given as an HTTP-date is silently treated as 1s. Separately, the 5s cap can make the single retry fire before the upstream window reopens, which wastes a call that is likely to 429 again.",
+   "evidence": "if (!Number.isFinite(secs) || secs < 0) return 1_000;  return Math.min(secs * 1000, MAX_UPSTREAM_RETRY_MS);"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "LRU eviction resets a tenant's bucket to full burst, so an evicted tenant regains its whole burst on return. The cap of 10k is far above roughly 120 tenants, so this is benign today, but the artifact does not note the reset behaviour.",
+   "evidence": "new LRUCache<string, Bucket>({ max: 10_000 }) ... const b = this.buckets.get(tenantId) ?? { tokens: limits.burst, updatedMs: nowMs };"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The 429 error body uses type \"rate_limited\", while OpenAI-compatible clients commonly key on OpenAI-style error types. This may cause client-side handling to misfire.",
+   "evidence": "send({ error: { type: \"rate_limited\", message: \"tenant rate limit exceeded\" } })"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Tests cover only the bucket arithmetic. Nothing covers the route's 429 response or Retry-After header, the upstream 429 retry path, or Retry-After parsing, which are the new behaviours that touch the wire.",
+   "evidence": "bucket.test.ts contains only \"admits burst, then rate-limits, then refills\" and \"tenants are isolated\"; ABSENT: completions route tests or retry tests"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The upstream 429 retry has no jitter and no retry budget. Concurrent requests that were throttled at the same moment all sleep the same Retry-After and retry together, which can double upstream demand exactly when the upstream is already rejecting traffic.",
+   "evidence": "\"await new Promise((r) => setTimeout(r, delay)); res = await upstream.chat(req.body, { signal: req.signal });\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The retry is not passed through the tenant limiter, so a tenant's effective upstream rate can reach about 2x its configured rate (20 rps / burst 40) whenever the upstream returns 429. That undermines the stated goal of preventing tenants from starving each other.",
+   "evidence": "limiter.take(tenant.id, limitsFor(tenant)) runs once, then \"res = await upstream.chat(req.body, { signal: req.signal });\" runs again with no take()"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "A new default of 20 rps / burst 40 is applied to all ~120 tenants with no staged rollout, override verification, or evidence of current per-tenant rates. Any legitimate tenant running above 20 rps will start receiving 429s on deploy, and the artifact gives no rollback or flag path.",
+   "evidence": "\"limits from tenant config, default 20 rps / burst 40\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "Only the bucket primitive is tested. The new route behaviour (limiter 429 with Retry-After, the single upstream retry, Retry-After parsing, and the 5s cap) has no tests, even though it is the riskiest part of the change.",
+   "evidence": "Only src/ratelimit/bucket.test.ts is added; no test file covers src/routes/completions.ts"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "If the client disconnects during the retry sleep, the abort is not observed and the retry is still sent upstream with an already-aborted signal. The resulting error path is not handled explicitly.",
+   "evidence": "setTimeout(r, delay) with no abort listener on req.signal before the second upstream.chat call"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Each retry holds a request open for up to 5s plus two upstream round trips, and no overall request timeout is defined. Under a sustained upstream 429 or slowdown, connections and memory pile up in the single process.",
+   "evidence": "No timeout is set on upstream.chat; the handler can wait MAX_UPSTREAM_RETRY_MS on top of the first call"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Every rate-limited rejection is logged at info level. A single tenant at 400 rps that is limited to 20 rps produces roughly 380 log lines per second per process, which inflates log volume and cost.",
+   "evidence": "req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, \"tenant rate limited\") on every rejection"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The key fingerprint is an unsalted SHA-256 truncated to 40 bits. It is deterministic, so it links log lines across requests and can be correlated with the same key elsewhere. The artifact also has no test asserting that raw API keys never reach logs, despite that being a stated requirement.",
+   "evidence": "createHash(\"sha256\").update(apiKey).digest(\"hex\").slice(0, 10); ABSENT: a test or assertion that the apiKey is not logged"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "If ratePerSec is 0, the wait calculation divides by zero and produces Infinity. The response then sends an invalid \"Retry-After: Infinity\" header.",
+   "evidence": "return Math.ceil(((1 - b.tokens) / limits.ratePerSec) * 1000);"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "retryAfterMs only handles delta-seconds. An HTTP-date Retry-After yields NaN and silently falls back to 1s, and an empty header parses to 0 and triggers an immediate retry.",
+   "evidence": "const secs = Number(header); if (!Number.isFinite(secs) || secs < 0) return 1_000;"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Bucket state is per process, so once horizontal scaling lands the effective per-tenant limit multiplies by replica count. The artifact does not note this limitation.",
+   "evidence": "const limiter = new TenantLimiter();  (module-level, in-process only)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "limitsFor and the default 20 rps / burst 40 are used but not defined in the diff, so the claim that defaults apply correctly is unverified.",
+   "evidence": "limitsFor(tenant) with no definition or test in the artifact"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The upstream 429 retry issues a second upstream call for every 429, after a sleep of up to 5s. Under sustained upstream throttling this doubles upstream load exactly when the upstream is overloaded, and holds each handler open for the sleep.",
+   "evidence": "let res = await upstream.chat(req.body, { signal: req.signal }); if (res.status === 429) { ... await new Promise((r) => setTimeout(r, delay)); res = await upstream.chat(req.body, { signal: req.signal });"
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The retry does not call limiter.take(), so one admitted request can produce two upstream calls. A tenant's effective upstream rate can reach up to 2x its configured limit, and upstream token spend is not bounded by the tenant budget.",
+   "evidence": "const waitMs = limiter.take(tenant.id, limitsFor(tenant)); ... res = await upstream.chat(req.body, { signal: req.signal });  (no take() before the retry call)"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The default of 20 rps / burst 40 applies to all ~120 existing tenants on merge, with no feature flag, staged rollout, or kill switch. Any tenant with legitimate sustained traffic above 20 rps starts receiving 429s immediately, and rollback requires a revert deploy.",
+   "evidence": "limits from tenant config, default 20 rps / burst 40"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR does not show that the fix addresses the stated root cause. Per-tenant caps do not bound aggregate upstream load: 120 tenants each at the 20 rps default could in total send about 2400 rps, and no global cap or upstream capacity figure is given.",
+   "evidence": "This adds an in-process token bucket per tenant (limits from tenant config, default 20 rps / burst 40)  -- ABSENT: any global/aggregate limit or measured upstream capacity"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The log fingerprint is an unsalted SHA-256 of the tenant API key, truncated to 40 bits, and is written to logs. It is a stable, derivable value linked to a secret, which sits uneasily with the rule that keys must never appear in logs. A keyed HMAC, or logging only the tenant id (already logged), would avoid this.",
+   "evidence": "export function keyFingerprint(apiKey: string): string { return createHash(\"sha256\").update(apiKey).digest(\"hex\").slice(0, 10); }"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Every rejected request emits an info-level log line. A single tenant at 400 rps over its limit produces roughly 380 log lines per second, so log volume scales with abusive traffic.",
+   "evidence": "req.log.info( { tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, \"tenant rate limited\", );"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The retry sleep ignores req.signal, so a client that disconnects still waits the full delay and then fires an upstream call with an aborted signal. The first 429 response body is also never consumed or cancelled before retrying.",
+   "evidence": "await new Promise((r) => setTimeout(r, delay));"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Date.now is not monotonic. A backward clock step makes elapsedSec negative, which can drive tokens below zero and inflate waitMs for subsequent requests. performance.now() would avoid this.",
+   "evidence": "constructor(private now: () => number = Date.now) {}"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "There is no validation of tenant limits. ratePerSec of 0 yields Infinity in Retry-After, and burst below 1 means the bucket never admits the tenant, a permanent denial from a config typo.",
+   "evidence": "return Math.ceil(((1 - b.tokens) / limits.ratePerSec) * 1000);"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "retryAfterMs only handles delta-seconds. The HTTP-date form of Retry-After falls back silently to 1s, and an empty header parses as 0 via Number(''), which causes an immediate retry.",
+   "evidence": "const secs = Number(header); if (!Number.isFinite(secs) || secs < 0) return 1_000;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "LRU eviction resets an evicted tenant to a full burst. Under churn above 10k tenants, eviction lets a tenant regain its full burst, so the limit is not strictly enforced. The PR does not state this trade-off.",
+   "evidence": "Bucket state is bounded by an LRU (10k tenants), so idle tenants do not accumulate."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Tests cover only the bucket math. Nothing tests the route's 429 response, the Retry-After header, the upstream retry path and its cap, or LRU eviction behaviour.",
+   "evidence": "test(\"admits burst, then rate-limits, then refills\" ... test(\"tenants are isolated\" -- ABSENT: completions route tests, retry tests, eviction tests"
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "Sleeping up to 5s inside the request before retrying adds latency to every upstream-throttled request. A fast 429 or a queued response would be more predictable for clients.",
+   "evidence": "const MAX_UPSTREAM_RETRY_MS = 5_000;"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Hard 429s are the only response to over-limit tenants. The PR offers no queuing or backpressure, so batch tenants must implement their own retry handling, and the value to them is not argued.",
+   "evidence": "return reply.code(429) ... message: \"tenant rate limit exceeded\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "No new personal data is collected. The only new logged identifiers are the tenant id and the key fingerprint, which is covered under security.",
+   "evidence": "{ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "No finding. The limiter is in-process with no new external vendor, and lru-cache is an open-source library.",
+   "evidence": "import { LRUCache } from \"lru-cache\";"
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "No finding. The change has no rendered UI; the 429 body is a plain JSON error.",
+   "evidence": "send({ error: { type: \"rate_limited\", message: \"tenant rate limit exceeded\" } })"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "No finding. The change has no user-facing interface.",
+   "evidence": "ABSENT: any UI or rendered output in the diff"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "No finding. The diff adds no regulated data handling or platform terms issues.",
+   "evidence": "ABSENT: any regulated data or ToS-relevant change in the diff"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "No additional gate-worthy issue beyond the findings above.",
+   "evidence": "ABSENT: nothing further in the artifact"
+  }
+ ],
+ "usage": {
+  "calls": 3,
+  "tokIn": 11037,
+  "tokOut": 20649,
+  "usd": 0.01043541,
+  "critMs": 35380
+ }
+}

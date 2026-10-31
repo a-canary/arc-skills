@@ -1,0 +1,141 @@
+{
+ "approach": "rubric-stop-early",
+ "case": "merge-06",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The 20 rps / burst 40 default starts enforcing on merge for all ~120 tenants with no flag, shadow mode, or per-tenant rollout plan. Any existing tenant running above 20 rps (not just the batch job) will begin receiving 429s in production, and rolling that back means reverting the code.",
+     "evidence": "\"limits from tenant config, default 20 rps / burst 40\" and \"returns 429 with Retry-After when a tenant is over\"; ABSENT: a feature flag, a dry-run/log-only phase, or a list of tenant limits set before deploy."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3692,
+    "tokOut": 2182,
+    "usd": 0.0016572499999999999,
+    "critMs": 12555
+   },
+   "wallMs": 25031
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The upstream 429 retry is not gated by RATE_LIMIT_MODE, so it changes live behavior on merge in shadow mode. It also cannot be turned off by the env-var rollback the PR relies on, so reverting it requires a code change. This contradicts the claim that merging changes no tenant's behavior.",
+     "evidence": "\"Deploy in `shadow`... so merging changes no tenant's behavior.\" and \"Rollback is setting the env var back to `shadow` or `off` and restarting, with no code revert.\" The diff retries unconditionally: \"if (res.status === 429) { ... req.log.warn({ tenant: tenant.id, delay }, \\\"upstream 429, retrying once\\\"); ... res = await upstream.chat(req.body, ...)\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4152,
+    "tokOut": 1440,
+    "usd": 0.0013782500000000001,
+    "critMs": 7648
+   },
+   "wallMs": 70327
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Shadow mode is the default and is meant to run for days, but every over-limit request emits an unsampled info-level log line. A tenant at the 400 rps from the incident would produce roughly 380 log lines per second, which can flood the log pipeline and add cost before any enforcement happens.",
+     "evidence": "req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs, enforce }, enforce ? \"tenant rate limited\" : \"tenant would be rate limited (shadow)\"); ABSENT: any sampling, deduplication, or per-tenant log throttling."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4356,
+    "tokOut": 2718,
+    "usd": 0.0020580499999999996,
+    "critMs": 14127
+   },
+   "wallMs": 61396
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "In enforce mode every upstream 429 is retried once for every tenant with no retry budget and no jitter. During an upstream overload, which is the condition this change targets, the gateway can double its upstream request volume, and requests that wait on the synchronized delay hold connections open for up to 5s. Retries are not coordinated across tenants, so the retry wave can recreate the Tuesday 429 storm.",
+     "evidence": "\"When the upstream itself returns 429 we retry once, honoring its Retry-After capped at 5s\" and in completions.ts: \"const delay = retryAfterMs(...); await new Promise((r) => setTimeout(r, delay)); res = await upstream.chat(req.body, ...)\". ABSENT: any retry budget, jitter, or cap on concurrent retries, and any load test showing upstream volume under sustained 429s."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5072,
+    "tokOut": 2856,
+    "usd": 0.00227025,
+    "critMs": 13788
+   },
+   "wallMs": 25390
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The retry is capped at 4s regardless of the upstream's Retry-After. When Retry-After exceeds about 5s, the retry is sent before the upstream says capacity returns, so it will very likely get another 429. Each such request then adds up to 5s of latency and spends a retry-budget token, and the client receives a second 429 anyway. This is the overload case where retries should not amplify load.",
+     "evidence": "function retryAfterMs(header) { ... return Math.min(secs * 1000, MAX_UPSTREAM_RETRY_MS); } with MAX_UPSTREAM_RETRY_MS = 4_000, and the PR text says \"honoring its Retry-After (capped at 4s)\". ABSENT: any check that skips the retry when Retry-After exceeds the cap, or any evidence that upstream Retry-After values are typically under 4s."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 6739,
+    "tokOut": 3384,
+    "usd": 0.0028676500000000002,
+    "critMs": 16482
+   },
+   "wallMs": 46262
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The rejected upstream 429 response is overwritten by the retry without being drained or cancelled. If `upstream.chat` returns an undici-style body, unread 429 bodies can hold sockets during the overload this change is meant to handle. The upstream wrapper is not in the diff, so this cannot be confirmed here.",
+     "evidence": "let res = await upstream.chat(req.body, { signal: req.signal }); ... res = await upstream.chat(req.body, { signal: req.signal });  ABSENT: any cancel or drain of the first response body"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The retry sleep is a bare setTimeout that does not observe req.signal. If the client disconnects during the up-to-5s wait, the handler still sleeps and then issues a second upstream call, holding a retry-in-flight slot for the full delay.",
+     "evidence": "await new Promise((r) => setTimeout(r, delay));"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "An empty Retry-After header is coerced by Number('') to 0, so it is treated as a valid 0 ms wait rather than invalid. The spec says a missing or invalid header gets the 1s default. The effect is an immediate retry plus jitter, which is minor but contradicts the stated rule.",
+     "evidence": "const secs = Number(header); if (!Number.isFinite(secs) || secs < 0) return 1_000;"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 7317,
+    "tokOut": 3006,
+    "usd": 0.00279425,
+    "critMs": 15053
+   },
+   "wallMs": 52863
+  }
+ ],
+ "artifact": "PR #377: Per-tenant token-bucket rate limiting + upstream 429 handling\n\nTenants on the shared gateway can currently starve each other: one batch job at 400 rps pushed everyone else into upstream 429s on Tuesday.\nThis adds an in-process token bucket per tenant (limits from tenant config, default 20 rps / burst 40). When a tenant is over, it returns 429 with Retry-After, subject to the rollout mode below.\nWhen the upstream itself returns 429 we retry at most once, but only if its Retry-After is at most 4s. The retry waits the Retry-After plus up to 1s of random jitter, so no retry waits more than 5s and retries from different requests are not synchronized. **If the upstream's Retry-After is longer than 4s (or can't be honored within that cap), we do not retry at all: the upstream 429 is passed straight through and no retry-budget token is spent.** Retrying earlier than the upstream says capacity returns would most likely just draw another 429, add latency, and amplify load during an overload. If the header is missing or invalid, we wait a default of 1s (plus jitter) before the single retry. Retries are also bounded globally by a **retry budget**: a process-wide token bucket (5 retries/s, burst 10) and a cap of 20 retries in flight at once. When the budget is exhausted, the upstream 429 is passed straight through instead of retried, so during an upstream overload the extra upstream load from retries is at most about 5 req/s sustained (plus the burst of 10) no matter how many tenants are affected, and at most 20 connections are held open waiting on a retry. Any other upstream error is passed straight through. **This retry is gated by the same `RATE_LIMIT_MODE` and only runs in `enforce` mode**, so in `shadow` and `off` upstream 429s are passed through exactly as before.\nBucket state is bounded by an LRU (10k tenants), so idle tenants do not accumulate.\nRate-limit decisions are logged with a key fingerprint for debugging. **These logs are throttled to at most one line per tenant per 10s**, and each emitted line carries a `suppressed` count of the over-limit decisions skipped since the previous line. A tenant at 400 rps therefore produces about 0.1 lines/s instead of about 380 lines/s. This applies in both `shadow` and `enforce`. Only the logging is throttled; limiting decisions and 429 responses are unaffected. The throttle state is also LRU-bounded (10k tenants).\n\n**Testing note on retries:** unit tests cover the retry budget (burst, refill, concurrency cap, release), jitter bounds, and skipping the retry when Retry-After exceeds the cap. No load test against an upstream under sustained 429s has been run. The bound on retry volume comes from the budget by construction, and the budget values (5/s, burst 10, 20 in flight) are initial guesses. Retries are logged, including when the budget denies one or when a long Retry-After causes the retry to be skipped, so the values and the 4s cap can be tuned from real traffic after enforcement starts.\n\n**Rollout / rollback:** enforcement is controlled by `RATE_LIMIT_MODE` (`off` | `shadow` | `enforce`), and **the default is `shadow`**. In shadow mode the limiter runs and logs `tenant would be rate limited (shadow)` with `enforce: false` (throttled as above), but every request is still admitted and upstream 429s are not retried, so merging changes no tenant's behavior. Plan:\n1. Deploy in `shadow`. Review the shadow logs for a few days to find tenants that would exceed 20 rps / burst 40 (the `suppressed` field shows how heavily each one is over).\n2. Set explicit per-tenant limits in tenant config for those tenants before enforcing.\n3. Flip `RATE_LIMIT_MODE=enforce`. This enables both the tenant 429s and the budgeted single upstream-429 retry.\n\nRollback is setting the env var back to `shadow` or `off` and restarting, with no code revert. That disables both the tenant limiting and the upstream retry. This is a single process per region, so the flip is per region.\n\ndiff --git a/src/ratelimit/bucket.ts b/src/ratelimit/bucket.ts\nnew file mode 100644\nindex 0000000..f1e2d3c\n--- /dev/null\n+++ b/src/ratelimit/bucket.ts\n@@ -0,0 +1,76 @@\n+import { createHash } from \"node:crypto\";\n+import { LRUCache } from \"lru-cache\";\n+\n+export type Limits = { ratePerSec: number; burst: number };\n+type Bucket = { tokens: number; updatedMs: number };\n+\n+export class TenantLimiter {\n+  private buckets = new LRUCache<string, Bucket>({ max: 10_000 });\n+\n+  constructor(private now: () => number = Date.now) {}\n+\n+  /** Returns 0 when admitted, otherwise milliseconds until a token is available. */\n+  take(tenantId: string, limits: Limits): number {\n+    const nowMs = this.now();\n+    const b = this.buckets.get(tenantId) ?? { tokens: limits.burst, updatedMs: nowMs };\n+    const elapsedSec = (nowMs - b.updatedMs) / 1000;\n+    b.tokens = Math.min(limits.burst, b.tokens + elapsedSec * limits.ratePerSec);\n+    b.updatedMs = nowMs;\n+    if (b.tokens >= 1) {\n+      b.tokens -= 1;\n+      this.buckets.set(tenantId, b);\n+      return 0;\n+    }\n+    this.buckets.set(tenantId, b);\n+    return Math.ceil(((1 - b.tokens) / limits.ratePerSec) * 1000);\n+  }\n+}\n+\n+/** Allows one log line per key per interval; counts the lines suppressed in between. */\n+export class LogThrottle {\n+  private last = new LRUCache<string, { atMs: number; suppressed: number }>({ max: 10_000 });\n+  constructor(private intervalMs: number, private now: () => number = Date.now) {}\n+  /** Returns null to suppress, or the number suppressed since the last emitted line. */\n+  admit(key: string): number | null {\n+    const nowMs = this.now();\n+    const e = this.last.get(key);\n+    if (e && nowMs - e.atMs < this.intervalMs) { e.suppressed += 1; return null; }\n+    this.last.set(key, { atMs: nowMs, suppressed: 0 });\n+    return e?.suppressed ?? 0;\n+  }\n+}\n+\n+/**\n+ * Process-wide budget for upstream-429 retries: a token bucket (rate + burst) plus a cap on\n+ * retries in flight. Bounds both the extra upstream load and the connections held open.\n+ */\n+export class RetryBudget {\n+  private tokens: number;\n+  private updatedMs: number;\n+  private inFlight = 0;\n+  constructor(\n+    private ratePerSec: number,\n+    private burst: number,\n+    private maxConcurrent: number,\n+    private now: () => number = Date.now,\n+  ) {\n+    this.tokens = burst;\n+    this.updatedMs = now();\n+  }\n+  /** Returns true if a retry may proceed; the caller must then call release(). */\n+  tryAcquire(): boolean {\n+    const nowMs = this.now();\n+    this.tokens = Math.min(this.burst, this.tokens + ((nowMs - this.updatedMs) / 1000) * this.ratePerSec);\n+    this.updatedMs = nowMs;\n+    if (this.inFlight >= this.maxConcurrent || this.tokens < 1) return false;\n+    this.tokens -= 1;\n+    this.inFlight += 1;\n+    return true;\n+  }\n+  release(): void {\n+    this.inFlight = Math.max(0, this.inFlight - 1);\n+  }\n+}\n+\n+export function keyFingerprint(apiKey: string): string {\n+  return createHash(\"sha256\").update(apiKey).digest(\"hex\").slice(0, 10);\n+}\ndiff --git a/src/routes/completions.ts b/src/routes/completions.ts\nindex 8d2c4e1..3b7a9f0 100644\n--- a/src/routes/completions.ts\n+++ b/src/routes/completions.ts\n@@ -1,22 +1,76 @@\n import type { FastifyInstance } from \"fastify\";\n import { authenticate } from \"../auth\";\n import { upstream } from \"../upstream\";\n+import { TenantLimiter, LogThrottle, RetryBudget, keyFingerprint } from \"../ratelimit/bucket\";\n+import { limitsFor } from \"../tenants\";\n+\n+// off: no limiting; shadow: evaluate and log only (default); enforce: return 429\n+const RATE_LIMIT_MODE = process.env.RATE_LIMIT_MODE ?? \"shadow\";\n+// The upstream-429 retry is a behavior change, so it is only active in enforce mode.\n+const RETRY_UPSTREAM_429 = RATE_LIMIT_MODE === \"enforce\";\n+const limiter = new TenantLimiter();\n+// At most one rate-limit log line per tenant per 10s, so a hot tenant cannot flood logs.\n+const logThrottle = new LogThrottle(10_000);\n+// Retry only if Retry-After <= 4s; wait = Retry-After + up to 1s jitter, so at most 5s total.\n+const MAX_UPSTREAM_RETRY_MS = 4_000;\n+const RETRY_JITTER_MS = 1_000;\n+// Process-wide retry budget: 5 retries/s sustained, burst 10, at most 20 retries in flight.\n+// When exhausted, the upstream 429 is passed through instead of retried.\n+const retryBudget = new RetryBudget(5, 10, 20);\n+\n+/**\n+ * Returns the Retry-After to honor in ms, or null if it exceeds the cap (no retry should be\n+ * made: retrying before the upstream says capacity returns would just draw another 429).\n+ * A missing or invalid header defaults to 1s.\n+ */\n+function retryAfterMs(header: string | undefined): number | null {\n+  const secs = Number(header);\n+  if (!Number.isFinite(secs) || secs < 0) return 1_000;\n+  const ms = secs * 1000;\n+  return ms > MAX_UPSTREAM_RETRY_MS ? null : ms;\n+}\n+\n+/**\n+ * Honors Retry-After, then adds random jitter so retries do not arrive in lockstep.\n+ * Returns null when Retry-After is longer than the cap, meaning the retry must be skipped.\n+ */\n+export function retryDelayMs(header: string | undefined, rand: () => number = Math.random): number | null {\n+  const base = retryAfterMs(header);\n+  if (base === null) return null;\n+  return base + Math.floor(rand() * RETRY_JITTER_MS);\n+}\n\n export async function completionsRoutes(app: FastifyInstance) {\n   app.post(\"/v1/chat/completions\", async (req, reply) => {\n     const tenant = await authenticate(req);\n-    const res = await upstream.chat(req.body, { signal: req.signal });\n+\n+    const waitMs = RATE_LIMIT_MODE === \"off\" ? 0 : limiter.take(tenant.id, limitsFor(tenant));\n+    if (waitMs > 0) {\n+      const enforce = RATE_LIMIT_MODE === \"enforce\";\n+      const suppressed = logThrottle.admit(tenant.id);\n+      if (suppressed !== null) {\n+        req.log.info(\n+          { tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs, enforce, suppressed },\n+          enforce ? \"tenant rate limited\" : \"tenant would be rate limited (shadow)\",\n+        );\n+      }\n+      if (enforce) {\n+        return reply\n+          .code(429)\n+          .header(\"Retry-After\", String(Math.ceil(waitMs / 1000)))\n+          .send({ error: { type: \"rate_limited\", message: \"tenant rate limit exceeded\" } });\n+      }\n+    }\n+\n+    let res = await upstream.chat(req.body, { signal: req.signal });\n+    if (RETRY_UPSTREAM_429 && res.status === 429) {\n+      const delay = retryDelayMs(res.headers.get(\"retry-after\") ?? undefined);\n+      if (delay === null) {\n+        // Checked before the budget so a skipped retry spends no token.\n+        req.log.warn({ tenant: tenant.id }, \"upstream 429, Retry-After exceeds cap; passing through\");\n+      } else if (retryBudget.tryAcquire()) {\n+        try {\n+          req.log.warn({ tenant: tenant.id, delay }, \"upstream 429, retrying once\");\n+          await new Promise((r) => setTimeout(r, delay));\n+          res = await upstream.chat(req.body, { signal: req.signal });\n+        } finally {\n+          retryBudget.release();\n+        }\n+      } else {\n+        req.log.warn({ tenant: tenant.id }, \"upstream 429, retry budget exhausted; passing through\");\n+      }\n+    }\n     return reply.code(res.status).headers(res.forwardHeaders()).send(res.body);\n   });\n }\ndiff --git a/src/ratelimit/bucket.test.ts b/src/ratelimit/bucket.test.ts\nnew file mode 100644\nindex 0000000..77aa012\n--- /dev/null\n+++ b/src/ratelimit/bucket.test.ts\n@@ -0,0 +1,56 @@\n+import { expect, test } from \"bun:test\";\n+import { TenantLimiter, LogThrottle, RetryBudget } from \"./bucket\";\n+import { retryDelayMs } from \"../routes/completions\";\n+\n+test(\"admits burst, then rate-limits, then refills\", () => {\n+  let t = 0;\n+  const l = new TenantLimiter(() => t);\n+  const lim = { ratePerSec: 2, burst: 3 };\n+  expect([l.take(\"a\", lim), l.take(\"a\", lim), l.take(\"a\", lim)]).toEqual([0, 0, 0]);\n+  expect(l.take(\"a\", lim)).toBe(500);\n+  t = 500;\n+  expect(l.take(\"a\", lim)).toBe(0);\n+});\n+\n+test(\"tenants are isolated\", () => {\n+  const l = new TenantLimiter(() => 0);\n+  const lim = { ratePerSec: 1, burst: 1 };\n+  expect([l.take(\"a\", lim), l.take(\"b\", lim)]).toEqual([0, 0]);\n+});\n+\n+test(\"log throttle emits once per interval and reports suppressed count\", () => {\n+  let t = 0;\n+  const th = new LogThrottle(1000, () => t);\n+  expect([th.admit(\"a\"), th.admit(\"a\"), th.admit(\"a\")]).toEqual([0, null, null]);\n+  t = 1000;\n+  expect(th.admit(\"a\")).toBe(2);\n+});\n+\n+test(\"retry budget allows burst, then denies, then refills\", () => {\n+  let t = 0;\n+  const b = new RetryBudget(2, 2, 100, () => t);\n+  expect([b.tryAcquire(), b.tryAcquire(), b.tryAcquire()]).toEqual([true, true, false]);\n+  t = 500;\n+  expect(b.tryAcquire()).toBe(true);\n+});\n+\n+test(\"retry budget caps concurrent retries and frees slots on release\", () => {\n+  const b = new RetryBudget(1000, 1000, 2, () => 0);\n+  expect([b.tryAcquire(), b.tryAcquire(), b.tryAcquire()]).toEqual([true, true, false]);\n+  b.release();\n+  expect(b.tryAcquire()).toBe(true);\n+});\n+\n+test(\"retry delay honors Retry-After, adds bounded jitter, and never exceeds 5s\", () => {\n+  expect(retryDelayMs(\"2\", () => 0)).toBe(2000);\n+  expect(retryDelayMs(\"2\", () => 0.999)).toBeLessThan(3000);\n+  expect(retryDelayMs(\"4\", () => 0)).toBe(4000);\n+  expect(retryDelayMs(\"4\", () => 0.999)).toBeLessThanOrEqual(5000);\n+  expect(retryDelayMs(undefined, () => 0)).toBe(1000);\n+});\n+\n+test(\"retry is skipped (null) when Retry-After exceeds the 4s cap\", () => {\n+  expect(retryDelayMs(\"4.5\", () => 0)).toBeNull();\n+  expect(retryDelayMs(\"60\", () => 0.999)).toBeNull();\n+});",
+ "fixerUsage": {
+  "calls": 5,
+  "tokIn": 21320,
+  "tokOut": 24475,
+  "usd": 0.33001,
+  "critMs": 132201
+ },
+ "status": "cleared"
+}

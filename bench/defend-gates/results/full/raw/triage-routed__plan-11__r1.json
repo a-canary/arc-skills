@@ -1,0 +1,143 @@
+{
+ "approach": "triage-routed",
+ "case": "plan-11",
+ "rep": 1,
+ "wallMs": 582381,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "spec-mismatch",
+   "severity": "major",
+   "claim": "Fallback and STOP paths restore NOTICE_PREV, which is 'phone' for new SMS sign-ups. After CallNotify ends on 2027-03-31 that channel is retired, and the plan defines no working print or other channel in the receiver or queue. Patrons could be left with no channel, which breaks the 'no patron may lose hold notices' constraint.",
+   "evidence": "\"restore `NOTICE_PREV` (email or phone call; print notice once CallNotify has ended)\" and \"queues the same notice on the patron's `NOTICE_PREV` channel\" and \"new sign-ups who pick SMS get `phone`\""
+  },
+  {
+   "lens": "spec-mismatch",
+   "severity": "major",
+   "claim": "The rollback guarantee is false for new sign-ups. They had no prior hold-notice channel, yet NOTICE_PREV is set to 'phone', so rollback does not return them to the channel they had before, and that target is being retired.",
+   "evidence": "\"Patrons who enrolled after launch end up on exactly the channel they had before.\" vs \"new sign-ups who pick SMS get `phone`\""
+  },
+  {
+   "lens": "edge-case",
+   "severity": "major",
+   "claim": "NOTICE_PREV has no overwrite guard. Re-opt-in by a patron already on SMS, or desk re-enrolment after a fallback, can replace the saved pre-SMS channel with 'sms'. A later STOP or rollback would then restore a channel the provider blocks, and the patron would silently lose notices.",
+   "evidence": "\"The patron's previous hold-notice channel is saved in patron attribute `NOTICE_PREV`\" (no write-once or overwrite rule stated)"
+  },
+  {
+   "lens": "spec-mismatch",
+   "severity": "major",
+   "claim": "The receiver's DB grants do not cover its specified writes. Adding a circulation or staff note has no granted table, restoring a channel may require inserting or deleting transport rows (UPDATE only is granted), and matching by phone number needs SELECT on borrower tables that is not listed. The build will fail or need broader grants than the least-privilege design.",
+   "evidence": "\"adds a circulation note visible to staff\" and \"UPDATE only on `borrower_message_transport_preferences` and `borrower_attributes`, and INSERT only on `message_queue` and `messages`\""
+  },
+  {
+   "lens": "consent",
+   "severity": "major",
+   "claim": "STOP does not record withdrawal of consent. It switches transport and adds a staff note, but does not say SMS_CONSENT is updated. The guarantee that re-enabling never texts anyone who sent STOP therefore depends on a record the plan never writes, and provider-side blocks are not described as cleared on re-enrolment.",
+   "evidence": "\"Consent and opt-out records are kept, so re-enabling later never texts anyone who sent STOP.\" vs \"switches every patron ... adds a circulation note visible to staff\" (no SMS_CONSENT update stated)"
+  },
+  {
+   "lens": "concurrency",
+   "severity": "major",
+   "claim": "The rollback order is unsafe. The SMS queue runs every 15 minutes and is not paused, so pending SMS rows can send after preferences are restored and before SMSSendDriver is cleared in step 3, causing duplicate or misrouted notices.",
+   "evidence": "\"2. Re-queue any pending SMS rows in `message_queue` on the restored channel... 3. Clear `SMSSendDriver`.\" and \"runs every 15 minutes\""
+  },
+  {
+   "lens": "carrier-10dlc-platform-rules",
+   "severity": "major",
+   "claim": "The staff pilot sends live SMS in week 3, but 10DLC approval is only 'typical' at 1–3 weeks from Oct 20 and the gate applies only to public launch. Pilot traffic may go out on an unregistered campaign and be filtered or blocked, which would invalidate the delivery, STOP and HELP checks.",
+   "evidence": "\"Week 3: staff pilot. 40 staff cardholders opt in\" vs \"Public launch is gated on approval\" and \"typical approval is 1–3 weeks\""
+  },
+  {
+   "lens": "consent-propagation",
+   "severity": "major",
+   "claim": "A STOP from one number switches every patron sharing that number off SMS, including people who opted in on their own account and never sent STOP. This changes other people's consent on someone else's action, and the plan does not say whether they are notified.",
+   "evidence": "\"switches every patron whose SMS number matches (family members can share a phone) from SMS back to their own `NOTICE_PREV`\""
+  },
+  {
+   "lens": "library-records-confidentiality",
+   "severity": "major",
+   "claim": "The plan asserts the message reveals nothing about requests, but the template tells whoever holds the number that a hold is ready, at a named branch, with a date. The statute forbids disclosing requested materials, and the artifact gives no legal analysis or sign-off on the message text. Reassigned numbers are not detected, so old consent carries over to a new holder.",
+   "evidence": "\"A reassigned number or shared phone reveals nothing about what the patron requested.\" and \"1 item is ready for pickup at Eastside Branch until Nov 4\" ABSENT: attorney or compliance sign-off on the template text (the only cited review covers the provider clause, \"reviewed by the city attorney (Oct 1)\")"
+  },
+  {
+   "lens": "sms-optout-disclosure",
+   "severity": "major",
+   "claim": "The Spanish template text is referenced but not given, and STOP/HELP keywords and the HELP and confirmation texts are shown only in English. Spanish-language SMS must carry compliant opt-out wording, and the GSM-7 one-segment and $0.011 cost assumptions are unverified for accented Spanish text.",
+   "evidence": "\"Template (English, plus Spanish for patrons whose preferred language is Spanish, via `TranslateNotices`), GSM-7, one segment\" ABSENT: Spanish template text, Spanish STOP/HELP keywords"
+  },
+  {
+   "lens": "tcpa-consent",
+   "severity": "major",
+   "claim": "Desk enrolment records only a source label and a date. It does not record that the owner of the mobile number agreed to texts, and the plan does not address a number belonging to someone other than the patron, such as a parent's phone for a minor.",
+   "evidence": "\"staff set it at the desk when the patron asks and provides a mobile number. Patron attribute `SMS_CONSENT` records the date and source (opac/desk).\" ABSENT: number-owner consent capture and any guardian rule"
+  },
+  {
+   "lens": "privacy-retention",
+   "severity": "major",
+   "claim": "No retention or deletion rule is given for SMS_CONSENT, NOTICE_PREV, circulation notes, or inbound STOP/HELP replies. Consent records are kept indefinitely for rollback, and inbound records containing phone numbers are not covered by the purge rules, which cover only message_queue and provider delivery metadata.",
+   "evidence": "\"Consent and opt-out records are kept\" and \"ABSENT: retention period for SMS_CONSENT, NOTICE_PREV and circulation notes; handling for inbound STOP/HELP replies\""
+  },
+  {
+   "lens": "measures",
+   "severity": "major",
+   "claim": "The hard constraint 'no patron may lose hold notices' has no measure. The only metric is SMS delivery rate, which does not show whether any patron failed to receive a notice on any channel after fallback, and no alert covers patrons left with no working channel.",
+   "evidence": "\"Delivery rate ≥ 97% (provider status callbacks).\" with no metric for notices undelivered across channels"
+  },
+  {
+   "lens": "one-way door",
+   "severity": "major",
+   "claim": "Week 4 schedules public, hard-to-retract actions (systemwide OPAC enablement, branch signage, newsletter) with no go/no-go criteria from the week-3 pilot. Launch depends on 10DLC approval outside the team's control, so it can slip or be partly reverted after the public has been told.",
+   "evidence": "\"Week 4, after 10DLC approval: OPAC option enabled systemwide, branch signage, and a line in the email newsletter.\""
+  },
+  {
+   "lens": "edge-case",
+   "severity": "minor",
+   "claim": "The failure-switch rule is undefined. 'Consecutive' failures have no reset or window, and the pilot's single invalid-number test exercises only the first failure, not the switch to NOTICE_PREV.",
+   "evidence": "\"After 2 consecutive failures it switches the patron back to `NOTICE_PREV`\" and \"one deliberately invalid number\""
+  },
+  {
+   "lens": "spec-consistency",
+   "severity": "minor",
+   "claim": "The claim that switching providers is only a config change conflicts with the receiver, which verifies provider-specific request signatures and parses provider-specific status and STOP callbacks. A provider switch would require code changes.",
+   "evidence": "\"Switching providers later is a config change, not a code change.\" vs \"verifies the provider's request signature\""
+  },
+  {
+   "lens": "privacy-retention",
+   "severity": "minor",
+   "claim": "No deadline is given for redacting message bodies at the provider, and the 90-day metadata retention is not justified against the statute. The provider therefore holds records linking phone numbers to library hold activity for an unspecified period.",
+   "evidence": "\"Message bodies are redacted at the provider after delivery; delivery metadata is kept 90 days per contract.\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The budget model omits costs from fallback re-sends and from STOP reversions to $0.11 phone calls. Only a $450 alert is set against the $600 cap.",
+   "evidence": "\"a provider spend alert fires at $450\" and \"Calls drop by ~20,500/month\""
+  },
+  {
+   "lens": "quiet-hours",
+   "severity": "minor",
+   "claim": "Quiet hours apply only to the SMS queue. Fallback notices on NOTICE_PREV, including phone calls, have no stated time restriction, so patrons could be called outside appropriate hours.",
+   "evidence": "\"`process_message_queue.pl --type sms` runs every 15 minutes between 09:00 and 20:00\" and \"queues the same notice on the patron's `NOTICE_PREV` channel\""
+  },
+  {
+   "lens": "security-surface",
+   "severity": "minor",
+   "claim": "The public POST endpoint holds write privileges to patron tables. The plan names signature verification and rate limiting but not replay protection or timestamp validation.",
+   "evidence": "\"exposes a single rate-limited POST path, verifies the provider's request signature\""
+  },
+  {
+   "lens": "rollback-path",
+   "severity": "minor",
+   "claim": "Rollback does not cover in-flight provider-side messages, the receiver endpoint or nginx route, or removal of the dedicated DB user and its grants. Clearing SMSSendDriver stops only new sends.",
+   "evidence": "\"3. Clear `SMSSendDriver`.\" with no step for pending provider messages, the receiver endpoint, or the DB user"
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 32032,
+  "tokOut": 35331,
+  "usd": 0.02396125,
+  "critMs": 77651
+ }
+}

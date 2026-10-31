@@ -1,0 +1,791 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-10",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "On shutdown the worker returns nil after render, discarding a finished result and leaving the job running until its lease expires (up to jobTimeout+1m). With the startup ResetRunning removed, every Recreate deploy that interrupts a job stalls that job's retry for up to about 3 minutes. The PR description does not disclose this deploy-time latency.",
+     "evidence": "\"if ctx.Err() != nil { return nil // shutting down: leave the lease to expire so another worker retries the job }\" with \"Startup ResetRunning is removed.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The lease-safety invariant is asserted, not shown. It holds only if render and upload honor jobCtx cancellation within the 1-minute margin. No ctx-aware exec, upload cancellation, or test with a non-cooperative render is shown, so a stale holder could write to the job-derived key after reclaim. The lease is the only mutual-exclusion mechanism here.",
+     "evidence": "\"the job context is cancelled at jobTimeout, so a live worker never outlives its lease\"; ABSENT: exec.CommandContext or equivalent kill, upload cancellation, or a test of a render that ignores ctx"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A job that crashes or hangs the worker keeps being reclaimed first, since it is oldest, once per lease period. The loop predates this PR through restart-time ResetRunning, so it is not a regression. The attempts cap is deferred to #215. Shutdown-interrupted claims also consume attempts, which inflates counts until #215 lands.",
+     "evidence": "\"ORDER BY created_at, id LIMIT 1\"; \"a poison-job attempts cap (#215) are separate changes.\"; \"attempts = attempts + 1\" with \"return nil // shutting down\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Complete does not check locked_until, so an expired but unreclaimed holder can still complete. This is safe because only reclaim changes locked_by. The wording \"requires the caller to still hold the lease\" overstates the guarantee and should name the actual fence: locked_by plus status.",
+     "evidence": "\"Complete requires the caller to still hold the lease.\" vs \"WHERE id = $1 AND locked_by = $2 AND status = 'running'\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Lease fencing depends on w.id being unique per live claimant, but the diff never shows how w.id is generated. Recreate and replica count 1 make this safe today, but a static or reused ID would break the fence once scale-out lands.",
+     "evidence": "ABSENT: definition of w.id; diff shows only \"w.store.Claim(ctx, w.id, w.jobTimeout+time.Minute)\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The claim query filters on status and locked_until and sorts by created_at, id, and no index is added. The table is about 20k rows with 7-day pruning, so cost is small today, but it grows with backlog and must be indexed before scale-out.",
+     "evidence": "ABSENT: any CREATE INDEX in db/migrations/0042_thumbnail_job_leases.sql; \"WHERE status = 'queued' OR (status = 'running' AND (locked_until IS NULL OR locked_until < now())) ORDER BY created_at, id\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The poll interval and any backoff on the ErrNoJob path are not shown, so the database load from an idle worker is unestimated.",
+     "evidence": "ABSENT: poll interval or backoff on the ErrNoJob path in internal/worker; \"for {\" loop calls w.store.Claim each iteration"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A DB error in Complete makes Run return, so the worker exits and the job waits for lease expiry. Lost leases are logged at Warn only, with no counter or alert, so duplicate renders and stale-holder races are invisible to operations. Both behaviors are pre-existing or observability gaps, not correctness failures.",
+     "evidence": "\"return fmt.Errorf(\"complete job %d: %w\", job.ID, err)\"; \"w.log.Warn(\"lease lost before completion\", \"job\", job.ID)\" with ABSENT: any metric or alert"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "There is no down migration and no rollback note. Rollback is safe only because the old binary's ResetRunning requeues running rows and ignores the new columns. Neither point is documented.",
+     "evidence": "\"ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz;\" with ABSENT: down migration or rollback procedure"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The title says more than one worker can run, but the body says replica count stays at 1 and scale-out is deferred. This PR delivers an enabling change, not multi-worker operation.",
+     "evidence": "TITLE: \"thumbnailer: lease-based job claiming so more than one worker can run\" vs \"Replica count stays 1 here\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The invariant that the lease must exceed jobTimeout is enforced only by a call-site comment. Store accepts any duration, so a future change to jobTimeout or the margin could silently break the safety property.",
+     "evidence": "\"w.store.Claim(ctx, w.id, w.jobTimeout+time.Minute) // lease must outlive jobTimeout\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The concurrency test checks only the total claim count and never records job IDs. Its count check is sound for duplicates because the loop runs until no queued rows remain. It does not exercise lease expiry interleaved with concurrent claims. Its context.Background() calls have no deadline, so a hang blocks the suite instead of failing it.",
+     "evidence": "\"if n := claims.Load(); n != 40 {\"; \"s.Claim(context.Background(), worker, time.Minute)\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Import hunks for the new uses of errors, time, fmt, atomic, and errgroup are not shown, and the diff is hunk-trimmed. This is not evidence of a compile error, but the reviewer cannot confirm the change builds as shown.",
+     "evidence": "ABSENT: import hunks in store.go, worker.go, store_test.go"
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 114629,
+    "tokOut": 85069,
+    "usd": 0.06369699000000001,
+    "critMs": 136540
+   },
+   "wallMs": 153242
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The shutdown branch that the PR presents as its main deploy fix has no worker-level test. Nothing verifies the ctx.Err() branch, the Complete-versus-Release choice, the detached 10s settle context, or the return nil. The three new tests exercise only Store methods.",
+     "evidence": "ABSENT: any internal/worker test for the ctx.Err() != nil branch; the test additions are only in internal/jobs/store_test.go"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The no-double-write safety argument rests on two unverified assumptions: that render output is deterministic and that the upload is atomic. Lease fencing covers only the thumbnail_jobs row, not object storage. A stale holder whose render or upload ignores jobCtx can keep writing the per-job key while a new holder renders it, and the PR does not show that the outputs are identical or that a partial write cannot be left behind a done row.",
+     "evidence": "render writes to an object key derived only from the job, so a stale holder that overran its lease would rewrite the same output ... I have not added a test with a render that ignores ctx."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Reclaim-on-expiry has no attempts bound, so a deterministic crash is retried every lease period. The old code also looped on crash through startup ResetRunning, so this is not wholly new, but the PR explicitly defers the cap to #215 and the loop remains live at merge.",
+     "evidence": "Expired leases (crashed worker, or NULL from the old worker) are reclaimed ... a poison-job attempts cap (#215) are separate changes."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "On shutdown, any non-nil runErr is Released to queued, so a genuine render failure that coincides with a deploy is requeued once and then fails normally on a later claim. It is a one-time wasted retry, not a loop, and cancellation cannot be distinguished from failure here.",
+     "evidence": "if runErr == nil { serr = w.store.Complete(...) } else { serr = w.store.Release(sctx, job.ID, w.id) }"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "attempts is incremented on every claim and Release does not decrement it. Deploy interruptions therefore count against attempts, which will distort the planned #215 cap for healthy jobs.",
+     "evidence": "attempts = attempts + 1 ... SET status = 'queued', locked_by = NULL, locked_until = NULL"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Fencing depends on w.id being unique per live process, but its definition is not in the diff. If it is constant or reused across restarts, a restarted process could pass the locked_by check for a lease it no longer holds. This must be verified, though the Recreate strategy limits exposure today.",
+     "evidence": "ABSENT: definition of w.id; Claim(ctx, w.id, ...) and Complete(ctx, job.ID, w.id, ...) depend on it"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Complete fences on locked_by and status but not locked_until. A holder whose lease has lapsed but has not been reclaimed can still complete, which is inconsistent with the expiry semantics the claim predicate uses. No other holder exists in that window, so this is an inconsistency rather than a data hazard.",
+     "evidence": "WHERE id = $1 AND locked_by = $2 AND status = 'running'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The 'deploys do not wait' guarantee depends on terminationGracePeriodSeconds exceeding render cancellation plus the 10s settle. Neither the grace period nor SIGTERM wiring is shown. A SIGKILL during settle falls back to the roughly 3-minute lease wait.",
+     "evidence": "ABSENT: terminationGracePeriodSeconds and SIGTERM handling; sctx, scancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Removing ResetRunning is safe only because Recreate prevents old and new workers from overlapping. A rollback or a future RollingUpdate would let old code reset leased jobs and Complete without checking leases. The constraint is not recorded in the PR.",
+     "evidence": "strategy Recreate, so old and new worker versions never run at the same time ... removed ResetRunning call"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The migration has no down step and no rollback note.",
+     "evidence": "ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz;"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The claim predicate ORs two status conditions and sorts by created_at with no supporting index. This is acceptable at ~20k rows but will degrade as the table grows or pollers are added.",
+     "evidence": "ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz; (no index)"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 40-job concurrency test asserts only that the claim count equals the job count. It does not check that no two workers held a live lease on the same job, so the no-double-claim property is weakly tested.",
+     "evidence": "if n := claims.Load(); n != 40 { t.Fatalf(...) }"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Every SIGTERM cancels jobCtx, so nearly every in-flight render is discarded and restarted on the next worker. This wastes up to a full jobTimeout of compute per deploy, a tradeoff the PR does not quantify.",
+     "evidence": "jobCtx, cancel := context.WithTimeout(ctx, w.jobTimeout) ... if ctx.Err() != nil {"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Settle failures and ErrLeaseLost are logged only at Warn, with no metric or alert, so reclaim storms and lost leases would be invisible in operations.",
+     "evidence": "w.log.Warn(\"could not settle job on shutdown; lease will expire\", ...)"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The title says more than one worker can run, but the body keeps replica count at 1 and defers scale-out, so the title overstates what this PR delivers.",
+     "evidence": "TITLE: thumbnailer: lease-based job claiming so more than one worker can run ... Replica count stays 1 here"
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 124721,
+    "tokOut": 59857,
+    "usd": 0.053109390000000006,
+    "critMs": 102488
+   },
+   "wallMs": 118316
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The graceful-shutdown branch in worker.Run runs on every deploy but has no worker-level test. Its ctx.Err() path, the Complete-vs-Release choice, the detached 10s settle context and the clean return are verified only by reading. The author names the needed test (cancel ctx mid-render for both a finishing and an erroring render, then assert 'done' or 'queued').",
+     "evidence": "\"The graceful-shutdown branch in worker.Run is not covered by any worker-level test. ... A worker test that cancels ctx mid-render ... is the follow-up to add.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The stated invariant says Complete requires the caller to still hold the lease, but neither Complete nor Release checks locked_until. Only locked_by and status are checked, so a holder past its lease can still settle until a reclaim happens. The stale-holder test passes only because a second claim runs first. Harmless at replica 1, but the code and the stated contract disagree.",
+     "evidence": "\"WHERE id = $1 AND locked_by = $2 AND status = 'running'\" vs. \"Complete requires the caller to still hold the lease.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A job that crashes its worker (OOM/SIGKILL) is reclaimed every ~3 minutes with no attempts cap, and ORDER BY created_at keeps picking the same poison job first, so it can stall the queue. The old startup ResetRunning produced the same loop on every restart, so this is pre-existing and the lease only slows it. The cap is explicitly deferred to #215.",
+     "evidence": "\"Only a hard crash (SIGKILL/OOM) leaves a job waiting for its lease, up to jobTimeout+1m (about 3 minutes), before another worker retries it.\" and \"a poison-job attempts cap (#215) are separate changes.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Claim increments attempts but Release does not decrement it, so every deploy that interrupts a healthy job consumes an attempt. This is latent until #215 enforces a cap, and #215 must account for it or routine deploys will push healthy jobs toward failure.",
+     "evidence": "Claim: \"attempts = attempts + 1\"; Release: \"SET status = 'queued', locked_by = NULL, locked_until = NULL\" (no attempts change)"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The title promises that more than one worker can run, but the body says replicas stay at 1 and scale-out is a separate change. A reader could scale to 2 on the strength of the title. Retitle before merge.",
+     "evidence": "TITLE: \"lease-based job claiming so more than one worker can run\" vs. \"Replica count stays 1 here; scale-out ... are separate changes.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "Overlapping object-storage writes depend on three unverified properties: render output is deterministic, the upload is atomic, and render honors ctx. Fencing covers only the DB row. This is out of scope at replica 1 and must be verified before scale-out.",
+     "evidence": "\"Fencing covers only the thumbnail_jobs row, not object storage ... I have not verified: that render output is deterministic ... and that the upload is atomic.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The claim that deploys never wait for a lease depends on SIGTERM cancelling the Run ctx and on terminationGracePeriodSeconds covering render cancel plus the 10s settle. Neither appears in the diff. If SIGKILL arrives first, the job falls back to the ~3-minute lease path, which is a degradation rather than a new failure.",
+     "evidence": "\"Deploys therefore do not wait for a lease to expire.\" (no terminationGracePeriodSeconds or signal wiring in the diff)"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The fencing identity is the stable worker id, not a per-claim token. How w.id is generated and whether it is unique per process is not shown. At replica 1 under Recreate this is not load-bearing, but it must be confirmed before scale-out.",
+     "evidence": "ABSENT: definition of w.id; \"w.store.Complete(ctx, job.ID, w.id, statusFor(runErr), errText(runErr))\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "On shutdown, any non-nil runErr is Released, and the error text is discarded. A deterministic failure such as bad input, if it occurs just before SIGTERM, re-enters the queue on every deploy with no failed record. The cost is extra renders rather than data loss.",
+     "evidence": "\"if runErr == nil { ... Complete ... } else { serr = w.store.Release(sctx, job.ID, w.id) }\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "If the claim UPDATE commits server-side but the cancelled client ctx drops the RETURNING result, the job stays 'running' under a phantom lease until expiry (about 3 minutes). The effect is a bounded delay, not corruption.",
+     "evidence": "\"QueryRow(ctx, UPDATE ... RETURNING ...)\" with no detached fallback"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Lease losses, reclaims and failed shutdown settles are logged only at Warn, with no counter or alert. A crash loop or repeated lease churn would be invisible in operations.",
+     "evidence": "\"w.log.Warn(\\\"lease lost before completion\\\", ...)\" and \"w.log.Warn(\\\"could not settle job on shutdown; lease will expire\\\", ...)\" with no metric in the diff"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The claim predicate ORs status with locked_until and orders by created_at, and migration 0042 adds no index for it. It runs on every idle poll. The cost is negligible at ~20k rows, but it grows with retained rows and worker count.",
+     "evidence": "\"WHERE status = 'queued' OR (status = 'running' AND (locked_until IS NULL OR locked_until < now()))\" with migration \"ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz;\" (no index)"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The migration has no down step and no rollback note. Rolling back to the old binary is probably safe under Recreate, since its ResetRunning re-queues running rows and its Complete ignores leases, but the PR does not say so.",
+     "evidence": "ABSENT: down migration or rollback note for 0042"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "TestClaimNeverHandsOutAJobTwice checks only the total claim count, not the set of distinct job IDs. A job claimed twice while another is never claimed still sums to 40 and passes, so the test does not prove the property its name claims.",
+     "evidence": "\"if n := claims.Load(); n != 40 { t.Fatalf(\\\"got %d claims for 40 jobs\\\", n) }\" with no distinct-ID check"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "defer scancel() sits inside the loop body. It is harmless only because the branch returns immediately, which is fragile under later edits.",
+     "evidence": "\"sctx, scancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)\" followed by \"defer scancel()\" inside the for loop"
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 128002,
+    "tokOut": 73271,
+    "usd": 0.06047259000000001,
+    "critMs": 119101
+   },
+   "wallMs": 122453
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "On graceful shutdown every non-nil render error is Released back to 'queued' and the error text is discarded. A deterministic failure, such as a corrupt input in flight during a deploy, is retried with no recorded failure, unlike the normal path, which calls Complete with statusFor(runErr) and errText(runErr). Since the attempts cap (#215) is deferred, this changes failure semantics with no bound.",
+     "evidence": "} else { serr = w.store.Release(sctx, job.ID, w.id) }"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The new store and worker tests have never been compiled or run. The author says the seed INSERT, the Worker field names, and the helpers may need adjustment. The shutdown behaviour and lease-fencing claims are therefore unverified until CI runs them green. The worker test's render also ignores ctx, so it does not exercise the honoured-cancellation case the lease margin depends on.",
+     "evidence": "\"I wrote this test without being able to run it here... it may need small adjustments to compile against the real constructor and schema; please run it in CI before relying on it.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The deploy-speed benefit depends on render unwinding and the 10s settle completing within the pod's termination grace period. Neither the grace period nor render's cancel-to-return latency is stated. If SIGKILL lands first, the job falls back to the roughly 3-minute lease wait. This is a latency regression, not a correctness failure.",
+     "evidence": "\"Deploys therefore do not wait for a lease to expire.\" ABSENT: terminationGracePeriodSeconds for the thumbnailer Deployment."
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Object-store writes are not fenced. A stale holder can still render and upload to the per-job key while a new holder does the same. Safety rests on unverified render determinism and upload atomicity. At replica 1 with Recreate this is latent, and it must be resolved before scale-out.",
+     "evidence": "\"nothing stops its render or upload from writing the per-job object key while a new holder renders the same key.\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Fencing depends on w.id being unique per process, but the diff does not show how w.id is generated. This is latent at replica 1.",
+     "evidence": "ABSENT: how w.id is set in the worker constructor; test uses id: \"w1\"."
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "A job that reliably crashes the worker is reclaimed about every 3 minutes with no bound until #215 lands. The status quo already requeues running jobs on restart, so this is a known deferred item rather than a new class of cost. Each release also increments attempts, so deploys can inflate the counter.",
+     "evidence": "\"up to jobTimeout+1m (about 3 minutes), before another worker retries it.\" and \"attempts = attempts + 1\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The claim predicate (an OR on status and locked_until, ordered by created_at, id) has no supporting index. This is acceptable at about 20k rows but must be addressed before scale-out.",
+     "evidence": "ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz; (no CREATE INDEX)"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The migration has no down file and no rollback note. The old binary's startup ResetRunning clears 'running' rows, so rollback is recoverable, but this is not written down.",
+     "evidence": "db/migrations/0042_thumbnail_job_leases.sql contains only ADD COLUMN; ABSENT rollback note."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Settle failures and ErrLeaseLost are logged only at Warn, with no metric or alert. A job stranded by a failed shutdown settle is invisible until a backlog appears.",
+     "evidence": "w.log.Warn(\"could not settle job on shutdown; lease will expire\", \"job\", job.ID, \"err\", serr)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The no-overlap assumption leans on Recreate waiting for confirmed termination. A node partition or force-delete would break it, and the handling is not stated.",
+     "evidence": "\"The thumbnailer Deployment uses strategy Recreate, so old and new worker versions never run at the same time.\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The invariant that lease exceeds jobTimeout plus settle time is held only by a comment. No code or test enforces it.",
+     "evidence": "w.store.Claim(ctx, w.id, w.jobTimeout+time.Minute) // lease must outlive jobTimeout"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 10s settle-failure path is untested and verified only by reading.",
+     "evidence": "\"It does not exercise the 10s detached-context timeout expiring (settle failure path); that remains reviewed by reading only.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The title says more than one worker can run, but the body says replica count stays at 1 and the multi-worker safety conditions are unverified. Title and stated scope disagree.",
+     "evidence": "Title: \"lease-based job claiming so more than one worker can run\" vs \"Replica count stays 1 here\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The concurrency and lease tests call Claim and Complete with context.Background() and no deadline, so a pool or SKIP LOCKED stall would hang CI rather than fail it.",
+     "evidence": "j, err := s.Claim(context.Background(), worker, time.Minute)"
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 148058,
+    "tokOut": 49817,
+    "usd": 0.05275679,
+    "critMs": 88031
+   },
+   "wallMs": 91251
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "None of the new Store or worker tests has been compiled or run. The concurrent-claim, expired-lease, Release, and all three shutdown-branch guarantees are therefore unverified, and the worker test's field names and seed INSERT columns are assumed. CI must run them green before the merge gate can clear.",
+     "evidence": "None of the new Store or worker tests has been compiled or run: I wrote them without being able to run them here."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The headline guarantee that deploys never wait for a lease depends on the pod's terminationGracePeriodSeconds covering render cancellation, the Release or Complete, and the 10s settle. The Deployment manifest is not in the diff. If the grace period is shorter, SIGKILL lands mid-settle and the job waits up to about 3 minutes.",
+     "evidence": "Deploys do not wait for a lease to expire. ABSENT: terminationGracePeriodSeconds for the thumbnailer Deployment."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The deploy-safe requeue only fires when errors.Is(runErr, context.Canceled) holds. The worker test uses a stub that returns ctx.Err() directly. A real render that surfaces interruption as a killed subprocess or an unwrapped error would be recorded as a failure on each deploy. The render-side contract is not shown and should be documented and tested.",
+     "evidence": "if runErr != nil && errors.Is(runErr, context.Canceled) { serr = w.store.Release(sctx, job.ID, w.id) }"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "If the 10s detached settle fails, the worker logs a warning and returns nil. The job then waits for lease expiry, and a genuine failure is re-rendered rather than recorded. This degraded path is untested.",
+     "evidence": "could not settle job on shutdown; lease will expire  |  ABSENT: test for the 10s detached-context timeout expiring"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "A shutdown that lands after the ctx.Err() check but before the normal-path Complete makes that call fail on the cancelled ctx. Run then returns an error and the job waits for lease expiry. The fix is to use the detached context on this path too.",
+     "evidence": "err = w.store.Complete(ctx, job.ID, w.id, statusFor(runErr), errText(runErr))"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The row fence is locked_by = w.id. The artifact does not show how w.id is generated, so uniqueness across restarts is unverified. At replica 1 under Recreate this is inactive, but it should be confirmed before scale-out.",
+     "evidence": "ABSENT: how w.id is generated. WHERE id = $1 AND locked_by = $2 AND status = 'running'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "If ctx is cancelled while Claim's UPDATE is in flight, the server may commit the claim while the client sees an error. The row then stays running under this worker's id until the lease expires, and the worker returns without settling it.",
+     "evidence": "job, err := w.store.Claim(ctx, w.id, w.jobTimeout+time.Minute)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Claim now returns the post-increment attempts value, and a shutdown Release keeps the increment. A deploy-interrupted render therefore consumes an attempt for work that did not fail, which will distort the planned #215 cap. Neither behaviour is documented or tested.",
+     "evidence": "RETURNING id, video_key, offsets, attempts; Release: UPDATE thumbnail_jobs SET status = 'queued', locked_by = NULL, locked_until = NULL"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The claim predicate ORs two status conditions and sorts by created_at, and the migration adds no supporting index. This is tolerable at about 20k rows with pruning but becomes a hot-path cost with backlog or scale-out.",
+     "evidence": "ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz; (no index)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A poison job that kills its worker is reclaimed oldest-first after each lease expiry and re-rendered. The attempts cap is explicitly deferred to #215, and the same loop already existed through ResetRunning on restart, so this is scoped follow-up work rather than a regression in this PR.",
+     "evidence": "Replica count stays 1 here; scale-out and a poison-job attempts cap (#215) are separate changes."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Lease loss, reclaim, and settle failure are signalled only by Warn logs. There is no metric or alert, so a crash loop or repeated lease loss would not be visible to operations. The shutdown log also says 'lease will expire' even when the settle returned ErrLeaseLost.",
+     "evidence": "w.log.Warn(\"lease lost before completion\", \"job\", job.ID)  |  could not settle job on shutdown; lease will expire"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The migration has no down step and no rollback notes. Rollback to the old binary is safe because its ResetRunning requeues running rows under Recreate, but that dependency is not stated.",
+     "evidence": "ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz;"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "There is no test with a render that ignores ctx, and none for the 10s settle timeout. The lease-margin argument (render and upload stop when jobCtx is cancelled) therefore rests on reading the code alone.",
+     "evidence": "There is no test with a render that ignores ctx ... no test for the 10s detached-context timeout expiring"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The settle logic is duplicated between the shutdown branch and the normal path. defer scancel() sits inside the loop body, and runShutdownCase reads an unfiltered SELECT status, so it is correct only if testdb gives each test an empty table.",
+     "evidence": "defer scancel() inside for { ... } in worker.Run  |  db.QueryRow(bg, `SELECT status FROM thumbnail_jobs`)"
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 162512,
+    "tokOut": 77682,
+    "usd": 0.06958009000000001,
+    "critMs": 125340
+   },
+   "wallMs": 129589
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The author states that none of the new Store or worker tests has been compiled or run, and that the PR must not merge until CI is green. The concurrency, fencing, and shutdown behaviour the PR relies on is unverified, and the test seed INSERT and Worker field names may not match the real schema and constructor.",
+     "evidence": "\"None of the new Store or worker tests has been compiled or run ... this PR should not merge until CI has compiled and run these tests green.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The shutdown branch requeues only when errors.Is(runErr, context.Canceled) holds. A render interrupted by SIGTERM that returns a non-%w-wrapped error, a subprocess kill error, or a DeadlineExceeded error is recorded as a permanent failure during a routine deploy. The render error contract is neither stated nor tested.",
+     "evidence": "\"if runErr != nil && errors.Is(runErr, context.Canceled) {\" ABSENT: a render error-wrapping contract and a test where the render returns a non-Canceled error on shutdown."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The no-wait deploy guarantee depends on terminationGracePeriodSeconds covering render cancellation plus the 10s settle. The value is unchecked. If it is shorter, SIGKILL lands mid-settle and the job falls back to lease expiry (about 3 minutes). This is a benign fallback, not data loss.",
+     "evidence": "\"I have not checked the thumbnailer Deployment's terminationGracePeriodSeconds (the manifest is not part of this diff).\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The normal-path shutdown check is racy. ctx.Err() is checked, then Complete runs on the cancellable ctx. A cancel during that write fails Complete and Run returns an error. The job then waits for its lease, and the re-render overwrites its own output, so the impact is delay, not corruption.",
+     "evidence": "\"if ctx.Err() != nil {...}\" followed by \"err = w.store.Complete(ctx, job.ID, w.id, statusFor(runErr), errText(runErr))\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "attempts is incremented on every Claim and Release does not refund it, so deploy interruptions consume attempts. The old ResetRunning-then-Claim path already did this, so the behaviour is pre-existing. It matters once the #215 attempts cap lands.",
+     "evidence": "\"attempts = attempts + 1\" in Claim; Release sets \"status = 'queued', locked_by = NULL, locked_until = NULL\" with no attempts change"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The claim predicate ORs status with lease expiry and sorts by created_at, id, and the migration adds no supporting index. Every poll scans the table, including idle polls. This is cheap at about 20k rows but grows with 7-day retention and future scale-out.",
+     "evidence": "ABSENT: any index in db/migrations/0042_thumbnail_job_leases.sql; \"WHERE status = 'queued' OR (status = 'running' AND (locked_until IS NULL OR locked_until < now()))\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Object-storage writes are not fenced. A render that ignores ctx and overruns its lease can write the per-job key while a new holder renders the same key. Safety rests on unverified determinism and atomic upload, and no test covers a non-cooperative render. This is latent at replica count 1 and must be resolved before scale-out.",
+     "evidence": "\"nothing stops its render or upload from writing the per-job object key while a new holder renders the same key\" / \"There is no test with a render that ignores ctx.\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Fencing depends on w.id being unique per process, but the diff does not show how w.id is generated. If it is constant or unset, a stale holder passes the locked_by check. This is an open question to confirm, not a demonstrated defect.",
+     "evidence": "ABSENT: how w.id is derived and guaranteed unique per process; \"w.store.Complete(ctx, job.ID, w.id, statusFor(runErr), errText(runErr))\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "If the job deadline and a shutdown fire together, runErr is context.DeadlineExceeded rather than Canceled. The branch then records a failure for an interruption caused by the shutdown. This is narrow, and no test covers it.",
+     "evidence": "\"errors.Is(runErr, context.Canceled)\" does not match DeadlineExceeded; no test covers a combined deadline and shutdown"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The invariant that the lease outlives jobTimeout is only a comment. Raising jobTimeout without changing the +1m margin silently breaks the fencing premise, and nothing in tests or config enforces it.",
+     "evidence": "\"job, err := w.store.Claim(ctx, w.id, w.jobTimeout+time.Minute) // lease must outlive jobTimeout\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 10s detached-settle timeout and its failure path have no test. The shutdown guarantee depends on that path, which is covered only by reading.",
+     "evidence": "\"no test for the 10s detached-context timeout expiring (settle failure path); both remain reviewed by reading only.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The migration has no down step and no rollback note. Rolling back to the old binary reinstates ResetRunning, which requeues running rows regardless of lease. That is safe only while replicas stay at 1, and the PR does not say so.",
+     "evidence": "\"ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz;\" (no reverse migration); \"Startup ResetRunning is removed.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Lease loss and settle failures are logged only at Warn, with no metric or alert. Reclaimed or stranded jobs are invisible to operations.",
+     "evidence": "w.log.Warn(\"lease lost before completion\", \"job\", job.ID) and w.log.Warn(\"could not settle job on shutdown; lease will expire\", ...)"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The title says the change lets more than one worker run, but the body states replica count stays 1 and object-storage writes are not fenced. The title overstates what is safe in this PR.",
+     "evidence": "Title: \"lease-based job claiming so more than one worker can run\" vs \"Replica count stays 1 here\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "A poison job that crashes the worker is reclaimed after each lease expiry and has no attempts cap in this PR. The crash-retry loop predates this PR, which changes the cadence from restart to about 3 minutes. The bound is the job of #215.",
+     "evidence": "\"A hard crash (SIGKILL/OOM) leaves a job waiting for its lease, up to jobTimeout+1m (about 3 minutes), before another worker retries it.\" / \"a poison-job attempts cap (#215) [is a] separate change.\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 155625,
+    "tokOut": 72389,
+    "usd": 0.06555619,
+    "critMs": 115761
+   },
+   "wallMs": 123785
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The new Store and worker tests have never been compiled or run. The Worker field names and the thumbnail_jobs seed columns may not match the real constructor and schema, so the lease, shutdown, and fencing behavior is unproven. The author states this PR should not merge until CI is green.",
+     "evidence": "\"None of the new Store or worker tests has been compiled or run ... this PR should not merge until CI has compiled and run these tests green.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The no-wait deploy benefit depends on terminationGracePeriodSeconds covering render cancellation plus the 10s settle. The Deployment manifest is outside the diff and was not checked. If the grace period is shorter, SIGKILL can land mid-settle and each in-flight job waits about 3 minutes for its lease.",
+     "evidence": "\"I have not checked the thumbnailer Deployment's terminationGracePeriodSeconds (the manifest is not part of this diff).\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Requeue on shutdown only happens if render returns an error satisfying errors.Is(err, context.Canceled). A render that shells out may return *exec.ExitError or an unwrapped error on cancel. Such a job is recorded as a permanent failure on every routine deploy. The contract is unverified against the real render, and no test covers a non-wrapped kill error.",
+     "evidence": "\"I have not verified that the real render meets this ... there is no test for a render that returns a non-wrapped error because it was killed by the shutdown.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Race in the shutdown check: ctx.Err() is tested before the normal-path Complete, which still uses the cancelled ctx. If shutdown starts after the check, Complete fails, Run returns an error instead of nil, and the job waits for its lease. The outcome is safe for data but contradicts the test's nil assertion.",
+     "evidence": "\"if ctx.Err() != nil { ... return nil }\" followed by \"err = w.store.Complete(ctx, job.ID, w.id, statusFor(runErr), errText(runErr))\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "Object-storage fencing is unestablished. A stale holder that overruns its lease can still write the per-job key while a new holder renders it. This depends on unverified render determinism, atomic upload, and ctx-honoring render, and no test uses a render that ignores ctx. It does not bite at replica count 1 but matters before scale-out.",
+     "evidence": "\"Fencing covers only the thumbnail_jobs row, not object storage ... There is no test with a render that ignores ctx.\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Fencing relies on w.id being unique per live process, but the diff does not show how w.id is assigned. A constant or reused id would let a stale holder pass the locked_by check. This is a precondition for scale-out.",
+     "evidence": "ABSENT: derivation of w.id passed as workerID to Claim, Complete and Release."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A hard crash now stalls the job for about 3 minutes before retry, where the old startup reset requeued it immediately. This is a documented trade-off. The poison-job re-pick predates this PR, and the attempts cap is deferred to #215.",
+     "evidence": "\"A hard crash (SIGKILL/OOM) leaves a job waiting for its lease, up to jobTimeout+1m (about 3 minutes), before another worker retries it.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The claim predicate ORs status with locked_until and orders by created_at, id, and migration 0042 adds no index for it. At about 20k rows this is tolerable, but the cost grows with retention and claim rate.",
+     "evidence": "\"ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz;\" (no CREATE INDEX)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Complete and Release check locked_by and status but not locked_until, so a holder whose lease has expired but not yet been reclaimed can still complete. This is benign because no other holder exists until reclaim, but it differs from the description's 'caller must still hold the lease' wording.",
+     "evidence": "\"WHERE id = $1 AND locked_by = $2 AND status = 'running'\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "attempts increments on every claim, including shutdown Releases and lease reclaims. Graceful deploys that interrupt renders consume attempts the job never really ran, which skews the counter that #215 will cap.",
+     "evidence": "\"attempts = attempts + 1\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Migration 0042 has no down step and no rollback note. Rolling back to the old binary runs ResetRunning, which requeues rows with live leases. That is harmless only while replica count stays at 1, and the PR does not say so.",
+     "evidence": "db/migrations/0042_thumbnail_job_leases.sql contains only ALTER TABLE ... ADD COLUMN; no down migration or rollback note."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A failed settle on shutdown or a lease-lost Complete is logged at Warn only, with no metric or alert. Operators get no direct signal for jobs stuck in 'running' until the lease expires.",
+     "evidence": "\"w.log.Warn(\\\"could not settle job on shutdown; lease will expire\\\", ...)\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "Title scope mismatch: it says more than one worker can run, but the body says replica count stays 1 and scale-out is separate.",
+     "evidence": "TITLE: \"lease-based thumbnail job claiming so more than one worker can run\" vs \"Replica count stays 1 here\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The shutdown branch duplicates the settle logic from the normal path, and the render error contract lives only in a comment rather than being enforced by types or a test.",
+     "evidence": "\"// Contract: render must return an error satisfying errors.Is(err, context.Canceled) ...\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 159936,
+    "tokOut": 55494,
+    "usd": 0.05797089,
+    "critMs": 99879
+   },
+   "wallMs": 103647
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The new Store and worker tests have never been compiled or run, so the shutdown, lease, and fencing behavior that the merge depends on is unverified. The author states the PR must not merge until CI is green.",
+     "evidence": "\"None of the new Store or worker tests has been compiled or run: I wrote them without being able to run them here\" and \"this PR should not merge until CI has compiled and run these tests green.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The claim that deploys avoid lease waits depends on the thumbnailer Deployment's terminationGracePeriodSeconds, which is not in the diff and is unchecked. If it is shorter than about 10s plus render cancellation time, SIGKILL lands mid-settle and each in-flight job waits up to about 3 minutes on every deploy.",
+     "evidence": "\"I have not checked the thumbnailer Deployment's terminationGracePeriodSeconds (the manifest is not part of this diff).\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Requeue versus failure on shutdown depends on render returning an error that satisfies errors.Is(err, context.Canceled). The real render is unchanged and unverified. A subprocess-kill or unwrapped error would be recorded as a failed job on routine deploys, with no retry.",
+     "evidence": "\"a render that shells out to a subprocess may return an `*exec.ExitError` (\\\"signal: killed\\\") or a non-wrapped error when ctx is cancelled\" and \"I have not verified that the real render meets this.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Fencing covers only the thumbnail_jobs row. A stale holder that overran its lease can still render and upload to the per-job object key while a new holder writes it. Safety depends on unverified render determinism and upload atomicity. This is latent at replica count 1 and the PR scopes it to scale-out.",
+     "evidence": "\"nothing stops its render or upload from writing the per-job object key while a new holder renders the same key.\" and \"Since replica count stays 1 here, this only matters once scale-out lands\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Attempts is incremented on every Claim, and Release does not undo it, so each deploy-interrupted run consumes an attempt on a healthy job. This has no effect until the #215 attempts cap lands.",
+     "evidence": "\"attempts = attempts + 1\" in Claim, and Release sets only status, locked_by and locked_until; \"a poison-job attempts cap (#215) are separate changes.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A poison job that crashes or OOMs the worker is reclaimed about every 3 minutes with no cap, and it sorts first by created_at. This is a pre-existing gap that #215 must close, not a regression introduced here.",
+     "evidence": "\"A hard crash (SIGKILL/OOM) leaves a job waiting for its lease, up to jobTimeout+1m (about 3 minutes)\" and \"a poison-job attempts cap (#215) are separate changes.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The claim predicate ORs status with a locked_until check and orders by created_at, but the migration adds no index. Each claim scans the queued and running backlog. This is acceptable at about 20k rows and matters only at growth or scale-out.",
+     "evidence": "\"ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz;\" with ABSENT: an index on (status, created_at) or locked_until"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The migration is forward-only with no down step. Rollback is safe mainly because the Recreate strategy prevents overlap and the old startup ResetRunning clears stale leases. That dependency is not written down.",
+     "evidence": "\"db/migrations/0042_thumbnail_job_leases.sql\" contains only the forward ALTER TABLE; ABSENT: a rollback note"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Lease safety depends on old and new worker versions never running together. That constraint is recorded only in the PR text and the Recreate strategy, with no code comment or manifest guard. A future rolling update would double-run jobs.",
+     "evidence": "\"The thumbnailer Deployment uses strategy Recreate, so old and new worker versions never run at the same time.\" ABSENT: a code comment or manifest guard"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Settle failures on the detached 10s context and lost leases are logged only at Warn, with no counter or alert. The settle-failure path has no test, so a stuck or double-run job could go unnoticed.",
+     "evidence": "\"w.log.Warn(\\\"could not settle job on shutdown; lease will expire\\\", ...)\" and \"no test for the 10s detached-context timeout expiring (settle failure path)\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The title promises that more than one worker can run, but the body says replica count stays at 1 and multi-writer safety is unproven. The title overstates what this PR delivers.",
+     "evidence": "\"lease-based thumbnail job claiming so more than one worker can run\" versus \"Replica count stays 1 here; scale-out and a poison-job attempts cap (#215) are separate changes.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The worker test reads SELECT status FROM thumbnail_jobs with no WHERE clause, so it depends on per-test table isolation that the diff does not show.",
+     "evidence": "\"SELECT status FROM thumbnail_jobs\" in runShutdownCase"
+    }
+   ],
+   "usage": {
+    "calls": 12,
+    "tokIn": 169935,
+    "tokOut": 71346,
+    "usd": 0.06624045,
+    "critMs": 144282
+   },
+   "wallMs": 149018
+  }
+ ],
+ "artifact": "PR #214: thumbnailer: lease-based job claiming so more than one worker can run\n\nClaiming was a SELECT then an UPDATE, and every worker reset all 'running' jobs to 'queued' on startup, so we could only run one replica.\n- Claim is one UPDATE ... WHERE id = (SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1): concurrent workers never get the same row.\n- A claim takes a lease of jobTimeout + 1m; the job context is cancelled at jobTimeout, so a live worker that honors its context never outlives its lease.\n- Expired leases (crashed worker, or NULL from the old worker) are reclaimed; Complete requires the caller to still hold the lease.\n- Startup ResetRunning is removed. On graceful shutdown the worker settles its own job right away, using a detached context with a 10s timeout. The outcome depends on why the render returned. If the render was interrupted by the shutdown (it returned an error satisfying `errors.Is(err, context.Canceled)`), the worker Releases the lease (back to 'queued') so another worker retries it. Otherwise, whether the render succeeded or failed for its own reasons (e.g. corrupt input), the worker Completes the job with statusFor/errText, exactly as the normal path does. A genuine failure is therefore recorded as a failure and is not silently requeued during a deploy. Deploys do not need to wait for a lease to expire, provided the pod's terminationGracePeriodSeconds covers render cancellation plus the Release or Complete, which can take up to the 10s settle timeout. I have not checked the thumbnailer Deployment's terminationGracePeriodSeconds (the manifest is not part of this diff). If it is shorter than that, SIGKILL can land mid-settle and the job then waits for its lease like a crash. Please confirm the grace period (at least about 10s plus the time a render takes to notice cancellation) before relying on this. A hard crash (SIGKILL/OOM) leaves a job waiting for its lease, up to jobTimeout+1m (about 3 minutes), before another worker retries it.\n- Render error contract: the requeue decision relies on render wrapping cancellation with %w (or returning ctx.Err()) when it is interrupted by ctx. This PR does not change render, and I have not verified that the real render meets this. In particular, a render that shells out to a subprocess may return an `*exec.ExitError` (\"signal: killed\") or a non-wrapped error when ctx is cancelled, and a DeadlineExceeded error is deliberately not treated as a shutdown interruption (it means jobTimeout fired). Any such error is recorded as a failed job during a deploy instead of being requeued. This fails in the safe-for-data direction (no double work), but it is a permanent failure for a routine deploy. Before relying on graceful requeue, check that render maps ctx cancellation to context.Canceled (e.g. `if ctx.Err() != nil { return ctx.Err() }` after a subprocess error). The contract is now documented in a comment in worker.Run. The \"records genuine failure\" worker test pins the non-Canceled branch, but there is no test for a render that returns a non-wrapped error because it was killed by the shutdown. I did not change the worker to requeue every error that arrives during shutdown, because that would also requeue genuine failures; the fix belongs in render, which is outside this diff.\n- Fencing covers only the thumbnail_jobs row, not object storage. If a stale holder overran its lease, its Complete is rejected with ErrLeaseLost, but nothing stops its render or upload from writing the per-job object key while a new holder renders the same key. Safety against double writes therefore depends on two things I have not verified: that render output is deterministic (so overlapping writes produce identical bytes), and that the upload is atomic (so a partial write cannot sit behind a 'done' row). It also depends on render and upload stopping when jobCtx is cancelled, which is what the 1m margin assumes. There is no test with a render that ignores ctx. Since replica count stays 1 here, this only matters once scale-out lands, and I'd want it checked before then.\n- Test coverage: the Store tests cover concurrent claims, expired-lease reclaim with a stale holder rejected, and Release by holder only. A worker-level test covers the graceful-shutdown branch in worker.Run, with three cases that each cancel ctx mid-render and assert that Run returns nil: a render that finishes (job ends 'done'), a render that honors ctx and returns context.Canceled (job ends 'queued'), and a render that fails for its own reasons (job ends with statusFor(err), not requeued). None of the new Store or worker tests has been compiled or run: I wrote them without being able to run them here, and I cannot resolve that from this environment. The Worker field names come from the diff, and the seed INSERT assumes the column names in thumbnail_jobs, so they may need small adjustments to compile against the real constructor and schema. Treat the shutdown and fencing behavior as unverified until CI runs them green; this PR should not merge until CI has compiled and run these tests green. The worker test now includes a render that honors ctx, but there is still no test with a render that ignores ctx, and no test for the 10s detached-context timeout expiring (settle failure path); both remain reviewed by reading only.\n- Before merge (reviewer/owner actions I cannot do from here): (1) CI green on the new Store and worker tests, fixing any compile or schema mismatches; (2) confirm terminationGracePeriodSeconds in the thumbnailer manifest is at least about 10s plus render cancellation time, or accept that deploys will wait on leases; (3) confirm render returns context.Canceled when interrupted by ctx, or accept that in-flight jobs are marked failed on deploy.\n- Replica count stays 1 here; scale-out and a poison-job attempts cap (#215) are separate changes.\n\ndiff --git a/db/migrations/0042_thumbnail_job_leases.sql b/db/migrations/0042_thumbnail_job_leases.sql\n--- /dev/null\n+++ b/db/migrations/0042_thumbnail_job_leases.sql\n@@ -0,0 +1 @@\n+ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz;\ndiff --git a/internal/jobs/store.go b/internal/jobs/store.go\n--- a/internal/jobs/store.go\n+++ b/internal/jobs/store.go\n@@ -14,15 +14,28 @@ type Store struct{ db *pgxpool.Pool }\n-func (s *Store) ResetRunning(ctx context.Context) error {\n-\t_, err := s.db.Exec(ctx, `UPDATE thumbnail_jobs SET status = 'queued' WHERE status = 'running'`)\n-\treturn err\n-}\n-\n-func (s *Store) Claim(ctx context.Context) (Job, error) {\n-\tvar j Job\n-\terr := s.db.QueryRow(ctx, `SELECT id, video_key, offsets, attempts FROM thumbnail_jobs WHERE status = 'queued' ORDER BY created_at, id LIMIT 1`).Scan(&j.ID, &j.VideoKey, &j.Offsets, &j.Attempts)\n-\tif err == nil {\n-\t\t_, err = s.db.Exec(ctx, `UPDATE thumbnail_jobs SET status = 'running', attempts = attempts + 1 WHERE id = $1`, j.ID)\n-\t}\n-\treturn j, mapNoRows(err)\n-}\n-\n-func (s *Store) Complete(ctx context.Context, id int64, st Status, errMsg string) error {\n-\t_, err := s.db.Exec(ctx, `UPDATE thumbnail_jobs SET status = $2, error = NULLIF($3, ''), finished_at = now() WHERE id = $1`, id, st, errMsg)\n-\treturn err\n-}\n+var ErrLeaseLost = errors.New(\"jobs: lease no longer held\")\n+\n+func (s *Store) Claim(ctx context.Context, workerID string, lease time.Duration) (Job, error) {\n+\tvar j Job\n+\terr := s.db.QueryRow(ctx, `UPDATE thumbnail_jobs\n+SET status = 'running', locked_by = $1, locked_until = now() + make_interval(secs => $2), attempts = attempts + 1\n+WHERE id = (SELECT id FROM thumbnail_jobs\n+  WHERE status = 'queued' OR (status = 'running' AND (locked_until IS NULL OR locked_until < now()))\n+  ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED)\n+RETURNING id, video_key, offsets, attempts`, workerID, lease.Seconds()).Scan(&j.ID, &j.VideoKey, &j.Offsets, &j.Attempts)\n+\treturn j, mapNoRows(err)\n+}\n+\n+func (s *Store) Complete(ctx context.Context, id int64, workerID string, st Status, errMsg string) error {\n+\ttag, err := s.db.Exec(ctx, `UPDATE thumbnail_jobs SET status = $3, error = NULLIF($4, ''), locked_by = NULL, locked_until = NULL,\n+  finished_at = now() WHERE id = $1 AND locked_by = $2 AND status = 'running'`, id, workerID, st, errMsg)\n+\tif err == nil && tag.RowsAffected() == 0 {\n+\t\treturn ErrLeaseLost\n+\t}\n+\treturn err\n+}\n+\n+// Release hands a running job back to the queue immediately; used on graceful shutdown.\n+func (s *Store) Release(ctx context.Context, id int64, workerID string) error {\n+\ttag, err := s.db.Exec(ctx, `UPDATE thumbnail_jobs SET status = 'queued', locked_by = NULL, locked_until = NULL\n+WHERE id = $1 AND locked_by = $2 AND status = 'running'`, id, workerID)\n+\tif err == nil && tag.RowsAffected() == 0 {\n+\t\treturn ErrLeaseLost\n+\t}\n+\treturn err\n+}\ndiff --git a/internal/worker/worker.go b/internal/worker/worker.go\n--- a/internal/worker/worker.go\n+++ b/internal/worker/worker.go\n@@ -41,5 +41,3 @@ func (w *Worker) Run(ctx context.Context) error {\n-\tif err := w.store.ResetRunning(ctx); err != nil {\n-\t\treturn fmt.Errorf(\"reset running jobs: %w\", err)\n-\t}\n \tfor {\n-\t\tjob, err := w.store.Claim(ctx)\n+\t\tjob, err := w.store.Claim(ctx, w.id, w.jobTimeout+time.Minute) // lease must outlive jobTimeout\n@@ -56,6 +54,28 @@ func (w *Worker) Run(ctx context.Context) error {\n \t\tjobCtx, cancel := context.WithTimeout(ctx, w.jobTimeout)\n \t\trunErr := w.render(jobCtx, job)\n \t\tcancel()\n-\t\tif err := w.store.Complete(ctx, job.ID, statusFor(runErr), errText(runErr)); err != nil {\n+\t\tif ctx.Err() != nil {\n+\t\t\t// Shutting down: settle the job now on a detached context so a deploy\n+\t\t\t// doesn't leave it running until the lease expires.\n+\t\t\tsctx, scancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)\n+\t\t\tdefer scancel()\n+\t\t\tvar serr error\n+\t\t\t// Contract: render must return an error satisfying\n+\t\t\t// errors.Is(err, context.Canceled) (wrap with %w, or return ctx.Err())\n+\t\t\t// when it is interrupted by ctx. Only such a render goes back to the\n+\t\t\t// queue. Anything else (including an unwrapped subprocess-kill error or\n+\t\t\t// DeadlineExceeded from jobTimeout) is recorded like on the normal path.\n+\t\t\tif runErr != nil && errors.Is(runErr, context.Canceled) {\n+\t\t\t\tserr = w.store.Release(sctx, job.ID, w.id)\n+\t\t\t} else {\n+\t\t\t\tserr = w.store.Complete(sctx, job.ID, w.id, statusFor(runErr), errText(runErr))\n+\t\t\t}\n+\t\t\tif serr != nil {\n+\t\t\t\tw.log.Warn(\"could not settle job on shutdown; lease will expire\", \"job\", job.ID, \"err\", serr)\n+\t\t\t}\n+\t\t\treturn nil\n+\t\t}\n+\t\terr = w.store.Complete(ctx, job.ID, w.id, statusFor(runErr), errText(runErr))\n+\t\tif errors.Is(err, jobs.ErrLeaseLost) {\n+\t\t\tw.log.Warn(\"lease lost before completion\", \"job\", job.ID)\n+\t\t} else if err != nil {\n \t\t\treturn fmt.Errorf(\"complete job %d: %w\", job.ID, err)\n \t\t}\n \t}\ndiff --git a/internal/jobs/store_test.go b/internal/jobs/store_test.go\n--- a/internal/jobs/store_test.go\n+++ b/internal/jobs/store_test.go\n@@ -88,0 +89,58 @@ func jobStatus(t *testing.T, s *Store, id int64) Status {\n+func TestClaimNeverHandsOutAJobTwice(t *testing.T) {\n+\ts := NewStore(testdb.New(t))\n+\tseedQueued(t, s, 40)\n+\tvar claims atomic.Int32\n+\tvar g errgroup.Group\n+\tfor w := range 8 {\n+\t\tg.Go(func() error {\n+\t\t\tworker := fmt.Sprint(\"w\", w)\n+\t\t\tfor {\n+\t\t\t\tj, err := s.Claim(context.Background(), worker, time.Minute)\n+\t\t\t\tif errors.Is(err, ErrNoJob) {\n+\t\t\t\t\treturn nil\n+\t\t\t\t} else if err != nil {\n+\t\t\t\t\treturn err\n+\t\t\t\t}\n+\t\t\t\tclaims.Add(1)\n+\t\t\t\tif err := s.Complete(context.Background(), j.ID, worker, StatusDone, \"\"); err != nil {\n+\t\t\t\t\treturn fmt.Errorf(\"complete job %d by %s: %w\", j.ID, worker, err)\n+\t\t\t\t}\n+\t\t\t}\n+\t\t})\n+\t}\n+\tif err := g.Wait(); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tif n := claims.Load(); n != 40 {\n+\t\tt.Fatalf(\"got %d claims for 40 jobs\", n)\n+\t}\n+}\n+\n+func TestExpiredLeaseIsReclaimedAndStaleHolderLosesIt(t *testing.T) {\n+\ts, ctx := NewStore(testdb.New(t)), context.Background()\n+\tseedQueued(t, s, 1)\n+\ta, err := s.Claim(ctx, \"a\", -time.Second) // lease already expired\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tif _, err := s.Claim(ctx, \"b\", time.Minute); err != nil {\n+\t\tt.Fatalf(\"expired job not reclaimed: %v\", err)\n+\t}\n+\tif _, err := s.Claim(ctx, \"c\", time.Minute); !errors.Is(err, ErrNoJob) {\n+\t\tt.Fatalf(\"live lease was reclaimed: %v\", err)\n+\t}\n+\tif err := s.Complete(ctx, a.ID, \"a\", StatusDone, \"\"); !errors.Is(err, ErrLeaseLost) {\n+\t\tt.Fatalf(\"stale holder completed: %v\", err)\n+\t}\n+}\n+\n+func TestReleaseRequeuesImmediatelyAndOnlyForTheHolder(t *testing.T) {\n+\ts, ctx := NewStore(testdb.New(t)), context.Background()\n+\tseedQueued(t, s, 1)\n+\ta, err := s.Claim(ctx, \"a\", time.Minute)\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tif err := s.Release(ctx, a.ID, \"b\"); !errors.Is(err, ErrLeaseLost) {\n+\t\tt.Fatalf(\"non-holder released: %v\", err)\n+\t}\n+\tif err := s.Release(ctx, a.ID, \"a\"); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tif _, err := s.Claim(ctx, \"b\", time.Minute); err != nil {\n+\t\tt.Fatalf(\"released job not claimable: %v\", err)\n+\t}\n+}\ndiff --git a/internal/worker/worker_test.go b/internal/worker/worker_test.go\n--- /dev/null\n+++ b/internal/worker/worker_test.go\n@@ -0,0 +1,80 @@\n+package worker\n+\n+import (\n+\t\"context\"\n+\t\"errors\"\n+\t\"log/slog\"\n+\t\"testing\"\n+\t\"time\"\n+\n+\t\"reelbox/internal/jobs\"\n+\t\"reelbox/internal/testdb\"\n+)\n+\n+// runShutdownCase starts a worker on one queued job, cancels ctx while the\n+// render is in flight, lets the render behave as renderFn dictates, and returns\n+// the job's final status after Run has returned. renderFn receives the job\n+// context and a channel that is closed right after the shutdown is triggered.\n+func runShutdownCase(t *testing.T, renderFn func(ctx context.Context, finish <-chan struct{}) error) string {\n+\tt.Helper()\n+\tdb := testdb.New(t)\n+\tbg := context.Background()\n+\tif _, err := db.Exec(bg, `INSERT INTO thumbnail_jobs (video_key, offsets, status) VALUES ('v', '{1}', 'queued')`); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tstarted, finish := make(chan struct{}), make(chan struct{})\n+\tw := &Worker{\n+\t\tstore:      jobs.NewStore(db),\n+\t\tid:         \"w1\",\n+\t\tjobTimeout: time.Minute,\n+\t\tlog:        slog.Default(),\n+\t\trender: func(ctx context.Context, j jobs.Job) error {\n+\t\t\tclose(started)\n+\t\t\treturn renderFn(ctx, finish)\n+\t\t},\n+\t}\n+\tctx, cancel := context.WithCancel(bg)\n+\tdefer cancel()\n+\tdone := make(chan error, 1)\n+\tgo func() { done <- w.Run(ctx) }()\n+\n+\t<-started\n+\tcancel()      // shutdown arrives mid-render\n+\tclose(finish) // renders that don't watch ctx may now return\n+\tselect {\n+\tcase err := <-done:\n+\t\tif err != nil {\n+\t\t\tt.Fatalf(\"Run returned %v on graceful shutdown, want nil\", err)\n+\t\t}\n+\tcase <-time.After(15 * time.Second):\n+\t\tt.Fatal(\"Run did not return after shutdown\")\n+\t}\n+\tvar status string\n+\tif err := db.QueryRow(bg, `SELECT status FROM thumbnail_jobs`).Scan(&status); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\treturn status\n+}\n+\n+func TestShutdownMidRenderCompletesFinishedJob(t *testing.T) {\n+\tgot := runShutdownCase(t, func(ctx context.Context, finish <-chan struct{}) error {\n+\t\t<-finish\n+\t\treturn nil\n+\t})\n+\tif got != \"done\" {\n+\t\tt.Fatalf(\"status = %q, want done\", got)\n+\t}\n+}\n+\n+// The render honors ctx and returns context.Canceled: the job must be requeued.\n+func TestShutdownMidRenderReleasesInterruptedJob(t *testing.T) {\n+\tgot := runShutdownCase(t, func(ctx context.Context, finish <-chan struct{}) error {\n+\t\t<-ctx.Done()\n+\t\treturn ctx.Err()\n+\t})\n+\tif got != \"queued\" {\n+\t\tt.Fatalf(\"status = %q, want queued\", got)\n+\t}\n+}\n+\n+// A genuine render failure during shutdown is recorded, not requeued. The error\n+// here does not wrap context.Canceled, so this also pins the contract that only\n+// Canceled-wrapping errors are requeued.\n+func TestShutdownMidRenderRecordsGenuineFailure(t *testing.T) {\n+\trenderErr := errors.New(\"corrupt input\")\n+\tgot := runShutdownCase(t, func(ctx context.Context, finish <-chan struct{}) error {\n+\t\t<-finish\n+\t\treturn renderErr\n+\t})\n+\tif want := string(statusFor(renderErr)); got != want {\n+\t\tt.Fatalf(\"status = %q, want %q\", got, want)\n+\t}\n+}",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 44729,
+  "tokOut": 46166,
+  "usd": 0.6405479999999999,
+  "critMs": 242070
+ },
+ "status": "cap"
+}

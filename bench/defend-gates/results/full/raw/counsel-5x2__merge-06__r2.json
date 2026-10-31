@@ -1,0 +1,113 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-06",
+ "rep": 2,
+ "wallMs": 374081,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The upstream 429 retry issues a second call for every upstream 429 with no jitter, no retry budget, and no global concurrency cap. During an upstream-wide throttle, in-flight requests retry at roughly the same time, which can roughly double upstream volume and billable spend while holding connections for up to 5s each.",
+   "evidence": "if (res.status === 429) { ... await new Promise((r) => setTimeout(r, delay)); res = await upstream.chat(req.body, { signal: req.signal });"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The retry sleep does not observe client disconnect. If the client aborts during the delay, the gateway still makes the second upstream call with an already-aborted signal.",
+   "evidence": "await new Promise((r) => setTimeout(r, delay)); res = await upstream.chat(req.body, { signal: req.signal });"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The log line writes an unsalted truncated SHA-256 of the raw tenant API key on every rejection. The raw key is not logged, but the artifact states keys must never appear in logs, and this stable key-derived value creates a durable link between tenant and key material. The fingerprint is not needed because tenant.id already identifies the tenant.",
+   "evidence": "export function keyFingerprint(apiKey: string): string { return createHash(\"sha256\").update(apiKey).digest(\"hex\").slice(0, 10); } ... { tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "A tenant with ratePerSec 0 gives waitMs of Infinity, so the 429 sends the invalid header 'Retry-After: Infinity'. Tenant limits are not validated, and clients may retry in a tight loop.",
+   "evidence": "return Math.ceil(((1 - b.tokens) / limits.ratePerSec) * 1000); ... .header(\"Retry-After\", String(Math.ceil(waitMs / 1000)))"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "A backward wall-clock step makes elapsedSec negative, and tokens are clamped only from above. A large step can drive a tenant's token count far below zero, causing a lockout proportional to the step size.",
+   "evidence": "const elapsedSec = (nowMs - b.updatedMs) / 1000; b.tokens = Math.min(limits.burst, b.tokens + elapsedSec * limits.ratePerSec);"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The stated incident is aggregate upstream 429s, but the PR adds only per-tenant buckets. At 20 rps across about 120 tenants the theoretical aggregate is about 2400 rps, and no upstream quota, global cap, or before/after load measurement is given to show the Tuesday 429s would be avoided.",
+   "evidence": "ABSENT: upstream quota figure, global or aggregate bucket, or before/after load measurement for the 400 rps scenario; only \"default 20 rps / burst 40\" is stated."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The default 20 rps / burst 40 takes effect for all tenants on deploy, including any tenant already running above 20 rps. No feature flag, shadow mode, or staged opt-in is described, so rollback during a live incident requires a redeploy.",
+   "evidence": "This adds an in-process token bucket per tenant (limits from tenant config, default 20 rps / burst 40) and returns 429 with Retry-After when a tenant is over."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "No tests cover the new route path: the 429 response, the Retry-After header, retryAfterMs parsing, the upstream retry branch, and the 5s cap. The two bucket tests cover only TenantLimiter.take().",
+   "evidence": "ABSENT: any test of completions.ts or retryAfterMs; bucket.test.ts contains only \"admits burst, then rate-limits, then refills\" and \"tenants are isolated\"."
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Every rejected request emits an info-level log line. A throttled 400 rps tenant produces about 380 log lines per second during the incident, with no sampling or aggregation.",
+   "evidence": "req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, \"tenant rate limited\");"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "retryAfterMs parses only delta-seconds. An empty Retry-After parses to 0 and triggers an immediate retry, and an HTTP-date value silently falls back to 1s without a log entry.",
+   "evidence": "const secs = Number(header); if (!Number.isFinite(secs) || secs < 0) return 1_000;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "When an LRU entry is evicted, the tenant gets a fresh full burst on its next request. This is an unacknowledged limit bypass, although at 120 tenants against a 10k cap it is unlikely to trigger.",
+   "evidence": "const b = this.buckets.get(tenantId) ?? { tokens: limits.burst, updatedMs: nowMs };"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "Limiter state is in-process, so once the gateway scales horizontally each replica enforces its own bucket and the effective limit multiplies. The single-process assumption is stated in the context but not recorded in code or config.",
+   "evidence": "const limiter = new TenantLimiter(); (single-process constraint stated only in the PR context)"
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "An upstream 429 adds up to 5s of silent latency before any response. The client gets no signal that a retry happened and no way to opt out.",
+   "evidence": "req.log.warn({ tenant: tenant.id, delay }, \"upstream 429, retrying once\"); await new Promise((r) => setTimeout(r, delay));"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "No metrics or alerts are added for rate-limit rejections or upstream retries. Operators can see throttling only by grepping logs during the incident.",
+   "evidence": "ABSENT: metric or alert definitions; only req.log.info and req.log.warn are added."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The 429 body uses type 'rate_limited'. If OpenAI-compatible clients key their error handling on a specific type string, they may not recognise it. This is unverified against client behaviour.",
+   "evidence": "send({ error: { type: \"rate_limited\", message: \"tenant rate limit exceeded\" } })"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The diff imports lru-cache but shows no package.json or lockfile change. If the diff is complete, the build may fail or the dependency may be unpinned.",
+   "evidence": "ABSENT: package.json or lockfile hunk; import { LRUCache } from \"lru-cache\";"
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 115619,
+  "tokOut": 52849,
+  "usd": 0.04513924,
+  "critMs": 90881
+ }
+}

@@ -1,0 +1,83 @@
+{
+ "approach": "cascade",
+ "case": "merge-07",
+ "rep": 2,
+ "wallMs": 209573,
+ "verdict": "ATTACKS",
+ "confidence": 0.93,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "`_upload` builds a shell string with `shell=True` that interpolates `local`, which is derived from the partner-chosen filename (`src.stem`), and `src.stem` itself is part of `dest`. Shell metacharacters in an SFTP filename (`$(...)`, `;`, backticks) give command execution on a worker holding write credentials for the whole raw bucket. Spaces also break the command.",
+   "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The partition date changed from UTC to naive local time. Workers run with TZ=America/Los_Angeles and the job starts at 01:30 UTC, which is 17:30 PT the previous day. Data lands in the previous UTC day's partition, while dashboards read the UTC-date partition. This can mix into or overwrite an already-published partition and emit a second _SUCCESS.",
+   "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")"
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "The _SUCCESS marker is written unconditionally, even when files failed. Dashboards consume a partition as soon as the marker appears, so a partially failed partner run is published as complete with no signal that data is missing. The failure count is only logged.",
+   "evidence": "write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")  after the loop that increments `failed`; log.info(... ok=%d failed=%d)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "When a file fails midway, chunks already uploaded stay in the bucket as partial data under that partition, and the in-flight local chunk is never unlinked. The partial objects are then covered by the success marker.",
+   "evidence": "for chunk in _write_chunks(src, work_dir): _upload(...); chunk.unlink()  /  except Exception: log.exception(...); failed += 1"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The gsutil call has no timeout and no retry. A hung process blocks the task indefinitely, and a transient error permanently fails that file for the night.",
+   "evidence": "subprocess.run(..., shell=True, check=True)  (no timeout=)"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "There is no idempotency or cleanup for reruns of the same dt. A rerun with a different chunk count leaves stale chunk objects next to the new ones, and the marker is re-emitted over mixed data.",
+   "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\"  (no prefix cleanup)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The output layout changed from one object per source (`{stem}.csv.gz`) to a per-stem directory of numbered chunks. Downstream readers keyed to the old object names may miss or double-read data, and the PR describes no compatibility plan. Normalisation is also not truly unchanged: `normalise_row` previously received a pandas Series (NaN for empty cells) and now receives a dict of raw strings.",
+   "evidence": "-blob = bucket.blob(f\"raw/{partner}/dt={dt}/{src.stem}.csv.gz\")  /  Schema normalisation is unchanged (same `normalise_row`)."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "`ingest_partner` gains a required `work_dir` parameter, but no callers are updated in the diff, so the DAG task will raise TypeError unless changed elsewhere.",
+   "evidence": "+def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None:"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The speed claim is unmeasured. The 150M composite threshold likely never triggers on gzipped 500k-row chunks, and composite uploads need extra permissions that are not verified.",
+   "evidence": "parallel_composite_upload_threshold=150M  /  CHUNK_ROWS = 500_000"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A source file with no data rows yields no chunks but is still counted as ok.",
+   "evidence": "for chunk in _write_chunks(src, work_dir): ... ok += 1"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "The pipeline now depends on the gsutil CLI in the worker image rather than the client library it used before.",
+   "evidence": "import subprocess  /  gsutil -q ... cp"
+  }
+ ],
+ "usage": {
+  "calls": 2,
+  "tokIn": 8872,
+  "tokOut": 7865,
+  "usd": 0.038950250000000006,
+  "critMs": 38368
+ }
+}

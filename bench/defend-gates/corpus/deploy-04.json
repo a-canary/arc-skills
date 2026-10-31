@@ -1,0 +1,28 @@
+{
+  "id": "deploy-04",
+  "gate": "deploy",
+  "title": "Lumen Gateway free tier GA and playground share links",
+  "context": "Lumen is a hosted, OpenAI-compatible inference gateway that serves open-weight models on rented H100 GPUs. Paid ('pro') projects are billed per token. The free tier is a marketing expense with a hard budget of $4k/month. This proposal covers the public launch of the free tier and of Playground share links, deploying Wednesday with a launch post on the blog, HN and X.",
+  "artifact": "# Release proposal: Lumen Gateway — Free tier GA + Playground share links\n\nOwner: platform · Deploy: Wed 2026-11-04 16:00 UTC · Launch post: Wed 17:00 UTC (blog, HN, X)\n\n## Release notes (public changelog)\n\n- **Free tier is generally available.** Sign up with email, no card required. Free accounts get **20 requests per minute** and **100k tokens per day** on `llama-3.1-8b-instruct` and `qwen2.5-7b-instruct`.\n- **Share from Playground.** Click \"Share\" on any playground session to get a link. Anyone with the link can view the conversation and re-run it, even without a Lumen account.\n- New `GET /v1/usage` endpoint returns your current daily token usage.\n\n## Gateway config change (`deploy/prod/gateway.yaml`, diff)\n\n```diff\n tiers:\n+  free:\n+    models: [llama-3.1-8b-instruct, qwen2.5-7b-instruct]\n+    rate_limit: { requests: 20, per: second, burst: 40 }\n+    max_tokens_per_request: 4096\n+    pool: free-8b\n   pro:\n     models: [\"*\"]\n     rate_limit: { requests: 600, per: minute, burst: 120 }\n     daily_tokens: null\n     pool: shared-h100\n pools:\n+  free-8b:\n+    gpu: h100-80g\n+    min_replicas: 2\n+    max_replicas: 24\n+    scale_on: queue_depth > 8 for 60s\n   shared-h100:\n     gpu: h100-80g\n     min_replicas: 6\n     max_replicas: 40\n```\n\n## Capacity and cost\n\n- Projection: 3,000 free DAU in month 1, avg 35 requests/day each, ~1.2k tokens per request.\n- Two H100 replicas serve the projected free load at < 30% utilization; at the GPU provider's on-demand rate of $2.49/h that is ~$3.6k/month, within the $4k/month free-tier budget.\n- Free pool is isolated from `shared-h100`, so free traffic cannot degrade paid latency.\n\n## Playground share links (`apps/playground/src/share.ts`)\n\n```ts\nexport async function createShareLink(session: Session, project: Project): Promise<string> {\n  const share = await db.shares.insert({\n    sessionId: session.id,\n    projectId: project.id,\n    messages: session.messages,\n    model: session.model,\n    createdAt: new Date(),\n  });\n  // Viewers without an account replay against the owner's project quota.\n  const url = new URL(\"/s/\" + share.id, PLAYGROUND_ORIGIN);\n  url.searchParams.set(\"k\", project.apiKey);\n  return url.toString();\n}\n```\n\n```ts\n// apps/playground/src/routes/s/[id].ts\nexport async function load({ params, url }) {\n  const share = await db.shares.get(params.id);\n  if (!share) throw error(404);\n  return { messages: share.messages, model: share.model, replayKey: url.searchParams.get(\"k\") };\n}\n```\n\n- Share pages are server-rendered with Open Graph tags so links unfurl nicely on Slack/X.\n- Shares can be deleted from Playground → History; deleted shares return 404.\n\n## Logging\n\n- Gateway access logs redact the `Authorization` header and drop request bodies; we log model, token counts, latency, status and project id only (unchanged from current prod).\n\n## QA summary (staging)\n\n- Signup → first free request in < 60s: pass.\n- Free-tier model allow-list: request to `llama-3.1-70b-instruct` with a free key returns 403: pass.\n- Rate limiting: 21st request inside a minute returned 429 with `Retry-After`: pass (staging config used `per: minute`).\n- Share link: create, open in incognito, re-run, delete → 404: pass.\n- `/v1/usage` matches billing ledger within 0.1%: pass.\n\n## Rollout\n\n- Deploy gateway config and playground at 16:00 UTC, flag `free_signup_open` on at 16:45 UTC.\n- Alerting: free pool replicas > 6 pages on-call; error rate > 2% pages on-call.\n- Rollback: `free_signup_open` off stops new signups; existing free keys keep working.",
+  "expected_verdict": "ATTACKS",
+  "defects": [
+    {
+      "id": "d1",
+      "lens": "cost",
+      "severity": "major",
+      "description": "The public notes and the cost projection assume 20 requests per minute and 100k tokens/day. The production config sets 20 requests per second, 60x higher (QA tested per minute), and the free tier has no daily_tokens cap at all. Together with a free pool that autoscales to 24 H100s (~$43k/month at $2.49/h), free-tier spend is unbounded relative to the $4k budget.",
+      "evidence": "rate_limit: { requests: 20, per: second, burst: 40 }"
+    },
+    {
+      "id": "d2",
+      "lens": "security",
+      "severity": "blocker",
+      "description": "Share links embed the owner's real project API key in the URL query string, and the share page hands it to the client as replayKey. Anyone who sees the link, including Slack/X unfurl crawlers, referrer headers and browser history, gets the project's full key. Deleting the share does not revoke it. Replay should go through a server-side, share-scoped, revocable token.",
+      "evidence": "url.searchParams.set(\"k\", project.apiKey);"
+    }
+  ],
+  "decoys": [
+    "Free keys might reach the expensive 70B model through the pro wildcard, but the free tier has an explicit model allow-list and QA verified a free key gets 403 on llama-3.1-70b-instruct.",
+    "Request logging could leak prompts or keys, but the Logging section states that access logs redact the Authorization header and drop request bodies."
+  ]
+}

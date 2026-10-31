@@ -1,0 +1,35 @@
+{
+  "id": "merge-04",
+  "gate": "merge",
+  "title": "Rename notes column and cursor-paginate saved recipes",
+  "context": "Repo: pantry-web, a consumer meal-planning web app on Postgres. user_recipes has ~140M rows and the heaviest users have more than 200k saved recipes; notes are user-written free text that users cannot recover elsewhere. Migrations run automatically on deploy after merge to main. API p99 budget is 300ms.",
+  "artifact": "PR #1907: Rename recipe notes column + cursor pagination for saved recipes\n\nTwo small changes bundled because they touch the same table.\n\n1. `user_recipes.notes` becomes `user_recipes.private_notes` ahead of the shared-collections work, so it is obvious in queries which field must never be exposed on shared views. Pure rename, no data change; the down migration restores the old name.\n2. `GET /api/recipes/saved` moves from offset to cursor pagination. Offsets were drifting when users saved recipes while scrolling. The client already sends `cursor` from the previous page's `nextCursor`.\n\ndiff --git a/db/migrations/0087_private_notes.up.sql b/db/migrations/0087_private_notes.up.sql\nnew file mode 100644\nindex 0000000..c41e9d2\n--- /dev/null\n+++ b/db/migrations/0087_private_notes.up.sql\n@@ -0,0 +1,4 @@\n+BEGIN;\n+ALTER TABLE user_recipes ADD COLUMN private_notes text;\n+ALTER TABLE user_recipes DROP COLUMN notes;\n+COMMIT;\ndiff --git a/db/migrations/0087_private_notes.down.sql b/db/migrations/0087_private_notes.down.sql\nnew file mode 100644\nindex 0000000..8a02b7f\n--- /dev/null\n+++ b/db/migrations/0087_private_notes.down.sql\n@@ -0,0 +1,4 @@\n+BEGIN;\n+ALTER TABLE user_recipes ADD COLUMN notes text;\n+ALTER TABLE user_recipes DROP COLUMN private_notes;\n+COMMIT;\ndiff --git a/server/routes/saved.ts b/server/routes/saved.ts\nindex 2c9f1ab..e7a50d3 100644\n--- a/server/routes/saved.ts\n+++ b/server/routes/saved.ts\n@@ -1,36 +1,44 @@\n import { Router } from \"express\";\n import { db } from \"../db\";\n import { requireUser } from \"../auth\";\n\n export const saved = Router();\n\n+type SavedRow = {\n+  id: string;\n+  recipe_id: string;\n+  title: string;\n+  saved_at: Date;\n+  private_notes: string | null;\n+};\n+\n saved.get(\"/api/recipes/saved\", requireUser, async (req, res) => {\n   const userId = req.user!.id;\n-  const limit = Math.min(Number(req.query.limit) || 50, 100);\n-  const offset = Math.max(Number(req.query.offset) || 0, 0);\n-  const { rows } = await db.query(\n-    `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.notes\n-       FROM user_recipes ur JOIN recipes r ON r.id = ur.recipe_id\n-      WHERE ur.user_id = $1\n-      ORDER BY ur.saved_at DESC\n-      LIMIT $2 OFFSET $3`,\n-    [userId, limit, offset],\n-  );\n-  res.json({ items: rows });\n+  const limit = Math.min(Number(req.query.limit) || 50, 100);\n+  const cursor = typeof req.query.cursor === \"string\" ? req.query.cursor : null;\n+\n+  const { rows } = await db.query<SavedRow>(\n+    `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.private_notes\n+       FROM user_recipes ur JOIN recipes r ON r.id = ur.recipe_id\n+      WHERE ur.user_id = $1\n+      ORDER BY ur.saved_at DESC, ur.id DESC`,\n+    [userId],\n+  );\n+\n+  const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;\n+  const page = rows.slice(start, start + limit);\n+  const nextCursor =\n+    start + limit < rows.length ? page[page.length - 1].id : null;\n+\n+  res.json({ items: page, nextCursor });\n });\ndiff --git a/server/routes/saved.test.ts b/server/routes/saved.test.ts\nindex 91d0c3e..4b7f2a1 100644\n--- a/server/routes/saved.test.ts\n+++ b/server/routes/saved.test.ts\n@@ -12,9 +12,18 @@ describe(\"GET /api/recipes/saved\", () => {\n-  it(\"pages with offset\", async () => {\n-    const a = await get(\"/api/recipes/saved?limit=2&offset=0\");\n-    const b = await get(\"/api/recipes/saved?limit=2&offset=2\");\n-    expect(a.items.map((i) => i.id)).toEqual([\"r5\", \"r4\"]);\n-    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n+  it(\"pages with cursor\", async () => {\n+    const a = await get(\"/api/recipes/saved?limit=2\");\n+    expect(a.items.map((i) => i.id)).toEqual([\"r5\", \"r4\"]);\n+    const b = await get(`/api/recipes/saved?limit=2&cursor=${a.nextCursor}`);\n+    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n+    const c = await get(`/api/recipes/saved?limit=2&cursor=${b.nextCursor}`);\n+    expect(c.items.map((i) => i.id)).toEqual([\"r1\"]);\n+    expect(c.nextCursor).toBeNull();\n   });\n });",
+  "expected_verdict": "ATTACKS",
+  "defects": [
+    {
+      "id": "d1",
+      "lens": "reversibility",
+      "severity": "blocker",
+      "description": "Description calls this a pure rename with no data change, but the up migration adds an empty private_notes column and drops notes without copying data (should be RENAME COLUMN). Every user's notes are destroyed on deploy and the down migration cannot restore them.",
+      "evidence": "ALTER TABLE user_recipes DROP COLUMN notes;"
+    },
+    {
+      "id": "d2",
+      "lens": "scale",
+      "severity": "major",
+      "description": "The query dropped LIMIT and now loads a user's entire saved list on every page request, slicing in memory; for users with 200k+ rows this blows the 300ms budget and memory on every scroll.",
+      "evidence": "ORDER BY ur.saved_at DESC, ur.id DESC`,"
+    },
+    {
+      "id": "d3",
+      "lens": "correctness",
+      "severity": "major",
+      "description": "If the cursor row no longer exists (recipe unsaved between pages), findIndex returns -1 so start becomes 0 and the client gets page one again, duplicating items and looping infinite scroll.",
+      "evidence": "rows.findIndex((r) => r.id === cursor) + 1"
+    }
+  ],
+  "decoys": [
+    "limit query param is clamped (Math.min(... || 50, 100)) so a client cannot request an unbounded page size.",
+    "private_notes is returned in the response, but this route is requireUser and filtered to the caller's own rows, so it is the owner reading their own notes."
+  ]
+}

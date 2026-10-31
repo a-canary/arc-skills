@@ -1,0 +1,119 @@
+{
+ "approach": "triage-routed",
+ "case": "plan-05",
+ "rep": 1,
+ "wallMs": 238781,
+ "verdict": "ATTACKS",
+ "confidence": 0.86,
+ "attacks": [
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The nightly job's feasibility is unproven. At the sized population (about 630k pantry users, 30% of 2.1M MAU) versus the 12k-user staging run, linear scaling gives roughly 52x the 41-minute baseline, about 36 hours, which overruns the 02:00 UTC window. The plan does not say whether staging used the full 340k catalog, and it has no runtime budget or production-volume test.",
+   "evidence": "\"Staging run: 12,000 synthetic pantry users completed in 41 minutes.\" / \"Adoption assumption for sizing: 30% of MAU create a pantry within 90 days.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Each night the job fully rescores every pantry user against all 340k recipes and upserts top-50 rows, with no dirty-flag, delta, or skip logic. Compute and write cost scale with total users and catalog size rather than with changes, and the ~31M row writes per night are not budgeted.",
+   "evidence": "\"for each user with a pantry, score every recipe in the catalog (340k recipes) in a single SQL statement\" / \"then upsert the top 50 into pantry_matches\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The single large scoring statement and the upserts run on the primary, which also serves production writes, with no batching, chunking, statement timeout, or read-replica use for the read side. This risks lock contention and WAL pressure on production.",
+   "evidence": "\"in a single SQL statement joining pantry_items x recipe_ingredients on the primary\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The job runs at 02:00 UTC, which is roughly 6–9pm local for the ~78% of US-timezone users. That is peak cooking and browsing time, so the heavy batch load compounds the contention risk on the primary.",
+   "evidence": "\"PantryMatchJob (Sidekiq, nightly 02:00 UTC)\" / \"~78% of them in US time zones\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The scoring formula is underspecified in ways that change results. The expiry-proximity weighting has no defined function, it is unstated whether expired items count as present, and 'always present' staples inflate the numerator while the denominator treatment is unspecified.",
+   "evidence": "\"Score = (pantry ingredients used / recipe ingredients) weighted by expiry proximity, with pantry staples (salt, oil, water, pepper) always counted as present.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Quantity and unit are collected but do not enter the score, which treats ingredient presence as binary. A recipe needing 2 cups would match a pantry holding 1 teaspoon, and no unit-conversion approach is stated.",
+   "evidence": "\"Users add items with a form: ingredient (autocomplete over our 9,400-ingredient catalog), quantity, unit, expiry date.\" / \"Score = (pantry ingredients used / recipe ingredients)\""
+  },
+  {
+   "lens": "other",
+   "severity": "major",
+   "claim": "Pantry accuracy depends on users updating quantities after cooking, and there is no staleness handling for items consumed outside recipe flows. Matches may therefore route users to recipes using ingredients they no longer have, and the plan gives no evidence that users will respond to the prompt given the effort-driven churn.",
+   "evidence": "\"Users are asked to update quantities after cooking (prompt on the recipe \"I made this\" screen).\" / ABSENT: staleness handling or response-rate evidence"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The top churn reason is setup and typing effort (38%), yet the design requires typing ingredients, quantities, units, and expiry dates before the feature works. The plan does not reconcile this or show that the mechanism avoids the stated driver.",
+   "evidence": "\"Too much setup / typing to get useful suggestions\" — 38% vs. \"Users add items with a form: ingredient ..., quantity, unit, expiry date.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The 15-item unlock gate and the 25%-of-MAU unlock target rest on the 30% pantry-adoption and typing-willingness assumptions, which are not grounded in any cited data, prototype, or survey.",
+   "evidence": "\"Adoption assumption for sizing: 30% of MAU create a pantry within 90 days.\" / ABSENT: prior data or prototype showing users will enter 15+ items with expiry dates"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The +3 pt retention success metric has no baseline, power or sample-size estimate, or matching method, and the unlock threshold selects for already-engaged users. The result would be confounded by selection and cannot be evaluated as written.",
+   "evidence": "\"+3 pts 30-day retention for users who unlock vs. matched control.\" / ABSENT: baseline retention, power calculation, matching method, control assignment"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The beta ramp from 5% to 100% has no load or runtime gate, and no feature flag or kill switch is stated for disabling the nightly job if runtime or cost exceeds budget. The only load evidence covers about 2% of the sized population.",
+   "evidence": "\"Week 6: beta to 5% of users, then 100%.\" / ABSENT: feature flag, kill switch, or ramp criteria"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The 'use it before it goes bad' push needs a fan-out scheduler across many time zones and a per-user daily counter or dedupe store, neither of which is described. A naive scheduler would spike at each local quiet-hours end.",
+   "evidence": "\"Optional 'use it before it goes bad' push when a pantry item is 2 days from expiry.\" / \"max 1 push per user per day, respects existing quiet hours (21:00-08:00 local)\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Scoring behavior for items without expiry dates is undefined, even though the unlock threshold counts only items with expiry dates, so the match quality the gate protects is unspecified.",
+   "evidence": "\"unlocks once a user has entered at least 15 items with expiry dates\" / ABSENT: how expiry-less items are weighted"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The 'max 1 push per user per day' window is not defined in local time or UTC, and the plan does not say how user timezone is determined, which matters for the 22% of users outside US time zones.",
+   "evidence": "\"max 1 push per user per day, respects existing quiet hours (21:00-08:00 local)\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The plan does not say whether stale pantry_matches rows are deleted after the nightly upsert, so the table either grows or relies on heavy churn that bloats Postgres and autovacuum has to absorb.",
+   "evidence": "\"new table pantry_matches(user_id, recipe_id, score, computed_at), top 50 per user\" / \"then upsert the top 50 into pantry_matches\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "There is no cap on pantry items per user, so per-user scoring cost and the autocomplete and list endpoints are unbounded.",
+   "evidence": "ABSENT: maximum pantry item count or quota on pantry_items"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Analytics events needed to evaluate the success metrics are not scheduled until week 5, and the six-week, three-platform scope for a four-person squad leaves little slack for the scoring work.",
+   "evidence": "\"Week 5: notifications, analytics events.\""
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 20460,
+  "tokOut": 11842,
+  "usd": 0.00990235,
+  "critMs": 31210
+ }
+}

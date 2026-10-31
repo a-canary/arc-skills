@@ -1,0 +1,101 @@
+{
+ "approach": "cascade",
+ "case": "deploy-08",
+ "rep": 2,
+ "wallMs": 211527,
+ "verdict": "ATTACKS",
+ "confidence": 0.9,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "Any SES error, including throttling, records every recipient in the batch as a permanent failure. Those recipients are excluded from the rest of the issue and shown to publishers as 'Not delivered'. There is no retry or backoff. With 48 workers against a 300 msg/s limit, throttling is likely, so real subscribers would be permanently dropped.",
+   "evidence": "\"if err != nil { for _, r := range batch.Recipients { failures.Record(...) } ... continue }\" and \"those recipients are excluded from the issue's remaining sends\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "blocker",
+   "claim": "The QA results (0 failures, 11 min) were produced with SES throttling simulated off. Staging used 4 workers, while prod uses 48 workers at about 25 msg/s each, roughly 1200 msg/s of demand against a 300 msg/s limit. Production behavior under throttling is unproven. The QA run also took 11 min against a goal of under 3 min.",
+   "evidence": "\"QA ran with SES throttling simulated off via the sandbox mock\"; \"SEND_WORKERS=48\"; \"300 messages/second\"; \"~25 msg/s sustained\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The launch post tells all publishers that Smart Send is live for every publication today. The rollout plan ramps it 5%, 25%, then 100% over three weeks, gated on metrics, while the prod config already sets the default to on. The public announcement contradicts the gated plan and cannot be retracted.",
+   "evidence": "\"Smart Send Time is live for every publication today\" vs \"5% (week 1), 25% (week 2), 100% (week 3)\" and \"SMART_SEND_DEFAULT=on\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The 'up to 5× faster' claim is unsupported. Staging shows 11 min against a 14 min baseline, about 1.3x, and there is no prod measurement.",
+   "evidence": "\"every Inkwell issue reaches inboxes up to 5× faster\" vs \"Pass, 0 failures, 11 min\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "major",
+   "claim": "Smart Send holds issues for up to 18 hours by default. 40% of publications are news outlets with time-sensitive content, and no per-issue urgency override is described. The default harms the core use case, and the top request (time-zone scheduling) has already shipped.",
+   "evidence": "\"Issues are held for at most 18 hours. Enabled by default for all publications\" and \"4,480 of them (40%) are news or local-news outlets\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The error path skips Ack after already recording failures, so a redelivered batch is both marked failed and retried. The per-entry loop indexes batch.Recipients[i] with no length check against the result count, so a mismatch would panic or misattribute failures.",
+   "evidence": "\"continue\" with no q.Ack on the error path; \"batch.Recipients[i].SubscriberID\" with no length check"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The batch-failure metric and 'Not delivered' volume are dashboard-only. The pager covers only queue lag and complaint rate, so a throttling-driven delivery loss would not page anyone. There is no alert on the Smart Send hold backlog either.",
+   "evidence": "\"On-call pager: queue lag > 10 min, complaint rate > 0.1%\"; send.batch_failed listed only under Dashboards"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "There is no client-side rate limiter or per-publication quota. One large issue, or a burst across 11,240 publications, can saturate the shared 300 msg/s and 25M/day SES limits and starve other publishers. Smart Send hour-aligned delivery also concentrates load into peak hours.",
+   "evidence": "\"SES production account limits (us-east-1): 300 messages/second, 25M/day\" with no limiter in the loop or config"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The pipeline deploys to 100% of sends with no canary. Smart Send rollback releases all held issues at once, creating a burst into the SES limits, and under the current error handling a burst that triggers throttling would permanently fail recipients.",
+   "evidence": "\"deploy Monday 09:00 UTC to 100% of sends\"; \"held issues are released immediately\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Smart Send builds a per-subscriber behavioral profile from 90 days of opens, on by default. No subscriber notice, retention limit or opt-out for readers is described.",
+   "evidence": "\"predicts each subscriber's most likely open hour from their last 90 days of opens\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Default-on behavioral profiling has no documented lawful basis or legal review (GDPR/ePrivacy-style), and delaying election or weather alerts raises public-interest concerns. Neither is assessed.",
+   "evidence": "ABSENT: no legal or consent assessment; \"Enabled by default for all publications\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The 71% accuracy figure has no baseline, such as a fixed hour, so it does not show the feature adds value. The 'control' in the ramp gate is undefined.",
+   "evidence": "\"71%\" and \"open-rate lift ≥ 3% vs control\""
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "Sending depends on a single provider (SES) in a single region. The only fallback is the idle Sidekiq sender, which presumably also depends on SES, and its 14-day window is short.",
+   "evidence": "\"SES_REGION=us-east-1\"; \"keep the Sidekiq sender deployed but idle for 14 days\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "There is no SES spend estimate or retry budget, though the planned retry fix would increase send volume.",
+   "evidence": "ABSENT: no cost figures"
+  }
+ ],
+ "usage": {
+  "calls": 2,
+  "tokIn": 9882,
+  "tokOut": 10422,
+  "usd": 0.048163750000000005,
+  "critMs": 55607
+ }
+}

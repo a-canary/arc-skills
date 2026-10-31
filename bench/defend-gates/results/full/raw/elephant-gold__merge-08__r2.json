@@ -1,0 +1,71 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-08",
+ "rep": 2,
+ "wallMs": 36680,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "supply-chain",
+   "severity": "blocker",
+   "claim": "The go.mod replace directive redirects zap to a local sibling path outside the repo. A clean-checkout CI build cannot resolve ../zap, and any build that does succeed compiles unreviewed local source instead of the pinned module. The binary is distributed to on-call laptops, so this is a supply-chain and reproducibility break. The PR text only says zap was bumped and does not mention the replace.",
+   "evidence": "+replace go.uber.org/zap => ../zap"
+  },
+  {
+   "lens": "supply-chain",
+   "severity": "major",
+   "claim": "The zap pseudo-version is an unreleased commit whose provenance the diff does not verify, and go.sum is not updated. The replace overrides checksum verification for the code that is actually compiled.",
+   "evidence": "-\tgo.uber.org/zap v1.27.0\n+\tgo.uber.org/zap v1.27.1-0.20260914181502-9d3e1c0f7a2b"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "printPlan does not reproduce computeBatches' batch sizing. It uses int() truncation over len(hosts), while the real rollout uses ceil() over len(rest). For 10 hosts at 0.25 with no canary, the real batches are 3,3,3,1 but the plan prints 2,2,2,2,2. On-call would approve a plan that the irreversible real rollout does not follow.",
+   "evidence": "per := int(float64(len(hosts)) * o.MaxSurge) ... vs computeBatches: size := int(math.Ceil(float64(len(rest)) * o.MaxSurge))"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "With --canary set, printPlan never removes the canary from the host list before chunking. The canary is printed as batch 0 and appears again in a regular batch, so the plan is wrong in exactly the case the feature is meant to verify. computeBatches uses without(hosts, canary).",
+   "evidence": "for i := 0; i < len(hosts); i += per { ... hosts[i:end] ... } (no without() call), vs rest = without(hosts, o.CanaryHost)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Run calls api.Hosts before checking DryRun, so a dry-run fails with 'list hosts' whenever the orchestrator is down or slow. This contradicts the stated contract and removes the feature's value during the incidents when on-call most needs a plan.",
+   "evidence": "hosts, err := api.Hosts(ctx, o.Service) ... if o.DryRun {"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR claims dry-run exits without touching the orchestrator API, but the code calls api.Hosts before the dry-run check. The description does not match the behavior.",
+   "evidence": "\"now prints the batch plan and exits without touching the orchestrator API.\""
+  },
+  {
+   "lens": "scope-drift",
+   "severity": "major",
+   "claim": "A zap dependency bump is bundled into a PR whose stated purpose is the dry-run flag. It cannot be reviewed or reverted independently, and it carries the local replace with it.",
+   "evidence": "Also bumps zap to pick up the JSON encoder fix we upstreamed."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "No test covers printPlan, the --dry-run path, or equality between the printed plan and computeBatches output. That equality is the entire reason the feature exists, and the divergence above would be caught by such a test.",
+   "evidence": "ABSENT: any *_test.go change or test output for printPlan or --dry-run"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "printPlan reimplements batch splitting instead of sharing computeBatches, and the copy has already diverged. Any future change to batching or canary handling will drift again, and the drift will be invisible at small fleet sizes.",
+   "evidence": "func printPlan(w io.Writer, hosts []string, o Options) { ... per := int(float64(len(hosts)) * o.MaxSurge) ... } — ABSENT: any call to computeBatches from printPlan"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 51801,
+  "tokOut": 21933,
+  "usd": 0.013344060000000001,
+  "critMs": 18898
+ }
+}

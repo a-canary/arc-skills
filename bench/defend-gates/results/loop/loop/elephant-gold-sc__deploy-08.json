@@ -1,0 +1,568 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "deploy-08",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "scale",
+     "severity": "blocker",
+     "claim": "Production runs 48 workers at ~25 msg/s each, about 1,200 msg/s, four times the 300 msg/s SES account limit. Throttled batches are recorded as failures and permanently excluded from the issue instead of being retried or paced.",
+     "evidence": "\"SEND_WORKERS=48\" with \"~25 msg/s sustained\" per worker, against \"SES production account limits (us-east-1): 300 messages/second\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "The worker has no retry or backoff. Any SendBulkEmail error marks every recipient in the batch as failed and skips the batch. Failed recipients are excluded from the rest of the issue and shown as \"Not delivered\", so transient errors become permanent non-delivery. The batch is also never acked and there is no idempotency guard, so the batch is either redelivered (duplicates) or stranded.",
+     "evidence": "if err != nil { for _, r := range batch.Recipients { failures.Record(...) } metrics.Inc(\"send.batch_failed\"); continue } ... \"those recipients are excluded from the issue's remaining sends and shown to publishers in the issue report under 'Not delivered'\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "QA does not validate behavior at production limits. Staging SES throttling was simulated off via a sandbox mock, so the 0-failure, 11-minute result never exercised the throttled and failure path that production at 48 workers will hit. The under-3-minute goal is unproven.",
+     "evidence": "\"4 workers were throttled intermittently, so QA ran with SES throttling simulated off via the sandbox mock\"; \"Pass, 0 failures, 11 min\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The per-result loop indexes batch.Recipients[i] by SES result index without checking that the result length and order match the input. A mismatch would blame the wrong subscribers, who are then excluded from the issue. Errors from failures.Record and q.Ack are ignored.",
+     "evidence": "for i, res := range out.BulkEmailEntryResults { ... batch.Recipients[i].SubscriberID ... } q.Ack(ctx, batch)"
+    },
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "The launch post tells all publishers Smart Send Time is live for every publication today and already on. The rollout plan ramps it 5%, 25%, 100% over three weeks, gated on lift and tickets, and production config has SMART_SEND_DEFAULT=on. The public announcement is irreversible and bypasses the staged protection.",
+     "evidence": "\"Smart Send Time is live for every publication today\" vs \"ramp SMART_SEND_DEFAULT by publication cohort: 5% (week 1), 25% (week 2), 100% (week 3)\" and \"SMART_SEND_DEFAULT=on\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "Smart Send Time is on by default and holds issues up to 18 hours. 40% of publications are time-sensitive news outlets (breaking news, election results, weather alerts). There is no opt-in, no exemption for them, and no evidence that publishers want algorithmic timing. The shipped time-zone scheduling was the top request.",
+     "evidence": "\"Enabled by default for all publications\"; \"4,480 of them (40%) are news or local-news outlets whose issues are time-sensitive\"; \"Issues are held for at most 18 hours.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The launch post claims every issue arrives up to 5× faster. The only measured result is 11 minutes on staging with throttling off, against a 14-minute baseline. The under-3-minute figure is a goal, and the post does not mention the up-to-18-hour hold.",
+     "evidence": "\"every Inkwell issue reaches inboxes up to 5× faster\" vs \"11 min\" and \"QA ran with SES throttling simulated off\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Rollback is unproven and not a clean reversal. Held issues are released immediately all at once, with no rate limit, into the same SES cap and at the wrong time. In-flight SES sends cannot be recalled. The dispatcher switch to Sidekiq mid-issue is untested and risks duplicate or missing sends.",
+     "evidence": "\"held issues are released immediately\"; \"set SENDER=sidekiq in the dispatcher; in-flight batches drain in < 2 min\"; ABSENT: rollback test results"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Monitoring does not cover the primary failure signal. send.batch_failed, SES throttle responses, and send_failures growth are on dashboards but have no alarm. A throttling storm or SES outage could drain the queue as failures without queue lag ever reaching the paging threshold.",
+     "evidence": "\"On-call pager: queue lag > 10 min, complaint rate > 0.1%.\" with no alarm on send.batch_failed or failure counts"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Smart Send Time profiles each subscriber's open behavior over 90 days, on by default. The artifact gives no subscriber notice, subscriber-level opt-out, legal basis, or retention policy, and the launch post does not disclose the profiling.",
+     "evidence": "\"predicts each subscriber's most likely open hour from their last 90 days of opens\"; ABSENT: subscriber notice, opt-out, or privacy review"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The 25M/day SES quota is not reconciled with projected volume across 11,240 publications. Meeting the 3-minute goal for 50k recipients needs about 280 msg/s, nearly the whole 300 msg/s cap, leaving almost no headroom for concurrent publications.",
+     "evidence": "\"300 messages/second, 25M/day\"; ABSENT: projected daily send volume"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "The pipeline rewrite and the default-on Smart Send Time are bundled in one deploy and launch with a same-day public announcement. The pipeline goes to 100% of sends with no staged ramp, so a fault in either feature hits all publishers at once.",
+     "evidence": "\"deploy Monday 09:00 UTC to 100% of sends\"; \"1. Send pipeline v2 ... 2. Smart Send Time\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 63246,
+    "tokOut": 23677,
+    "usd": 0.12291760000000002,
+    "critMs": 29179
+   },
+   "wallMs": 110385
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The ledger is written only after SES returns, and the SES call has no idempotency key or pre-send intent record. A timeout that actually delivered, or a result-count mismatch, is Nacked and the whole batch is resent because nothing was MarkSent. A crash between the SES call and MarkSent has the same effect. FilterUnsent and MarkSent are also not atomic across workers. Duplicate emails cannot be recalled, so the claim that the ledger prevents duplicates is overstated.",
+     "evidence": "\"exponential backoff + jitter on throttling / 5xx / timeouts\"; \"SES result length mismatch\" ... \"q.Nack(ctx, batch, cfg.RequeueDelay)\"; MarkSent runs only per returned result. ABSENT: idempotency key or intent record for ambiguous outcomes."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Transient batch errors and transient per-recipient results are requeued with no attempt counter, dead-letter path or escalation. SEND_MAX_ATTEMPTS only bounds the backoff inside one call. Permanent errors and mismatches page and then Nack the same batch, so a poison batch loops and pages roughly every 30s indefinitely. Each loop re-sends through SES, which also adds cost. No alarm covers send.batch_requeued.",
+     "evidence": "\"metrics.Inc(\\\"send.batch_requeued\\\")\" then \"q.Nack(ctx, batch, cfg.RequeueDelay)\"; \"mustDo(q.Requeue(ctx, retry, cfg.RequeueDelay))\"; \"SEND_MAX_ATTEMPTS=6\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The failure-path evidence does not exist yet. The only passing 50k run never exercised throttling or failures. The throttled run, fault injection, redelivery test and rollback drills (including the mid-issue switch) are all unrun. These are exactly the checks that would verify the duplicate and loss guarantees and the rollback. They must be attached before this gate is crossed, not merely listed as required.",
+     "evidence": "\"Required before the 2026-11-09 deploy (not yet run; results to be attached)\"; \"this run never exercised throttling or the failure path\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The default branch treats any status not matched by isTransientStatus as a permanent \"Not delivered\" failure. The transient list is only given as \"e.g.\", so an unlisted transient status would violate the stated invariant that transient errors never become permanent non-delivery.",
+     "evidence": "\"default: // permanent per-recipient failure (suppressed, invalid address, ...)\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The rule for time-sensitive exemption is ambiguous: \"category and an explicit self-declaration\" could be AND or OR. About 40% of publications are time-sensitive, so a news outlet that never self-declares could be default-enrolled in holds of up to 18 hours.",
+     "evidence": "\"identified by publication category and an explicit self-declaration in Settings\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Per-publication fairness is asserted but not shown. The loop has a single global WaitN with no per-publication keying. The mechanism behind the claim that one large issue cannot starve others is undescribed.",
+     "evidence": "\"The shared limiter schedules batches fairly across publications so one large issue cannot starve others.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "No timeouts are defined for SES calls, DB writes or limiter waits. The artifact also does not say where Smart Send hold state is persisted across restarts or rollback.",
+     "evidence": "ABSENT: timeout keys in deploy/prod/send-worker.env; ABSENT: storage of held-issue state."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The rollback says the switch takes effect at issue boundaries, but the drill requires a mid-issue switch. The 18-hour hold maximum is also not reconciled with rollback release through a rate limiter.",
+     "evidence": "\"The switch takes effect at issue boundaries\" vs \"including a mid-issue switch\"; \"Issues are held for at most 18 hours.\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The artifact does not say how bounce and complaint webhooks are authenticated. These feed suppression and the complaint-rate alarms that gate the ramp.",
+     "evidence": "\"Bounce/complaint webhooks still processed | — | Pass\"; ABSENT: signature verification."
+    }
+   ],
+   "usage": {
+    "calls": 18,
+    "tokIn": 120027,
+    "tokOut": 52769,
+    "usd": 0.16467472,
+    "critMs": 75562
+   },
+   "wallMs": 179853
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "partial-failure",
+     "severity": "major",
+     "claim": "The reconciler releases every `inflight` recipient with no Send event for a resend once `SEND_RECONCILE_WINDOW` passes. Nothing checks whether SES event ingestion is healthy or lagging, so an event-pipeline outage could trigger mass duplicate sends that cannot be recalled. The reconciler's release-for-resend count has no alarm either.",
+     "evidence": "\"A recipient with no Send event after `SEND_RECONCILE_WINDOW` is released for one resend.\" ABSENT: any guard that pauses auto-release when event ingestion is down or lagging; \"duplicates detected by the reconciler\" appears only as a dashboard item."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The permanent per-recipient failure branch records a failure but never updates the ledger, so the row stays `inflight`. The reconciler finds no Send event for it, since SES rejected it, and releases it for a resend. That contradicts the stated exclusion of permanently failed recipients.",
+     "evidence": "default: // permanent per-recipient failure (suppressed, invalid address, ...)\n    mustDo(failures.Record(ctx, batch.IssueID, r.SubscriberID, string(res.Status)))"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The limiter-error path calls `q.Nack` without incrementing `batch.Deliveries`, while the dead-letter bound depends on that counter. A persistent limiter failure (for example a cancelled context) can redeliver the batch forever, which contradicts the 'Nothing loops forever' claim.",
+     "evidence": "if err := limiter.WaitN(ctx, len(pending.Recipients)); err != nil {\n        mustDo(ledger.Release(ctx, pending)) // nothing was sent\n        q.Nack(ctx, batch, cfg.RequeueDelay)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The catch-all `default` branch treats any unclassified error as a permanent not-sent batch error and releases the claims. An error that occurs after SES may have accepted the request, such as a connection reset, would free recipients who may already have been sent, risking duplicates. Unknown errors should default to ambiguous.",
+     "evidence": "default:\n            // Permanent error for the whole batch (e.g. account/config problem): quarantine ...\n            mustDo(ledger.Release(ctx, pending))"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The time-sensitive exemption is ambiguous. The text says publications are identified by category 'and' an explicit self-declaration. If both are required, news outlets that have not self-declared, part of the 40% cohort, are enrolled in 18-hour holds by default. If either suffices, the wording is wrong. The two readings give different enrollment outcomes.",
+     "evidence": "\"identified by publication category and an explicit self-declaration in Settings\""
+    },
+    {
+     "lens": "rollback",
+     "severity": "minor",
+     "claim": "The rollback to Sidekiq assumes the Sidekiq sender honors the shared ledger. The artifact does not say the Sidekiq path was changed to check `sent` or `inflight` rows. The mid-issue rollback drill partly covers this risk.",
+     "evidence": "\"The send ledger is shared, so a Sidekiq sender skips recipients already `sent` or `inflight`\""
+    },
+    {
+     "lens": "partial-failure",
+     "severity": "minor",
+     "claim": "Dead-lettered and quarantined batches have no replay or recovery procedure. Their ledger rows are released, so recipients stay unsent until someone acts on the page.",
+     "evidence": "ABSENT: DLQ replay procedure, owner, or runbook; \"Recipients that exhaust retries are dead-lettered, surfaced to the delivery team by page\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The artifact states no suppression or unsubscribe check at send or release time. Held Smart Send issues can go out up to 18 hours after a subscriber unsubscribes or requests erasure.",
+     "evidence": "ABSENT: unsubscribe/suppression check in ClaimUnsent or held-issue release; \"Issues are held for at most 18 hours\""
+    },
+    {
+     "lens": "retries",
+     "severity": "minor",
+     "claim": "The batch lease timeout, the SES call deadline, and the `mustDo` retry budget are not defined. A slow healthy batch could be redelivered and dead-lettered, and workers could block during a DB outage.",
+     "evidence": "ABSENT: visibility timeout, SES call timeout, or `mustDo` attempt count in the config; \"`mustDo` logs, increments `send.bookkeeping_error`, and retries the write.\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The publisher survey and 2-week opt-in beta are promised before the Smart Send ramp, but they are not listed among its gates. The ramp gates list only open-rate lift and late-issue tickets.",
+     "evidence": "\"Before the ramp we will run a short publisher survey and a 2-week opt-in beta\" vs. ramp gates listing only \"open-rate lift ≥ 3% vs control\" and \"issue arrived late\" tickets"
+    },
+    {
+     "lens": "rollback",
+     "severity": "minor",
+     "claim": "The Smart Send rollback drain has no maximum duration, so a large held backlog could be released later than the public copy's 'up to 18 hours'. The pipeline rollback also waits on reconciliation of up to 60 minutes.",
+     "evidence": "\"Drill in staging with a large held backlog, recording release duration\" with no pass threshold; \"`inflight` recipients are resolved by the reconciler first.\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 146420,
+    "tokOut": 48969,
+    "usd": 0.1767521,
+    "critMs": 48695
+   },
+   "wallMs": 117711
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "`ledger.ClaimUnsent` returns no error to the loop. A DB error or timeout during claim yields an empty `pending`, and the loop acks the batch as already handled, so those recipients are never sent, recorded, or alerted on. The fault-injection gate lists DB failures only for `failures.Record`, `q.Ack` and `MarkSent`, not for claim.",
+     "evidence": "pending := ledger.ClaimUnsent(ctx, batch) ... if len(pending.Recipients) == 0 { mustDo(q.Ack(ctx, batch)) }; ABSENT: claim error handling and a claim-failure fault-injection case"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The per-recipient `default` branch treats every SES entry status that is not success or transient as a permanent failure. It marks the recipient terminal `failed` and shows it as \"Not delivered\", which contradicts the rule that any status not positively classified is ambiguous. The sets of transient and permanent statuses are never enumerated.",
+     "evidence": "default: // permanent per-recipient failure (suppressed, invalid address, ...) ... ledger.MarkFailed(...) vs \"any error not positively classified as definitely-not-sent ... ambiguous\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The \"nothing loops forever\" bound has holes. When a bookkeeping write still fails after `mustDo` retries, the batch is redelivered without incrementing `batch.Deliveries`, so a persistent DB failure can redeliver indefinitely. The reconciler's release-for-resend path shows no counter, and \"released for one resend\" has no release count or ledger state enforcing it.",
+     "evidence": "\"If it still fails the batch is not acked and is redelivered.\" vs \"incremented on every redelivery path\"; \"released for one resend\" with ledger states only inflight/sent/failed"
+    },
+    {
+     "lens": "rollback",
+     "severity": "major",
+     "claim": "Rollback to Sidekiq depends on the old sender honoring the shared ledger (skipping sent, failed and inflight rows). No Sidekiq-side change is listed in what ships. Without one, rollback can duplicate sends, and the artifact does not say how the reconciler is owned during rollback.",
+     "evidence": "\"a Sidekiq sender skips recipients already `sent`, `failed` or `inflight`\"; ABSENT: any ledger-aware change to the Sidekiq sender in \"What ships\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Dead-lettered and quarantined batches have no per-recipient ledger state, no replay or drain procedure, and no publisher visibility. Their recipients are unsent but only paged internally, so an issue can look complete while subscribers never receive it.",
+     "evidence": "mustDo(q.DeadLetter(ctx, batch, \"max deliveries exceeded\")) / mustDo(q.Quarantine(...)); ABSENT: DLQ/quarantine recovery procedure and ledger state"
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Issues are held up to 18 hours, but nothing says unsubscribe, erasure or suppression status is rechecked at release time. A subscriber who unsubscribes during the hold could still receive the issue.",
+     "evidence": "\"Issues are held for at most 18 hours.\" / \"deleted on unsubscribe or erasure request\"; ABSENT: suppression recheck at release"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Reconciliation matches SES Send events by a per-recipient message tag, but the shown worker path sets no tag. `sendWithBackoff` is not shown, so this is unverified, though the fault-injection gate would likely catch it.",
+     "evidence": "\"matched by a per-recipient message tag\"; ABSENT: tag in the SendBulkEmail call"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The capacity math is inconsistent. Eight workers at ~25 msg/s give ~200 msg/s, below the 240 msg/s limiter, so the limiter does not bind as claimed. At the 300 msg/s account limit, 50k takes ~2.8 min, so the \"not achievable\" statement depends on the 240 msg/s limiter, not the SES limit. The artifact already treats the goal as unproven.",
+     "evidence": "\"8 workers is about 200 msg/s ... so the limiter ... is the normal pacing mechanism\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "`MarkFailed` and `failures.Record` are separate writes. A crash between them leaves a terminal `failed` ledger row with no \"Not delivered\" record, and redelivery skips failed rows.",
+     "evidence": "ledger.MarkFailed(...) followed by failures.Record(...)"
+    },
+    {
+     "lens": "rollback",
+     "severity": "minor",
+     "claim": "The rollback design says the switch only takes effect at issue boundaries, yet the gate requires drilling a \"mid-issue switch\". The behavior of held issues when a publisher turns Smart Send off is also undefined.",
+     "evidence": "\"The switch takes effect at issue boundaries\" vs \"including a mid-issue switch\"; \"Publishers can turn it off\" with no held-issue behavior"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The SES bounce-rate alarm only warns at 4% and never pages. SES account-health thresholds sit near 5%, so a sustained spike could reach enforcement without a page.",
+     "evidence": "\"SES bounce rate 4% / complaint rate 0.08% (warn), complaint rate > 0.1% (page)\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "No resume runbook exists for paused auto-release, and the stall check does not condition on inflight recipients existing. Paging per batch can storm on-call during systemic faults.",
+     "evidence": "\"cap reached (page; auto-release paused)\"; \"page once per batch\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 169284,
+    "tokOut": 62518,
+    "usd": 0.20667190000000002,
+    "critMs": 81633
+   },
+   "wallMs": 207641
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The one-resend guard is internally inconsistent. Only recipients with no ledger row are claimable, yet the reconciler's release increments `release_count` on the existing row. If release deletes the row, the count is lost and resends are unbounded. If it keeps the row, the recipient is not claimable. The artifact also never names which sender or queue picks up a released recipient, including during a Sidekiq rollback. Duplicate sends cannot be recalled.",
+     "evidence": "\"Only recipients with no row are claimable.\" vs. \"The release increments `release_count` on the ledger row in the same transaction as the release\"; ABSENT: how a released row becomes claimable and who consumes it"
+    },
+    {
+     "lens": "rollback",
+     "severity": "major",
+     "claim": "The artifact admits residual duplicate risk is non-zero. The pre-ramp gate only requires the duplicate count to be 'reported', with no maximum acceptable rate as a go/no-go criterion. An irreversible duplicate-send risk can therefore pass the gate at any measured value.",
+     "evidence": "\"we will report the measured duplicate rate from fault injection rather than claim none\"; ABSENT: a duplicate-rate pass threshold in the pre-ramp gate"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The ledger, `send_failures`, replay audit records and SES event data are keyed to subscribers. At up to 25M/day, the ledger grows without limit. The artifact states no retention, purge, partitioning or erasure handling for them; only the Smart Send profile has a retention rule.",
+     "evidence": "\"Retention: the profile is derived data, limited to the 90-day window, deleted on unsubscribe or erasure request.\" ABSENT: retention or erasure for ledger, send_failures and audit records"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "`failures.Record` is not atomic with `MarkFailed`. If `MarkFailed` commits and `Record` then fails, a redelivery skips the `failed` row and the failure is never recorded, so the recipient never appears under 'Not delivered'.",
+     "evidence": "mustDo(ledger.MarkFailed(...))\nmustDo(failures.Record(...))"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The deliveries counter appears to be incremented twice on retry: the code sets `batch.Deliveries+1` explicitly while the comment says the queue also increments it. Retried recipients could be dead-lettered earlier than intended.",
+     "evidence": "q.Requeue(ctx, retry.WithDeliveries(batch.Deliveries+1), cfg.RequeueDelay)) // queue increments batch.Deliveries"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The capacity arithmetic is inconsistent. Eight workers at about 25 msg/s give about 200 msg/s, below the 240 msg/s limiter, so the workers, not the limiter, bind throughput. The 3.5 minute estimate also assumes 240 msg/s.",
+     "evidence": "\"8 workers is about 200 msg/s, below both the 240 msg/s limiter ... so the limiter ... is the normal pacing mechanism\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The claim query is joined to eligibility, so ineligible recipients get no row. The artifact still says they are 'recorded as skipped_ineligible'. The ledger's unique key is not stated.",
+     "evidence": "\"joined against current subscriber eligibility\" vs. \"skipped and recorded as `skipped_ineligible`\""
+    },
+    {
+     "lens": "authz",
+     "severity": "minor",
+     "claim": "`send-replay` and manual release of `unresolved` rows can cause duplicate sends. The artifact states no access control or approval for them, only an after-the-fact audit record.",
+     "evidence": "\"on-call runs `send-replay --batch <id>`\" ... \"released once manually, with an audit record\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 223345,
+    "tokOut": 60733,
+    "usd": 0.2114673,
+    "critMs": 81283
+   },
+   "wallMs": 250913
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The claim statement uses ON CONFLICT (issue_id, subscriber_id), but the ledger is partitioned by day of send. PostgreSQL requires unique indexes/conflict targets on a partitioned table to include the partition key. As written the statement errors, or dedupe only holds within one day's partition, so a later-day reclaim (held Smart Send issue, replay, redelivery) inserts a fresh row with release_count reset. The at-most-once claim and the one-resend bound both depend on this statement.",
+     "evidence": "\"ledger partitioned by day of send\" and \"single statement `INSERT ... ON CONFLICT (issue_id, subscriber_id) DO UPDATE SET state='inflight' WHERE ledger.state='released' RETURNING`\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "ledger.Release is specified as deleting the just-created claim row, but the core loop calls it on the whole pending set, which can include rows flipped from `released` to `inflight` with release_count=1. Deleting those rows erases the release history, so SEND_MAX_RELEASES can be bypassed after a throttle or limiter failure following a reclaim.",
+     "evidence": "\"A definite-not-sent `ledger.Release` in the core loop deletes the just-created claim row, since nothing was ever sent and there is no release history to preserve.\" and \"mustDo(ledger.Release(ctx, pending)) // nothing was sent\""
+    },
+    {
+     "lens": "retries",
+     "severity": "major",
+     "claim": "The poison-batch guard calls MarkDeadLettered on the whole batch, and the permanent-error path converts pending inflight rows to dead_lettered. Recipients already inflight from a crashed earlier delivery (SES may have sent) or already sent can be flipped to dead_lettered. The reconciler never resolves dead_lettered rows, and send-replay releases them for resend without SES event reconciliation, producing duplicates outside the release limit.",
+     "evidence": "\"mustDo(ledger.MarkDeadLettered(ctx, batch)) // unsent recipients get terminal-until-replay rows\" and \"send-replay --batch <id>, which moves `dead_lettered` rows to `released`\""
+    },
+    {
+     "lens": "partial-failure",
+     "severity": "major",
+     "claim": "The reconciler release is described as a single transaction that updates the Postgres ledger and enqueues a message on the send queue. A DB and an external queue cannot share one transaction. A crash between the two leaves a `released` row with no message (only a 30-minute page, no automatic re-enqueue or runbook), or a message with a row not in claimable state.",
+     "evidence": "\"The release is a single transaction that updates the existing ledger row ... In the same transaction the reconciler enqueues the recipient as a retried-recipient message on the send queue\""
+    },
+    {
+     "lens": "retries",
+     "severity": "major",
+     "claim": "Deliveries is incremented by the queue on every delivery, yet the retry path also sets WithDeliveries(batch.Deliveries+1). Ownership of the counter is ambiguous. If both apply, each retry burns two units of SEND_MAX_DELIVERIES and healthy batches dead-letter early; the bounded-retry guarantee depends on which is authoritative.",
+     "evidence": "\"mustDo(q.Requeue(ctx, retry.WithDeliveries(batch.Deliveries+1), cfg.RequeueDelay))\" alongside \"// queue increments batch.Deliveries\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Manual release of `unresolved` rows increments release_count past SEND_MAX_RELEASES, so a recipient already auto-released once can be sent a third time. This contradicts the gate invariant of at most one extra copy.",
+     "evidence": "\"`unresolved` rows are reviewed by on-call ... released once manually (state `released`, `release_count` incremented, with an audit record)\" vs \"`release_count` ≤ `SEND_MAX_RELEASES`\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The ledger-aware Sidekiq sender is specified only as claiming before sending. Nothing says it marks sent/failed, tags messages per recipient for Send-event matching, or enqueues ambiguous outcomes to the reconciler. Rows it sends can stay inflight and be released and resent by the reconciler, causing duplicates in exactly the rollback path that depends on it. Its retry bounds are also unspecified.",
+     "evidence": "\"The existing Sidekiq sender is changed to use the same send ledger: it claims recipients before sending, using the same claim statement as `send-worker`\""
+    },
+    {
+     "lens": "spec-mismatch",
+     "severity": "major",
+     "claim": "The Smart Send subscriber-level opt-out has contradictory semantics: the privacy gate says it falls back to immediate send, while the eligibility recheck, hold text, and public launch post say opted-out subscribers are skipped and do not receive the held issue. Code and public promise cannot both be right.",
+     "evidence": "\"A subscriber-level opt-out that falls back to immediate send\" vs \"Subscribers who unsubscribe or opt out while an issue is held will not receive it.\""
+    },
+    {
+     "lens": "spec-mismatch",
+     "severity": "major",
+     "claim": "The claim query returns nothing for ineligible recipients and writes no row, yet the spec says they are recorded as `skipped_ineligible`. That state is never written, so counts, 'Delivery incomplete' accounting and audit are inaccurate and the gate test cannot pass as designed.",
+     "evidence": "\"Any recipient no longer eligible is skipped and recorded as `skipped_ineligible`, not sent.\" vs \"any other existing row yields nothing\""
+    },
+    {
+     "lens": "retention-erasure",
+     "severity": "major",
+     "claim": "The 30-day retention and erasure SLA are not actually bounded. Partitions holding any non-terminal row are never dropped (only a page), so subscriber-keyed data can persist indefinitely. Raw SES event data is purged at 30 days with no guard tied to open rows, so evidence needed to resolve `unresolved`/`dead_lettered` rows can be destroyed first.",
+     "evidence": "\"The purge job refuses to drop a partition that still contains non-terminal rows (`inflight`, `released`, `dead_lettered`, `unresolved`) and pages instead.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Privacy requirements are not verified before ramp and the cross-border/vendor side is unaddressed. The pre-ramp gate has no test for subscriber opt-out fallback, tracking opt-out, or not profiling subscribers who block open tracking. Jurisdiction handling is deferred ('where required'), EU/UK data flows through us-east-1 with no transfer basis, SES-side event/suppression copies are not covered by erasure, and the retained suppression entry has no defined content or retention. The artifact also does not say profile computation is disabled before sign-off.",
+     "evidence": "\"where required, Smart Send Time is off for those subscribers by default.\" with \"SES_REGION=us-east-1\"; \"a minimal suppression entry is retained for that purpose\"; ABSENT: gate row covering opt-out or open-tracking exclusion"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The artifact is inconsistent on whether audit records are linkable to subscribers: they reference only batch and ledger keys (which embed subscriber_id), yet subscribers are 'pseudonymized' in them. The identifier retained and the pseudonymization method are unspecified, which the privacy sign-off relies on.",
+     "evidence": "\"They reference batch and ledger keys, not email addresses.\" vs \"the subscriber is pseudonymized in audit records\""
+    },
+    {
+     "lens": "timeouts",
+     "severity": "major",
+     "claim": "Production config has no queue visibility timeout, SES client timeout, DB statement timeout, or bound on mustDo retries. A visibility timeout shorter than worst-case processing burns SEND_MAX_DELIVERIES on healthy batches; a hung SES call holds workers; an unbounded mustDo can stall all 8 workers during a DB outage.",
+     "evidence": "\"SEND_MAX_ATTEMPTS=6\", \"SEND_REQUEUE_DELAY=30s\"; \"mustDo ... retries the write\" with no retry limit"
+    },
+    {
+     "lens": "partial-failure",
+     "severity": "major",
+     "claim": "The rollback claims an issue is never split between senders, but reconciler releases and send-replay requeues for issues still on v2 are routed by SENDER to the Sidekiq sender, splitting them and sending backlog to a sender idle for days with unspecified capacity.",
+     "evidence": "\"so an issue is never split between senders\" vs \"Recipients the reconciler releases for resend are enqueued to the dispatcher, which routes them to the Sidekiq sender while `SENDER=sidekiq`\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Auto-release is gated only on lag and stall thresholds, not an ingestion watermark covering the reconcile window, and the window is measured from claim time. A recipient delayed by limiter wait or queue lag, or whose Send event is within the allowed lag, reads as 'no Send event' and is released while the original send may still complete.",
+     "evidence": "\"A recipient with no Send event after `SEND_RECONCILE_WINDOW` is released for resend\" with \"SEND_EVENT_LAG_MAX=10m\""
+    },
+    {
+     "lens": "observability",
+     "severity": "major",
+     "claim": "send.recipient_ambiguous has no alarm, so a new or unlisted SES status can silently push recipients to inflight until the oldest-inflight page fires ~75 minutes later. Per-recipient pages for unresolved and 4-hour dead-lettered recipients will also page-storm in a systemic incident, and the duplicate-rate metric only counts duplicates the reconciler sees from events, not the missing-event case it targets.",
+     "evidence": "ABSENT: alarm for `send.recipient_ambiguous`; \"Any recipient moved to `unresolved` (page)\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Capacity is unproven. Eight-worker throughput is extrapolated from a single-worker run, the only multi-worker run was throttled, and the stated under-3-minute goal is unachievable at the current quota. The quota reconciliation is still open, 'fair scheduling' across publications is asserted without design or a gate test, and the 750M-row ledger and hot claim-join performance are unmeasured.",
+     "evidence": "\"Per-worker throughput | 1 worker ... ~25 msg/s\"; \"The shared limiter schedules batches fairly across publications so one large issue cannot starve others.\"; \"Worst-case steady state is about 750M rows\""
+    },
+    {
+     "lens": "platform-tos",
+     "severity": "major",
+     "claim": "Account-level SES statuses (suspended, sending paused, unverified MAIL FROM) are treated as ambiguous per-recipient, so the worker keeps submitting, recipients are auto-released once, fail again, and go to unresolved with per-recipient pages. There is no circuit breaker or global send-pause, and rollback to Sidekiq uses the same SES account.",
+     "evidence": "\"account/config statuses such as `ACCOUNT_SUSPENDED`, `ACCOUNT_SENDING_PAUSED`, `CONFIGURATION_SET_SENDING_PAUSED` ... ambiguous, stays `inflight`, goes to the reconciler\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "Smart Send Time can go default-on without demand evidence or a stated policy toward scheduled sends. The survey and 2-week beta have no pass criteria and are not in the gate; there is no rule whether it overrides publisher-set send times or embargoes; time-sensitive publishers that opt in get no warning about up-to-18-hour holds.",
+     "evidence": "\"we will run a short publisher survey and a 2-week opt-in beta to confirm publishers want algorithmic timing\"; ABSENT: rule for explicitly scheduled or embargoed sends"
+    },
+    {
+     "lens": "authz",
+     "severity": "major",
+     "claim": "Privileged write paths (send-replay, manual unresolved release, SMART_SEND_DEFAULT, time-sensitive self-declaration, per-issue 'Send now') have no stated authorization or identity binding beyond an audit record, though they trigger real irreversible sends.",
+     "evidence": "\"on-call runs `send-replay --batch <id>`, which moves `dead_lettered` rows to `released`\"; ABSENT: authz requirements for Settings → Delivery changes and 'Send now'"
+    },
+    {
+     "lens": "irreversible public action",
+     "severity": "major",
+     "claim": "The deploy context says the public launch post goes to all publishers the same day, while the artifact says it is not same-day. A public send cannot be recalled, so the inconsistency must be resolved before crossing. Separately, Smart Send rollback releases held issues at the wrong hour with no hold-cancel path.",
+     "evidence": "CONTEXT: \"A public launch post goes out to all publishers the same day.\" vs ARTIFACT: \"**Not sent on deploy day.**\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 269080,
+    "tokOut": 102599,
+    "usd": 0.2901379,
+    "critMs": 136753
+   },
+   "wallMs": 250877
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The launch post says scheduled issues are \"never delayed\", but the spec lets a publisher opt a scheduled issue into Smart Send per issue, which can hold it past the scheduled time. The post copy should say \"unless you opt in\".",
+     "evidence": "\"issues you schedule for a specific time are never delayed\" vs \"A publisher can opt a scheduled issue in per issue\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The spec says the Sidekiq sender is bounded by \"the queue's delivery counter\" with Sidekiq retries set to 0, but it never says which component counts deliveries for Sidekiq jobs re-fetched after a crash. Duplicates are still prevented by the ledger claim and the reconciler, so this is a bounding gap, not a safety gap.",
+     "evidence": "\"Sidekiq's own retry count is set to 0 so the queue's delivery counter is the only retry bound\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The claim statement writes `skipped_ineligible` rows for erased subscribers, which can recreate subscriber-keyed ledger rows after an erasure purge. The erasure job does not say how it handles this.",
+     "evidence": "\"a second CTE upserts `skipped_ineligible` for recipients who are claimable (no row, or `released`) but no longer eligible\" vs \"deleted at row level in any state\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The global circuit breaker trips on the first `MAIL_FROM_DOMAIN_NOT_VERIFIED`. That status may be scoped to one sender identity, so a single publisher's misconfiguration could pause sending for all publications. The breaker is deliberately conservative and manually reset, but the blast radius is not discussed.",
+     "evidence": "\"trip a global send-pause on the first occurrence\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 391877,
+    "tokOut": 79778,
+    "usd": 0.3042843,
+    "critMs": 111081
+   },
+   "wallMs": 166234
+  }
+ ],
+ "artifact": "# Release proposal: Inkwell — Send pipeline v2 + Smart Send Time\n\nOwner: delivery team · Pipeline ramp starts: Mon 2026-11-09 09:00 UTC (5% of publications), **only if the pre-ramp evidence gate below is met; otherwise the date slips** · Smart Send Time: gated, see Rollout plan · Launch post: after the gates below pass (**deliberately not same-day**; this supersedes the original plan of a same-day post to all publishers, see Launch post)\n\n## What ships\n\n1. **Send pipeline v2** (`send-worker`): replaces the Sidekiq-based sender with a Go worker that pulls recipient batches from Postgres and calls SES `SendBulkEmail`. Goal: cut median time-to-inbox for a 50k-subscriber issue from 14 min to under 3 min. This is a goal, not yet a measured result, and it depends on the SES quota increase (see Production config); see QA.\n   - **Ledger-aware Sidekiq sender (ships with v2, before the 5% step).** The existing Sidekiq sender is changed to use the same send ledger through the same shared ledger library as `send-worker`, not a re-implementation. It:\n     - claims recipients before sending with the same claim statement, and skips recipients in any non-claimable state (`sent`, `failed`, `inflight`, `unresolved`, `dead_lettered`, `skipped_ineligible`, `closed_unconfirmed`);\n     - stamps `send_attempted_at` before each SES call and sets the per-recipient message tag used for Send-event matching, with the same configuration set;\n     - applies the same per-recipient status allowlists, writes `sent` / `failed` / `released` the same way, and sends ambiguous outcomes (timeouts, 5xx, result-count mismatch, unclassified errors, crashes) to the reconciler with the recipient left `inflight`, never retrying them itself;\n     - is bound by the same `SEND_MAX_DELIVERIES` (Sidekiq's own retry count is set to 0 so the queue's delivery counter is the only retry bound), `SEND_MAX_ATTEMPTS`, the same global rate limiter, and the same account-level circuit breaker.\n\n     Rollback to Sidekiq depends on this behavior. It is covered by the rollback drill in the pre-ramp gate, including ambiguous-outcome injection.\n   - **Reconciler runs as its own service**, independent of the `SENDER` switch. It keeps running during and after a rollback, so `inflight` rows are always resolved by it, never by either sender.\n   - **Issue-bound sender.** The dispatcher records which sender owns an issue when the issue starts (`issues.sender`). All later messages for that issue (reconciler releases, `send-replay` requeues, retried recipients) are routed to the recorded sender, not to the current `SENDER` value. `SENDER` only decides the sender for issues that have not started. This is what keeps an issue from being split between senders.\n2. **Smart Send Time**: Inkwell predicts each subscriber's most likely open hour from their last 90 days of opens and delivers each issue at that hour. Issues are held for at most 18 hours. Publishers can turn it off in Settings → Delivery, can choose \"Send now\" on any individual issue, and can cancel the hold on an issue's remaining recipients before release. **Off by default for time-sensitive publications** (news, local news, weather and election outlets). A publication is treated as time-sensitive if **either** its publication category is one of those categories **or** it has self-declared as time-sensitive in Settings; either signal alone is sufficient, and both are not required. These publishers can opt in, and when they do, the opt-in screen warns that issues may be held for up to 18 hours. Default-on applies only to the remaining cohorts, per the ramp below. Smart Send Time does not ship until the privacy review gate passes.\n   - **Scheduled and embargoed issues are never delayed.** Smart Send Time applies only to issues sent without an explicit publisher-set send time or embargo. An issue the publisher scheduled for a specific time (including time-zone scheduled sends) or marked as embargoed goes out at that time. A publisher can opt a scheduled issue in per issue, and Smart Send will never move it past the scheduled time plus the normal hold limit.\n   - **Eligibility is rechecked at release time.** Held issues are not sent from the audience snapshot taken at schedule time. At the moment a held recipient is released for sending (including rollback and \"Send now\" releases), the claim step rechecks current subscriber state: unsubscribed, erasure requested, suppressed or bounced address, and complaint. Any recipient no longer eligible is skipped and written to the ledger as `skipped_ineligible` (the claim statement writes the row, see Delivery semantics), not sent. The **Smart Send subscriber-level opt-out is not a skip condition**: a subscriber who opts out during a hold is released immediately (the opt-out falls back to immediate send) and still receives the issue. The recheck is part of the claim query itself, so it applies on every send path, not only Smart Send.\n\n## Delivery semantics\n\nSES `SendBulkEmail` has no idempotency key, and an email that has been sent cannot be recalled. The pipeline therefore cannot promise exactly-once delivery. The design is:\n\n- **Claim before send.** Before calling SES, the worker atomically claims recipients in the send ledger with a single statement. The ledger is partitioned by `issue_day`, a column assigned once when the issue is created and never changed. The primary key and conflict target are `(issue_day, issue_id, subscriber_id)`, so they include the partition key as PostgreSQL requires, and every row for an issue is always in the same partition even if the issue is held past midnight, redelivered or replayed days later. The statement is a CTE of the form `INSERT ... ON CONFLICT (issue_day, issue_id, subscriber_id) DO UPDATE SET state='inflight', claim_origin='reclaim', claimed_at=now() WHERE ledger.state='released' RETURNING`, joined against current subscriber eligibility. A recipient with no row is inserted as `inflight` (`claim_origin='fresh'`). A recipient whose row is in `released` state is flipped back to `inflight` with its `release_count` preserved. Any other existing row yields nothing. In the same statement, a second CTE upserts `skipped_ineligible` for recipients who are claimable (no row, or `released`) but no longer eligible, so skips are recorded rather than silently absent. Two workers cannot claim the same recipient, and a redelivered batch only gets recipients that are claimable. A claim that returns an error is treated as \"nothing claimed\": the batch is not acked and is redelivered (see core loop). If a claim commits but its response is lost, those recipients are `inflight` with nothing sent, and the reconciler resolves them like any other inflight row (no Send event, so released after the window).\n- **Ledger states:** `inflight`, `sent`, `failed` (permanent per-recipient rejection), `skipped_ineligible`, `dead_lettered` (batch dead-lettered or quarantined; **definitely unsent**, awaiting replay), `unresolved` (reconciler release limit reached; needs human decision), `released` (released for resend by the reconciler or `send-replay`; row and `release_count` retained; awaiting re-claim), `closed_unconfirmed` (terminal; closed by a human or by the hard retention limit without confirmation either way, reported to publishers separately, never as \"Not delivered\"). Only recipients with no row, or a row in `released` state, are claimable. `ledger.Release` (a definite-not-sent outcome in the core loop) undoes only this delivery's claim: rows with `claim_origin='fresh'` are deleted (nothing was ever sent and there is no release history), and rows with `claim_origin='reclaim'` are set back to `released` with `release_count` intact. A reclaimed row is never deleted, so `SEND_MAX_RELEASES` cannot be bypassed by a throttle or limiter failure after a reclaim.\n- **Definite vs. ambiguous outcomes.** Throttling and explicit SES rejections mean the message was not accepted. The claim is released and the recipient is retried, except permanent per-recipient rejections, which are marked `failed` in the ledger and never retried. Timeouts, 5xx responses, result-count mismatches, worker crashes, **per-recipient statuses not on the transient or permanent allowlists below**, and **any error not positively classified as definitely-not-sent** are ambiguous: SES may have sent. Ambiguous recipients stay `inflight` and are **not blindly resent**.\n- **Per-recipient status allowlists** (exact SES `BulkEmailStatus` values; allowlists are checked in code and verified against the pinned SDK version in the pre-ramp gate):\n  - Success: `SUCCESS` → `sent`.\n  - Transient, not accepted, release and retry: `ACCOUNT_THROTTLED`, `ACCOUNT_DAILY_QUOTA_EXCEEDED`.\n  - Permanent per-recipient, terminal `failed`, shown under \"Not delivered\": `MESSAGE_REJECTED`, `INVALID_PARAMETER`.\n  - Everything else (including `TRANSIENT_FAILURE`, `FAILED`, account/config statuses such as `ACCOUNT_SUSPENDED`, `ACCOUNT_SENDING_PAUSED`, `CONFIGURATION_SET_SENDING_PAUSED`, `MAIL_FROM_DOMAIN_NOT_VERIFIED`, and any value not known to the SDK): ambiguous, stays `inflight`, goes to the reconciler, increments `send.recipient_ambiguous`. Never written as \"Not delivered\" by the worker.\n- **Account-level circuit breaker.** Account/config statuses (`ACCOUNT_SUSPENDED`, `ACCOUNT_SENDING_PAUSED`, `CONFIGURATION_SET_SENDING_PAUSED`, `MAIL_FROM_DOMAIN_NOT_VERIFIED`) trip a global send-pause on the first occurrence, and so does an ambiguous-recipient rate above `SEND_AMBIGUOUS_BREAKER_PCT` of recipients over 5 minutes. While the breaker is open, no sender (`send-worker` or the ledger-aware Sidekiq sender, which use the same SES account) pulls or submits batches, so queued batches stay queued and do not burn `Deliveries`. Reconciler auto-release is paused. One page fires for the incident, not one per recipient. The breaker is reset manually by delivery on-call after the account/config problem is resolved, and the reset is audited. This prevents the loop of resubmit, auto-release, fail again, `unresolved`.\n- **Reconciliation.** A reconciler resolves `inflight` rows against SES event data (Send events from the `inkwell-prod` configuration set, matched by a per-recipient message tag). A recipient with a Send event is marked `sent`. A recipient with no Send event is released for resend only when **all** of these hold:\n  - The reconcile window has elapsed, measured from `last_activity_at = max(claimed_at, send_attempted_at)`, not from claim time alone. `send_attempted_at` is stamped immediately before the SES call, so limiter wait and queue lag do not count against the window.\n  - The **SES event-ingestion watermark** (the timestamp up to which all SES events are known to be ingested) is at least `last_activity_at + SEND_RECONCILE_WINDOW`, so events still in flight within the allowed lag cannot read as \"no Send event\".\n  - The recipient's batch message is no longer active on the queue (not in flight or awaiting redelivery).\n  - Event ingestion is healthy, the circuit breaker is closed, and the row's `release_count` is below `SEND_MAX_RELEASES` (1).\n\n  The release is a transactional-outbox write: **one Postgres transaction** updates the existing ledger row (`inflight` → `released`, `release_count` + 1) and inserts an outbox row for a retried-recipient message. The row is never deleted, so \"one resend\" is enforced by the ledger, not by convention. An outbox relay publishes outbox rows to the send queue (`Deliveries` reset to 0 for the new message), at-least-once, and marks them published. A crash after the transaction but before publish therefore loses nothing, and a duplicate message is harmless because the claim only succeeds on a `released` row. A sweeper also re-enqueues any `released` row that has had no claim within 30 minutes (bounded, one re-enqueue per 30 minutes, and it pages if a row stays `released` for 2 hours). The message is routed to the sender bound to the issue (see What ships), which picks it up through the same claim statement; the claim re-checks eligibility and flips `released` → `inflight`. A recipient that would exceed the limit (`release_count` already at `SEND_MAX_RELEASES`) moves to `unresolved` and is never auto-released again. Auto-release is paused whenever the event-ingestion lag exceeds `SEND_EVENT_LAG_MAX` or no events have been ingested for `SEND_EVENT_STALL_MAX`; paused recipients stay `inflight` and the delivery team is paged. The reconciler also has a release-for-resend rate cap (`SEND_RELEASE_RATE_CAP`); exceeding it pauses auto-release and pages. Residual duplicate risk is limited to the case where SES event delivery is missing for individual recipients while ingestion looks healthy. It is not zero, so the pre-ramp gate sets a maximum acceptable measured duplicate rate (see gate), and the measured rate is reported rather than claiming none. The missing-event case is measured directly: for every recipient SES reports `SUCCESS`, we check that a Send event arrives within the window, and we report that missing-event rate (`send.event_missing_rate`). Per-issue seed-list mailboxes (internal addresses) also count actual copies received.\n- **Bounded retries.** `Deliveries` is owned by the queue alone. The queue increments it on **every delivery** of a batch or retried-recipient message, including redelivery after an unacked batch (visibility timeout), limiter failures, claim errors and bookkeeping failures, so no redelivery path bypasses it. Application code never sets or adds to the counter; a requeued subset inherits the counter and the queue increments it on its next delivery, so each retry burns exactly one unit. Past `SEND_MAX_DELIVERIES` the batch is dead-lettered and pages once. The reconciler's resend path is bounded by `SEND_MAX_RELEASES` as above. Nothing loops forever.\n- **Dead-letter and quarantine recovery.** Dead-lettering or quarantining a batch writes `dead_lettered` ledger rows only for recipients that are **definitely unsent**: recipients with no ledger row, rows in `released` state, and rows claimed in the current delivery that were positively classified as rejected before acceptance. Rows already `inflight` (for example from a crashed earlier delivery, where SES may have sent), `sent`, `failed` or `unresolved` are never converted to `dead_lettered`; `inflight` rows stay with the reconciler. Because `dead_lettered` means definitely unsent, `send-replay` can release them without SES event reconciliation. Procedure:\n  1. The page goes to the delivery on-call, who triages within 1 hour.\n  2. After the cause is fixed (or the batch judged safe), on-call runs `send-replay --batch <id>`, which moves `dead_lettered` rows to `released` (keeping `release_count`, with an audit record) and requeues them to the issue-bound sender with `Deliveries` reset. Recipients that became ineligible meanwhile are skipped by the claim recheck.\n  3. `unresolved` rows are reviewed by on-call against SES event data. They are either marked `sent` (event found) or, if no event is found, closed as `closed_unconfirmed` with an audit record and a second approver. **There is no manual resend of an `unresolved` row**, so total automatic and manual copies stay within `SEND_MAX_RELEASES`. Publishers see `closed_unconfirmed` counts as \"Unconfirmed\", not as \"Not delivered\".\n  4. **Publisher visibility:** an issue with any `inflight`, `dead_lettered`, `released` or `unresolved` recipients is shown as \"Delivery incomplete\" with a count, never as complete, and the delivery team can post a status notice to affected publishers. Recipients are never counted under \"Not delivered\" unless permanently rejected.\n  5. A dead-lettered or unresolved recipient older than 4 hours escalates the page. Pages are aggregated per issue and per incident (one page with counts per issue per hour); per-recipient detail goes to a ticket and dashboard so a systemic failure does not page-storm.\n\n## send-worker core loop (`internal/send/worker.go`)\n\n```go\n// Consumption is paused while the account-level circuit breaker is open: q.Batches yields\n// nothing, so batches stay queued and do not burn Deliveries.\nfor batch := range q.Batches(ctx, cfg.BatchSize) {\n    // The queue is the sole owner of batch.Deliveries and increments it on EVERY delivery,\n    // including redelivery of an unacked batch. Application code never sets it, so every\n    // retry path below burns exactly one unit and is bounded by this guard.\n    // Poison-batch guard: bounded redelivery, then dead-letter and page once (no infinite loop).\n    if batch.Deliveries > cfg.MaxDeliveries {\n        metrics.Inc(\"send.batch_dead_lettered\")\n        // Only definitely-unsent recipients (no row, or state=released) become dead_lettered.\n        // inflight / sent / failed / unresolved rows are NOT touched; the reconciler owns inflight.\n        mustDo(ledger.MarkDeadLettered(ctx, batch))\n        mustDo(q.DeadLetter(ctx, batch, \"max deliveries exceeded\"))\n        alert.Page(\"send-worker batch dead-lettered\", batch.ID)\n        continue\n    }\n\n    // Atomically claim recipients that are claimable (no ledger row, or state=released) and\n    // still eligible (not unsubscribed/erased/suppressed/complaint); claimed rows become\n    // state=inflight. Claimable-but-ineligible recipients are written as skipped_ineligible\n    // by the same statement. Recipients already sent, failed, inflight, dead_lettered,\n    // unresolved or skipped are not returned, so concurrent workers and redeliveries cannot\n    // claim the same recipient. Smart Send opt-out is NOT a skip: such recipients are released now.\n    pending, err := ledger.ClaimUnsent(ctx, batch)\n    if err != nil {\n        // Claim failed (DB error/timeout): nothing was sent. Do NOT ack and do NOT treat\n        // as \"already handled\". Redeliver; the delivery counter bounds this.\n        metrics.Inc(\"send.claim_error\")\n        mustDo(q.Requeue(ctx, batch, cfg.RequeueDelay))\n        continue\n    }\n    if len(pending.Recipients) == 0 {\n        mustDo(q.Ack(ctx, batch))\n        continue\n    }\n\n    // Global rate limiter shared by all workers, set below the SES account limit.\n    if err := limiter.WaitN(ctx, len(pending.Recipients)); err != nil {\n        // Nothing was sent. Undo only this delivery's claim: fresh rows deleted, reclaimed\n        // rows set back to released with release_count intact.\n        mustDo(ledger.Release(ctx, pending))\n        // Redelivery counts toward the dead-letter bound, so a persistent limiter\n        // failure (e.g. cancelled context) cannot loop forever.\n        mustDo(q.Requeue(ctx, batch, cfg.RequeueDelay)) // queue increments batch.Deliveries\n        continue\n    }\n\n    // Stamp send_attempted_at before the SES call; the reconciler's window runs from here.\n    mustDo(ledger.StampAttempt(ctx, pending))\n\n    // sendWithBackoff retries only DEFINITE not-sent errors (throttling) with exponential\n    // backoff + jitter, up to cfg.MaxAttempts calls, each bounded by SES_CLIENT_TIMEOUT.\n    // Timeouts / 5xx return errAmbiguous.\n    out, err := sendWithBackoff(ctx, pending)\n    if err != nil {\n        switch {\n        case isDefinitelyNotSent(err): // throttling exhausted, connection refused before request\n            metrics.Inc(\"send.batch_requeued\")\n            mustDo(ledger.Release(ctx, pending))\n            mustDo(q.Requeue(ctx, batch, cfg.RequeueDelay)) // queue increments batch.Deliveries\n        case isDefinitelyPermanent(err): // positively classified: auth/config/validation rejected before acceptance\n            // Permanent error for the whole batch (e.g. account/config problem): quarantine\n            // so it cannot loop; page once; do not blame subscribers. These recipients were\n            // positively rejected before acceptance, so they are definitely unsent.\n            metrics.Inc(\"send.batch_failed\")\n            mustDo(ledger.MarkDeadLettered(ctx, pending)) // inflight -> dead_lettered, awaiting replay\n            mustDo(q.Quarantine(ctx, batch, errCode(err)))\n            alert.Page(\"send-worker permanent batch error\", errCode(err))\n        default: // ambiguous, including any unclassified error (timeout, 5xx, connection reset): SES may have sent\n            metrics.Inc(\"send.batch_ambiguous\")\n            mustDo(reconciler.Enqueue(ctx, pending)) // recipients stay inflight; NOT resent blindly\n            mustDo(q.Ack(ctx, batch))\n        }\n        continue\n    }\n\n    // SES must return exactly one result per input entry, in order. If not, the outcome\n    // is ambiguous: reconcile against SES events rather than resend.\n    if len(out.BulkEmailEntryResults) != len(pending.Recipients) {\n        metrics.Inc(\"send.result_mismatch\")\n        mustDo(reconciler.Enqueue(ctx, pending))\n        mustDo(q.Ack(ctx, batch))\n        alert.Page(\"SES result length mismatch\", batch.ID)\n        continue\n    }\n\n    retry := pending.Empty()\n    ambiguous := pending.Empty()\n    for i, res := range out.BulkEmailEntryResults {\n        r := pending.Recipients[i]\n        switch {\n        case res.Status == types.BulkEmailStatusSuccess:\n            mustDo(ledger.MarkSent(ctx, batch.IssueID, r.SubscriberID))\n        case transientStatuses[res.Status]: // allowlist: ACCOUNT_THROTTLED, ACCOUNT_DAILY_QUOTA_EXCEEDED\n            mustDo(ledger.Release(ctx, r))\n            retry.Add(r)\n        case permanentStatuses[res.Status]: // allowlist: MESSAGE_REJECTED, INVALID_PARAMETER\n            // Terminal ledger state so the reconciler never releases it for resend.\n            mustDo(ledger.MarkFailed(ctx, batch.IssueID, r.SubscriberID, string(res.Status)))\n            mustDo(failures.Record(ctx, batch.IssueID, r.SubscriberID, string(res.Status)))\n        default: // not positively classified (unknown/other status): SES may have sent\n            metrics.Inc(\"send.recipient_ambiguous\")\n            breaker.Record(res.Status) // account/config statuses trip the global send-pause\n            ambiguous.Add(r) // stays inflight; NOT marked failed, NOT resent blindly\n        }\n    }\n    if len(ambiguous.Recipients) > 0 {\n        mustDo(reconciler.Enqueue(ctx, ambiguous))\n    }\n    if len(retry.Recipients) > 0 {\n        // The queue owns Deliveries: the subset inherits batch.Deliveries and the queue\n        // increments it on its next delivery. We do not add to it here.\n        mustDo(q.Requeue(ctx, retry, cfg.RequeueDelay))\n    }\n    mustDo(q.Ack(ctx, batch))\n}\n```\n\n`mustDo` is bounded: it logs, increments `send.bookkeeping_error`, and retries the write with backoff up to `SEND_MUSTDO_MAX_RETRIES` (about 30 seconds in total), with each DB statement bounded by `SEND_DB_STATEMENT_TIMEOUT`. If it still fails, it abandons the batch without acking and the worker moves on to the next batch, so a DB outage cannot hold all workers indefinitely. The queue redelivers the abandoned batch after `SEND_QUEUE_VISIBILITY_TIMEOUT`, incrementing `Deliveries`, so a persistent DB failure ends in the dead-letter bound above instead of redelivering indefinitely. Each batch also runs under `SEND_BATCH_DEADLINE`. The visibility timeout (10 min) is deliberately longer than the batch deadline (5 min), which exceeds the worst case of limiter wait plus `SEND_MAX_ATTEMPTS` SES calls at `SES_CLIENT_TIMEOUT` plus backoff, so healthy slow batches are not redelivered while still running and do not burn `Deliveries`. A timeout on the SES call is classified ambiguous. On redelivery, `ClaimUnsent` skips recipients that are already `sent`, `failed`, `inflight`, `dead_lettered` or `unresolved`. A crash between the SES call and `MarkSent` leaves those recipients `inflight`, and the reconciler resolves them from SES events instead of resending. Only permanent per-recipient failures are written to `send_failures`, and they are set to terminal `failed` state in the ledger so the reconciler ignores them. Those recipients are excluded from the issue's remaining sends and shown to publishers under \"Not delivered\". Throttled or otherwise transient results are retried (bounded by `SEND_MAX_DELIVERIES`) and never appear there. Recipients that exhaust retries are marked `dead_lettered` only if they were definitely unsent, surfaced to the delivery team by page, covered by the recovery procedure above, and never silently written as \"Not delivered\".\n\n## Production config (`deploy/prod/send-worker.env`)\n\n```\nSEND_WORKERS=8\nBATCH_SIZE=50\nSEND_GLOBAL_RATE_LIMIT=240        # msg/s across all workers, ~80% of SES account limit\nSEND_MAX_ATTEMPTS=6               # SES call attempts inside one delivery (backoff on throttling only)\nSEND_MAX_DELIVERIES=6             # queue deliveries per batch/recipient before dead-letter (owned by the queue)\nSEND_MAX_RELEASES=1               # reconciler release-for-resend per recipient (ledger release_count); then unresolved\nSEND_REQUEUE_DELAY=30s\nSES_CLIENT_TIMEOUT=10s            # per SES call (connect 3s); a timeout is classified ambiguous\nSEND_DB_STATEMENT_TIMEOUT=5s      # per ledger/queue DB statement\nSEND_MUSTDO_MAX_RETRIES=5         # bounded bookkeeping retries (~30s total), then abandon batch unacked\nSEND_BATCH_DEADLINE=5m            # whole-batch processing deadline\nSEND_QUEUE_VISIBILITY_TIMEOUT=10m # must exceed SEND_BATCH_DEADLINE; verified in the pre-ramp gate\nSEND_RECONCILE_WINDOW=60m         # wait for SES Send events (from last_activity_at) before releasing an inflight recipient\nSEND_EVENT_LAG_MAX=10m            # pause reconciler auto-release if SES event ingestion lag exceeds this\nSEND_EVENT_STALL_MAX=5m           # pause auto-release if no SES events ingested for this long\nSEND_RELEASE_RATE_CAP=200         # max inflight recipients auto-released per 10 min before pausing and paging\nSEND_AMBIGUOUS_BREAKER_PCT=1      # ambiguous-recipient rate over 5 min that trips the global send-pause\nSEND_LEDGER_RETENTION_DAYS=30     # ledger partitions dropped after this if all rows are terminal (see Data retention)\nSEND_LEDGER_HARD_MAX_DAYS=45      # hard cap: remaining open rows force-closed (closed_unconfirmed) and partition dropped\nSEND_FAILURES_RETENTION_DAYS=90   # send_failures rows purged after this\nSEND_EVENT_RETENTION_DAYS=30      # raw SES event data purged after this (kept longer only for open rows, up to the hard cap)\nSEND_AUDIT_RETENTION_DAYS=365     # replay/manual-closure audit records\nSEND_ERASURE_PURGE_SLA_DAYS=30    # max time to purge subscriber-keyed send data after erasure\nSES_REGION=us-east-1\nSES_CONFIGURATION_SET=inkwell-prod\nSMART_SEND_DEFAULT=off            # enabled per cohort by the ramp, never globally\nSMART_SEND_PROFILE_COMPUTE=off    # no open-behavior profiles are built until the privacy review signs off\nSMART_SEND_MAX_HOLD_HOURS=18\nSMART_SEND_EXEMPT_TIME_SENSITIVE=true\n```\n\nSES production account limits (us-east-1): 300 messages/second, 25M/day. Worker sizing: at ~25 msg/s per worker, 8 workers is about 200 msg/s, below both the 240 msg/s limiter and the 300 msg/s account limit, so the limiter, not SES throttling, is the normal pacing mechanism. The 8-worker figure is extrapolated from a single-worker run and is verified by the multi-worker capacity gate below. A 50k issue at 240 msg/s takes about 3.5 min, so the under-3-minute goal for a 50k issue **is not achievable at the current SES limit** when it is the only sender; we are filing an SES quota increase (target ≥ 1,000 msg/s) before ramping past 25%, and the goal will be restated based on measured results.\n\n**Quota and volume reconciliation (go/no-go input, owner: delivery team, due 2026-11-04):** projected peak msg/s and daily volume across all 11,240 publications (including concurrent large issues at common send times), compared against 300 msg/s and 25M/day. The ramp does not go past 5% until this is attached and shows headroom. **Fair scheduling design:** the shared limiter schedules batches by weighted round-robin across publications, with a per-publication cap of 25% of the global rate while other publications have queued work, so one large issue cannot starve others. It is verified by the fairness gate below rather than assumed.\n\n## Data retention and erasure (send pipeline)\n\nThe send ledger, `send_failures`, replay and manual-closure audit records, and raw SES event data are all keyed to subscribers. At up to 25M sends/day they must not grow without limit, and they are in scope for erasure requests, not just the Smart Send profile.\n\n- **Send ledger:** partitioned by `issue_day` (the day the issue was created, fixed per issue; see Delivery semantics). Partitions are dropped after `SEND_LEDGER_RETENTION_DAYS` (30), which is longer than any state that can still produce a send (18-hour hold, 60-minute reconcile window, triage and replay). The purge job does not drop a partition that still contains non-terminal rows (`inflight`, `released`, `dead_lettered`, `unresolved`) before the hard cap: it pages and escalates. At `SEND_LEDGER_HARD_MAX_DAYS` (45), any remaining non-terminal rows are force-closed as `closed_unconfirmed` with an audit record (no send is ever triggered by this), and the partition is dropped. So retention is bounded at 45 days even when rows stay open. Worst-case steady state is about 1.1B rows (25M/day × 45), bounded by partition drops.\n- **`send_failures`:** purged after `SEND_FAILURES_RETENTION_DAYS` (90), long enough for publisher \"Not delivered\" reporting.\n- **SES event data:** raw Send/bounce/complaint events used for reconciliation are purged after `SEND_EVENT_RETENTION_DAYS` (30), **except** events for recipients that still have a non-terminal ledger row, which are kept until that row is resolved or the 45-day hard cap, so the evidence needed to resolve `unresolved` and `dead_lettered` rows is never destroyed first. SES-side copies are in scope: the event destination and any logs holding events are configured to the same retention, and on erasure the address is removed from the SES account-level suppression list by API once Inkwell's own suppression entry is in place.\n- **Suppression entry:** the minimal retained record for erased or suppressed subscribers contains only a keyed hash of the normalized email address (HMAC with a key held in the secrets manager), a reason code (erased, unsubscribed, bounced, complaint) and the creation date. It holds no plaintext address and no behavioral data. It is retained 24 months, a period the privacy review confirms or changes, and then dropped.\n- **Audit records** (`send-replay`, manual `unresolved` closure, breaker resets): retained `SEND_AUDIT_RETENTION_DAYS` (365). They reference batch IDs and a `subscriber_ref`, which is a pseudonym derived from a per-subscriber random token stored with the subscriber record. They contain no email addresses and no raw `subscriber_id`.\n- **Erasure:** on an erasure request, ledger rows, `send_failures` rows and raw SES event data for that subscriber are deleted at row level in any state (this does not wait for partition drops), and the per-subscriber token is deleted, which makes the audit `subscriber_ref` values unlinkable (the pseudonymization method). This is done within `SEND_ERASURE_PURGE_SLA_DAYS` (30). Deleting a ledger row does not make an erased subscriber sendable again, because the claim recheck blocks any subscriber with an erasure request, and the suppression entry above is retained for that purpose. Unsubscribe does not delete these records; they age out under the retention periods above.\n- The purge and erasure jobs are covered by the pre-ramp gate, and their success and backlog are monitored.\n\n## QA report summary (staging)\n\n| Check | Config | Result |\n|---|---|---|\n| 50k-recipient issue end to end | 4 workers, batch 50, SES throttling simulated off (sandbox mock) | Pass, 0 failures, 11 min. **Not representative of production**: this run never exercised throttling or the failure path. |\n| Per-worker throughput | 1 worker, batch 50 | ~25 msg/s sustained |\n| Worker count capped at 4 in staging | — | Staging SES limit is 14 msg/s; 4 workers were throttled intermittently |\n| Bounce/complaint webhooks still processed | — | Pass |\n| Smart Send Time: predicted hour within ±1h of actual top open hour, 2,000 sampled subscribers | — | 71% |\n| Unsubscribe link and List-Unsubscribe-Post header present | — | Pass |\n\n**Pre-ramp evidence gate (hard go/no-go, owner: delivery team, due 2026-11-04 with the quota reconciliation).** The checks below have **not been run yet**. Their results must be attached to this proposal and reviewed before the 2026-11-09 ramp starts. If any is missing or fails, the ramp does not start and the date moves. The passing 50k run above does not count toward this gate.\n\n| Check | Pass criteria |\n|---|---|\n| 50k issue with real SES throttling enabled, limiter at staging-scaled rate | 0 recipients lost to transient errors; throttled batches retried; no duplicates; time-to-inbox recorded |\n| Multi-worker capacity: 8 workers against production-like limits (SES load-test quota or a production canary at the limiter rate), several concurrent large issues | Sustained aggregate rate recorded against 240 msg/s; no unexpected throttling; queue lag and visibility-timeout redeliveries recorded (none from healthy batches) |\n| Fair scheduling: one 500k-recipient issue running alongside many small issues from other publications | Small issues' time-to-inbox stays within the agreed bound; the large issue is held to the per-publication cap while others have work |\n| Ledger scale: claim query and partition-key conflict behavior on a ledger populated to production-scale volume (at least 300M rows across partitions), including a held issue crossing midnight, a replay days later, and a redelivery | p99 claim latency within the agreed bound; the claim statement runs on the partitioned table; a later-day reclaim hits the existing row (`release_count` preserved, no fresh row inserted); `release`/reclaim paths keep `release_count` |\n| Fault injection: SES 5xx, timeouts (including timeouts where SES did send), connection reset after request sent, unclassified errors, throttling storm, result-count mismatch, DB write failure on `failures.Record` / `q.Ack` / `MarkSent`, **and DB error/timeout on `ledger.ClaimUnsent` (including a claim that commits but whose response is lost)** | No transient error becomes \"Not delivered\"; a failed claim is never acked and its recipients are retried, not dropped; ambiguous and unclassified outcomes are reconciled, not blindly resent; **0 duplicate sends in every scenario where SES events are ingested for all recipients**; pages fire |\n| **Duplicate-rate threshold: injected loss of Send events for individual recipients (drop events for 1% of inflight recipients) while ingestion lag and stall stay below limits** | **No recipient receives more than 1 extra copy (`release_count` ≤ `SEND_MAX_RELEASES`), and total duplicates ≤ 0.01% of recipients sent in the run. Above that, the ramp does not start.** Measured rate, `send.event_missing_rate` and seed-mailbox copy counts are attached |\n| Slow-but-healthy delivery: limiter wait and queue lag delay a batch, and Send events arrive at the edge of `SEND_EVENT_LAG_MAX` | The window runs from `send_attempted_at`; no release before the ingestion watermark covers the window; no resend of a recipient whose original send later completes |\n| Per-recipient status handling: inject each allowlisted transient and permanent status, plus unlisted statuses (`TRANSIENT_FAILURE`, `FAILED`, account/config statuses, a value unknown to the SDK); allowlists checked against the pinned SDK enum | Transient: released and retried. Permanent: terminal `failed`, shown once under \"Not delivered\". Unlisted: stays `inflight`, reconciled, never \"Not delivered\", never blindly resent |\n| Account-level circuit breaker: inject `ACCOUNT_SUSPENDED`, `ACCOUNT_SENDING_PAUSED`, `MAIL_FROM_DOMAIN_NOT_VERIFIED` mid-issue, then an ambiguous-rate spike above `SEND_AMBIGUOUS_BREAKER_PCT` | Breaker trips on the first account-level status; both senders stop submitting; queued batches do not burn `Deliveries`; reconciler auto-release is paused; one aggregated page; no per-recipient auto-release loop; manual reset audited and processing resumes |\n| Persistent bookkeeping failure (DB writes failing past `mustDo` retries) | `mustDo` stops after `SEND_MUSTDO_MAX_RETRIES`; workers are not stalled; batch not acked; `Deliveries` increments by exactly one per redelivery; dead-lettered after `SEND_MAX_DELIVERIES`; one page; no infinite redelivery |\n| Timeouts: hung SES call, slow DB statement, batch running to `SEND_BATCH_DEADLINE` | Calls abort at `SES_CLIENT_TIMEOUT` / `SEND_DB_STATEMENT_TIMEOUT`; timed-out SES calls are ambiguous; visibility timeout exceeds the batch deadline so no healthy batch is redelivered while running |\n| Delivery counter ownership: throttled batch requeued N times | Each retry increments `Deliveries` by exactly 1 (no double count); dead-letter happens at exactly `SEND_MAX_DELIVERIES` |\n| SES event-ingestion outage and lag (events stopped or delayed beyond `SEND_EVENT_LAG_MAX` / `SEND_EVENT_STALL_MAX`) with inflight recipients past `SEND_RECONCILE_WINDOW` | Reconciler auto-release pauses; no recipients released for resend during the outage; page fires; release resumes correctly after ingestion recovers; release-rate cap trips and pages when exceeded |\n| Reconciler release path and limit: inflight recipient with no Send event is released once, consumed by `send-worker` (issue bound to v2), then repeated for an issue bound to the ledger-aware Sidekiq sender; resend again produces no Send event | Row is retained and moves `inflight` → `released` → `inflight` with `release_count` = 1 (never deleted, count never lost); released recipient is claimed and sent exactly once by the issue-bound sender; on the next window `release_count` has reached `SEND_MAX_RELEASES` so row moves to `unresolved`; no second auto-release; page fires |\n| Release-then-fail: a reclaimed row (`release_count` = 1) hits a throttle or limiter failure after reclaim | Row returns to `released` with `release_count` = 1 (not deleted); a later auto-release is still blocked at the limit |\n| Outbox crash safety: kill the reconciler between the release transaction and the relay publish; publish a duplicate outbox message | No recipient is lost (relay or the 30-minute sweeper re-enqueues); duplicate message yields no second claim; no `released` row left unqueued |\n| Permanent per-recipient failure (suppressed / invalid address) | Ledger row is terminal `failed`; reconciler never releases it; recipient appears once under \"Not delivered\"; no resend |\n| Persistent limiter failure (e.g. cancelled context) | `batch.Deliveries` increments on each redelivery; batch dead-lettered after `SEND_MAX_DELIVERIES`; one page; no loop |\n| Dead-letter and quarantine recovery: dead-letter a batch that contains a mix of unclaimed, `inflight` (from a crashed earlier delivery) and `sent` recipients, quarantine a batch, then run `send-replay` | Only definitely-unsent recipients get `dead_lettered` rows; `inflight` and `sent` rows are untouched and resolved by the reconciler; issue shows \"Delivery incomplete\" with counts; after replay (rows to `released`, `release_count` preserved), recipients are sent exactly once and ineligible ones skipped; audit records written; escalation page fires at 4 hours |\n| Manual `unresolved` handling | Mark `sent` or close as `closed_unconfirmed` with two approvers and an audit record; no path resends an `unresolved` row; total copies per recipient never exceed original + `SEND_MAX_RELEASES` |\n| Crash between SES call and `MarkSent`; kill worker mid-batch; two workers handed the same batch | Claim prevents concurrent double-claim; inflight recipients are resolved by the reconciler from SES events; no stranded batches; duplicate count reported against the threshold above |\n| Poison batch (permanent batch error) and persistently throttled recipient | Batch is quarantined or dead-lettered after `SEND_MAX_DELIVERIES`; exactly one page; no repeated SES sends; no loop |\n| Eligibility recheck at release: subscriber unsubscribes, requests erasure, is suppressed or complains during a Smart Send hold (and during a rollback release) | Recipient is written as `skipped_ineligible` (a ledger row exists, counts and \"Delivery incomplete\" accounting correct) and receives nothing; others in the issue are sent |\n| Smart Send opt-out: subscriber opts out of Smart Send during a hold | Recipient is released immediately and receives the issue (not skipped); no profile built for them afterward |\n| Privacy controls: tracking opt-out (subscriber blocks open tracking or has an existing tracking opt-out) and EU/UK subscribers | No open-behavior profile is built or used for these subscribers; they get immediate send; `SMART_SEND_PROFILE_COMPUTE=off` produces no profile rows anywhere before sign-off; profile deleted on unsubscribe and on erasure |\n| Retention and erasure jobs: ledger partition purge (including a partition holding a non-terminal row, run past 30 days and past the 45-day hard cap), `send_failures` / SES event / audit purge, erasure request for a subscriber with ledger, failure and event rows (including rows in non-terminal state) | Expired partitions dropped; a partition with open rows is not dropped before the cap, pages, and is force-closed and dropped at 45 days; events for open rows are retained until resolved or the cap; expired rows purged on schedule; after erasure all subscriber-keyed ledger, failure and event rows are deleted at row level, the per-subscriber token is removed so audit records are unlinkable, and SES-side suppression entry is removed, all within `SEND_ERASURE_PURGE_SLA_DAYS`; erased subscriber still receives nothing |\n| Privileged actions: `send-replay`, manual closure, breaker reset, `SMART_SEND_DEFAULT` change, per-issue \"Send now\", time-sensitive self-declaration | Each requires the stated role and identity (see Authorization), is rejected otherwise, and writes an audit record with the actor |\n| Rollback drills (see Rollout plan), including a mid-issue switch, with the ledger-aware Sidekiq sender and the reconciler running throughout, and ambiguous-outcome injection on the Sidekiq path | Pass as described there: no issue split between senders, no duplicate or missing recipients, Sidekiq-sent recipients become `sent` (not stuck `inflight`) and ambiguous ones reach the reconciler |\n| Smart Send demand evidence: publisher survey and 2-week opt-in beta | Survey: at least 50% of respondents say they would use algorithmic timing. Beta: open-rate lift ≥ 3% vs control among beta publications, fewer than 25% of beta publications turn it off, and no increase in \"issue arrived late\" tickets. Failing any of these means Smart Send Time does not go default-on. |\n\nThe measured median from these runs, not the 3-minute goal, is what we will quote externally.\n\n## Customer base context (from the Q3 customer review)\n\n- 11,240 active publications; 4,480 of them (40%) are news or local-news outlets whose issues are time-sensitive (breaking news, election results, weather alerts). These are exempt from Smart Send Time by default, based on publication category alone, without requiring a self-declaration.\n- Top customer request in Q3: scheduled sends with time zone support (shipped in 2026.08). Smart Send Time does not override those scheduled times (see What ships). Before the ramp we will run a short publisher survey and a 2-week opt-in beta to confirm publishers want algorithmic timing, with pass criteria in the pre-ramp gate; the ramp's open-rate lift gate is the measured evidence.\n\n## Privacy review (gate for Smart Send Time)\n\nSmart Send Time builds a per-subscriber open-behavior profile from 90 days of opens. **No profile is computed (`SMART_SEND_PROFILE_COMPUTE=off`) and no cohort is enabled** until the privacy review signs off on:\n\n- Legal basis and jurisdiction handling: Smart Send Time is **off for EU/UK subscribers** (immediate send, no profiling) until the review approves a legal basis for them; other jurisdictions are listed and decided in the review.\n- Cross-border transfer: the transfer basis for EU/UK subscriber data processed through SES in `us-east-1` (DPA and transfer mechanism with AWS, or a region choice), reviewed and signed off with this gate.\n- Subscriber notice (publisher-facing disclosure text and a link in the email footer/preferences page).\n- A subscriber-level opt-out that falls back to immediate send (the subscriber still receives the issue, not skipped), plus honoring existing tracking opt-outs and not profiling subscribers who block open tracking. These are verified by the pre-ramp gate rows above.\n- Retention: the profile is derived data, limited to the 90-day window, deleted on unsubscribe or erasure request.\n- Hold-period handling: unsubscribe, erasure, suppression and complaint status is rechecked at release time (see What ships), so a subscriber who unsubscribes during the up-to-18-hour hold does not receive the held issue; a subscriber who opts out of Smart Send during the hold receives it immediately.\n- Send-pipeline data (ledger, `send_failures`, audit records, SES event data and SES-side copies, suppression entries): the retention and erasure rules in \"Data retention and erasure\" above, including the suppression entry's content and 24-month retention, are reviewed and signed off with this gate.\n\n## Authorization\n\nPrivileged write paths trigger real, irreversible sends or change who receives mail, so each is restricted and bound to a named identity:\n\n- **`send-replay`, breaker reset and manual `unresolved` closure:** delivery on-call role only, via SSO with MFA; per-user credentials (no shared accounts); the actor, batch/issue and reason are written to the audit record. Manual closure of `unresolved` rows requires a second approver (a different delivery-team member).\n- **`SMART_SEND_DEFAULT`, cohort changes and rollbacks:** changed only through the reviewed config-change process by the delivery team, with a named approver recorded.\n- **Settings → Delivery changes, time-sensitive self-declaration, per-issue \"Send now\" and hold cancel:** publication owner or admin role only; \"Send now\" and hold cancel require a confirmation dialog, and each action is recorded with the user and timestamp. Staff-initiated changes on a publisher's behalf require support role and are audited.\n\n## Rollout plan\n\nPipeline and Smart Send Time are decoupled and ramp independently; Smart Send Time does not start until the pipeline has been stable at 25% for at least 7 days.\n\n- **Send pipeline v2:** the 5% step (Mon 2026-11-09) requires the pre-ramp evidence gate and the quota reconciliation. Ramp by publication cohort: 5%, 25% (after 3 days clean), 50%, then 100%. Each step requires: `send.batch_failed`, `send.batch_dead_lettered` and `send.result_mismatch` at zero unexplained, no `dead_lettered` or `unresolved` recipients left unresolved past their triage window, reconcile backlog draining within `SEND_RECONCILE_WINDOW`, duplicates detected by the reconciler and seed mailboxes at or below 0.01% of recipients sent during the step (above that, the ramp halts and does not advance until explained), `send.event_missing_rate` within its alarm threshold, `send_failures` rate no higher than the Sidekiq baseline, complaint rate unchanged, no queue-lag pages. Sidekiq sender (ledger-aware version) stays deployed but idle for 14 days after 100%.\n- **Smart Send Time** (after the privacy gate, the demand-evidence criteria and the pipeline's 25% step): ramp `SMART_SEND_DEFAULT` by publication cohort, excluding time-sensitive publications: 5% (week 1), 25% (week 2), 100% of non-exempt publications (week 3), gated on open-rate lift ≥ 3% vs control and \"issue arrived late\" support tickets < 20/week. Exempt publishers may opt in (with the hold warning). Scheduled and embargoed issues are not delayed.\n- **Rollback (pipeline):** set `SENDER=sidekiq` in the dispatcher. The switch takes effect at issue boundaries: it applies only to issues that have not started. Issues already bound to v2 stay on v2, and `send-worker` stays deployed (not scaled to zero) until they drain, so an issue is never split between senders. Reconciler releases and `send-replay` requeues are routed to the issue-bound sender (see What ships), so backlog for a v2 issue goes to v2 and only Sidekiq-bound issues reach Sidekiq, which keeps Sidekiq's idle-capacity limits from being hit by v2 backlog. The send ledger is shared and the Sidekiq sender is ledger-aware (shipped with v2), so it claims before sending, records `sent`/`failed`, reports ambiguous outcomes to the reconciler, and skips recipients already `sent`, `failed`, `inflight`, `unresolved` or `dead_lettered`. `inflight` recipients are resolved by the reconciler, which is a separate service that keeps running during rollback and is not switched off by `SENDER`. Sidekiq re-claims released recipients of its own issues (`released` → `inflight`) through the same claim statement, so the one-resend limit and eligibility recheck apply unchanged. If `send-worker` itself must be stopped while issues are still bound to it, on-call explicitly rebinds those issues to Sidekiq, one issue at a time, with an audit record, accepting that this is the only case where an issue's remaining recipients move between senders (the ledger prevents double sends). In-flight SES requests cannot be recalled and complete. Drill in staging before deploy, including a mid-issue switch, verifying no duplicate or missing recipients.\n- **Rollback (Smart Send):** set `SMART_SEND_DEFAULT=off`. Held issues are **not** released all at once: they are released through the same global rate limiter, oldest-held first, with time-sensitive issues prioritized, so the release cannot exhaust the SES cap. Release goes through the normal claim step, so unsubscribe, erasure, suppression and complaint are rechecked at release (and Smart Send opt-outs are released). Because release happens at the wrong hour for those subscribers, publishers get an in-app notice before the release starts and a window (default 30 minutes, except for time-sensitive issues, which release immediately) in which they can cancel the hold on an issue, in which case its remaining held recipients are not sent. Drill in staging with a large held backlog, recording release duration and SES throttle count.\n\n## Monitoring\n\n- Dashboards: send throughput, `send.batch_failed`, `send.batch_requeued`, `send.batch_ambiguous`, `send.recipient_ambiguous`, `send.batch_dead_lettered`, `send.result_mismatch`, `send.claim_error`, `send.bookkeeping_error`, `send.event_missing_rate`, circuit-breaker state, SES throttle responses, `send_failures` growth, SES bounce/complaint rate, queue lag, send-ledger hit rate (duplicate suppression), inflight/reconcile backlog and age, `released` count and age, `dead_lettered` and `unresolved` counts and age, `closed_unconfirmed` and `skipped_ineligible` counts, duplicates detected by the reconciler and seed mailboxes (count and % of recipients sent), SES event-ingestion lag, watermark and last-event age, reconciler release-for-resend count, outbox backlog, ledger size and partition count, retention/erasure purge job success and backlog.\n- Alarms (warn → page):\n  - SES bounce rate 4% / complaint rate 0.08% (warn), complaint rate > 0.1% (page)\n  - `send.batch_failed` > 0 (page once per batch; batch is quarantined, not retried); `send.result_mismatch` > 0 (page)\n  - `send.batch_dead_lettered` > 0 (page once per batch); any `dead_lettered` or `unresolved` recipient older than 4 hours (escalated page, aggregated per issue with counts, not per recipient)\n  - `send.batch_requeued` > 5% of batches over 10 min (warn), > 20% (page)\n  - `send.claim_error` > 0 over 5 min (warn), > 1% of claims (page)\n  - `send.recipient_ambiguous` > 0 for any status outside the known list (warn, ticket naming the status); ambiguous-recipient rate > 0.1% over 10 min (page); > `SEND_AMBIGUOUS_BREAKER_PCT` (circuit breaker trips, one page)\n  - Circuit breaker open (page once)\n  - SES event-ingestion lag > `SEND_EVENT_LAG_MAX` or no events ingested for > `SEND_EVENT_STALL_MAX` (page; reconciler auto-release is paused)\n  - `send.event_missing_rate` > 0.005% of SES-accepted recipients over 24h (warn), > 0.01% (page; ramp halts)\n  - Reconciler release-for-resend count > 50% of `SEND_RELEASE_RATE_CAP` over 10 min (warn); cap reached (page; auto-release paused)\n  - Duplicates detected (reconciler and seed mailboxes) > 0.005% of recipients sent over 24h (warn), > 0.01% (page; ramp halts)\n  - Any recipient moved to `unresolved` (one aggregated page per issue per hour with counts)\n  - Oldest `inflight` recipient older than `SEND_RECONCILE_WINDOW` + 15 min (page)\n  - `released` recipient not re-claimed within 30 min (sweeper re-enqueues; page if still `released` after 2 hours); outbox backlog older than 10 min (page)\n  - Ledger partition purge blocked by non-terminal rows, any partition reaching `SEND_LEDGER_HARD_MAX_DAYS` with open rows, or any retention/erasure purge job failing or exceeding `SEND_ERASURE_PURGE_SLA_DAYS` (page)\n  - `send_failures` rate > 2× Sidekiq baseline over 10 min (page)\n  - SES throttle responses > 1% of requests over 5 min (warn), > 5% (page)\n  - `send.bookkeeping_error` > 0 over 5 min (warn)\n  - Queue lag > 10 min (page)\n- Smart Send Time: held-issue count, hold-duration distribution, \"issue arrived late\" tickets, hold-cancel and \"Send now\" counts.\n\n## Launch post (blog + newsletter to all publishers)\n\n**Not sent on deploy day.** The original plan called for a same-day launch post to all publishers; this proposal deliberately replaces it, because a public send cannot be recalled and its claims depend on measured results that do not exist yet. The product/comms owner must confirm this change before any launch send; until they do, no launch post is sent. Each part publishes only after its own gates pass, and the claims use measured numbers.\n\n- **Pipeline post** (after the 100% step with measured results): \"Inkwell sends are faster. In production, the median time-to-inbox for a 50,000-subscriber issue went from 14 minutes to **[measured value]**.\" No \"up to 5×\" claim; the number comes from production measurements.\n- **Smart Send Time post** (after the week-3 gate passes and the privacy review is signed off):\n\n> **Smart Send Time is rolling out.** Smart Send Time delivers each issue when each reader is most likely to open it, which can delay delivery by up to 18 hours. It's being enabled gradually; you'll see a notice in Settings → Delivery when it reaches your publication. Time-sensitive publications like news and weather outlets are not enrolled automatically, and issues you schedule for a specific time are never delayed. You can turn it off anytime, choose \"Send now\" for any issue, or cancel the hold on an issue. Subscribers who unsubscribe while an issue is held will not receive it, and a subscriber who opts out of Smart Send Time gets the issue immediately. It uses each subscriber's open history from the last 90 days; see how that data is used and how subscribers can opt out [link].",
+ "fixerUsage": {
+  "calls": 6,
+  "tokIn": 59312,
+  "tokOut": 81602,
+  "usd": 1.053244,
+  "critMs": 477383
+ },
+ "status": "cleared"
+}

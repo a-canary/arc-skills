@@ -1,0 +1,65 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "merge-02",
+ "rep": 1,
+ "wallMs": 196864,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "blocker",
+   "claim": "The duplicate-ballot log line writes the voter's email together with the choice they attempted. Logs ship to a third-party host readable by the whole support team, so this creates an irreversible identity-to-choice link outside the tally and breaks the core anonymity promise.",
+   "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value,)"
+  },
+  {
+   "lens": "authz",
+   "severity": "blocker",
+   "claim": "The new results export route has no authentication or admin role dependency, unlike other admin routes. Anyone who can reach the URL can download tallies for any measure. Combined with no closed-state check, this can disclose interim results of open votes, which cannot be undone.",
+   "evidence": "@router.get(\"/measures/{measure_id}/results.csv\")\nasync def export_results(\n    measure_id: int,\n    db: Session = Depends(get_db),\n):"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The export is described as being for closed measures but never checks whether the measure is closed. Live partial counts for open measures can be exported, and the CSV has no status or as-of marker to distinguish provisional from final.",
+   "evidence": "measure = db.get(Measure, measure_id)\n    if measure is None:\n        raise HTTPException(404)  (no is_open()/closed check)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Tally zero-fill looks up counts with Choice enum members while the dict is keyed by whatever Ballot.choice returns. If the column returns plain strings and Choice is not a str-enum, every row silently reports 0 votes in a document filed with the council. No test or sample output rules this out.",
+   "evidence": "counts = dict(db.query(Ballot.choice, func.count(Ballot.id))...) ... writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "The new export route and logging change ship with no tests. The CSV shape, zero-fill, 404 path, and admin gating are unverified, and the missing auth and enum-key concerns would have been caught by tests.",
+   "evidence": "ABSENT: no test files in the diff; new export_results route and new logger.info call added without test coverage"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The duplicate check is check-then-insert with no handling of a unique-constraint violation on commit. Concurrent submissions can produce an unlogged 500 instead of the 409 path support wants to diagnose.",
+   "evidence": "if db.query(Receipt).filter_by(token=receipt).first(): ... db.add(Receipt(token=receipt)) ... db.commit()"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The duplicate-ballot log line fires on every rejected retry with no rate limit or sampling, which could inflate log volume and cost on the third-party host.",
+   "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", ...) followed by raise HTTPException(409, \"already voted\")"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The measure slug is interpolated unescaped into the Content-Disposition header; a slug with quotes or CR/LF could break the header if slugs are not constrained.",
+   "evidence": "f'attachment; filename=\"{measure.slug}-results.csv\"'"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 48062,
+  "tokOut": 21940,
+  "usd": 0.06535858,
+  "critMs": 21304
+ }
+}

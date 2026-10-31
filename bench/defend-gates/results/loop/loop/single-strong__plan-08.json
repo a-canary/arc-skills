@@ -1,0 +1,113 @@
+{
+ "approach": "single-strong",
+ "case": "plan-08",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "sovereignty",
+     "severity": "blocker",
+     "claim": "The plan makes a proprietary, hosted-only Cirrus Cloud the single sync backend and archives the stride-server Docker image in 5.0. This directly breaks the project's charter promise that users can self-host and fully own their data, and strands ~3,000 self-hosted instances. The server is not self-hostable at all, so there is no exit path.",
+     "evidence": "\"after which Cirrus Cloud becomes the single sync backend and the stride-server Docker image is archived\"; \"the server component is available only as the hosted Cirrus Cloud service\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The app is MIT open source, but its core sync depends on a prebuilt closed-source binary under a commercial license. License compatibility, redistribution rights in an open-source app, and F-Droid/open-source distribution are never assessed. The plan is also silent on the Cirrus ToS and on data processing terms.",
+     "evidence": "\"distributed as a prebuilt binary (iOS xcframework, Android AAR) under the Cirrus commercial license\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Sending GPS tracks, which reveal home and routine locations, and workout data for ~90k users to a third-party processor is a major privacy change. The plan has no consent or notice, no DPA, no data residency or GDPR analysis, and no retention terms. Deletion relies on an admin API within 30 days with no verification, and the backups and tombstones are not addressed.",
+     "evidence": "\"Account deletion removes the Cirrus user record and all synced records via the Cirrus admin API within 30 days.\" (no mention of consent, residency, DPA)"
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The budget math rests on a free tier that leaves only ~10% headroom (90k of 100k MAD). Growth or counting differences (devices vs users, multi-device, beta cohorts) could push the project into unknown paid pricing, with no cost ceiling, alert, or fallback. Pricing is vendor-controlled and can change.",
+     "evidence": "\"free up to 100k monthly active devices; our 90k fits the free tier\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Moving to the Cirrus store and proprietary replication is a one-way door. There is no plan for exporting data back out of Cirrus Cloud if the vendor changes terms, shuts down, or the free tier ends. The backup is deleted after 30 days, and the 3.x restore path doesn't cover data created after migration. Legacy REST for cloud users is dropped.",
+     "evidence": "\"the backup is deleted only after 30 days and two successful syncs\"; \"Legacy REST sync is removed in app 5.0\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The product's core promise depends on a single third-party hosted service with no stated SLA, outage fallback, or rate limits. A 3.x downgrade restores the old DB, but any workouts recorded on 4.x after migration are lost or silently diverge. The plan has no monitoring beyond client-reported success and a crash-rate halt threshold.",
+     "evidence": "\"3.x detects stride-backup-v3.db and restores from it\"; \"Sync success rate (client-reported)\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The claim that Cirrus fixes the partial-upload and duplicate problem is asserted without a prototype. The spike is only in week 1, yet the plan commits the whole 5-week architecture. Whether the Cirrus data model can handle large GPS tracks and the 14 conflict scenarios is unverified. The success targets (down 80%, 99.5%) have no baseline.",
+     "evidence": "\"uploads are resumable at the record level, so a dropped connection never leaves a partial workout\"; \"Week 1: Cirrus integration spike\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The root cause is the REST upload being non-idempotent and non-resumable. A fix on the existing self-hostable stack (idempotency keys, chunked upload) would solve the problem without a vendor swap. The plan does not weigh these alternatives.",
+     "evidence": "ABSENT: alternatives considered (idempotent client-generated IDs on existing REST, open-source sync engines)"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The migration and sync of GPS tracks, with 500 workouts per batch, has no analysis of data volume for heavy users or of the tombstone growth. The beta of 500 volunteers is too small to validate behavior at 90k users.",
+     "evidence": "\"Migration is chunked (500 workouts per batch)\"; \"beta ... to 500 volunteers\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2716,
+    "tokOut": 1629,
+    "usd": 0.0236712,
+    "critMs": 12119
+   },
+   "wallMs": 51067
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The plan does not say that idempotent upserts keyed on a client-generated UUID are scoped per authenticated user. Without that scoping, a colliding or guessed UUID could overwrite another user's record on a multi-user server. Chunked uploads of up to 30 MB also have no stated size or rate limits.",
+     "evidence": "ABSENT: authn/authz scoping for UUID upserts and per-upload size or quota limits"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Tombstones are kept for 90 days, so a device offline for longer than that can still resurrect a deleted workout. The plan does not say how this case is handled.",
+     "evidence": "Deletes are tombstones retained 90 days so an offline device cannot resurrect a deleted workout."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The plan does not say how orphaned incomplete chunk sets are garbage-collected when the final commit never arrives. Unbounded server storage growth is possible on self-hosted instances.",
+     "evidence": "a workout becomes visible on the server only when its final chunk commits (atomic commit marker)"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3399,
+    "tokOut": 703,
+    "usd": 0.017143199999999997,
+    "critMs": 5456
+   },
+   "wallMs": 34575
+  }
+ ],
+ "artifact": "# Offline-first sync: build plan\n\nMaintainers: core team | 5 weeks | Ships in app 4.0\n\n## 1. Problem\n- 23% of sync-related GitHub issues in the last 6 months are \"workout lost/duplicated after trail run with no signal\".\n- Current REST sync uploads whole-workout blobs. A dropped connection mid-upload leaves a partial server row and a client that believes the upload failed, which then re-uploads a duplicate.\n\n## 2. Approach\nBuild resumable, idempotent record-level sync into the existing open stack (on-device SQLite plus the MIT-licensed stride-server). This keeps the charter promise that users can self-host and fully own their data. We are not adopting a proprietary hosted-only SDK as the sync backend.\n- Every record (workout, lap, GPS-track chunk, gear) gets a client-generated UUID. Uploads are idempotent upserts keyed on that UUID, so a retry after a dropped connection can never create a duplicate.\n- Per-record change log on device. Large GPS tracks are uploaded in chunks, and a workout becomes visible on the server only when its final chunk commits (atomic commit marker), so no partial workout is ever visible.\n- The protocol is documented in the repo and implemented in both the app and stride-server, so any self-hosted instance gets the fix.\n- Third-party sync SDKs (including Cirrus Sync, which is hosted-only with a closed-source binary client) are not part of this plan. Any future opt-in hosted backend would need a separate proposal with a license review (MIT / F-Droid compatibility), a DPA, and a data-export path, and could not replace the self-hostable server.\n- Cost: no new vendor cost. Self-hosters bear their own hosting costs, as today.\n\n## 3. Self-hosted instances\nSelf-hosted servers are first-class and remain supported:\n- The new protocol ships in the stride-server Docker image. The image is not archived, and no hosted-only backend is introduced.\n- Legacy REST sync is kept through 4.x so 3.x clients and not-yet-upgraded servers keep working. Version negotiation falls back to legacy REST when the server does not advertise the new protocol. Any later removal of legacy REST needs its own deprecation notice and a migration guide for self-hosters.\n- Week 3 includes a server upgrade guide and an integration test against the published Docker image.\n\n## 4. Conflict resolution\n- Workouts are append-only after the \"finish\" event. Edits after finish (title, notes, gear) are per-field last-writer-wins using a hybrid logical clock stamped on device.\n- Deletes are tombstones retained 90 days so an offline device cannot resurrect a deleted workout.\n- Unit tests cover the 14 conflict scenarios enumerated in docs/sync-conflicts.md.\n\n## 5. On-device migration\n- On first launch of 4.0, the app copies the existing SQLite database to stride-backup-v3.db before running the additive schema migration (sync UUIDs and the change log).\n- If migration fails, 3.x or 4.x restores from stride-backup-v3.db. The backup is deleted only after 30 days and two successful syncs.\n- Downgrade to 3.x: workouts recorded on 4.x after migration are not in the backup. Before a downgrade, or before the backup is deleted, the app offers a full JSON export, and 4.x-recorded workouts remain on the server, which keeps serving legacy REST through 4.x so 3.x can pull them.\n- Migration is chunked (500 workouts per batch) and resumable if the app is killed mid-migration.\n\n## 6. Timeline\n- Week 1: prototype of the idempotent chunked-upload protocol against stride-server, exercised with fault injection (connection dropped at random points, 30 MB GPS tracks, the 14 conflict scenarios). Also capture baselines: count of \"lost/duplicated\" issues per month, and server-side sync success rate from logs. Go/no-go review at end of week 1. If the prototype cannot eliminate partial and duplicate workouts, scope is re-planned before further build.\n- Week 2: on-device migration + backup/restore path.\n- Week 3: conflict resolution + tests; legacy REST fallback and version negotiation; self-hosted upgrade guide.\n- Week 4: beta (TestFlight / Play internal) to 500 volunteers, including 50 trail runners, plus at least 10 self-hosted instances.\n- Week 5: staged rollout 10% -> 50% -> 100%, halting if crash-free sessions drop below 99.3% or server-side sync success falls below the beta baseline.\n\n## 7. Data export and deletion\n- Settings > Export keeps working unchanged: GPX per workout and a full JSON archive, generated on device from the local store.\n- No third-party processor receives workout or GPS data; data goes only to the server URL the user configured.\n- Account deletion removes the user's records on the server. Tombstones are purged after the 90-day retention window, and the deletion docs state this. Self-hosters control their own server data and backups.\n\n## 8. Success metrics\n- \"Lost/duplicated workout\" issues down 80% versus the Week 1 baseline within 2 months of 4.0.\n- Sync success rate >= 99.5% on the beta cohort, measured both client-reported and server-side against the Week 1 baseline.\n- Server-side monitoring: upload retry rate, partial-commit count (target 0), and duplicate-UUID rejections.",
+ "fixerUsage": {
+  "calls": 1,
+  "tokIn": 3171,
+  "tokOut": 2931,
+  "usd": 0.04199,
+  "critMs": 22582
+ },
+ "status": "cleared"
+}

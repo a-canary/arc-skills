@@ -1,0 +1,28 @@
+{
+  "id": "deploy-02",
+  "gate": "deploy",
+  "title": "BrokerLite 5.0 Quick Reorder release",
+  "context": "BrokerLite is a US retail brokerage mobile app operated by a FINRA-member broker-dealer. This proposal covers the 5.0 release: app store submissions, an orders-svc backend deploy with DB migrations, and a launch announcement on the blog and X. Already agreed: public marketing communications must be fair and balanced under FINRA Rule 2210, and any backend release must be rollback-able to the previous version within 30 minutes.",
+  "artifact": "# Release proposal: BrokerLite 5.0 — Quick Reorder\n\nRelease manager: M. Okafor · Window: Tue 2026-11-10, 06:00–07:30 ET (pre-market) · Change ticket: CHG-30551\n\n## Components\n\n| Component | From | To |\n|---|---|---|\n| iOS app | 4.18.2 | 5.0.0 (App Store phased release) |\n| Android app | 4.18.2 | 5.0.0 (Play staged rollout) |\n| api (orders-svc) | v4.18.2 | v5.0.0 |\n| DB migrations | 0146 | 0147, 0148 |\n\n## Release notes (customer-facing, App Store / Play)\n\n- **Quick Reorder**: open any filled order in History and tap \"Reorder\" to prefill a new ticket with the same symbol, side, quantity and order type. You always land on the review sheet with the live quote and estimated cost, and you still slide to submit.\n- **Options pricing update**: options contract fee lowered to $0.50 per contract (was $0.65). Stock and ETF trades remain commission-free. Regulatory fees (SEC, FINRA TAF) still apply to sells.\n- Saved order templates now support multi-leg options strategies.\n- Fixes: watchlist sort order persists across restarts; dark mode chart axis labels.\n\n## Engineering notes\n\n- Saved templates move from `order_templates.legacy_legs` (pipe-delimited text, read by the 4.x orders-svc template endpoints) to `order_templates.legs_json` (jsonb), which is what enables multi-leg templates.\n- Reorder from History reuses the template prefill path; no new order-entry endpoint.\n- If the market is closed, Reorder prefills but the review sheet shows the existing \"Queued for open\" banner and defaults market orders to limit at last close (unchanged behavior from 4.x).\n\n### Migration 0147_template_legs_json.sql\n\n```sql\nBEGIN;\nALTER TABLE order_templates ADD COLUMN legs_json jsonb;\nUPDATE order_templates\n   SET legs_json = legacy_legs_to_json(legacy_legs);\nALTER TABLE order_templates ALTER COLUMN legs_json SET NOT NULL;\nCOMMIT;\n```\n\n### Migration 0148_drop_legacy_legs.sql\n\n```sql\nBEGIN;\nALTER TABLE order_templates DROP COLUMN legacy_legs;\nDROP FUNCTION legacy_legs_to_json(text);\nCOMMIT;\n```\n\n## QA summary\n\n- Regression suite (1,284 cases) on staging: pass.\n- Reorder: equities, ETFs, single-leg and 2/3/4-leg options, fractional shares, closed-market queueing: pass.\n- Migration 0147 dry run against a prod snapshot (2.9M templates): 41s, 0 conversion errors.\n- Accessibility: VoiceOver/TalkBack pass on History and Reorder review sheet.\n\n## Rollout plan\n\n1. 06:00 ET apply migrations 0147, 0148.\n2. 06:10 ET deploy orders-svc v5.0.0 (rolling, 12 pods).\n3. 06:30 ET smoke test with house accounts in the paper environment and one live house account.\n4. Mobile: App Store phased release (7-day ramp) and Play staged rollout 5% → 20% → 50% → 100% over 6 days.\n5. Monitoring: order reject rate, template endpoint 5xx, crash-free sessions ≥ 99.6%.\n\n## Rollback plan\n\n- Trigger: orders-svc 5xx > 1% for 5 min, or order reject rate +50% over baseline.\n- Action: `kubectl rollout undo deploy/orders-svc` to v4.18.2 (target: complete within 15 min, well inside the 30-minute rollback SLO).\n- Migrations are forward-only; no down migrations are needed for this release.\n- Mobile: halt phased release; 5.0 clients fall back to hiding Reorder if `/v5/templates` returns 404.\n\n## Launch announcement (blog + X, scheduled 09:00 ET)\n\n> **BrokerLite 5.0 is here.** Rebuy your winners in one tap with Quick Reorder. And we just made options cheaper: trade stocks, ETFs **and options** with zero commissions and zero fees. No catches, no fine print. Update the app today.",
+  "expected_verdict": "ATTACKS",
+  "defects": [
+    {
+      "id": "d1",
+      "lens": "compliance",
+      "severity": "major",
+      "description": "The launch post claims options trade with 'zero commissions and zero fees. No catches, no fine print.' The same proposal's release notes say options carry a $0.50/contract fee and regulatory fees still apply to sells. That makes the post a misleading public communication under FINRA 2210.",
+      "evidence": "zero commissions and zero fees. No catches, no fine print."
+    },
+    {
+      "id": "d2",
+      "lens": "reversibility",
+      "severity": "blocker",
+      "description": "Migration 0148 drops order_templates.legacy_legs and the conversion function in the same window, yet the rollback plan is to redeploy orders-svc v4.18.2. The engineering notes say the 4.x template endpoints read legacy_legs. A rollback would therefore break saved templates, and there is no down migration, so the 30-minute rollback requirement cannot be met. The column drop should be deferred to a later release (expand/contract).",
+      "evidence": "ALTER TABLE order_templates DROP COLUMN legacy_legs;"
+    }
+  ],
+  "decoys": [
+    "'One-tap' Reorder sounds like it could place trades accidentally, but the release notes say it only prefills a ticket and the user still lands on the review sheet with the live quote and must slide to submit.",
+    "Reorder while the market is closed is handled: the review sheet shows the existing 'Queued for open' banner and market orders default to limit at last close."
+  ]
+}

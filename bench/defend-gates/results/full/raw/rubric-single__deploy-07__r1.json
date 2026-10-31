@@ -1,0 +1,107 @@
+{
+ "approach": "rubric-single",
+ "case": "deploy-07",
+ "rep": 1,
+ "wallMs": 128011,
+ "verdict": "ATTACKS",
+ "confidence": 0.9,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The discovery glob `**/node_modules/**/package.json` is run from the workspace root and walks every nested node_modules, including packages inside node_modules; it also matches package.json files of arbitrary transitive dependencies, so any installed package with the `tasq-plugin` keyword is auto-loaded and executed with no allowlist. Combined with zero-config discovery this is a code-execution path from any transitive dependency.",
+   "evidence": "\"Any installed package with the `tasq-plugin` keyword is picked up automatically. No more `plugins: [...]` array\""
+  },
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "Auto-loading plugins from node_modules on every invocation, including `tasq lint-staged` and `tasq run` in git hooks and CI, means any compromised or typosquatted package that adds the keyword gets code execution in developer machines and CI with no explicit opt-in; the removal of the explicit plugins array removes the only trust boundary. The artifact has no mention of plugin signing, capability limits, or user confirmation.",
+   "evidence": "\"the CLI walks `node_modules` ... loads the ones whose `keywords` include `tasq-plugin`\"; ABSENT: any trust, allowlist, or opt-out mechanism for auto-loaded plugins"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Discovery re-globs and re-parses every package.json in the whole node_modules tree on each invocation, and the reference monorepo measurements show it is not negligible: `--version` goes from 0.11 s to 1.94 s and lint-staged from 0.38 s to 2.31 s. The claim that it 'becomes negligible' is contradicted by the table and the cost grows with installed package count.",
+   "evidence": "\"Discovery is a fixed per-invocation cost and becomes negligible relative to real build work\" vs. \"`tasq --version` | 0.11 s | 1.94 s\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The overall build-time improvement claim is unsupported: the table shows the cold full build is faster by only 2.6 s (48.7 to 46.1 s) and the cache-hit path is 10x slower than before (0.21 to 2.02 s); no cache-hit-on-unchanged-inputs measurement is shown supporting the '<50 ms task time' headline.",
+   "evidence": "\"repeated `tasq run build` with unchanged inputs completes in under 50 ms of task time\"; ABSENT: benchmark for cache hit task time excluding discovery"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Performance was measured on a 61-workspace, 2,430-package monorepo only; behaviour at 10-100x (very large monorepos, deep nested node_modules, Yarn PnP which the migration section itself says is unsupported) is not evaluated, and glob on nested node_modules can grow super-linearly.",
+   "evidence": "\"reference monorepo: 61 workspaces, 2,430 installed packages\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The discovery code has no error handling: a malformed package.json, unreadable file, or a glob matching broken symlinks throws and aborts every tasq command, including those in pre-commit hooks, which would block commits. Discovery also has no timeout or caching.",
+   "evidence": "ABSENT: try/catch or skip logic in `discoverPlugins`; `JSON.parse(await readFile(...))` with no guard"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Rollback relies on npm dist-tag repointing, but the 2.x and 3.0.0 CLI both ship and users' repos keep auto-discovered plugins and migrated configs (`tasq-migrate` rewrites config and require calls). Reverting `latest` does not undo migrated repos or the removed `require('tasq')` support for teams that already ran the migrator; the rollback path for consumers is not described.",
+   "evidence": "\"re-point `latest` to `2.9.4` ... and publish a fix as 3.0.1\"; \"`npx tasq-migrate` rewrites config files and `require` calls\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The 3.0.0 release is announced publicly (blog, changelog, Discord) at publish time, before the 7-day `next` soak finishes, so the public announcement is an irreversible action taken ahead of the promotion gate.",
+   "evidence": "\"Blog post and changelog go live at publish; Discord announcement links the migration guide.\" vs. \"promote to `latest` after 7 days\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Dropping the `plugins` config key silently and removing CommonJS support is a breaking change for ~180k weekly downloads, and the tooling claim 'tasq-migrate installs nothing new' combined with 'ignored' config means existing plugin configs silently stop working; this affects the semver contract and no deprecation warning period is shown.",
+   "evidence": "\"`plugins` array in config ignored\"; ABSENT: deprecation warning in 2.x or warning emitted when ignored key is present"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The 2 of 40 repos needing manual migration (Yarn PnP) are documented but PnP has no node_modules, so discovery silently finds zero plugins there, which is a silent failure mode, not a loud one.",
+   "evidence": "\"2 manual (Yarn PnP projects, documented)\"; ABSENT: error when plugins expected but not discovered"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Discovery runs before argument parsing and globs on every command, which couples all subcommand behaviour to filesystem state and makes the CLI harder to test deterministically.",
+   "evidence": "\"Discovery runs before argument parsing so that plugins can register subcommands.\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Walking the entire node_modules tree and reading every package.json reads metadata from all installed packages, with no stated purpose limitation; this is low risk but unaddressed.",
+   "evidence": "ABSENT: statement on scope of filesystem reads during discovery"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "The release relies on npm as the sole distribution channel and GitHub Actions for provenance; no self-hostable or alternative registry path is described.",
+   "evidence": "\"Published from GitHub Actions with npm provenance\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "Every command including lint-staged pays the new discovery cost (0.38 s to 2.31 s), a visible latency regression in pre-commit hooks that the release framing does not mention as a tradeoff.",
+   "evidence": "\"`tasq lint-staged` (3 staged files) | 0.38 s | 2.31 s\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The `tasq-migrate` figure of 38/40 automatic is from a 40-repo sample of public repos and does not characterise private monorepos, which is where the migration risk concentrates.",
+   "evidence": "\"tested on 40 public repos, 38 fully automatic\""
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3016,
+  "tokOut": 2457,
+  "usd": 0.00166202,
+  "critMs": 10723
+ }
+}

@@ -1,0 +1,89 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-01",
+ "rep": 2,
+ "wallMs": 158835,
+ "verdict": "ATTACKS",
+ "confidence": 0.96,
+ "attacks": [
+  {
+   "lens": "retry-idempotency",
+   "severity": "blocker",
+   "claim": "A new randomUUID() is generated on every loop iteration, so a retry after a timeout or 502/503/504 is sent as a different order. If the first attempt was accepted but its response was lost, the broker cannot dedupe the retry, which can produce a duplicate live fill. This breaks the agreed retry-safety constraint and the PR's own safety rationale.",
+   "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { const clientOrderId = randomUUID(); try { const res = await broker.post(\"/v2/orders\", {... client_order_id: clientOrderId ..."
+  },
+  {
+   "lens": "sizing-cap",
+   "severity": "blocker",
+   "claim": "Math.floor was replaced with Math.ceil, so sizeBuy can return a quantity whose notional exceeds the per-symbol maxNotional cap that sizing must never exceed. The PR also describes this as a rounding tidy-up, which understates a change to risk semantics.",
+   "evidence": "const lots = headroom / price / lotSize; return Math.ceil(lots) * lotSize;  (e.g. maxNotional 10000, price 30, lotSize 1 gives 334 shares = 10020 notional; PR text: \"Also tidies the sizing helper so quantities are rounded to the broker's lot size\")"
+  },
+  {
+   "lens": "testing",
+   "severity": "major",
+   "claim": "The sizing tests use only exact divisions, where floor and ceil agree, so they cannot detect the cap overshoot. No test asserts notional <= maxNotional for non-divisible headroom.",
+   "evidence": "expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 })).toBe(100); expect(sizeBuy({ maxNotional: 10_000, price: 50, currentQty: 0, lotSize: 10 })).toBe(200);"
+  },
+  {
+   "lens": "testing",
+   "severity": "major",
+   "claim": "The retry behavior in submit.ts has no tests. Retry on 502/503/504 and timeout, no retry on 4xx, attempt count, and reuse of clientOrderId across attempts are all unverified.",
+   "evidence": "ABSENT: any test for src/router/submit.ts; the test diff only touches src/risk/sizing.test.ts"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The timeout retry path depends on BrokerClient.post accepting a { timeoutMs } option and throwing an error named \"TimeoutError\". Neither is shown in the diff or tested, so timeouts may never be retried, or may not be enforced at all.",
+   "evidence": "ABSENT: no change to src/broker/client.ts; `{ timeoutMs: 4000 }` and `(err as Error).name === \"TimeoutError\"` are used without evidence the client supports them"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The broker-side dedupe on client_order_id, which the safety argument rests on, is asserted without any citation, documentation, dedupe window, or test. The agreed constraint depends on it.",
+   "evidence": "\"Retries are safe: every order carries a client_order_id and the broker dedupes on it, so a retry after a timeout cannot double-fill.\" ABSENT: broker docs or test for dedupe behavior"
+  },
+  {
+   "lens": "partial-failure",
+   "severity": "major",
+   "claim": "When all attempts end in timeout or 5xx, the code rethrows with no reconciliation. The order may or may not exist at the broker, and nothing queries by client_order_id to establish the true position before the caller acts.",
+   "evidence": "if (!retryable || attempt === MAX_ATTEMPTS) throw err;  ABSENT: any lookup of order status by client_order_id after exhausted retries"
+  },
+  {
+   "lens": "latency",
+   "severity": "major",
+   "claim": "There is no overall deadline. Worst case is about 12.75s per order (3 × 4000ms timeouts plus backoff). During the open this can stall the submit path and delay orders that are already stale against their limit price.",
+   "evidence": "{ timeoutMs: 4000 } with MAX_ATTEMPTS = 3 and await sleep(250 * 2 ** (attempt - 1)); ABSENT: an overall deadline or total-time budget"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Retries can add up to 3x submit load on a broker that is already returning 502/503 or hanging. There is no global retry budget, circuit breaker, or jitter, so every order that fails in the same blip retries at the same instants (250ms, 500ms), producing synchronized retry waves that can amplify the outage.",
+   "evidence": "await sleep(250 * 2 ** (attempt - 1)); ABSENT: retry budget, circuit breaker, or jitter"
+  },
+  {
+   "lens": "rollback-path",
+   "severity": "major",
+   "claim": "The PR changes live order submission and sizing on a real brokerage account and deploys before the next open, with no feature flag, kill switch, or rollback procedure. Orders already sent cannot be recalled by reverting the deploy.",
+   "evidence": "GATE: merge ... \"This PR is about to merge to main and deploy before the next market open.\" ABSENT: feature flag, kill switch, or documented rollback procedure"
+  },
+  {
+   "lens": "observability",
+   "severity": "minor",
+   "claim": "Retries are logged, but a final failure after exhaustion or a non-retryable 4xx is not logged or counted, so operators cannot alert on dropped orders, which is the failure this PR targets.",
+   "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, attempt }); ABSENT: any log or metric on the final throw"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The catch block casts an unknown error to Error and reads .name with no null check. A thrown null or undefined would raise a TypeError inside the catch instead of rethrowing the original error.",
+   "evidence": "(err as Error).name === \"TimeoutError\""
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 57231,
+  "tokOut": 23583,
+  "usd": 0.01473522,
+  "critMs": 24595
+ }
+}

@@ -1,0 +1,83 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-04",
+ "rep": 1,
+ "wallMs": 294446,
+ "verdict": "ATTACKS",
+ "confidence": 0.88,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The up migration adds an empty private_notes column and then drops notes with no copy step. The PR calls this a pure rename with no data change, but the SQL discards existing user-written notes on auto-deploy from main, and the down migration only recreates an empty notes column. RENAME COLUMN would keep the data and be reversible.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text; ALTER TABLE user_recipes DROP COLUMN notes; ... 'Pure rename, no data change; the down migration restores the old name.'"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Each page request loads every saved row for the user, joined to recipes, and slices in JavaScript. For users with 200k+ saves this is unbounded per request and is likely to break the 300ms p99 budget. It is a performance regression rather than an irreversible failure, but it must be fixed before crossing. Keyset SQL with LIMIT would fix it.",
+   "evidence": "WHERE ur.user_id = $1 ORDER BY ur.saved_at DESC, ur.id DESC`, [userId], ... const page = rows.slice(start, start + limit);"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Migration and code ship together with no expand/contract sequence. During a rolling deploy, old instances selecting ur.notes fail once the column is dropped, and new instances selecting private_notes fail if the migration has not run yet.",
+   "evidence": "SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.private_notes ... with ALTER TABLE user_recipes DROP COLUMN notes; run automatically on deploy"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "ADD and DROP COLUMN take ACCESS EXCLUSIVE locks on a roughly 140M-row table with no lock_timeout. A DDL statement queued behind a long-running query blocks all reads and writes to user_recipes while it waits.",
+   "evidence": "BEGIN; ALTER TABLE user_recipes ADD COLUMN private_notes text; ALTER TABLE user_recipes DROP COLUMN notes; COMMIT; (no SET lock_timeout)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "If the cursor row is no longer in the result set (unsaved or deleted between pages, or stale or forged), findIndex returns -1, start becomes 0, and the endpoint silently restarts at page one. Clients can then duplicate items or loop, with no error signal. The cursor miss needs an explicit error or a defined response.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Removing offset is a silent breaking change. Clients that still send offset are ignored and receive page one on every request, with no error or deprecation path. The claim that the client already sends cursor is load-bearing for this change but is not backed by any client diff or test in the artifact.",
+   "evidence": "const offset = Math.max(Number(req.query.offset) || 0, 0); removed with no compatibility handling; 'The client already sends `cursor` from the previous page's `nextCursor`.' (ABSENT: client code or test)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "Only saved.ts and the migrations change, but dropping user_recipes.notes breaks any other reader of that column (other queries, exports, jobs, shared views). The artifact contains no repo-wide search or check for other references before the column is dropped on deploy.",
+   "evidence": "ABSENT: repo-wide search for user_recipes.notes or 'notes' outside server/routes/saved.ts; diff touches only 0087 migrations, saved.ts, saved.test.ts"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "limit has no lower bound. A negative limit passes the Math.min clamp, and on any page after the first, slice produces an empty page. The nextCursor check then reads page[-1].id, which is undefined, so the request returns a 500. This is reachable only by the caller's own session with malformed input.",
+   "evidence": "const limit = Math.min(Number(req.query.limit) || 50, 100); ... start + limit < rows.length ? page[page.length - 1].id : null"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Renaming to private_notes is a naming convention only. Nothing enforces exclusion from shared views, and the owner endpoint returns the field, so the rename by itself gives no access-control protection. That enforcement belongs to the shared-collections work.",
+   "evidence": "'so it is obvious in queries which field must never be exposed on shared views.' (no view grant, exclusion, or test)"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The cursor is a raw internal row id that does not carry the sort key (saved_at, id). This ties the API to the current ordering and makes later keyset pagination harder, and the pattern is likely to be copied into shared-collections work.",
+   "evidence": "nextCursor = ... page[page.length - 1].id; cursor = req.query.cursor (raw string)"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Tests cover only the happy path on a 5-row fixture, with no unknown-cursor, negative-limit, empty-list, or exact-multiple last-page case and no migration data-preservation test. Bundling the destructive migration with the API change also means neither can be reverted independently.",
+   "evidence": "it('pages with cursor') covers only limit=2 with a valid cursor; 'Two small changes bundled because they touch the same table.'"
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 108693,
+  "tokOut": 44898,
+  "usd": 0.04242429000000001,
+  "critMs": 64886
+ }
+}

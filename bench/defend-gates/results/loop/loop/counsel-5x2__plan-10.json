@@ -1,0 +1,1133 @@
+{
+ "approach": "counsel-5x2",
+ "case": "plan-10",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The purge is irreversible and runs nightly over all accounts past grace, but the job ignores the feature flag and the plan gives no purge-specific pause, per-run deletion ceiling, or review gate after the first dry-run batch. A registry or query defect could irreversibly delete many accounts in one night with no automated stop.",
+     "evidence": "'Requests already confirmed are still purged on schedule (the purge job ignores the flag)' and 'The first real purge batch ... runs in dry-run mode first'. ABSENT: purge-specific pause switch or max-deletions-per-run limit for later nightly runs."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Processor deletions run after the DB transaction commits, and the plan describes no durable outbox or pending-call record. A crash between commit and the processor calls removes the user row while Amplitude, Customer.io, Zendesk or Stripe still hold data, and the external identifiers needed for retry may be gone.",
+     "evidence": "'After the DB transaction commits: Amplitude: user deletion API. Customer.io: DELETE /customers/{id}...' ABSENT: outbox or pending-call table, or external IDs persisted before commit."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Alerting covers only per-processor failures. If AccountPurgeJob stops, stalls, or misses runs, no alert fires and the 21-day worst case fails silently for every queued account. No on-call owner is named.",
+     "evidence": "'A dashboard shows pending, completed and failed per processor.' ABSENT: missed-run or job-level failure alert and named on-call owner."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "deleted_accounts, which the restore runbook uses to re-apply purges, lives in the same database as the 35-day snapshots it protects. A restore rolls it back to snapshot state, so purges recorded after the snapshot point can be lost and the deleted accounts resurrected.",
+     "evidence": "'Table deleted_accounts keeps only purged user IDs and dates (no PII); the restore runbook re-applies purges from it after any restore, so a restore cannot resurrect a deleted account.' ABSENT: copy of the purge log stored outside the restored database."
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The plan says deleted_accounts holds 'no PII', but purged user IDs are personal data under GDPR. The table has no stated retention period and grows indefinitely, which conflicts with storage limitation.",
+     "evidence": "'Table deleted_accounts keeps only purged user IDs and dates (no PII)' ABSENT: retention period for deleted_accounts."
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Screen 1 tells users their data is permanently deleted 14 days after confirmation, but processor retries can keep it at third parties until day 21. The user-facing statement is inaccurate for the design.",
+     "evidence": "'permanently deleted 14 days after you confirm' against 'Each call retries with exponential backoff for up to 7 days'."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The 'nothing else holds user data' claim rests on DPI-2026, which is cited but not shown. The plan also sends confirmation and deletion emails and pauses push, yet names no email-delivery or push provider in the purge list.",
+     "evidence": "'No other system holds user-level data beyond the processors below (data inventory DPI-2026, reviewed Sep 2026).' and 'Email to the account address'. ABSENT: inventory contents, and email or push providers in the purge list."
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "On the logged-out path, control of the mailbox alone starts deletion because clicking the emailed link counts as re-auth, and the same mailbox controls the cancel link. The confirmation link's expiry and single-use rules are not stated.",
+     "evidence": "'we email a confirmation link to the account address, and clicking it counts as re-auth.' ABSENT: lifetime and single-use rules for the confirmation link."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Rollback hides all entry points, and the web page parlo.app/account/delete is one of them. The Play data-safety form requires a working deletion web link, so rollback can break a required link.",
+     "evidence": "'Rollback: flag off hides the entry points only' and 'Google Play's data-safety form requires a web link where users can request deletion'."
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "Two engineers in three weeks must deliver web, iOS and Android flows, Stripe and store-subscription handling, a 23-table purge, multiple processor integrations, a dashboard and a restore drill, with App Store resubmission in the same week. The plan gives no estimate that supports this scope.",
+     "evidence": "'Owners: 2 engineers (1 backend, 1 web/mobile) · 3 weeks' and 'Week 3: ... then App Store resubmission the same week.'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The 21-day success metric and worst case run from confirmation. For the logged-out path the request may start at form submission, before the link is clicked, so the one-month Art. 17 clock start is not defined for that path.",
+     "evidence": "'100% of purges complete within 21 days of confirmation (dashboard).' ABSENT: clock start for the logged-out email-link path."
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The staging test plan covers Stripe test mode and the Apple sandbox but not the Amplitude, Customer.io or Zendesk deletion endpoints, which the purge depends on.",
+     "evidence": "'staging run with 500 synthetic accounts across password / Apple / Google sign-in and Stripe test-mode subscriptions; Apple sandbox revoke' ABSENT: tested runs against Amplitude, Customer.io and Zendesk."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The CI guard only matches columns named user_id or *_user_id, so differently named owner references or polymorphic keys are missed. The 'cannot be forgotten' claim is overstated. Processor calls are hardcoded in the job with no registry or CI check.",
+     "evidence": "'A CI test fails if any such column in db/schema.rb is missing from the registry, so new tables cannot be forgotten.' ABSENT: processor registry or CI check."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The registry lists delete or nullify actions per table, but the plan does not show them. Nullifying shared rows such as club messages or friend relations may break other users' data or foreign-key constraints.",
+     "evidence": "'its action (delete, or nullify for rows owned by someone else)' ABSENT: per-table action list and constraint checks."
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Each account is purged in one transaction across 23 tables. Batch size, lock duration and nightly runtime are not stated. Against the baseline of about 1,140 requests per month this is probably a sizing note, not a blocker.",
+     "evidence": "'each account is one DB transaction across users and the 23 tables that reference it.' ABSENT: batch size, runtime budget or lock analysis."
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The 'Manage subscription' deep link and Continue sit before the delete action. Continue remains available and no retention offer is shown, so this is informational, but the copy should state that no retention offer appears at confirm.",
+     "evidence": "'No retention offer, discount or survey. One button: Continue.'"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The erasure path does not address accounts whose declared age was wrong, despite the 16+ sign-up floor.",
+     "evidence": "'Sign-up requires users to be 16 or older.' ABSENT: deletion handling for misdeclared-age accounts."
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "Subscriptions are cancelled at period end and at purge, but the plan does not say how refunds apply to prepaid annual plans cancelled mid-term. App Store and Play charges also continue with no account to use.",
+     "evidence": "'Refunds follow the existing refund policy ... nothing changes there.' and 'Deleting your account does not cancel your App Store subscription'."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A permanent 4xx from Apple's revoke endpoint, for example for an already-invalid token, has no terminal state. It would retry for 7 days and then produce a ticket with no defined resolution.",
+     "evidence": "'Sign in with Apple users: POST /auth/revoke for their refresh token.' ABSENT: handling for non-retryable responses."
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "Erasure depends on five third-party processors, several US-hosted, with no transfer mechanism stated for EU personal data and no fallback if a deletion API changes or is withdrawn.",
+     "evidence": "'Amplitude: user deletion API.' ABSENT: transfer basis and processor exit or fallback procedure."
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Application logs and Sentry keep identifiers for 30 days, and the plan does not say they are cleared at purge. A new account on the same email could be linked to the old one within that window.",
+     "evidence": "'Application logs and Sentry error reports have 30-day retention' and 'After purge the email address can be used to register a new, empty account.'"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Rate limits are per IP and per email address only, with no global cap, so an attacker can spread confirmation emails across many addresses and IPs.",
+     "evidence": "'Web requests are rate-limited to 5/hour per IP and 3/day per email address.'"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Snapshots roll off after 35 days, so data can persist in backups beyond the one-month window. The restore runbook re-applies purges, but the plan states no beyond-use basis or erasure timing for backups.",
+     "evidence": "'Postgres snapshots roll off after 35 days and are not edited.' ABSENT: beyond-use argument or backup erasure timing."
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The data export is emailed with no stated completion time, so a user who requests it just before confirming may not receive it before purge, even though delivery is promised.",
+     "evidence": "'An export requested here is still delivered after you confirm deletion.' ABSENT: completion time or purge-hold rule."
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Retries for up to 7 days across five processors have no quota, budget or cost estimate.",
+     "evidence": "'Each call retries with exponential backoff for up to 7 days' ABSENT: API quota or cost estimate for purge traffic."
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 134079,
+    "tokOut": 61152,
+    "usd": 0.05562849,
+    "critMs": 130671
+   },
+   "wallMs": 133838
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The Art. 17 one-month deadline is measured from confirmation, not from the request, and the plan has no control that stops a kill-switch pause or a 200/night ceiling backlog from pushing confirmed accounts past day 30. The 14+7 arithmetic leaves about 9 days of margin, and the mailbox-only path's clock start is never stated.",
+     "evidence": "\"paused accounts stay deactivated and are purged once it is re-enabled.\" and \"Worst case (14 + 7 days) stays inside the one-month Art. 17 deadline.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The 200/night ceiling is sized from support-ticket volume (~40/day), not self-serve intake. Accounts confirmed during launch come due together after 14 days, and the plan has no capacity estimate and no path other than waiting for a human to raise the limit.",
+     "evidence": "\"the job purges at most 200 accounts per night (about 5x the expected daily volume of ~40 from 1,140/month at launch).\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Purging for 14 days depends on one privacy lead approving each nightly list, and no backup approver or fallback is named. Job on-call and escalation also rest on single named owners, so an absence either stalls purging toward the deadline or leads to the gate being skipped.",
+     "evidence": "\"the privacy lead approves each night's list before it executes\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "After 7 days of processor retries, the only path is a single ticket to the privacy lead, with no automated escalation. The 100%-within-21-days success metric has no remediation path for failures that outlast that window.",
+     "evidence": "\"anything still failing opens a `purge-failed` ticket for the privacy lead.\" and \"100% of purges complete within 21 days of confirmation (dashboard).\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The email and push processors are unnamed placeholders, so the claim that the purge list covers every processor holding user-level data cannot be verified. This is a launch gate, but the list must be closed before launch.",
+     "evidence": "\"placeholder: `{email provider}`, `{push provider}`\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The statement 'Nothing else is kept' conflicts with the rest of the plan. Application logs, Sentry, the 42-day deleted_accounts table, the external purge log, and the email provider's delivery log all retain personal data or user IDs after erasure. This text is the basis for the privacy policy and must be corrected.",
+     "evidence": "\"Kept: invoice records ... Nothing else is kept.\" versus \"Application logs and Sentry error reports have 30-day retention\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The processor_deletions outbox stores Apple refresh tokens and other live external identifiers for up to 21 days. The plan states no encryption, access control, or scoping for this table.",
+     "evidence": "\"holding the external identifiers needed (Amplitude ID, Customer.io ID, Zendesk end-user ID, Stripe customer ID, Apple refresh token, email/push provider IDs) and status.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Store-subscription detection is unspecified. A user with an active App Store or Google Play subscription may not get the warning, and after purge the account is gone while the store can keep billing.",
+     "evidence": "\"If the user has an active store subscription, screen 1 says\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "'Keep my account' is described as restoring the account exactly as it was, but cancel_at_period_end can lapse within the 14-day grace. Unsetting it cannot revive an ended subscription, and the plan does not say the user is told.",
+     "evidence": "\"'Keep my account' unsets it.\" and \"restores the account exactly as it was\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Screen 1 gives a fixed timeline (permanent deletion at 14 days, provider deletion within 21 days total). It is not linked to outbox state, and the 7-day tail is an unsourced vendor assumption, so the promise can be false for an account whose call is still retrying.",
+     "evidence": "\"permanently deleted from Parlo 14 days after you confirm\" and \"(21 days in total at most)\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The registry CI check only matches columns named user_id or *_user_id. Tables that reference users through other names, such as owner_id or polymorphic references, or that hold personal fields such as email, would pass CI while still holding user data. The claim that new tables 'cannot be forgotten' is overstated.",
+     "evidence": "\"A CI test fails if any such column in `db/schema.rb` is missing from the registry, so new tables cannot be forgotten.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The external purge-log bucket holds user IDs and is a new personal-data store. Its provider and region are unnamed, it is not in the processor inventory, and no residency or transfer basis is stated.",
+     "evidence": "\"written nightly to an append-only object-storage bucket outside the primary database (same 42-day lifecycle rule).\" with ABSENT: provider, region, and transfer basis for this bucket."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "Open manual deletion requests (6-day median) and their one-month clock are not addressed at cutover. Requests received before launch still owe erasure within the statutory window.",
+     "evidence": "ABSENT: no handling for open manual deletion tickets at launch."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Backend and web/mobile estimates are about 13 engineer-days each against about 15 available. The plan has defined cut lines and a day-1 go/no-go, so this is a known schedule risk rather than a blocker.",
+     "evidence": "\"backend ~13, web/mobile ~13, against ~15 available each. Little slack; the day-1 pass owns the go/no-go.\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "On the mailbox-only path, one compromised mailbox can start deletion and also cancel it. The grace period and notices mitigate this, but the residual risk is not stated as an accepted risk.",
+     "evidence": "\"Because the mailbox alone can start deletion on this path (and the same mailbox controls the cancel link)\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Apple revoke runs at purge, so the Sign in with Apple grant stays live for the whole grace period. The plan does not say whether this is intended or how it relates to the account-deletion requirement it cites.",
+     "evidence": "\"Sign in with Apple users: `POST /auth/revoke` for their refresh token.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Each account is a single transaction across users and 23 tables. The plan defines no per-account retry or quarantine, so one failing account can block the nightly run.",
+     "evidence": "\"each account is one DB transaction across `users` and the 23 tables that reference it.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The anomaly stop depends on a trailing 7-day baseline that does not exist at launch. The dry-run gate covers the first 14 days, but the plan does not say so.",
+     "evidence": "\"if a run's per-table deleted row counts exceed 3x the trailing 7-day average per account\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "App Store resubmission is planned for the end of week 3 with no fallback if review runs past that point. This is external timing, not a plan defect, but the iOS block is the reason for the project.",
+     "evidence": "\"App Store resubmission is expected at the end of week 3, but review time is outside our control.\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "Accessibility testing is scheduled for week 3, which leaves no time to remediate findings before staff rollout and resubmission.",
+     "evidence": "\"Week 3: staging run with 500 accounts, accessibility testing, staff rollout\""
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "The purge date has no time or time zone, and the web cancel_at_period_end end date is not shown on the confirm screen. Users may misread the date or not understand the subscription change.",
+     "evidence": "\"Your Parlo account will be deleted on {date}.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The 42-day retention of pseudonymous user IDs needs a stated legal basis in privacy §7, beyond restore convenience.",
+     "evidence": "\"it is kept only as long as needed to re-apply purges after a restore, i.e. 35 days plus a 7-day margin (42 days)\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "No quota or spend estimate exists for 7-day exponential retries against Stripe, Zendesk, Amplitude, and other vendor rate limits.",
+     "evidence": "ABSENT: rate limits or cost estimate for processor deletion retries."
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The success metrics measure support cost only. They do not track drop-off, friction-driven deletions, or the reasons users choose Keep my account, so a problematic flow would not be detected.",
+     "evidence": "\"Deletion support tickets < 100/month by end of December (from 1,140).\" and \"\\\"Keep my account\\\" rate tracked, no target.\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 148708,
+    "tokOut": 65257,
+    "usd": 0.060606789999999994,
+    "critMs": 162538
+   },
+   "wallMs": 165851
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "After purge, active App Store or Google Play subscriptions are not stopped. The plan only shows a notice, re-checks status at day 14 and logs the result. The Apple call revokes the refresh token, which does not cancel renewals, so a user may keep being charged for an account that no longer exists.",
+     "evidence": "\"App Store / Google Play: we cannot cancel these.\" ... \"The purge job re-checks at day 14 and records the result in the purge log\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Screen 1 copy promises processor deletion within a week and erasure within one month, but the processor deletion-time check is scheduled for week 1 and is not part of the launch gate. The flag can reach staff with unverified user-facing timing.",
+     "evidence": "\"In week 1 we also check each processor's documented deletion time against its DPA and the inventory, and correct Screen 1 wording if any exceeds a week.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The success metric counts requests with 'escalated and documented remediation in progress' as success within 30 days, which is not erasure. The 1% of purges allowed beyond 21 days has no upper bound, so the metric can pass while the agreed one-month erasure is missed.",
+     "evidence": "\"100% of requests fully erased, or with an escalated and documented remediation in progress, within 30 days of requested_at. At least 99% of purges ... complete within 21 days.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The day-30 deadline has no automatic backstop. Pauses longer than 5 days and stacked pauses plus retries are allowed with only a recorded decision, and the day-25 response depends on people acting. Nothing technical forces purging before the deadline.",
+     "evidence": "\"A pause longer than 48 hours needs a recorded decision by the privacy lead in PAR-2207.\" ... \"The privacy lead then decides, and records the decision, on fixing the cause or manually purging the affected accounts before day 30.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The 500/night ceiling is sized from support-ticket volume, not self-serve intake, and no arrival model exists for the cohort that comes due together after the 100% and App Store release. Auto-doubling to 2,000/night is not gated on measured capacity, and the staging run uses only 500 accounts. Per-night human approval of lists of that size is also unmodelled.",
+     "evidence": "\"The ~40/day figure comes from support tickets (1,140/month), not self-serve intake.\" ... \"the ceiling doubles automatically (hard maximum 2,000/night)\" ... \"staging run with 500 synthetic accounts\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The outbox holds live Apple refresh tokens and processor identifiers for up to 21 days. Its encryption and access checks are verified only in the week-3 test list, and the plan has no key-compromise or credential-rotation response.",
+     "evidence": "\"Because the table holds live credentials and identifiers for up to 21 days\" ... \"outbox encryption and access check\" appears only under Tests in §6"
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "The schedule has almost no slack: backend ~14 against ~15 and web/mobile ~13 against ~15 engineer-days. The day-1 estimate is the go/no-go, the store-API integrations and App Store review are outside the team's control, and cut lines may not recover a slip.",
+     "evidence": "\"backend ~14, web/mobile ~13, against ~15 available each. Little slack; the day-1 pass owns the go/no-go.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The Screen 1 notice treats unknown store status as active, but the day-12 reminder fires only when status is confirmed active. Users with unknown status get the warning but no reminder.",
+     "evidence": "\"If the user has an active or unknown-status store subscription\" vs \"a reminder email goes out on day 12 if the store subscription is still active.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The launch on-call pair is the backend engineers building the feature, who also run rollout and nightly approvals. The job-failure and day-25 alerts therefore have no independent owner in the critical window.",
+     "evidence": "\"At launch the primary is the backend engineer on this epic and the secondary is another backend engineer from the team rota.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The purge log records store-subscription status against the user ID, but the external bucket is described as holding only user IDs and purge dates. The plan does not say whether subscription status is included in the external copy.",
+     "evidence": "\"records the result in the purge log (no personal data beyond the user ID)\" vs \"The bucket holds only user IDs and purge dates.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Email-provider suppression handling needs the address to be retained, but the 'Nothing else is kept' list does not include a suppression entry.",
+     "evidence": "\"They get the same deletion/suppression handling as the others\" and \"Nothing else is kept.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Purges are irreversible by design. The anomaly stop halts only before the next account, and the restore runbook re-applies purges but cannot restore rows or accounts wrongly purged by a registry or code error.",
+     "evidence": "\"the job halts and alerts before committing the next account.\" ... \"The restore runbook re-applies purges from that external copy\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The 'nullify' action for rows owned by others is not mapped per table. Screen 1 promises that club messages are permanently deleted, but the registry action for them is not stated.",
+     "evidence": "\"either with an action (delete, or nullify for rows owned by someone else)\" and \"club messages and leaderboard history are permanently deleted\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The anomaly stop depends on a trailing 7-day baseline, but the plan does not say how that baseline exists at the first live run, so the check may be inert when first needed.",
+     "evidence": "\"if a run's per-table deleted row counts exceed 3x the trailing 7-day average per account, the job halts\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The registry relies on naming heuristics and a maintained column list that CI cannot complete. The plan names no owner for keeping the registry current as the schema changes.",
+     "evidence": "\"CI cannot detect every indirect reference, so the staging run (§6) also searches all tables\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The web path lets a mailbox alone start deletion. Rate limits bound each address to 3 requests per day, but a distributed flood can still send notices to many victims, and the plan does not address this.",
+     "evidence": "\"Web requests are rate-limited to 5/hour per IP and 3/day per email address.\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Existing accounts trigger an email send and live store-status API calls while unknown addresses do not, so response latency may reveal account existence despite the neutral message.",
+     "evidence": "\"The page never reveals whether an address has an account\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Store-status API calls run on every Screen 1 render and on each web link request, with no quota or caching plan.",
+     "evidence": "\"At Screen 1 (and when the web link is requested) we check current status live via the App Store Server API / Google Play Developer API.\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "The fail-safe copy for unknown or failed store-status checks is not written out for screen readers, and accessibility testing has no named owner.",
+     "evidence": "\"If the API call fails or the status is unknown, we show the notice anyway (fail safe).\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "The primary database's cloud provider and region are not stated, so the bucket residency decision and transfer basis for US-facing processors cannot be checked from the plan.",
+     "evidence": "\"If the primary database is not in the EU, the privacy lead decides the bucket's region before it is created.\""
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The confirmation email says the account 'will be deleted on {date}', while Screen 1 says processor copies can take up to a week, so the email may overstate when deletion is complete.",
+     "evidence": "\"Your Parlo account will be deleted on {date}.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "Offering a resubscribe link after a lapsed web subscription is disclosed and not coercive, but it may be read as pressure under the no-dark-patterns constraint and should be reviewed.",
+     "evidence": "\"it is not revived. The screen says so and offers a resubscribe link.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The email provider's delivery-log retention is said to be 'listed in §7', but no retention value appears in the plan, so the 42-day claim for logs is unverified for that provider.",
+     "evidence": "\"the email provider's standard delivery log for the confirmation emails (its own retention, listed in §7)\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 172451,
+    "tokOut": 59211,
+    "usd": 0.06233239,
+    "critMs": 155771
+   },
+   "wallMs": 159487
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The success metric sets a fixed 30-day erasure target, but the agreed constraint is one month (28 to 31 days). In February, 30 days exceeds one month, so the metric can report success for a late erasure.",
+     "evidence": "'Erasure deadline: 100% of requests fully erased, including processor deletion, within 30 days of `requested_at`.' vs agreed constraint 'within one month'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The day-27 deadline lane purges accounts regardless of the kill switch, ceiling and approval gate. Its only remaining safeguard is the anomaly stop, which has no baseline during the first live week.",
+     "evidence": "'at day 27 from `requested_at`, any still-unpurged account is purged by the job regardless of `account_purge_enabled`, the per-run ceiling and the nightly approval gate. Only the anomaly stop still applies.'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The anomaly stop compares against a trailing 7-day average, which does not exist at launch, when the spike arrives. The plan does not say what baseline applies or how the stop behaves before 7 days of history.",
+     "evidence": "'if a run's per-table deleted row counts exceed 3x the trailing 7-day average per account, the job halts and alerts before committing the next account.' ABSENT: baseline when fewer than 7 days of history exist"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Purge is irreversible, and nothing verifies before the first live batch that rows owned by other users (for example club messages) are nullified rather than deleted. The approver sees summaries and 20 accounts, and the staging search checks only synthetic IDs.",
+     "evidence": "'a random sample of 20 accounts' and 'searches all tables for the synthetic accounts' IDs and emails' ABSENT: row-level check that shared rows are nullified, not deleted"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Capacity is unmeasured. The 500/night ceiling is fixed at launch before the week-3 throughput run, and a 2,000-account spike may not clear before day 27 if demonstrated capacity is lower.",
+     "evidence": "'Planning assumption, not a measurement: sustained intake up to 10x the ticket rate (about 400/day), with a one-day launch spike of up to 2,000 confirmations.'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The ceiling rules contradict each other: it is never below 500, but it must never exceed demonstrated staging throughput. If staging shows under 500 per night, the plan does not say which rule wins.",
+     "evidence": "'never below 500' vs 'It must never exceed the nightly throughput demonstrated in staging (§6)'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Manual day-27 remediation for pending processor rows across 23 tables and up to seven processors is not shown to be feasible for a large backlog in a short window, and the same small team is also approver and on-call.",
+     "evidence": "'At day 27 any still-pending processor row triggers the manual remediation path below (console deletion or support request), recorded against the row.'"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The external purge log is written nightly, so purges between the last log write and a restore point may be missing from the log. The stated guarantee that a restore cannot resurrect a deleted account is therefore not fully supported.",
+     "evidence": "'The restore runbook re-applies purges from that external copy, not from the restored database, so a restore cannot roll back the log and resurrect a deleted account.'"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The email provider's delivery log keeps the account address under its own retention, which the artifact does not state. The referenced §7 is not in the artifact, so the claim that nothing else is kept cannot be verified.",
+     "evidence": "'the email provider's standard delivery log for the confirmation emails (its own retention, listed in §7)' ABSENT: the retention period and the §7 entry"
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Users with active store subscriptions will keep being billed after Parlo purges the account, and Parlo cannot stop it. The mitigation is notices plus a weekly review that may only revise notice design, and the plan does not record legal or consumer-protection review before launch.",
+     "evidence": "'We do not delay the purge because of a store subscription' and 'if it is material we revisit the notice design rather than the purge timing.'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The schedule has 2 to 3 days of slack per engineer against about 13 and 12 engineer-days, with many external dependencies (store APIs, processor sandboxes, drills, restore test). A single blocked dependency can consume the slack.",
+     "evidence": "'Rough estimates (engineer-days, re-baselined for the moves above, to be confirmed by the engineers in a day-1 estimation pass before commitment)' and 'so about 2–3 days of slack each'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Re-requesting an expired link sets a new requested_at, which may restart the erasure clock for the same intent. The plan does not say whether an earlier unconfirmed request keeps its original date.",
+     "evidence": "'requesting a new link invalidates earlier ones' and '`requested_at` records that moment'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The plan does not say whether restoring an account through 'Keep my account' clears requested_at or closes the erasure clock.",
+     "evidence": "'This restores the account, progress, and notification and marketing preferences.'"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "On the web path, the mailbox alone can start deletion and also controls the cancel link. This is mitigated by the 14-day grace period and notices, and the mailbox is already the usual account-recovery root.",
+     "evidence": "'Because the mailbox alone can start deletion on this path (and the same mailbox controls the cancel link)'"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Web rate limits are per IP and per email only. Confirmation is still required before purge, but distributed requests could still spam third-party addresses and load the notice and paging path.",
+     "evidence": "'Web requests are rate-limited to 5/hour per IP and 3/day per email address.'"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The outbox holds live Apple tokens and processor identifiers, and the rotation runbook is drilled in week 2. The first live purge is about 14 days after launch, so the timing works, but no explicit gate ties the drill to the first live purge.",
+     "evidence": "'key-compromise and credential-rotation response is a runbook written and drilled on staging in week 2'"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "Screen 1 timing copy ('up to a week', 'within one month') is drafted before processor deletion times are verified. The launch gate covers it, but the copy should be marked as a placeholder until sign-off.",
+     "evidence": "'This normally takes up to a week, we follow up on any that are slow' with 'No user-facing timing claim ships unverified.'"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "No quota or rate budget is stated for App Store Server API, Google Play Developer API, or processor retry traffic.",
+     "evidence": "ABSENT: quota or rate budget for store status checks and processor retries"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The personal-data column list is 'maintained' with no named owner or update process, and CI cannot catch indirect references.",
+     "evidence": "'a personal-data column name (`email`, `name`, `phone`, `ip`, `device_token`, and similar, from a maintained list)' and 'CI cannot detect every indirect reference'"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The on-call primary is the backend engineer who built the epic, and no long-term owner is named for the purge machinery after build.",
+     "evidence": "'At launch the primary is the backend engineer on this epic'"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The privacy lead is approver, pause-extension decider, processor sign-off owner and remediation owner, which concentrates conflicting roles in one person.",
+     "evidence": "'Extending it needs a recorded decision by the privacy lead in PAR-2207'"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "User IDs in deleted_accounts and the external purge log are kept for 42 days. The retention is justified and disclosed, but the necessity of the full period should be reviewed.",
+     "evidence": "'`deleted_accounts` and the external purge log (user ID and purge date, 42 days)'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The 26-hour job watchdog depends on monitoring that is not described as independent of the job. A dead scheduler is detected only if the alerting path itself is independent.",
+     "evidence": "'an alert fires if `AccountPurgeJob` has not completed a run in 26 hours'"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Marketing preferences are restored on 'Keep my account' without reconfirming consent after the user requested deletion.",
+     "evidence": "'This restores the account, progress, and notification and marketing preferences.'"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Apple and Google re-auth is scheduled for week 2 on web/mobile, while the backend revoke path is in week 1. The sequencing dependency is not stated.",
+     "evidence": "'Week 2 (backend)... Web/mobile: iOS screens, store-subscription notice, re-auth for Apple/Google'"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "No immediate-deletion option exists, so every user waits 14 days. This is defensible as a safety control but adds friction for users who have decided.",
+     "evidence": "'Continue' is the only path; no immediate-deletion option is stated."
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "Default focus and button order on the destructive confirmation are not specified, so a stray tap or screen-reader default could confirm deletion.",
+     "evidence": "'Screen 3: \"Delete my account\" (destructive style) and \"Cancel\".'"
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "The processor list stays open until day 3 of week 1, and the purge-log bucket region depends on the primary database region, which the plan does not record.",
+     "evidence": "'It is created with the same cloud provider and region as the primary database' ABSENT: primary database region"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Each account is one transaction across users and 23 referencing tables, with no stated lock or duration bound, which could affect the live app under large batches.",
+     "evidence": "'each account is one DB transaction across `users` and the 23 tables that reference it'"
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 216128,
+    "tokOut": 55785,
+    "usd": 0.06935479,
+    "critMs": 133222
+   },
+   "wallMs": 137336
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The T−3 deadline lane and the T−5 page both run inside AccountPurgeJob. The only job-level alert is a 26-hour no-run check that is not tied to the deadline date, so if the job runner is down, neither the lane nor the page fires. The deadline control has no independent trigger.",
+     "evidence": "\"Automatic deadline lane: at T−3 days, any still-unpurged account is purged by the job regardless of `account_purge_enabled`\" and \"an alert fires if `AccountPurgeJob` has not completed a run in 26 hours\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The T−3 lane purges irreversibly, bypassing the kill switch, the per-run ceiling and the nightly approval gate. Only the anomaly stop remains, and its pre-7-day baseline comes from a 500-account staging run that is not validated against production. The text also does not say whether the shared-row approval block applies inside the lane, so a shared-row delete could run unreviewed.",
+     "evidence": "\"at T−3 days, any still-unpurged account is purged by the job regardless of `account_purge_enabled`, the per-run ceiling and the nightly approval gate. Only the anomaly stop still applies\" and \"a fixed per-table per-account maximum from the 500-account staging run\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The default is to purge without delay while a store subscription is active or unknown, and the legal review that is meant to decide this is only a launch gate. The final notice is sent immediately before the purge with no delivery confirmation or wait, so the consumer-protection position is set in the build before it is reviewed.",
+     "evidence": "\"We do not delay the purge because of a store subscription by default\" and \"it sends one last email with the 'Manage subscription' link to the account address immediately before the purge transaction\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "major",
+     "claim": "The plan requires the destructive flow to be tested with VoiceOver, TalkBack, keyboard-only web and large-text settings. The first cut line then moves the web accessibility pass to week 4. The web page is also the Play data-safety deletion path, so the untested flow would ship to 100%.",
+     "evidence": "\"flow tested with VoiceOver, TalkBack, keyboard-only web and Dynamic Type XXL / 200% font scale\" and \"(2) accessibility pass on web moves to week 4 (iOS stays)\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The capacity figures that set the ceiling and the 100% gate come from a throughput run that may use sandboxes or stubs, so it may not reflect real processor latency. That run sits in week 3, the same week as the staff rollout and the 100% decision, with no day allocated between its result and the flag change.",
+     "evidence": "\"processor calls against sandbox or stubs\" and \"Week 3: staging run with 500 accounts, shared-row spec and throughput run (the ceiling is set from this), remediation drill, ... staff rollout, then 100%\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Each account purge is one transaction across users and 23 tables, and it nullifies or deletes rows owned by other users, such as club threads and leaderboard rows. The plan gives no lock timeout, batch-timing or contention analysis for running this against live traffic at 100%.",
+     "evidence": "\"each account is one DB transaction across `users` and the 23 tables that reference it\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Every purge in the first 14 days needs a named approver's action. Escalation happens only after 24 hours, and no weekend or holiday rota is defined. Approval delays can use up the margin before T−3, which the lane would then have to cover.",
+     "evidence": "\"If no approver has acted within 24 hours, the on-call escalates to the other two.\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The key-compromise runbook is only drilled in week 2. Apple revoke-first ordering is a worker convention with no stated test. The CI checks confirm encryption and role configuration, not how the worker uses keys at runtime.",
+     "evidence": "\"Apple revoke calls are executed first, to shorten token lifetime\" and \"the encryption and access controls are verified by automated CI tests\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The estimates (backend ~13, web/mobile ~12 against ~15 available) have no per-item breakdown. The no-go threshold equals the backend estimate, and the cut lines recover only a few days, so an overrun has a weak remedy.",
+     "evidence": "\"backend ~13, web/mobile ~12, against ~15 available each in weeks 1–3\" and \"Commitment rule: if the day-1 pass shows either engineer above 13 days, we do not start\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The external purge log keeps user IDs and purge dates for 42 days, but no legal-basis or legitimate-interest assessment is documented. The primary database's region is also never stated, which leaves the bucket's residency to be decided later.",
+     "evidence": "ABSENT: legal-basis assessment for the purge log; \"If the primary database is not in the EU, the privacy lead decides the bucket's region before it is created.\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "The bucket is tied to the primary database's cloud provider and region. This adds a second cloud dependency and makes later exit harder, and no exit plan is given.",
+     "evidence": "\"It is created with the same cloud provider and region as the primary database, so it introduces no new transfer.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The deletion calls go to US-hosted processors (Amplitude, Customer.io, Zendesk, Stripe), and the transfer basis for them is not named. Invoice retention cites only German §147 AO, and the plan does not address retention or deletion exceptions for US users.",
+     "evidence": "ABSENT: transfer basis for US processors; \"Invoice records ... for the statutory retention period under §147 AO\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The DPO is among the approvers of operational purges. This combines oversight and operations, which weakens the DPO's independent role.",
+     "evidence": "\"Approvers are the privacy lead, a named deputy and the DPO, any one of whom may approve.\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The rate limits (5/hour per IP, 3/day per email) still let a third party trigger repeated deletion emails and push notifications to a victim's devices. No control addresses this harassment vector.",
+     "evidence": "\"Web requests are rate-limited to 5/hour per IP and 3/day per email address.\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Live store-status checks and up to 7 days of processor retries have no quota, rate limit or spend bound, and no cost estimate is given.",
+     "evidence": "\"we check current status live via the App Store Server API / Google Play Developer API\" and \"Each call retries with exponential backoff for up to 7 days.\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 227237,
+    "tokOut": 50923,
+    "usd": 0.06932077,
+    "critMs": 154638
+   },
+   "wallMs": 162483
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "schedule",
+     "severity": "major",
+     "claim": "Estimated 14 backend and 12 web/mobile engineer-days against about 15 available each leaves only 1–3 days of slack, with several external dependencies (store APIs, processor sandboxes, Apple revoke key, second runner host) unconfirmed until day 1–2. The plan's own commitment rule and cut lines mitigate this, but the schedule is not shown to be credible yet.",
+     "evidence": "\"backend ~14, web/mobile ~12, against ~15 available each in weeks 1–3, so about 1–3 days of slack each\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The restore runbook closes the minutes-long gap in the external purge log by replaying application logs, which have 30-day retention. A restore point can be up to 35 days old, so the logs needed for purges around that restore point may already be gone, and the stated residual-gap closure does not hold at the edge of the window.",
+     "evidence": "\"replaying the purge job's run records from application logs (30-day retention)\" versus \"Postgres snapshots (35 days)\"; \"The one residual gap is a purge committed in the minutes before its append completes\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The 21-day worst case plus a 28-day T is presented as 7 days of margin, but processor failures reach purge-failed at day 7 of retries and remediation must finish before T. The real buffer for human processor remediation is less than the 7 days implied, and the plan does not show remediation capacity covers it.",
+     "evidence": "\"leaving at least 7 days of margin even in a 28-day month\" alongside \"At 7 days a `purge-failed` ticket is opened\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The T−3 deadline lane purges irreversibly without the kill switch or nightly approval. Its remaining guards (anomaly stop, shared-row guard) depend on the registry classification, and the plan admits CI cannot detect every indirect reference, so a misclassified shared-row path would be deleted without human review before the same-day page.",
+     "evidence": "\"at T−3 days, any still-unpurged account is purged regardless of `account_purge_enabled`, the per-run ceiling and the nightly approval gate\"; \"CI cannot detect every indirect reference\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The independent watchdog and its second runner are the backstop for the T−5 page and T−3 lane, yet no owner is named for them and the plan does not monitor the watchdog itself. A silent watchdog failure would remove the deadline backstop with no alert while the main job may still look healthy.",
+     "evidence": "\"A separate watchdog runs in the monitoring platform on its own schedule (hourly)\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "On the web path the mailbox alone starts deletion and also receives the cancel link. The push notification and the 14-day grace reduce the risk, but a mailbox-only attacker can still trigger deletion and the user relies on noticing the push or email in time.",
+     "evidence": "\"Because the mailbox alone can start deletion on this path (and the same mailbox controls the cancel link)\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Post-purge retention of user IDs in the external purge log (42 days) and related stores is justified by restore integrity, but the legal basis under Art. 5(1)(e) / Art. 17(3) is not stated alongside the retention periods.",
+     "evidence": "\"the external purge log (user ID and purge date, 42 days)\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The on-call primary at launch is the single backend engineer on this epic, which is a bus-factor risk for a one-month legal deadline. The secondary and the privacy-lead escalation mitigate this but do not remove it.",
+     "evidence": "\"At launch the primary is the backend engineer on this epic and the secondary is another backend engineer from the team rota.\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "A user with an open manual ticket who also submits a self-serve request has no de-duplication rule, so the manual script and AccountPurgeJob could both process the same account.",
+     "evidence": "\"The manual script and process stay available until that queue is empty.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The day-13 final store-subscription notice is not held for delivery, so users may not see it before purge. The plan lists delivery-confirmation waiting as an option for legal review, so this is a pending design choice rather than a defect.",
+     "evidence": "\"The purge is not held for delivery by default\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The 2,000-account throughput run, processor retries across up to seven vendors, and manual remediation staffing have no cost estimate or budget cap.",
+     "evidence": "\"a separate throughput run of at least 2,000 bulk-seeded synthetic accounts\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Outbox key custody and the worker's runtime placement are not specified. The plan names the secrets manager and the worker DB role but not which host runs the worker or who can read the keys.",
+     "evidence": "\"keys in the secrets manager, not in the database\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Rate limits of 5/hour per IP and 3/day per email do not stop an attacker rotating IPs to flood a victim's mailbox with confirmation emails.",
+     "evidence": "\"Web requests are rate-limited to 5/hour per IP and 3/day per email address.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The 48-hour automatic expiry of the kill-switch pause resumes irreversible purging unless someone records an extension, so a pause meant to stop purging can lapse without a deliberate decision.",
+     "evidence": "\"A kill-switch pause expires automatically after 48 hours.\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 236113,
+    "tokOut": 37148,
+    "usd": 0.06403329,
+    "critMs": 92109
+   },
+   "wallMs": 95652
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "compliance",
+     "severity": "blocker",
+     "claim": "The default purges accounts without delay despite active store subscriptions, and the plan itself says legal has not confirmed this. Continued store billing on a purged account is an unassessed consumer-protection exposure, and build and timing logic are committed before the decision exists. It is gated from users by a config flag and the staff rollout, so it must be resolved before the build crosses, not treated as a live harm.",
+     "evidence": "\"Default policy, to be confirmed by legal before any user sees it: we do not delay the purge because of a store subscription\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The T−3 deadline lane purges irreversibly and bypasses the kill switch, the ceiling and the nightly approval gate. Its safety depends on a catalog guard and an anomaly baseline that may be staging-derived or absent, and no pre-launch rehearsal on production-shaped data is required to prove those guards halt correctly.",
+     "evidence": "\"at T−3 days, any still-unpurged account is purged regardless of `account_purge_enabled`, the per-run ceiling and the nightly approval gate.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Re-requesting a link invalidates earlier links and rewrites requested_at, with no rule keeping the earliest request. Repeated requests could push the Art. 17 deadline later than the user's first request.",
+     "evidence": "\"requesting a new link invalidates earlier ones\" and \"`requested_at` records that moment\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The access model is contradictory. The outbox is said to be readable only by the worker's DB role, but the watchdog SQL view and the dashboards read processor rows. The CI role checks would not catch reads through the view.",
+     "evidence": "\"only the outbox worker's DB role can read the table\" vs \"reads a read-only SQL view of `requested_at`, purge state and processor rows\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The monitoring platform receives production user IDs and processor-row data through the watchdog view, but it is not on the processor list or in the inventory. The plan says that list covers every processor holding user-level data.",
+     "evidence": "\"reads a read-only SQL view of `requested_at`, purge state and processor rows\" vs \"The purge list is to cover every processor that holds user-level data\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Erasure within one month is not guaranteed by design. The normal path reaches day 21, and the remaining margin is described as the whole budget for human remediation, which has not been measured. Processor deletion timing is unverified against the deadline.",
+     "evidence": "\"That window is not spare slack: it is the whole budget for human remediation of failed processor calls.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "At the stated planning numbers, a 500/night cap drains a 2,000 spike plus about 400/day only slowly, so the backlog doubling rule would need to fire to clear by T−3. The capacity is unmeasured and the ceiling is set after the week-3 runs.",
+     "evidence": "\"the lowest of 500 accounts/night, the nightly throughput demonstrated in staging\" and \"the ceiling doubles automatically up to the lower of 2,000/night\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Each account is one transaction across 23 tables with no row bound or split strategy. A large or long-tenured account can exceed the 30 s statement timeout and retry indefinitely, blocking the queue.",
+     "evidence": "\"each account is one DB transaction across `users` and the 23 tables that reference it\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The on-call secondary is named as another backend engineer, but the team has one backend engineer. The watchdog, second runner, SQL view and deadline lane rest on that same person, so a single absence can silently disable deadline protection.",
+     "evidence": "\"the secondary is another backend engineer from the team rota\" vs \"2 engineers (1 backend, 1 web/mobile)\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Remediation capacity for failed processor rows is unmeasured and depends on remediation staff not yet named. The drill sizing it runs in week 3 with no margin before the 100% decision.",
+     "evidence": "\"the privacy lead names at least two remediation staff from support operations in PAR-2207 before launch\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Apple revoke is executed first with no fallback if the revoke key or API fails. A live refresh token could persist for the full outbox retry window, and the plan does not require the purge to stop on revoke failure.",
+     "evidence": "\"Apple revoke calls are executed first, to shorten token lifetime\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The outbox holds live Apple refresh tokens and processor identifiers for up to 21 days, but the key-rotation runbook is drilled only in week 4. A key compromise before then has no tested response.",
+     "evidence": "\"key-compromise and credential-rotation response is a runbook written in week 2 and drilled on staging in week 4\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The external purge-log bucket keeps linkable user IDs and purge dates for 42 days outside the primary database. Its region and legal basis are deferred to week 1 and depend on an undecided primary-database residency.",
+     "evidence": "\"If the primary database is not in the EU, the privacy lead decides the bucket's region before it is created.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Screen 1 promises permanent deletion 14 days after confirmation, but the nightly ceiling and backlog can delay purge. The day-13 notice is promised as about 24 hours before purge, which the purge timing does not guarantee. The user-facing timing copy is ahead of the throughput evidence.",
+     "evidence": "\"permanently deleted from Parlo's systems 14 days after you confirm\" and \"at day 13, about 24 hours before the purge\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Shared-row handling allows delete when a row 'has no other owner'. The CI check verifies only that the declaration exists, not that the row semantics hold, so cross-user loss of club messages or reactions is possible.",
+     "evidence": "\"delete only if the row has no other owner\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "App Store 5.1.1(v) requires in-app deletion, but Android in-app deletion is deferred to week 4. The Play policy requirement for an in-app path is not addressed, so the data-safety statement and Android compliance are unresolved in the interval.",
+     "evidence": "\"Android in-app screens ship as a planned week-4 follow-on\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Store subscriptions keep billing after account purge, with notices as the only mitigation. The plan provides no Parlo-controlled cancellation path for store purchases, and consumer cancellation rules have not been checked.",
+     "evidence": "\"Deleting the Parlo account ... does not stop store renewals\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "Week 1 is not buildable by one backend engineer at the described scope: registry, purge job with safety controls, encrypted outbox with CI checks and five processor integrations exceed the about-13-day total estimate in one week.",
+     "evidence": "\"Week 1 (backend + web): registry (full classification, including second-user-reference declarations) and CI test, `AccountPurgeJob` with kill switch/ceiling/dry-run/shared-row report/deadline lane\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "Schedule is over-committed. Backend is about 13 days against about 15 available with no margin, and the no-start rule is at its limit, so a one-day overrun stops the build. Week 4 drills required before the first live purge sit outside the 3-week commitment.",
+     "evidence": "\"if the day-1 pass shows either engineer above 13 days ... we do not start\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "Legal review of store-subscription notices and purge timing has no deadline and is needed for week-3 sign-off. A late outcome would force rework of purge and notice logic with no float.",
+     "evidence": "\"legal sign-off recorded\" in week 3 after legal review \"requested\" in week 2"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "major",
+     "claim": "The web and iOS accessibility pass is scheduled last in week 3 with no reserved time, yet it is a gate for 100%. It is likely to slip into the rollout decision.",
+     "evidence": "\"Then remediation drill, accessibility testing (web and iOS), open-ticket cutover export, legal sign-off recorded, staff rollout.\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "The purge engine is bespoke and large: registry CI, catalog introspection, shared-row guard, dual anomaly baselines, deadline lane, outbox, watchdog and external bucket. Each new user-referencing column becomes a merge gate, and two engineers must maintain it after launch.",
+     "evidence": "\"New tables therefore have to be classified before merge.\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 280334,
+    "tokOut": 74491,
+    "usd": 0.09154899000000001,
+    "critMs": 195063
+   },
+   "wallMs": 199055
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The Art. 17 budget arithmetic is off. Confirmation can be up to about 25 hours after requested_at, so purge at day 14 plus 7 days of retries ends about 22 days after requested_at. In a 28-day February that leaves about 6 days before T, not the 7 the plan claims, and remediation, the 48-hour DPO escalation and the T−5 page must fit inside that window.",
+     "evidence": "\"The request time is therefore at most about 25 hours before the Screen 3 confirmation.\" and \"leaves at least 7 days between the end of retries and T even in a 28-day month\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The T−3 deadline lane performs irreversible multi-table deletes with no human approval, and the shared-row catalog guard is not yet built. The plan also has no procedure for recovering other users' rows deleted by a bad batch: the restore runbook only re-applies purges and does not restore wrongly deleted rows.",
+     "evidence": "\"The lane is irreversible, and the plan accepts that on purpose\" and \"The restore runbook re-applies purges from that external copy\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The default purges personal data without delay while a store subscription may still be billing, and Parlo has no technical cancellation path for store purchases. The legal outcome that decides this is due only by end of week 1, so the default is unassessed when the store-subscription logic is built. It is fenced behind the legal review and a config flag, but the decision is still open.",
+     "evidence": "\"we do not delay the purge because of a store subscription\" and \"The flow ships to no real users (staff rollout included) until the legal review is recorded.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The starting 500/night cap cannot clear a 2,000-account spike plus 400/day by T−3. The plan blocks 100% if the projected clear date is past T−3, but the throttle that would fix this is only sketched (\"for example staged percentage\") and has not been designed.",
+     "evidence": "\"500/night against 400/day nets about 100/day, which cannot clear a 2,000 spike by T−3\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The backlog-doubling bound omits the contention-safe rate that the ceiling rule requires. Doubling is capped at the lower of 2,000/night and staging capacity, so it could push load past what user-facing latency tolerates.",
+     "evidence": "\"up to the lower of 2,000/night and the demonstrated staging capacity\" vs \"the rate the contention test shows is safe for user-facing latency\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Deletion can be started from the mailbox alone, and the email cancel link is in that same mailbox. An attacker with mailbox access can schedule deletion of any account. The victim's only recourse is the notice and logging in within the 14-day grace period, and push reaches only users who have devices.",
+     "evidence": "\"Because the mailbox alone can start deletion on this path (and the same mailbox controls the cancel link)\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The 'Download my data first' export is delivered after confirmation, but the plan does not say when it is generated relative to the purge, and it does not give the export ZIP's retention. The ZIP holds full personal data, yet the kept-after-purge list says nothing else is kept.",
+     "evidence": "\"An export requested here is still delivered after you confirm deletion.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Schedule overload with no slack where it matters. Week 3 stacks the staging run, throughput run, contention test, remediation drill and iOS accessibility on two engineers. Week 4 has zero backend slack yet carries the watchdog, lane rehearsal and drills that gate the first purge. The backend estimate of about 11 days is not derived from the listed weeks 1–3 tasks.",
+     "evidence": "\"Week 4: backend ~5, web/mobile ~4, against ~5 each.\" and \"weeks 1–3 backend ~11, web/mobile ~12.5\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The approval gate ties execution to a hash of the approved list, but the due list changes nightly and no freeze cut-off is defined. Accounts becoming due after approval, or a missing approval over a weekend, are not specified. A missing approval also stalls the nightly run.",
+     "evidence": "\"The approval is tied to a hash of the approved list, so the executed list is the approved one.\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "The week-3 Android in-app entry opens the web flow in a browser tab, and TalkBack and Dynamic Type testing of that path is not explicitly gated. The web pass covers the web flow, but the tab entry point is not listed.",
+     "evidence": "\"Until that Android release ships, the web link is the only path\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Live store-status calls run on every Screen 1 load and on web-link requests, with no quota, caching or cost estimate. When the API fails, the plan shows a notice anyway and sends extra emails, so an outage produces false active-subscription warnings with no bounded behaviour.",
+     "evidence": "\"At Screen 1 (and when the web link is requested) we check current status live\" and \"If the API call fails or the status is unknown, we show the notice anyway (fail safe).\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The rate limit is per IP and per email address. Neither stops a distributed attacker from triggering deletion requests across many addresses and IPs.",
+     "evidence": "\"Web requests are rate-limited to 5/hour per IP and 3/day per email address.\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The day-1 go/no-go pass owns the decision, but the plan does not name who runs that pass or who signs its outcome.",
+     "evidence": "\"The day-1 pass owns the go/no-go.\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The rails purge:add_table generator that scaffolds registry entries and CI fixtures is not scheduled in any week of §7. Each later table classification stays a manual task for two engineers.",
+     "evidence": "\"a generator (`rails purge:add_table`) scaffolds the registry entry and the CI fixture\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The purge engine has many interacting controls (kill switch, ceiling, backlog doubling, anomaly stop, approval gate, lane, watchdog) whose precedence is spread across several sections, which raises defect risk on an irreversible path.",
+     "evidence": "\"the purge engine is large on purpose, since each control answers an irreversible-deletion or Art. 17 deadline risk\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Unconfirmed mailbox-path requests lapse after 24 hours and a later request starts a new clock. The privacy lead has not yet confirmed this rule, and a user reading a one-month deadline from their request may not expect it.",
+     "evidence": "\"An unconfirmed request older than 24 hours lapses, and a later request starts a new clock\""
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "Screen 1 packs several conditional timing claims into one paragraph. At Dynamic Type XXL it is hard to read, and users are likely to take the figures as firm commitments.",
+     "evidence": "\"Deletion runs nightly, so it normally happens within a day or two after the waiting period ends\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 307257,
+    "tokOut": 62430,
+    "usd": 0.09090309,
+    "critMs": 150878
+   },
+   "wallMs": 154592
+  }
+ ],
+ "artifact": "# Plan: self-serve account deletion\n\nOwners: 2 engineers (1 backend, 1 web/mobile) · 3 weeks to launch, plus a planned week 4 of gates that must finish before the first live purge (§7) · Epic PAR-2207\n\n## 1. Why\n- iOS build 4.18 was rejected under App Store guideline 5.1.1(v) (apps with account creation must offer in-app account deletion). All iOS releases are blocked until this ships.\n- Support handled 1,140 deletion requests/month (Aug–Sep average, Zendesk tag `delete-account`). Median time to completion is 6 days; each takes ~9 min of agent time and a manual Rails console script.\n- Google Play's data-safety form requires a web link where users can request deletion; today we list a support email address.\n\n## 2. User flow (web, iOS, Android)\n- Entry: Settings → Account → \"Delete account\" on all three clients (on Android, until the week-4 native screens, this entry opens the web flow in an in-app browser tab, §7), plus the web page parlo.app/account/delete, linked from the Play listing and the help centre.\n- Screen 1, \"What happens when you delete your account\":\n  - Progress, streaks, courses, club messages and leaderboard history are permanently deleted from Parlo's systems after a 14-day waiting period that starts when you confirm. Deletion runs nightly, so it normally happens within a day or two after the waiting period ends, and can take a few days longer if many people ask at once; in all cases it is completed within one month of your request. We then ask our service providers to delete their copies. This normally takes up to a week, we follow up on any that are slow, and in all cases deletion is completed within one month of your request. Billing records we must keep by law are kept, and technical backups and logs expire on their own within 42 days (§4).\n  - \"Download my data first\" links to the existing data export (emailed ZIP). An export requested here is still delivered after you confirm deletion.\n  - Subscription notice, only when relevant (§3).\n  - No retention offer, discount or survey. One button: \"Continue\".\n- Screen 2: re-authenticate. Password users enter their password; Apple/Google sign-in users re-authenticate with that provider. Re-auth is valid for 10 minutes; if it expires the user re-auths and returns to the same step without losing anything.\n- Screen 3: \"Delete my account\" (destructive style) and \"Cancel\". On confirm:\n  - The request time is stored as `requested_at`. This starts the one-month Art. 17 clock (§4).\n  - All sessions and refresh tokens are revoked.\n  - The account is deactivated: hidden from leaderboards, friends and clubs (club messages included); push and marketing email are paused.\n  - Email to the account address: \"Your Parlo account is scheduled for deletion from {date}, and in all cases within one month of your request. Changed your mind? Log in before then, or use this link.\" `{date}` is the earliest purge date. The link is single-use, signed, valid until the purge.\n- Users who cannot log in use parlo.app/account/delete: we email a confirmation link to the account address, and clicking it counts as re-auth. The link is single-use, signed, and expires after 60 minutes; requesting a new link invalidates earlier ones. The one-month erasure clock starts when the link is first requested, and `requested_at` records that moment. Requesting a new link never moves `requested_at` later: if the account has an earlier unconfirmed link request from the last 24 hours, the earliest such `requested_at` is kept and carried onto the new link, so repeated requests cannot push the Art. 17 deadline past the user's first request. An unconfirmed request older than 24 hours lapses, and a later request starts a new clock (the privacy lead confirms this rule in week 1). The request time is therefore at most about 25 hours before the Screen 3 confirmation. Because the mailbox alone can start deletion on this path (and the same mailbox controls the cancel link), the confirmation step is followed by the same Screen 3 confirmation and the same 14-day grace period, and every request sends a notice to the account address and, where one exists, a push notification to the user's devices. The page never reveals whether an address has an account (\"If an account exists, we've sent a link\").\n- Logging in during the 14 days shows \"Your account is scheduled for deletion from {date}\" with \"Keep my account\". This restores the account, progress, and notification and marketing preferences. A subscription is the exception: if a web subscription's paid period ended during the grace period (§3), it is not revived. The screen says so and offers a resubscribe link.\n- Accessibility: native components only; the destructive button has a full-text label; flow tested with VoiceOver, TalkBack, keyboard-only web and Dynamic Type XXL / 200% font scale. The web and iOS passes are gates for the 100% rollout, have reserved time and finish by day 12 (§7), and are not cut lines.\n\n## 3. Subscriptions\n- Web (Stripe): at confirm, the subscription is set to `cancel_at_period_end`, so it never renews during the grace period. Screen 1 states the date the subscription will end. If that date falls before the purge date, the user is told it will end then, and \"Keep my account\" cannot revive it: the user is told and offered a resubscribe link. If the period has not ended, \"Keep my account\" unsets `cancel_at_period_end`. At purge, any still-active subscription is cancelled. Refunds follow the existing refund policy, linked from screen 1; nothing changes there.\n- App Store / Google Play: we cannot cancel these. Only the user can cancel in their store account, and the store, not Parlo, bills them. Parlo has no cancellation path for store purchases, because the contract is with the store; whether the notices below are sufficient is the question put to legal in the consumer-protection review (below). Deleting the Parlo account, including revoking the Sign in with Apple refresh token (§4), does not stop store renewals, and we never say or imply that it does. We therefore cannot prevent post-purge charges technically; what we do is make sure the user is told repeatedly, with a direct path to cancel, before the account is gone. Detection is server-side, so it works from any client and from the web link path:\n  - We store the App Store original transaction ID / Google Play purchase token for each store purchase. At Screen 1 (and when the web link is requested) we check current status live via the App Store Server API / Google Play Developer API.\n  - If the API call fails or the status is unknown, we show the notice anyway (fail safe).\n  - If the user has an active or unknown-status store subscription, screen 1 says \"Deleting your account does not cancel your App Store subscription\" (or Google Play) with a \"Manage subscription\" button deep-linking to the platform page, before \"Continue\". The notice is repeated on Screen 3 above the \"Delete my account\" button.\n  - The same notice is included in the confirmation email, and a reminder email goes out on day 12 if the store subscription is still active or unknown.\n  - Final notice: at day 13, 24 hours before the earliest purge time, a scheduled step keyed to each account's own due date (so queue delays in the nightly run cannot make it late) re-checks. If the subscription is still active or unknown, it sends one last email with the \"Manage subscription\" link to the account address, so the user has a day to act on it rather than receiving it at the moment of purge. If the purge itself runs later than day 14 because of the ceiling or a backlog (§4), the user simply has more time; the notice is never sent after the purge. The address is read from `users` for this one send and is not copied into the outbox; the provider's delivery log is already covered in §4. The email provider's delivery/bounce status is recorded in the purge log; a bounce is surfaced on the dashboard for the weekly review. The purge is not held for delivery by default (see the next point). At purge the job re-checks again and records the result in the purge log (no personal data beyond the user ID), so we can see how many accounts were purged with an active store subscription.\n  - Default policy (the starting position put to legal; confirmed or changed in the legal review below before the store-subscription build starts): we do not delay the purge because of a store subscription, because that would hold personal data past the user's request and past the one-month deadline, and the subscription is a contract with the store, not with the Parlo account. The behaviour is behind a config value (`store_sub_purge_policy`) so the legal outcome below can change it without a rebuild. The flow ships to no real users (staff rollout included) until the legal review is recorded. After purge, store server notifications for these purchases are ignored. Help-centre copy explains that a user who still sees a store charge cancels it in their store account, and that refunds are decided by the store.\n  - Legal review (build gate and launch gate): legal/consumer-protection review of the store-subscription notices (Screens 1 and 3, the emails), of the day-13 final-notice timing and of the decision to purge without delay is requested on day 1 of week 1, and its outcome is recorded in PAR-2207 by the end of week 1, before the week-2 store-subscription status checks, purge-timing logic and notice templates are built on it. If the outcome is not in by then, the privacy lead and legal owner are escalated to that day, and the backend engineer reorders week-2 work (other processor calls, monitoring) rather than building store-subscription logic on an unassessed default; notice copy stays in templates and the purge policy in config so a late outcome is a content/config change, not a rebuild. Final copy sign-off is recorded by mid week 2 and nothing reaches staff before it. The review also sets a threshold for the weekly purged-with-active-subscription rate and the response when it is crossed. Options on the table are stronger notice design, an explicit acknowledgement on Screen 3 (reviewed for dark-pattern risk), a wait for delivery confirmation of the final notice, or other measures legal recommends. Changes to purge timing are only made with the privacy lead's and legal's recorded sign-off, weighing the Art. 17 deadline. The count is reviewed weekly after launch against that threshold.\n\n## 4. Purge (day 14)\n- Nightly `AccountPurgeJob` processes accounts whose grace period has ended, oldest `requested_at` first. A typical account is purged in one DB transaction across `users` and the 23 tables that reference it. Large accounts are bounded: if an account's row count in any table exceeds a batch threshold (set from the staging run so a single transaction stays well inside the timeouts below), that table is purged in batches (for example 5,000 rows per short transaction, in a fixed table order) under a resumable, idempotent account-level `purge_state`. The account is already deactivated, so partial progress is not user-visible. The external-identifier columns and the `users` row are removed in the final transaction, which also writes the outbox rows and the `deleted_accounts` row; only that final commit marks the account purged and releases the outbox worker.\n- Transaction and contention controls. The purge also nullifies or deletes rows that other users' live traffic touches (club threads, replies, reactions, leaderboard rows), so it must not hold long locks:\n  - Each transaction (whole-account or batch) sets `lock_timeout` (initially 2 s) and `statement_timeout` (initially 30 s). On timeout or deadlock the transaction rolls back cleanly, the account is retried in the same run after other accounts, then next run, and the retry is counted. After 3 failed retries the account moves to a slow lane with smaller batches, and at 5 it pages the on-call, so one account cannot block the queue: the job always continues with the other accounts in the run. Retried and slow-lane accounts are visible on the dashboard and feed the T−5 check.\n  - Accounts are processed sequentially by one worker with a short pause between them (configurable), within a nightly off-peak window (the low-traffic hours from the load dashboards, agreed with the on-call). A paged alert fires if lock timeouts exceed a threshold set from the staging contention test. Updates on rows owned by others use indexed `user_id`-style columns; the registry CI test (below) also checks that each such column has an index.\n  - The initial timeouts, batch size, pause and window are set from the contention test in §6 (purge running against a production-sized snapshot with replayed read/write traffic on club, reaction and leaderboard tables, including seeded large accounts). The test reports p95 transaction time, lock waits and impact on request latency. The throughput ceiling cannot exceed what that test shows is safe for user-facing latency. The T−3 lane uses the same timeouts and batching.\n- Deadline clock: Art. 17 requires erasure within one month of the request, not of the confirmation. Every account stores `requested_at` (§2). The deadline T is `requested_at` plus one calendar month (for example 31 Jan → 28 Feb; 1 Feb → 1 Mar), so it is 28 to 31 days after the request depending on the month. All deadline controls below are expressed relative to T, not as fixed day counts, so they stay valid in February. The normal path is purge at day 14 plus up to 7 days of processor retries, i.e. day 21 worst case, which leaves at least 7 days between the end of retries and T even in a 28-day month. That window is not spare slack: it is the whole budget for human remediation of failed processor calls. The 48-hour escalation steps and the T−5 page sit inside it, so remediation is sized to finish in about 3 working days (see the remediation drill pass criterion below). This is a controlled commitment, not a guarantee by construction, because vendors control when their deletion completes. What the design does guarantee is that our own data is gone by T−3 and that every outstanding vendor call is visible, escalated and remediated by hand in time. The processor deletion-time check and the remediation drill (§6) measure that budget before any live purge, and a measured shortfall blocks the 100% flag change. The controls below stop pauses and backlogs from consuming that margin, and the last one is automatic and does not depend on a person acting:\n  - A kill-switch pause expires automatically after 48 hours. Extending it needs a recorded decision by the privacy lead in PAR-2207, and each extension is again limited to 48 hours.\n  - Independent deadline watchdog. The T−5 page and the T−3 lane trigger must not depend on `AccountPurgeJob` or the job runner being healthy. A separate watchdog runs in the monitoring platform on its own schedule (hourly), outside the Rails job runner, and reads a read-only SQL view (`purge_status_v`) of `requested_at`, purge state and processor row status, keyed by an opaque case ID rather than the user ID, with no identifier, token, email or name columns (see the outbox access controls). It pages the on-call and privacy lead when any account is unpurged or has an outstanding processor call at T−5 days, independent of the job's own alerts. It also checks the job's heartbeat. At T−3 days it starts the deadline lane (below) through a second, independent runner (a scheduled task on a different host from the main job runner) running the same idempotent code. It pages if the lane has not started within 1 hour of T−3 for any account. If the main job runner is down, the watchdog still pages and the second runner still fires. The monitoring platform receives only case IDs, timestamps and statuses, and is added to the processor list and DPI-2026 with its retention (see Processors).\n    - Ownership: the backend engineer on this epic owns the watchdog, the SQL view and the second runner through launch. From launch they belong to the backend on-call rotation under a runbook. A named deputy owner (the on-call secondary, from the wider backend rota) also gets access to the watchdog, view and second runner and walks through the runbook in the week-4 drill, so one person's absence cannot silently disable deadline protection. The named owner, the deputy and the runbook are recorded in PAR-2207 before the staff rollout.\n    - The watchdog is itself monitored, from two directions that do not depend on each other. The watchdog and the second runner each write a heartbeat; the monitoring platform's dead-man's-switch pages the on-call and the privacy lead if either is older than 2 hours. Separately, `AccountPurgeJob` checks the watchdog's heartbeat at the start of each run and pages if it is stale. A silent watchdog failure therefore alerts even when the main job looks healthy. The same heartbeat view is on the dashboard.\n  - Any account that is still unpurged, or has an outstanding processor call, at T−5 days pages the on-call and the privacy lead (via the watchdog above). The privacy lead then decides, and records the decision, on fixing the cause or manually purging the affected accounts.\n  - Automatic deadline lane: at T−3 days, any still-unpurged account is purged regardless of `account_purge_enabled`, the per-run ceiling and the nightly approval gate. These guards still apply inside the lane:\n    - The anomaly stop, using the baseline defined below. The earliest the lane can fire is about 25 days after launch (first live purge at least 14 days after launch, plus 11 days to T−3), so the lane always runs with at least 10 days of live purge history and approved nightly summaries. The pre-7-day fixed baseline from the staging run is therefore never the only check on the lane; it is the trailing-average baseline from production. If a baseline is missing the stop fails closed.\n    - The shared-row guard, evaluated per account in the lane: if the account's purge would delete a row that references another user (rather than nullify it), the lane skips that account, pages the on-call and privacy lead, and the case must be resolved the same day. The lane never executes a shared-row delete unreviewed. The guard does not rely on the registry alone, because CI cannot detect every indirect reference: it also introspects the live database catalog (all foreign keys to `users` and all polymorphic `*_type`/`*_id` pairs that can point at `User`) and checks the account's actual rows. In the lane, any table or user-reference column found in the catalog that is missing from the registry, or is classified `delete` while a row actually references another user, is treated as a shared-row hit: the account is skipped and paged, and only that account's remaining purge waits for review. Skipped accounts still have the days up to T for the same-day resolution.\n    - The lock and statement timeouts and batching above.\n    - Rehearsal before the lane can run: the lane is disabled in production (`deadline_lane_enabled` off) until a rehearsal on the production-sized snapshot is recorded in PAR-2207 and reviewed by the privacy lead. The rehearsal seeds: no baseline (must halt); the fixed staging baseline with an account over 3x (must halt); a table in the catalog but missing from the registry (account skipped and paged); a `delete`-classified table with a row referencing another user (skipped and paged); a large account over the batch threshold (completes in batches, queue not blocked); and a 28-day-month `requested_at`. It is re-run after any change to the lane code or the registry classification logic.\n    Each lane run posts its summary (count, per-table deleted-row counts, shared-row counts) to the privacy lead for review the same day. If the anomaly stop or the shared-row guard halts the lane, the on-call and privacy lead are paged and must resolve it the same day. The user has already confirmed deletion, so the legal deadline outranks pause and approval at this point. The lane is irreversible, and the plan accepts that on purpose: waiting would be a certain deadline breach for a user who has asked for erasure, while the rehearsal, the catalog guard, the anomaly stop and the 10+ days of approved history keep the risk of a wrong delete low. The residual risk is a misclassified path with the same row counts as past batches and no catalog-visible reference. It is covered by the staging all-tables search and the shared-row spec (§6).\n  - Processor calls cannot be forced technically, because the vendor controls completion. At T−3 days any still-pending processor row triggers the manual remediation path below (console deletion or support request), recorded against the row. Feasibility of that path is covered under Calls below.\n  - A dashboard shows the age distribution of confirmed accounts versus `requested_at`.\n- Purge safety controls:\n  - Live-purge gate: `account_purge_enabled` cannot be set to true in production (enforced by a check in the flag-change tooling) until the following are recorded in PAR-2207: the deadline-lane rehearsal above; the watchdog test (§6); the restore-runbook drill; the key-rotation drill; the recorded legal review (§3); and the throughput and contention results. These are all required before the first live purge (not before launch, §7). If they are not all recorded by the time the oldest confirmed account reaches T−10, new self-serve confirmations are paused (the `account_deletion` entry points go off and the web page switches to the static support form, §6) and the existing manual process handles new requests, so no account passes T without these controls.\n  - Purge-specific kill switch `account_purge_enabled`, separate from the `account_deletion` UI flag. Ops can pause purging without touching the entry points; paused accounts stay deactivated and are purged once it is re-enabled, subject to the deadline controls above.\n  - Arrival model and ceiling. The ~40/day figure comes from support tickets (1,140/month), not self-serve intake. Self-serve removes the friction that kept volume down, and accounts confirmed during the 100% rollout and App Store release come due together 14 days later. Planning assumption, not a measurement: sustained intake up to 10x the ticket rate (about 400/day), with a one-day launch spike of up to 2,000 confirmations. The assumption is revised after the staff rollout and again after the first week at 100%.\n  - Ceiling rule, one precedence order. The ceiling is not fixed before measurement: it is set only after the week-3 throughput run, which finishes before any live purge (the first live purge is at least 14 days after launch). The ceiling is the lowest of 500 accounts/night, the nightly throughput demonstrated in staging (§6) and the rate the contention test shows is safe for user-facing latency. The \"500\" is a starting cap, not a floor: if demonstrated capacity is below 500, demonstrated capacity wins. The 500 starting cap is not expected to clear the planning assumption by itself (500/night against 400/day nets about 100/day, which cannot clear a 2,000 spike by T−3). Whether the assumption clears is decided by the measured capacity at the capacity gate below, and the backlog doubling rule is a recovery mechanism that the gate does not rely on. After launch the ceiling is reviewed weekly and set to 3x the observed peak daily confirmations, capped at demonstrated capacity and, absent a measured throughput check, at 500.\n  - Capacity launch gate: the throughput run must show that the planning assumption (a 2,000-account spike plus 400/day) clears by T−3 with margin, and the dashboard shows the projected clear date. The run's processor-call stage uses real production latency and rate limits, not sandbox speed (§6). If it does not clear, the 100% rollout is throttled (for example staged percentage so daily confirmations stay within demonstrated capacity) or capacity is raised before 100%. We do not go to 100% with a projected clear date past T−3. The result is reviewed and recorded at least one working day before the flag change (§7).\n  - Backlog path: if the oldest due account is more than 48 hours past due, the ceiling doubles automatically up to the lower of 2,000/night and the demonstrated staging capacity, and an alert fires. The anomaly stop and the review gate still apply. Beyond that limit, a human raises it only after a measured throughput check.\n  - Review gate: the first live batch requires dry-run sign-off (§6). For the first 14 days of live purging, the job runs in dry-run mode each night and an approver approves each night's list before it executes. The approver reviews a snapshot summary, not every account: total count, per-table deleted-row counts against the baseline, the outliers, the shared-row report (below) and a random sample of 20 accounts. The approval is tied to a hash of the approved list, so the executed list is the approved one. Approvers are the privacy lead, a named deputy and the DPO, any one of whom may approve. Names are recorded in PAR-2207 before the staff rollout. If no approver has acted within 24 hours, the on-call escalates to the other two. The gate is never skipped, except for accounts in the T−3 deadline lane above (which keeps the shared-row guard and anomaly stop). After the 14 days it runs unattended within the ceiling.\n  - Shared-row report: the dry-run lists, per table, every row that would be deleted whose `user_id`-style columns also reference a different user (for example a reply, reaction or club thread row belonging to another account), and every row that would be nullified. The expected result is that rows owned by other users are nullified, never deleted. Any table where the dry-run would delete a row referencing another user blocks approval until reviewed. The first live batch's report is checked row-by-row for each table classified `delete` that has a second user reference.\n  - Anomaly stop: the job halts and alerts before committing the next account if a run's per-table deleted row counts per account exceed 3x the baseline. The baseline is defined for all stages: (a) before 7 days of live history exist, a fixed per-table per-account maximum from the 500-account staging run, scaled by 3x headroom and raised only by the approver from the production dry-run summaries (the staging figure is only a starting point and is replaced by production numbers as soon as dry-run summaries exist); (b) from day 8 of live purging, the trailing 7-day average per account. The stop fails closed: a table with no baseline halts the job. In the first 14 days the nightly human approval is an additional check.\n- Purge registry: `config/purge_registry.yml` classifies every table in `db/schema.rb`: either with an action (delete, or nullify for rows owned by someone else), or as `no_personal_data` with a one-line justification. A CI test fails if any table is unclassified, or if any of these is not covered by the registry:\n  - a column named `user_id`, `*_user_id`, `owner_id`, `author_id` or `*_id` with a foreign key to `users`\n  - a polymorphic `*_type`/`*_id` pair that can point at `User`\n  - a personal-data column name (`email`, `name`, `phone`, `ip`, `device_token`, and similar, from a maintained list)\n\n  A table with a `delete` action and a second user reference must also declare how rows referencing another user are handled: `nullify` (the default), or `delete_if_no_other_owner` with an explicit SQL predicate defining \"no other owner\". CI fails if the declaration is missing. Because a declaration alone does not prove the semantics, a per-table CI fixture test seeds a row referencing two users, runs the predicate and the purge, and asserts that the other user's row survives with the reference nullified and that only single-owner rows are deleted. Any `delete_if_no_other_owner` entry needs the privacy lead's review (registry CODEOWNERS). CI also fails if a user-reference column used by the purge has no index. New tables therefore have to be classified before merge. CI cannot detect every indirect reference, so the staging run (§6) also searches all tables for the synthetic accounts' IDs and emails after purge, and the deadline lane adds a live catalog check (above).\n- Kept after purge, all disclosed in privacy policy §7:\n  - Invoice records (amount, date, VAT, billing name and country) for the statutory retention period under §147 AO, then removed by the existing invoice retention job.\n  - Short-lived technical records that hold personal data or user IDs and expire on their own:\n    - Postgres snapshots (35 days)\n    - `deleted_accounts` and the external purge log (user ID and purge date, 42 days)\n    - the purge-run log stream (user ID and purge timestamp only, written by `AccountPurgeJob` for each committed purge, kept separately from application logs with a 42-day lifecycle, so it outlasts the 35-day snapshots)\n    - application logs and Sentry error reports (30 days)\n    - the email provider's standard delivery log for the confirmation emails. Its retention period is not yet confirmed in this plan. The privacy lead confirms it from the provider's DPA and records it in DPI-2026 and privacy policy §7 by the end of day 3 of week 1. If it exceeds 42 days, the Screen 1 wording (\"within 42 days\") is corrected or the provider setting is shortened before launch (launch gate (c) below).\n\n  Nothing else is kept, subject to that confirmation.\n- Processors: the data inventory (DPI-2026, reviewed Sep 2026) is attached to PAR-2207. The email-delivery and push providers' names are taken from it and the list below is closed by the end of day 3 of week 1, signed off by the privacy lead. The external purge-log bucket (below), the purge-run log stream and the monitoring platform that runs the watchdog (which receives only opaque case IDs, timestamps and statuses, with its retention recorded) are added to the inventory and processor list at the same time. The purge list is to cover every processor that holds user-level data, including the email-delivery and push providers used for the emails and notifications in §2. They get the same deletion/suppression handling as the others (placeholders until then: `{email provider}`, `{push provider}`). The \"up to 7 days\" tail is our retry window, not a vendor SLA. We also check each processor's documented deletion time against its DPA and the inventory, and the privacy lead confirms the Screen 1 wording against the results, correcting it if any processor exceeds a week. Launch gate: the `account_deletion` flag does not go to staff until (a) the processor list is closed and re-checked against the inventory, (b) the deletion-time check is complete and the Screen 1 wording is signed off by the privacy lead, and (c) the email provider's delivery-log retention is confirmed and recorded and Screen 1 and privacy policy §7 match it. No user-facing timing claim ships unverified.\n- Outbox: in the final purge transaction, we write one `processor_deletions` row per processor per account, holding the external identifiers needed (Amplitude ID, Customer.io ID, Zendesk end-user ID, Stripe customer ID, Apple refresh token, email/push provider IDs) and status. Those identifiers are removed once the call succeeds. A worker executes pending rows after commit, so a crash between commit and the calls loses nothing. Because the table holds live credentials and identifiers for up to 21 days:\n  - identifier and token columns use application-level encryption (ActiveRecord encryption, keys in the secrets manager, not in the database)\n  - only the outbox worker's DB role can read the table; no admin UI, console role, analytics export or read replica exposes it\n  - the only other read path is `purge_status_v`, used by the watchdog and the dashboards. It exposes opaque case ID, `requested_at`, purge state, processor name, status and attempt count, and no identifier, token, email or name column. It runs with its non-login owner role's privileges, so no monitoring or dashboard role holds SELECT on the table itself\n  - the columns are filtered from logs and Sentry\n  - rows hold no email, name or other profile data\n  - Apple revoke calls are executed first, to shorten token lifetime. The purge does not wait on the revoke, because holding the rest of the user's data would breach the deletion request; the token stays encrypted in the outbox under the controls above. Instead, a nightly health check of the revoke credential pages the on-call if it is invalid or expired, and Apple rows still failing after 24 hours page the on-call (not the generic 3-day alert). If the revoke key is the cause, the credential-rotation runbook below applies, and Apple rows still pending are listed on the dashboard\n  - the encryption and access controls are verified by automated CI tests from the first merge in week 1 (columns are encrypted at rest, no role other than the worker and the view's owner role holds SELECT on the table, the view's column list matches an allow-list and only the named monitoring and dashboard roles can select from it, replicas exclude the table, columns are on the log/Sentry filter list), and the same checks are part of the launch gate, not only a week-3 test\n  - key-compromise and credential-rotation response is a runbook written in week 2 and drilled on staging in week 4, before the first live purge. Real identifiers and tokens enter the table only at the first live purge (§6); before that it holds synthetic data only, so no real credential is exposed before the drill, and the live-purge gate above refuses `account_purge_enabled` in production until the drill is recorded. The runbook covers: rotating the ActiveRecord encryption key and re-encrypting pending rows; rotating the Apple Sign in key and processor API credentials (Stripe, Amplitude, Customer.io, Zendesk, email/push); pausing the outbox worker and purging pending Apple tokens by revoking them immediately; reviewing access logs for the affected window; and notifying the privacy lead and DPO at once for the Art. 33 72-hour assessment\n\n  Calls:\n  - Amplitude: user deletion API.\n  - Customer.io: `DELETE /customers/{id}`.\n  - Zendesk: end-user permanent deletion.\n  - Stripe: detach payment methods and redact customer metadata; invoices stay as required.\n  - Sign in with Apple users: `POST /auth/revoke` for their refresh token. This ends our access to the user's Apple account; it does not cancel App Store subscriptions (§3).\n  - Email-delivery and push providers: per the inventory (see above).\n- Each call retries with exponential backoff for up to 7 days. Failure escalation is automated:\n  - A call still failing after 3 days alerts the on-call channel.\n  - At 7 days a `purge-failed` ticket is opened, assigned to the privacy lead with the deputy as watcher, and the on-call is paged.\n  - If the ticket is untouched after 48 hours, it escalates to the DPO.\n  - Remediation is manual deletion through the processor's console or a support request by the privacy lead or deputy, recorded against the row. Only processor rows are manual: the database purge across the 23 tables is automated, so the manual workload is at most one row per processor per account (up to seven processors) and only for calls that failed for 7 days. To keep this feasible at volume: remediation is bulk-first (processor bulk/batch deletion endpoints or a single support request listing many IDs, rather than per-account console work); the privacy lead names at least two remediation staff from support operations in PAR-2207 by the end of day 3 of week 1, distinct from the approvers and the on-call rotation; and a failure rate high enough that remediation could not finish by T pages the privacy lead early, at the T−5 page. A remediation drill (bulk-deleting pending rows for 200 synthetic accounts in sandboxes) runs by the end of day 12, not at the end of week 3, measures rows per person-hour, and the result is recorded and compared with the planning spike. Pass criterion: with two remediation staff, the drill's rows-per-person-hour figure must show that failed rows for 10% of a 2,000-account spike (200 accounts across all processors) can be remediated within 3 working days. If it does not, more remediation staff are named or the 100% throttle is tightened before the flag change; these two options are decided in advance, so a failed drill leaves time to act before the flag change.\n\n  The T−5 and T−3 rules above apply. A dashboard shows pending, completed and failed per processor.\n- Job-level monitoring: an alert fires if `AccountPurgeJob` has not completed a run in 26 hours, if a run errors, or if the queue of accounts past grace is older than 24 hours. Alerts page the backend on-call rotation, with a named primary and a named secondary (both recorded in PAR-2207 before launch). At launch the primary is the backend engineer on this epic and the secondary is a named backend engineer from the wider backend on-call rota (not one of the two build engineers), whose availability is confirmed, and who is given access and runbook training, in the day-1 dependency check (§7). Escalation: privacy lead, then deputy, then DPO. These job-level alerts complement, and do not replace, the independent deadline watchdog above, which is tied to each account's own `requested_at`.\n- Backups: Postgres snapshots roll off after 35 days and are not edited. `deleted_accounts` records only purged user IDs and purge dates. A user ID is a pseudonymous identifier and is treated as personal data: it is kept only as long as needed to re-apply purges after a restore, i.e. 35 days plus a 7-day margin (42 days), then deleted by a nightly cleanup job. Each purge is also appended to an append-only object-storage bucket outside the primary database (same 42-day lifecycle rule) as soon as its transaction commits, not only in a nightly batch: the purge transaction writes a `deleted_accounts` row with `external_logged_at` empty, a worker appends it to the bucket within minutes and sets the timestamp, and a nightly reconciliation re-sends any row still empty and alerts on any older than 1 hour. The bucket holds only user IDs and purge dates. The primary database's region is confirmed in the day-1 pass. The bucket is created with the same cloud provider and region as the primary database, so it introduces no new transfer. The privacy lead records its provider, region and legal basis in DPI-2026 and privacy policy §7 by the end of day 3 of week 1, and the bucket is not created until that is recorded. The proposed basis is the obligation to keep erasure effective after a restore (Art. 6(1)(c) with Art. 17), for the privacy lead to confirm. Access is limited to the restore-runbook role. If the primary database is not in the EU, the privacy lead decides the bucket's region by the same day, before it is created. The restore runbook re-applies purges from that external copy, not from the restored database, so a restore cannot roll back the log and resurrect a deleted account. The one residual gap is a purge committed in the minutes before its append completes; the runbook closes it by also replaying the purge-run log stream (user ID and timestamp per committed purge, 42-day retention, so it covers the full 35-day snapshot window, unlike the 30-day application logs) for the period after the restore point. The restore drill (§6) tests both sources, including a restore point at the old edge of the snapshot window (about 35 days back).\n- Application logs and Sentry error reports have 30-day retention (privacy policy §7).\n- After purge the email address can be used to register a new, empty account.\n\n## 5. Abuse\n- A stolen session alone cannot delete an account: re-auth is required.\n- The confirmation email gives the real owner 14 days to cancel even if their password was used.\n- Web requests are rate-limited to 5/hour per IP and 3/day per email address.\n\n## 6. Rollout and rollback\n- Feature flag `account_deletion` per client. Week 3: staff accounts (60) first, then 100%, then App Store resubmission the same week. 100% is subject to the capacity launch gate (§4), the web and iOS accessibility pass (§7), the remediation drill pass criterion (§4) and a recorded review of the throughput and contention results at least one working day before the flag change. The live-purge gate (§4) governs the first live purge, not the flag.\n- The first real purge batch (14 days after launch) runs in dry-run mode first; an approver checks the account list, per-table row counts and the shared-row report before it runs live. Nightly approval, the ceiling and the kill switch in §4 then apply.\n- Cutover for open manual requests: requests received before launch still owe erasure within one month of their original request date. On launch day support exports all open `delete-account` tickets with their creation dates. These requests stay on the existing manual process (faster than the 14-day grace) and are not moved to the self-serve path unless the user chooses it. The ticket creation date is the clock start, and the manual script and process stay available until that queue is empty. Support and the privacy lead review the queue weekly, and any ticket older than 25 days is escalated. The same rule applies to requests created through the static fallback form below: the clock runs from submission.\n- Rollback: flag off hides the in-app entry points only. The web page parlo.app/account/delete stays live regardless of the flag, because the Play data-safety form requires a working deletion link; if the web flow itself is faulty, the page switches to a static form that creates a support request (the current manual process) rather than disappearing. Requests already confirmed are still purged on schedule unless `account_purge_enabled` is turned off (the purge job ignores the `account_deletion` flag), \"Keep my account\" and the email cancel link keep working, and new in-app requests go back to the current manual support process. No confirmed request is lost.\n- Tests: request spec per registry table; shared-row spec (below); staging run with 500 synthetic accounts across password / Apple / Google sign-in and Stripe test-mode subscriptions, including a post-purge search of all tables for the synthetic IDs and emails and a set of seeded large accounts above the batch threshold (batched purge completes, resumes after a killed worker, and does not block other accounts); a separate throughput run of at least 2,000 bulk-seeded synthetic accounts that measures nightly capacity for the ceiling, and a simulated launch-spike cohort to check the clear-date projection. The database stage runs on a production-sized snapshot. Sandbox and stub processor endpoints are not fast or slow in the same way as production, so the processor stage uses the production latency (p50/p95) and rate limits measured from existing production traffic to those vendors and from vendor documentation, injected into the stubs; the ceiling and the capacity gate use the slower of the injected and sandbox figures. After launch the ceiling is rechecked against real processor timings from the first live batches (§4). Also: a purge contention test under replayed live traffic (§4, transaction and contention controls) reporting p95 transaction time, lock waits and request-latency impact; the T−3 deadline-lane test and rehearsal on the production-sized snapshot with the seeded cases listed in §4 (kill switch on, ceiling reached, approval pending: aged accounts still purge, anomaly stop still halts, a shared-row delete is skipped and paged, and a table present in the catalog but missing from the registry is treated as a shared-row hit), run with a 28-day-month `requested_at` as well; a watchdog test (main job runner stopped: the T−5 page and the T−3 lane start still fire from the independent watchdog and second runner; and the watchdog stopped: the dead-man's-switch and the job-side heartbeat check both page); anomaly-stop test with no history (fixed baseline applies, missing baseline halts); processor remediation drill (§4); store-subscription detection with sandbox purchases, including API failure and the day-13 final notice; Apple sandbox revoke, including the revoke-failure alerts; outbox crash test (kill the worker between commit and calls); outbox encryption and access check (also automated in CI from week 1, including the `purge_status_v` allow-list) and the key-rotation drill (week 4, before the first live purge); restore-runbook drill on a staging snapshot using the external purge log and the purge-run log replay step, including a purge committed shortly before the simulated restore point and a restore point near the 35-day edge (planned for week 4, and required before the first live purge).\n- Shared-row spec: the staging run seeds synthetic users with rows that other synthetic users own or reply to (club threads and messages with replies, reactions, friend edges, leaderboard rows). After purging user A, a row-level assertion checks that every row owned by user B still exists with its A reference nullified (or, where the registry's predicate says the row has no other owner, deleted), per table, with before/after row counts compared to expected values. A failed assertion fails the staging run.\n\n## 7. Scope and schedule\nThe scope is tight for 2 engineers in 3 weeks, so slack is built in now rather than found by cutting late. The 3-week commitment is the launch: staff rollout, 100% and App Store resubmission. The week-4 items below gate the first live purge, not the launch, and stakeholders are told now that the whole build runs about 4 weeks.\n- Planned decisions made up front, not held back as late cut lines:\n  - The dashboards are built as SQL views, not a dashboard product, and the web/mobile engineer builds them.\n  - Android native screens ship as a planned week-4 follow-on. iOS is the blocker and ships in week 3. The web page (the Play data-safety link) is live from week 1. Because Play also expects an in-app path, the week-3 Android release adds the in-app Settings → Account → \"Delete account\" entry, which opens the web flow in an in-app browser tab (about half a day, included in the estimate below); the native screens replace it in week 4. Until that Android release ships, the web link is the only path and we do not describe the Android app as fully compliant. In week 1 the page gets a keyboard-only and screen-reader smoke check before it is linked from the listing; the full web pass happens in week 2, before 100%.\n  - The deadline watchdog, its second runner and heartbeat monitoring, the deadline lane and its rehearsal move to week 4. No account can reach T−5 before roughly 23 days after the first confirmation, and no live purge happens earlier than 14 days after launch, so they are not needed before then. They are required, not optional: the live-purge gate (§4) enforces them before the first live purge.\n  - The restore-runbook drill moves to week 4 (before the first live purge, which is at least 14 days after launch), to absorb the new shared-row spec, per-account external log write and remediation drill without eroding slack.\n  - The key-rotation drill also moves to week 4, before the first live purge. The runbook is still written in week 2, and the CI access and encryption checks still run from week 1.\n  - The web/mobile engineer also builds the email templates (confirmation, day-12 reminder, day-13 final notice) and the Screen 1/3 store-subscription notice.\n- Dependencies checked before commitment, in the day-1 estimation pass, because they are outside the team's control: App Store Server API and Google Play Developer API sandbox credentials working; Apple Sign in revoke key available; processor sandbox/test access for the throughput run and remediation drill; read access to production API latency data for the processors; a second host/runner for the deadline watchdog; a named on-call secondary from the wider backend rota who is available and trained; the primary database's region; and legal's agreed date for the §3 review outcome. The result of each check (confirmed, or owner and date) is part of the go/no-go below. A missing credential is escalated that day. If a dependency is still blocked at day 3, the affected piece is built against a stub or recorded fixture so the engineer is not idle, and the owner of the dependency and the date are recorded in PAR-2207.\n- Schedule checkpoints: end of week 1 and mid week 2, the engineers compare days burned against the estimate. If either is more than 1 day behind, the cut lines below are applied at that point, not at the end of week 2. Non-engineer work (legal review of §3 due by end of week 1, processor deletion-time check, retention confirmations, approver naming, remediation staff naming) is tracked on the same checkpoint so it cannot silently block the staff rollout.\n- Week 1 (backend + web): registry (full classification, including second-user-reference declarations and predicates) and CI test, `AccountPurgeJob` core (kill switch, ceiling, dry-run, shared-row report, lock/statement timeouts, batching and `purge_state`), outbox with encryption, `purge_status_v` and its CI access checks, processor calls for Stripe and Apple revoke (with the credential health check); web page and email links. Day 1: legal review of §3 requested. By the end of day 3 (privacy lead): processor list closed (including the monitoring platform), email-provider retention confirmed, approvers, on-call, remediation staff and watchdog owner and deputy named, and bucket (with region and basis) and purge-run log stream recorded in the inventory. End of week 1: legal outcome recorded. Web/mobile: Screens 1–3 on web, web smoke check.\n- Week 2 (backend): Amplitude, Customer.io, Zendesk and email/push provider calls, store-subscription status checks (started once the legal outcome is recorded), job monitoring, external purge log (per-purge append, reconciliation, after the bucket decision), purge-run log stream and cleanup, key-rotation runbook (written; drilled in week 4). Web/mobile: web accessibility pass (keyboard-only, screen reader) with fix time reserved, iOS screens, store-subscription notice, re-auth for Apple/Google, dashboards as SQL views, email templates. Processor deletion-time check completed by the privacy lead; copy sign-off recorded by mid week.\n- Week 3: staging run with 500 accounts, shared-row spec, large-account test, throughput run, purge contention test and remediation drill. These finish by the end of day 12 (mid week 3) so the ceiling and the capacity gate are set from real-latency figures and the remediation result is known with time to act on it. Web/mobile: iOS accessibility pass on days 10–11 with 1.5 days reserved for fixes, finished and recorded by day 12 so it is not the last item before the rollout decision; Android in-app entry (web flow). Then open-ticket cutover export, legal sign-off confirmed, staff rollout. 100% is not before day 14 and not before the throughput/contention results, the remediation drill result and the accessibility pass are recorded, at least one working day before the flag change, and then App Store resubmission, all subject to the capacity gate.\n- Week 4 (planned): Android native screens and accessibility testing, then Android flag on (web/mobile). Backend: independent deadline watchdog with second runner and heartbeat monitoring, deadline lane with its rehearsal, watchdog test, restore-runbook drill and key-rotation drill, and the deputy owner's runbook walkthrough, then the live-purge gate (§4) is recorded.\n- Rough estimates (engineer-days, re-baselined for the moves above, to be confirmed by the engineers in a day-1 estimation pass before commitment): weeks 1–3 backend ~11, web/mobile ~12.5 (including the 1.5 reserved accessibility-fix days and the Android entry), against ~15 available each, so about 4 days of backend slack and about 2.5 for web/mobile. Week 4: backend ~5, web/mobile ~4, against ~5 each. That slack is thin against the external dependencies above, so it is treated as covering one blocked dependency at most, with the stub rule and the checkpoints as the response to a second. This schedule is a conditional commitment: it is credible only if the day-1 pass confirms both the estimates and the dependencies. Commitment rule: if the day-1 pass shows either engineer above 13 days for weeks 1–3, or a dependency that is neither confirmed nor has a named owner and date, we do not start; scope or the date is renegotiated first. The day-1 pass owns the go/no-go.\n- Cut lines if still behind at a checkpoint or at the end of week 2, in order: (1) staff rollout shortened; (2) the 100% date moves later, rather than shipping any part of the flow with an incomplete gate. Not cut: the web and iOS accessibility pass before 100%, purge safety controls, deadline controls including the independent watchdog and its monitoring, the contention and throughput tests, outbox and its encryption and rotation runbook and drill, external purge log, re-auth, processor-timing launch gate, legal review gate, shared-row spec.\n- Maintainability after launch: the purge engine is large on purpose, since each control answers an irreversible-deletion or Art. 17 deadline risk, so it has named owners and planned retirements. After launch the backend on-call rotation owns the job, registry, watchdog and runbooks, not only the two build engineers. Registry changes go through CODEOWNERS review, and a generator (`rails purge:add_table`) scaffolds the registry entry and the CI fixture so classifying a new table or user-reference column is a short task rather than a merge-blocking puzzle. CI failures from the registry check are tracked, and a recurring cause is fixed at the source. Some controls retire by design: the nightly approval gate after the first 14 live days and the fixed pre-history anomaly baseline once the trailing baseline exists. 60 days after the first live purge, the privacy lead and the backend owners review which remaining controls can be simplified or merged and record the outcome in PAR-2207.\n- App Store resubmission is a target for the end of week 3, not a commitment: review time is outside our control, and stakeholders are told this now.\n\n## 8. Success measures\n- Deletion support tickets < 100/month by end of December (from 1,140).\n- Erasure deadline: 100% of requests fully erased, including processor deletion, by T, i.e. within one calendar month of `requested_at` (28 to 31 days depending on the month, so the measure is computed against T per request, not a fixed day count). The target is erasure itself. An escalated case with remediation still in progress is not counted as a success: it is a missed deadline, reported to the DPO as an incident, with cause and fix recorded. At least 99% of purges, including processor calls, complete within 21 days; the rest are listed individually on the dashboard, every one is reviewed, and the count over 21 days is reported weekly. The deadline lane and the independent watchdog (§4) mean our own data never waits past T−3, so any miss is a processor-side miss.\n- Store subscriptions: purged-with-active-store-subscription count and rate reviewed weekly against the threshold set in the legal review (§3).\n- \"Keep my account\" rate tracked, no target.",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 75454,
+  "tokOut": 112277,
+  "usd": 1.424558,
+  "critMs": 703500
+ },
+ "status": "cap"
+}

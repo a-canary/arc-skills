@@ -1,0 +1,204 @@
+{
+ "approach": "cascade",
+ "case": "deploy-04",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "Share links embed the owner's raw project API key in a public URL query parameter (`k`). Anyone with the link (Slack/X unfurls, HN, history, referrers, logs) gets the full key. The key is also returned to every viewer in the page load data.",
+     "evidence": "url.searchParams.set(\"k\", project.apiKey); / replayKey: url.searchParams.get(\"k\")"
+    },
+    {
+     "lens": "cost",
+     "severity": "blocker",
+     "claim": "Anonymous viewers replay against the owner's project quota. A link posted publicly (the launch is on HN/X) lets unlimited strangers spend the owner's per-token billing. Pro has no daily cap, so exposure is unbounded.",
+     "evidence": "Viewers without an account replay against the owner's project quota. / pro: daily_tokens: null"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Deleting a share returns 404 but does not revoke or rotate the leaked key. The QA 'delete → 404' pass gives false assurance, and copies of the link or key stay valid.",
+     "evidence": "deleted shares return 404. / ABSENT: key revocation or scoping on share delete"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The prod free-tier rate limit is 20 requests per SECOND with burst 40, but the changelog promises 20 per minute. QA passed only because staging used `per: minute`, so prod config was never tested. This is a roughly 60x difference in abuse and spend exposure.",
+     "evidence": "rate_limit: { requests: 20, per: second, burst: 40 } vs \"20 requests per minute\" and \"staging config used `per: minute`\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The advertised 100k tokens/day free quota is not configured. The free block has only max_tokens_per_request and no daily_tokens, so the daily limit is unenforced.",
+     "evidence": "free block: max_tokens_per_request: 4096 with no daily_tokens; changelog: \"100k tokens per day\""
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "Budget math contradicts the stated projection and has no hard cap. 3,000 DAU × 35 req × 1.2k tokens is about 126M tokens/day, which is far above the 100k/day/user limit scale in aggregate, and the 2-replica assumption is unsupported. Two replicas at $2.49/h is about $3.6k, leaving no headroom. The pool can autoscale to 24 replicas (about $43k/month) with no spend ceiling, and there is no budget-burn alert.",
+     "evidence": "max_replicas: 24 / \"~$3.6k/month, within the $4k/month free-tier budget\" / ABSENT: spend cap or budget alert"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Alerting is inadequate for a HN-driven launch. It pages at replicas > 6, but the pool can scale to 24, and there is no spend or abuse alert. Rollback of `free_signup_open` does not stop existing keys or shares from consuming spend.",
+     "evidence": "free pool replicas > 6 pages on-call / Rollback: `free_signup_open` off stops new signups; existing free keys keep working."
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Full conversations are stored and publicly viewable by link, with Open Graph unfurling and no stated expiry, noindex, consent or warning that content becomes public. Personal data in sessions can leak.",
+     "evidence": "messages: session.messages / Open Graph tags so links unfurl / ABSENT: expiry, noindex, consent prompt"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback covers only signups. Distributed keys in public links, and any spend incurred through them, cannot be undone, and there is no kill switch for the share feature.",
+     "evidence": "ABSENT: rollback or feature flag for share links"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 3,000 DAU, 35 requests/day and 1.2k tokens/request projections and the <30% utilization claim have no load test or prototype behind them.",
+     "evidence": "ABSENT: load test or capacity evidence"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The share id generation scheme is not stated, so its unguessability is unverified.",
+     "evidence": "ABSENT: id generation scheme"
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 8778,
+    "tokOut": 3963,
+    "usd": 0.035758939999999996,
+    "critMs": 21892
+   },
+   "wallMs": 45220
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The claim that worst-case spend is bounded by the budget cap is not supported. hard_stop is described only as stopping scale-up and shedding load, and it does not say replicas scale down. Replicas already running keep billing (min_replicas 1, up to 3 at ~$1.8k each). Budget accounting may also lag provider billing. The hard_stop behaviour is itself still pending verification.",
+     "evidence": "\"budget: { monthly_usd: 4000, hard_stop: true }   # stops scale-up and sheds at 100%\" vs \"Worst-case spend is bounded by the budget cap, not by `max_replicas`.\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Share links are bearer capabilities, but the artifact does not say how share.id is generated (it must be unguessable, not sequential). It also does not show that the creator owns the session and project. Guessable IDs would expose other users' full conversations.",
+     "evidence": "ABSENT: share.id generation scheme and ownership check; `new URL(\"/s/\" + share.id, PLAYGROUND_ORIGIN)`"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The public changelog promises 30-day expiry and deletion at any time. The code only returns 404 for expired shares. No purge of db.shares rows after expiry or deletion is specified, so message content is retained indefinitely.",
+     "evidence": "\"expire after 30 days. You can delete them at any time.\"; ABSENT: row deletion or purge job for db.shares"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The design excludes /s/ in robots.txt and also relies on an X-Robots-Tag noindex header. Compliant crawlers never fetch the page, so they never see the header, and the URL can still be indexed if linked elsewhere. The public claim 'not indexed by search engines' is therefore not guaranteed.",
+     "evidence": "\"Pages carry `noindex` and are excluded in `robots.txt`.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The share feature deploys at 16:00 with its security checks still pending (replay blocking, no key in page or logs, expiry and deletion). The launch gate formally covers only free_signup_open, and the default state of playground_share_enabled is not stated. Existing users could therefore create shares before verification.",
+     "evidence": "\"Share link, re-verified for the new design: *pending:* ...\" vs \"Deploy gateway config and playground at 16:00 UTC.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The shared 150M/day pool cap lets abusive or throwaway accounts exhaust capacity for all free users. Abuse alerts exist but there is no per-account or per-IP daily mitigation beyond the 100k per-user cap and the 4,000-account signup cap.",
+     "evidence": "\"pool_daily_tokens: 150000000   # global cap; beyond this the pool sheds load with 503\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The rate limit semantics are ambiguous. With burst 5 on top of 20 per minute, the 21st request may not return 429, so the pending QA criterion could be wrong. The prod-config rerun should catch this.",
+     "evidence": "\"rate_limit: { requests: 20, per: minute, burst: 5 }\" vs \"the 21st request inside a minute must return 429\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The kill-switch flag gives inconsistent signals: creation returns 503 while viewing returns 404.",
+     "evidence": "\"throw error(503, \\\"Sharing is temporarily disabled\\\")\" vs \"throw error(404)\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "Both tiers depend on a single GPU provider's on-demand capacity, with no fallback described.",
+     "evidence": "\"at the GPU provider's on-demand rate of $2.49/h\""
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 12827,
+    "tokOut": 13155,
+    "usd": 0.06276622,
+    "critMs": 70209
+   },
+   "wallMs": 200981
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The pending-QA gate is tied only to `free_signup_open`. Share links deploy at 16:00, and the share security and replay tests are still pending. The default state of `playground_share_enabled` is not stated, so shares could go live before those tests pass.",
+     "evidence": "\"Turn on `free_signup_open` at 16:45 UTC, only after all pending QA items pass.\" ABSENT: default state of `playground_share_enabled` at deploy"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The shipped config has `max_replicas: 3` (~$5.5k/month) against a $4k budget. The cap at 2 is only a contingency if the pending hard_stop check fails, and no scale-down rule is shown. The cost risk is disclosed and gated before signup opens, so this is not blocking.",
+     "evidence": "\"if hard_stop does not scale down, we cap `max_replicas` at 2 for launch week\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "With `burst: 5` on a 20 requests/minute limit, a token bucket may admit more than 20 requests in a minute, so the 21st request may not return 429. The pending prod-config test will catch this, but the expected behaviour should be reconciled.",
+     "evidence": "\"rate_limit: { requests: 20, per: minute, burst: 5 }\" vs \"the 21st request inside a minute must return 429\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The share ID is a bearer capability. Calling share URLs safe to log is inaccurate, because anyone with log access can read the conversation. The per-IP share-lookup rate limit is claimed but its implementation is not shown.",
+     "evidence": "\"Share URLs contain no secrets, so logging them is safe.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The changelog says expired and deleted shares are removed from the database, while the artifact says backups keep them on the standard schedule. The purge job has no failure alert.",
+     "evidence": "\"Database backups roll off on the standard backup retention schedule.\""
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 15225,
+    "tokOut": 16180,
+    "usd": 0.05879042,
+    "critMs": 80112
+   },
+   "wallMs": 165313
+  }
+ ],
+ "artifact": "# Release proposal: Lumen Gateway: Free tier GA + Playground share links\n\nOwner: platform · Deploy: Wed 2026-11-04 16:00 UTC · Launch post: Wed 17:00 UTC (blog, HN, X)\n\n**Launch gate:** the items marked *pending* in QA and Capacity must pass on the prod config before `free_signup_open` is turned on. If they don't, the launch post slips.\n\n## Release notes (public changelog)\n\n- **Free tier is generally available.** Sign up with email, no card required. Free accounts get **20 requests per minute** and **100k tokens per day** on `llama-3.1-8b-instruct` and `qwen2.5-7b-instruct`. Free capacity is shared and capped, so during heavy demand requests may return 429/503.\n- **Share from Playground.** Click \"Share\" on a playground session to get a link. Anyone with the link can **view** the conversation. Re-running it requires signing in to a Lumen account and uses **your own** quota. Shared conversations are public to anyone with the link, are not indexed by search engines, and expire after 30 days. You can delete them at any time. Expired and deleted shares are removed from our database, not just hidden.\n- New `GET /v1/usage` endpoint returns your current daily token usage.\n\n## Gateway config change (`deploy/prod/gateway.yaml`, diff)\n\n```diff\n tiers:\n+  free:\n+    models: [llama-3.1-8b-instruct, qwen2.5-7b-instruct]\n+    rate_limit: { requests: 20, per: minute, burst: 5 }\n+    daily_tokens: 100000\n+    max_tokens_per_request: 4096\n+    pool: free-8b\n   pro:\n     models: [\"*\"]\n     rate_limit: { requests: 600, per: minute, burst: 120 }\n     daily_tokens: null\n     pool: shared-h100\n pools:\n+  free-8b:\n+    gpu: h100-80g\n+    min_replicas: 1\n+    max_replicas: 3\n+    scale_on: queue_depth > 8 for 60s\n+    pool_daily_tokens: 150000000   # global cap; beyond this the pool sheds load with 503\n+    budget: { monthly_usd: 4000, hard_stop: true }   # at 100%: stops scale-up and sheds load; scale-down to min_replicas is NOT assumed (see Capacity and cost)\n   shared-h100:\n     gpu: h100-80g\n     min_replicas: 6\n     max_replicas: 40\n```\n\n## Capacity and cost\n\n- Projection: 3,000 free DAU in month 1, avg 35 requests/day each, ~1.2k tokens per request. That is ~105k requests/day and ~126M tokens/day (~42k tokens per user, under the 100k/user cap). The per-user cap alone allows up to 300M tokens/day at 3,000 users, so the global `pool_daily_tokens` cap of 150M is what bounds load and spend.\n- Cost at the GPU provider's on-demand rate of $2.49/h (~$1,818/month per replica): 1 replica is ~$1.8k, 2 replicas ~$3.6k, 3 replicas ~$5.5k if run continuously. The $4k budget therefore supports roughly 2 replicas on average. `max_replicas` is 3 only for short bursts.\n- **Worst-case spend is not guaranteed by `budget.hard_stop` alone.** hard_stop stops scale-up and sheds load, but replicas already running keep billing, and budget accounting may lag provider billing. Worst case is therefore bounded only by the replica count at the time of the stop: up to 3 replicas continuously (~$5.5k/month) if the pool is at max when the budget is hit. Controls: (a) the budget alert pages at 80% projected, well before 100%; (b) on the hard alert, on-call sets the pool to `max_replicas: 1` or turns off `free_tier_enabled` and scales the pool down manually; (c) *Pending:* verify that hard_stop at 100% also scales the pool down to `min_replicas`, and measure the lag between budget accounting and provider billing; if hard_stop does not scale down, we cap `max_replicas` at 2 for launch week so worst-case spend stays at ~$3.6k.\n- The earlier assumption that 2 replicas serve the load at <30% utilization was not measured. *Pending:* a load test of the free pool at the projected peak (including a 3x launch-hour spike) on prod config, to confirm replica count and latency before signup opens. If 2 replicas cannot hold the load, we tighten the signup cap and pool cap rather than raise the budget.\n- Launch-week signup cap: 4,000 total free accounts, enforced alongside `free_signup_open`.\n- Free pool is isolated from `shared-h100`, so free traffic cannot degrade paid latency.\n\n## Playground share links (`apps/playground/src/share.ts`)\n\nShare links no longer contain any credential. They are view-only for anonymous visitors. Replay requires a signed-in user and runs on that user's own quota. The owner's project key is never stored in, or returned from, a share.\n\n```ts\nconst SHARE_TTL_DAYS = 30;\n\nexport async function createShareLink(session: Session, project: Project, user: User): Promise<string> {\n  if (!flags.playground_share_enabled) throw error(503, \"Sharing is temporarily disabled\");\n  // Ownership: the caller must own both the session and the project.\n  if (session.ownerId !== user.id || project.id !== session.projectId || !(await canAccessProject(user, project))) {\n    throw error(403, \"Not allowed to share this session\");\n  }\n  // Unguessable bearer token: 128 bits from a CSPRNG, base64url (22 chars). Never sequential or derived from session/project ids.\n  const id = randomBytes(16).toString(\"base64url\");\n  const share = await db.shares.insert({\n    id,\n    sessionId: session.id,\n    projectId: project.id,\n    ownerId: user.id,\n    messages: session.messages,\n    model: session.model,\n    createdAt: new Date(),\n    expiresAt: addDays(new Date(), SHARE_TTL_DAYS),\n  });\n  return new URL(\"/s/\" + share.id, PLAYGROUND_ORIGIN).toString();\n}\n\nexport async function deleteShare(user: User, shareId: string): Promise<void> {\n  const share = await db.shares.get(shareId);\n  if (!share || share.ownerId !== user.id) throw error(404);\n  await db.shares.delete(shareId); // hard delete of the row, including message content\n}\n\n// Hourly job: hard-delete expired rows so content is not retained past expiry.\nexport async function purgeExpiredShares(): Promise<void> {\n  await db.shares.deleteWhere({ expiresAt: { lt: new Date() } });\n}\n```\n\n```ts\n// apps/playground/src/routes/s/[id].ts\nexport async function load({ params, locals, setHeaders }) {\n  if (!flags.playground_share_enabled) throw error(404);\n  const share = await db.shares.get(params.id);\n  if (!share || share.expiresAt < new Date()) throw error(404);\n  setHeaders({ \"X-Robots-Tag\": \"noindex, nofollow\", \"Referrer-Policy\": \"no-referrer\" });\n  // Replay happens server-side against the *viewer's* own account; no key is sent to the client.\n  return { messages: share.messages, model: share.model, canReplay: Boolean(locals.user) };\n}\n```\n\n- Clicking \"Share\" shows a confirmation: \"Anyone with this link can read this entire conversation. Don't share sessions containing personal or sensitive information.\" The user must confirm before the link is created.\n- Share IDs are 128-bit random tokens, so links cannot be enumerated or guessed. Share creation verifies the caller owns the session and has access to the project. Only the owner can delete a share. Share lookups are rate limited per IP to slow brute-force attempts.\n- Share pages are server-rendered with generic Open Graph tags (title and Lumen branding only, no conversation content), so links unfurl without exposing message text. Pages carry `noindex` and are excluded in `robots.txt`.\n- Shares expire after 30 days, and expired shares return 404 immediately. Deleting a share from Playground → History hard-deletes the row, and deleted shares return 404. An hourly purge job hard-deletes expired rows, so message content is not kept past expiry (at most about an hour of delay, during which the row is already not served). Database backups roll off on the standard backup retention schedule.\n- Because no key is ever embedded, deleting a share needs no key revocation. *Pending (staging cleanup):* staging shares created before this change embedded `k=` keys. Purge the staging `shares` table and rotate any project keys used in staging shares.\n- Kill switch: the `playground_share_enabled` flag disables creating and viewing shares immediately (all `/s/*` return 404).\n\n## Logging\n\n- Gateway access logs redact the `Authorization` header and drop request bodies; we log model, token counts, latency, status and project id only (unchanged from current prod).\n- Share URLs contain no secrets, so logging them is safe.\n\n## QA summary (staging)\n\n- Signup → first free request in < 60s: pass.\n- Free-tier model allow-list: request to `llama-3.1-70b-instruct` with a free key returns 403: pass.\n- Rate limiting: the earlier pass used a staging config with `per: minute` that did not match prod. *Pending:* rerun against the exact prod `gateway.yaml` (now `per: minute`, burst 5): the 21st request inside a minute must return 429 with `Retry-After`.\n- *Pending:* the 100k daily token quota is enforced on the prod config (the request that exceeds 100k returns 429, and `/v1/usage` reflects the limit).\n- *Pending:* the pool-level `pool_daily_tokens` cap and `budget.hard_stop` shed load as expected, verified with lowered thresholds on staging. Also verify whether hard_stop scales replicas down, and measure budget-accounting lag vs provider billing.\n- Share link, re-verified for the new design: *pending:* create → incognito view works, replay is blocked for anonymous viewers, replay works for a signed-in viewer on the viewer's quota, no API key appears in the URL, HTML, page data or logs, expired and deleted shares return 404, and the flag-off state returns 404.\n- *Pending:* share security: IDs are unguessable (random, non-sequential), creating a share for another user's session returns 403, another user cannot delete your share, and the purge job removes expired rows and deleted rows are gone from `db.shares`.\n- `/v1/usage` matches billing ledger within 0.1%: pass.\n- *Pending:* free pool load test (see Capacity and cost).\n\n## Rollout\n\n- Deploy gateway config and playground at 16:00 UTC. Turn on `free_signup_open` at 16:45 UTC, only after all pending QA items pass.\n- Alerting (all page on-call):\n  - Free pool replicas ≥ 3 (at max) for 10 minutes.\n  - Error rate > 2%.\n  - Free-pool spend burn: projected month-end spend > 80% of the $4k budget, and a hard alert at 100%.\n  - Free pool daily tokens > 80% of `pool_daily_tokens`.\n  - Abuse: more than 50 signups per minute from a single IP or ASN, or a single free key hitting 429 continuously.\n  - Share creation rate more than 10x baseline.\n- Rollback and kill switches (each independent, none requires a deploy):\n  - `free_signup_open` off stops new signups.\n  - `free_tier_enabled` off makes all existing free keys return 403 immediately, which stops free token usage. GPU spend stops only once replicas are scaled down, which on-call does manually if hard_stop does not.\n  - `playground_share_enabled` off disables share creation and viewing.\n  - Because shares carry no keys, there is no leaked credential to recall. Sharing can be stopped fully. Free-tier spend is capped by the budget controls above, with the replica-count caveat noted in Capacity and cost.",
+ "fixerUsage": {
+  "calls": 2,
+  "tokIn": 7846,
+  "tokOut": 8733,
+  "usd": 0.118706,
+  "critMs": 56523
+ },
+ "status": "cleared"
+}

@@ -1,0 +1,77 @@
+{
+ "approach": "triage-routed",
+ "case": "merge-09",
+ "rep": 2,
+ "wallMs": 402788,
+ "verdict": "CLEAR",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "authn",
+   "severity": "minor",
+   "claim": "A captured signed delivery can be replayed anywhere within the 5-minute window. There is no nonce or delivery-ID check. Upserts keyed on (device_id, measured_at) limit the damage, but a replay could overwrite corrected readings with older values.",
+   "evidence": "if abs(current - int(timestamp)) > TOLERANCE_SECONDS: raise SignatureError(\"timestamp outside tolerance\")"
+  },
+  {
+   "lens": "spec-mismatch",
+   "severity": "minor",
+   "claim": "The PR says failures return a bare 401, but the route sends a detail body.",
+   "evidence": "PR text: \"returns a bare 401 on any failure\"; code: raise HTTPException(status_code=401, detail=\"invalid signature\") from None"
+  },
+  {
+   "lens": "edge-case",
+   "severity": "minor",
+   "claim": "The v1= prefix is stripped if present rather than required, so a bare hex signature is accepted. This is looser than the stated v1=<hex> format.",
+   "evidence": "hmac.compare_digest(expected.encode(), signature.removeprefix(\"v1=\").encode())"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Deliveries older than 5 minutes are rejected and not queued. If the vendor retries after a long backoff or queues during an outage, those batches are lost. The PR does not document the vendor's retry policy. Deliveries during the upgrade window, before the operator sets the secret, also get 401s, and the release-note mitigation is only referenced.",
+   "evidence": "PR text: \"rejects deliveries more than 5 minutes old or in the future, and returns a bare 401 on any failure\"; ABSENT: vendor retry behavior and a description of the release-note mitigation"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Signature rejections are only logged at warning level. There is no counter, metric, or alert, so a wrong secret, clock drift, or a vendor signing change could stop readings without the operator noticing.",
+   "evidence": "log.warning(\"plugcloud webhook rejected: %s\", exc)  — ABSENT: any metric or alerting for 401 rate"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "VOLTLOG_PLUGCLOUD_SECRET is required with no default. An upgraded instance whose .env was not updated fails at startup. The release notes mitigate this, but the code gives no clearer message than pydantic's default.",
+   "evidence": "plugcloud_secret: SecretStr  (no default)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Secret rotation has no overlap window. verify() accepts a single secret, so switching the vendor and voltlog must happen at the same moment, and in-flight deliveries signed with the old key are rejected.",
+   "evidence": "def verify(secret: bytes, body: bytes, ...) — single secret, no accepted-previous-secret path"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Replay tolerance depends on the voltlog host clock being within 300 seconds of the vendor's clock. The tolerance is hard-coded and the PR does not document this dependency.",
+   "evidence": "TOLERANCE_SECONDS = 300"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The handler reads the whole request body into memory before verification and has no app-side size cap. It relies on the reverse proxy's 1 MB limit, so a direct connection to the app bypasses that protection.",
+   "evidence": "body = await request.body()  — ABSENT: app-side max body size check before verification"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "No test covers the missing-secret or short-secret startup failure. The validator and the \"startup fails\" claim are unverified. conftest supplies a valid secret, so a regression would go unnoticed. The diff also does not show when Settings is constructed, since the route uses Depends(get_settings), so the startup claim may not hold.",
+   "evidence": "ABSENT: no test constructing Settings without plugcloud_secret or with a value under 32 characters; only tests/conftest.py passes \"t\" * 32"
+  }
+ ],
+ "usage": {
+  "calls": 6,
+  "tokIn": 25910,
+  "tokOut": 13317,
+  "usd": 0.00811682,
+  "critMs": 33838
+ }
+}

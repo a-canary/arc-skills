@@ -1,0 +1,125 @@
+{
+ "approach": "rubric-calibrated",
+ "case": "plan-09",
+ "rep": 2,
+ "wallMs": 298696,
+ "verdict": "ATTACKS",
+ "confidence": 0.72,
+ "attacks": [
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The check behind the 'no cross-partition duplicates' equivalence runs on the already-deduplicated output table. Global dedup guarantees unique event_id in that table, so 0 results is vacuous and says nothing about raw.events, where the failure would appear.",
+   "evidence": "\"Checked over all 4.2B rows: 0 such `event_id`s (query linked in DATA-412).\" (4.2B is the fct_page_events row count; the check must be run on raw.events.)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Per-partition dedup is not equivalent to global dedup. Because event_date is clamped to [ingested_at − 30 d, ingested_at], a replayed event sent more than 30 days after its original ingestion gets a different event_date. Its copies then land in different rebuilt partitions and are double counted in the customer export. The artifact documents SDK offline replay but never bounds replay age to 30 days.",
+   "evidence": "\"Today's model already clamps `event_time` to [`ingested_at` − 30 d, `ingested_at`]\" and \"`qualify row_number() over (partition by event_id order by ingested_at) = 1`\" (per-partition after the change) alongside \"SDK offline replay\"."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The high-water mark is defined as the max ingested_at in the fact table, but the plan never says the table stores ingested_at or where the watermark is persisted. Without that, the incremental selection rule cannot be implemented, and a wrong watermark produces gaps or re-scans.",
+   "evidence": "ABSENT: the table's column list (\"Columns, types, grain ... unchanged\") does not include ingested_at, and no state table or dbt variable is named. Text: \"max `ingested_at` already in the table − 2 h\"."
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "No material security issue found. The rebuilds read only internal raw.events, and the existing analytics_write lock is reused.",
+   "evidence": "\"privacy-svc and the dbt jobs already share the `analytics_write` lock (unchanged)\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "No new privacy exposure found beyond the replay-duplicate issue. Erasure covers raw, the new table, and the legacy table for 30 days, and rebuilds read only raw.",
+   "evidence": "\"Rebuilds read only `raw.events`, so a rebuild cannot bring erased rows back.\""
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "Heavy coupling to BigQuery-specific features (bq cp -f atomic swap, FARM_FINGERPRINT, insert_overwrite, on-demand pricing). Exit would require rewriting the swap and parity tooling. This is a cost to weigh, not a gate blocker.",
+   "evidence": "\"`bq cp -f fct_page_events_v2 fct_page_events`\" and \"BIT_XOR(FARM_FINGERPRINT(TO_JSON_STRING(t)))\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Worst-case scan is bounded to ~31 days only while the job runs on schedule. After a multi-week pipeline pause, the rebuild window grows with the pause length, so the $2.40 worst case no longer holds.",
+   "evidence": "\"the run reads raw from the oldest selected date onward (at most ~31 days)\" (the bound assumes no prolonged pause)."
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Budget math is internally consistent (≈$72 nightly build, ≈$1,960 month 1). The Looker reduction is extrapolated from a subset of queries, but the steady-state savings hold even without it.",
+   "evidence": "\"dry runs of September's top 20 queries by bytes against v2: 61.2 → 8.7 TiB\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Parity uses BIT_XOR of row fingerprints, so identical duplicate rows cancel out. Row count and count distinct partly cover this, but a fingerprint-level mismatch could pass if counts happen to match.",
+   "evidence": "\"`BIT_XOR(FARM_FINGERPRINT(TO_JSON_STRING(t)))` over all columns\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The rollback claim of 'no gap' is overstated. The legacy copy is only as fresh as its last nightly rebuild, so the restored table lags until the next full refresh. This matches today's staleness, so it is not a regression.",
+   "evidence": "\"No gap, no lost events.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The swap steps are not ordered against the PR merge. A dbt run between the bq cp and the PR merge would rebuild the table with the old unpartitioned SQL.",
+   "evidence": "\"Merge the PR that points model `fct_page_events` at the incremental SQL\" listed after the bq cp steps."
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "No rendering or display issue applicable to this data-plan artifact.",
+   "evidence": "ABSENT: no UI surfaces change."
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Value is clear and aligned with the stated constraints (cost and dashboard SLA). No wrong-problem concern found.",
+   "evidence": "\"steady-state warehouse spend must go down\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "Swap timing rests on an unmeasured claim that 12:00 UTC has the lowest Looker traffic.",
+   "evidence": "\"Swap at 12:00 UTC (lowest Looker traffic ...)\""
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "Not applicable to this artifact; no interface changes.",
+   "evidence": "ABSENT: no UI or content changes."
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "No compliance violation found. Retention (25 months) and erasure are preserved across raw, the new table, and the legacy table.",
+   "evidence": "\"deletes rows older than 25 months from `raw.events` and `fct_page_events` (privacy policy §6). Unchanged\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The 30-day dual-model period, the separate legacy job, and the parity test add operational complexity for one engineer. This is acceptable with the planned cleanup at DATA-431.",
+   "evidence": "\"After 30 clean parity nights: drop the legacy model and table (DATA-431).\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Weekly unique_event_id test would detect cross-partition duplicates only up to a week after export has already double counted them.",
+   "evidence": "\"New dbt test `unique_event_id` runs weekly on the full table\""
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 4073,
+  "tokOut": 12900,
+  "usd": 0.0072644,
+  "critMs": 58755
+ }
+}

@@ -1,0 +1,65 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-06",
+ "rep": 1,
+ "wallMs": 359304,
+ "verdict": "ATTACKS",
+ "confidence": 0.9,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "A deterministic, unsalted truncated SHA-256 of the raw tenant API key is written to logs on every rate-limit rejection, violating the explicit rule that keys must never appear in logs. tenant.id on the same line already provides the debugging value, so the key fingerprint should be removed.",
+   "evidence": "req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, \"tenant rate limited\")"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Config is unvalidated and fails open. A NaN or missing ratePerSec/burst makes take() return NaN; 'NaN > 0' is false so the request is admitted, and the NaN persists in the bucket so the tenant is never limited again. A ratePerSec of 0 yields Infinity and an invalid 'Retry-After: Infinity' header.",
+   "evidence": "if (waitMs > 0) { ... } and return Math.ceil(((1 - b.tokens) / limits.ratePerSec) * 1000); with no validation of limitsFor(tenant) output"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Date.now() is wall-clock and can step backwards. A negative elapsedSec drains tokens, and Math.min caps only from above, so tokens can go negative and produce a long lockout until the clock recovers.",
+   "evidence": "const elapsedSec = (nowMs - b.updatedMs) / 1000; b.tokens = Math.min(limits.burst, b.tokens + elapsedSec * limits.ratePerSec);"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The upstream 429 retry is not gated by the tenant limiter and has no retry budget, concurrency cap, or jitter. An admitted tenant can produce two upstream calls per request during a 429 storm, and clients honoring the same Retry-After retry in lockstep, amplifying the overload the PR aims to contain.",
+   "evidence": "if (res.status === 429) { ... await new Promise((r) => setTimeout(r, delay)); res = await upstream.chat(req.body, { signal: req.signal }); }"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The retry sleep holds the handler and socket for up to 5s with no abort on client disconnect (req.signal is not checked during the sleep), no upstream timeout, and no concurrency bound. In-flight sleeping requests grow with inbound load during a 429 storm. The first 429 response body is also never consumed or cancelled.",
+   "evidence": "await new Promise((r) => setTimeout(r, delay)); // no req.signal check; ABSENT: upstream timeout or concurrency bound"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Enforcement at 20 rps / burst 40 applies to all ~120 tenants at deploy with no feature flag, shadow mode, or per-tenant opt-in. Tenants already above 20 rps begin receiving 429s immediately, and rollback requires a redeploy.",
+   "evidence": "This adds an in-process token bucket per tenant (limits from tenant config, default 20 rps / burst 40) and returns 429 with Retry-After when a tenant is over."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The Tuesday incident and the 20 rps / burst 40 defaults are asserted without traffic distribution or upstream quota figures. Per-tenant limits do not bound aggregate load: 120 tenants at 20 rps is about 2,400 rps with no global or upstream-level bucket, so compliant tenants can still saturate upstream.",
+   "evidence": "one batch job at 400 rps pushed everyone else into upstream 429s on Tuesday; default 20 rps / burst 40; ABSENT: upstream quota figure or per-tenant traffic distribution"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "Tests cover only bucket arithmetic and isolation. Nothing exercises the 429 response, the Retry-After header, the upstream retry, retryAfterMs parsing, the 5s cap, LRU eviction, or NaN/zero-rate config.",
+   "evidence": "test(\"admits burst, then rate-limits, then refills\") and test(\"tenants are isolated\"); ABSENT: completions route or retryAfterMs tests"
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 123146,
+  "tokOut": 58248,
+  "usd": 0.05198989,
+  "critMs": 79262
+ }
+}
