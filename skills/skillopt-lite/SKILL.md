@@ -20,6 +20,7 @@ canonical copy `skills/token-waste/agents/waste-analyst.md`).
    `input.subagent_type == <agent>`; captures `{id, session, ts, prompt, output}`
    (prompt = replay context; output = historical result if recoverable, else null;
    both capped ~8k chars).
+   `mine --skill <name>` instead mines Skill-tool calls (`input.skill == <name>` or `x:<name>`): prompt = preceding user message + args; output = assistant turns after the tool_result up to the next real user message. Streams line by line; `--root` overrides the transcripts dir.
 2. **split** — `split --in dataset.jsonl --test-frac 0.5 --seed 42`
    Deterministic seeded shuffle → `train.jsonl` + `test.jsonl`.
    The TEST split must stay unbiased random — never curated toward bad rows

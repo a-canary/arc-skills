@@ -4,6 +4,8 @@
 
 import { readdirSync, readFileSync, writeFileSync, statSync, mkdirSync, mkdtempSync, appendFileSync, rmSync, cpSync } from "fs";
 import { join, dirname } from "path";
+import { createReadStream } from "fs";
+import { createInterface } from "readline";
 import { homedir } from "os";
 
 // laneproxy (private local lane) since cli-proxy :7890 retired 2026-10-31; it serves qwen3.8-27b for any model name.
@@ -87,13 +89,14 @@ async function pmap<T, R>(rows: T[], fn: (t: T) => Promise<R>, conc = 2): Promis
   return out;
 }
 
-// --- mine: scan ~/.claude/projects transcripts for Task/Agent calls to target agent ---
-function mine() {
+// --- mine: scan ~/.claude/projects transcripts for Task/Agent calls to target agent
+// (--agent) or Skill-tool invocations of a target skill (--skill). --root overrides dir. ---
+async function mine() {
+  if (opt("skill")) return mineSkill();
   const agent = opt("agent")!, days = Number(opt("days", "14")), out = opt("out", "dataset.jsonl")!;
   const cutoff = Date.now() - days * 86400_000;
-  const root = join(homedir(), ".claude", "projects");
+  const root = opt("root", join(homedir(), ".claude", "projects"))!;
   const rows: any[] = [];
-  const tally: Record<string, number> = {};
   for (const proj of readdirSync(root)) {
     let files: string[];
     try { files = readdirSync(join(root, proj)).filter((f) => f.endsWith(".jsonl")); } catch { continue; }
@@ -132,10 +135,89 @@ function mine() {
       }
     }
   }
+  report(rows, out);
+}
+
+function report(rows: any[], out: string) {
   writeJsonl(out, rows);
+  const tally: Record<string, number> = {};
   for (const r of rows) { const day = (r.ts || "unknown").slice(0, 10); tally[day] = (tally[day] || 0) + 1; }
   console.error(`mined ${rows.length} rows (${rows.filter((r) => r.output).length} with output) -> ${out}`);
   for (const day of Object.keys(tally).sort()) console.error(`  ${day}: ${tally[day]}`);
+}
+
+// --- mine --skill: Skill tool_use with input.skill == name (or plugin-prefixed "x:name").
+// prompt = preceding real user message + args; output = assistant text/tool_use turns after
+// the Skill tool_result up to the next real user message. Streams line by line (transcripts
+// can be 100s of MB); isMeta user lines (injected SKILL.md body) and sidechains are skipped. ---
+const textOf = (content: any): string =>
+  typeof content === "string" ? content
+    : Array.isArray(content) ? content.filter((x: any) => x.type === "text").map((x: any) => x.text).join("\n") : "";
+const isRealUser = (d: any) => {
+  if (d.type !== "user" || d.isMeta) return false;
+  const c = d.message?.content;
+  if (typeof c === "string") return c.length > 0;
+  return Array.isArray(c) && c.some((x: any) => x.type === "text") && !c.some((x: any) => x.type === "tool_result");
+};
+const skillMatches = (got: any, name: string) =>
+  typeof got === "string" && (got === name || got.endsWith(`:${name}`));
+
+async function mineSkill() {
+  const skill = opt("skill")!, days = Number(opt("days", "14")), out = opt("out", "dataset.jsonl")!;
+  const cutoff = Date.now() - days * 86400_000;
+  const root = opt("root", join(homedir(), ".claude", "projects"))!;
+  const rows: any[] = [];
+  for (const proj of readdirSync(root)) {
+    let files: string[];
+    try { files = readdirSync(join(root, proj)).filter((f) => f.endsWith(".jsonl")); } catch { continue; }
+    for (const f of files) {
+      const p = join(root, proj, f);
+      if (statSync(p).mtimeMs < cutoff) continue; // cheap prefilter
+      let lastUser = "";
+      let cur: any = null;           // row being collected
+      let awaitId: string | null = null; // Skill tool_use id awaiting its tool_result
+      let parts: string[] = [];
+      const finish = () => {
+        if (cur) cur.output = parts.length ? parts.join("\n").slice(0, CAP) : null;
+        cur = null; awaitId = null; parts = [];
+      };
+      const rl = createInterface({ input: createReadStream(p, { encoding: "utf8" }), crlfDelay: Infinity });
+      for await (const line of rl) {
+        if (!line) continue;
+        const isUser = line.includes('"type":"user"');
+        const isAsst = line.includes('"type":"assistant"');
+        if (!isUser && !isAsst) continue;
+        // skip parsing lines that can't change state: assistant lines only matter while
+        // collecting or when they carry a Skill call; user lines only when not pure tool_result.
+        if (isAsst && !cur && !line.includes('"Skill"')) continue;
+        if (isUser && line.includes('"tool_result"') && !(awaitId && line.includes(awaitId))) continue;
+        let d: any; try { d = JSON.parse(line); } catch { continue; }
+        if (d.isSidechain) continue;
+        const content = d.message?.content;
+        if (d.type === "user") {
+          if (isRealUser(d)) { finish(); lastUser = textOf(content); continue; }
+          if (awaitId && Array.isArray(content) && content.some((c: any) => c.type === "tool_result" && c.tool_use_id === awaitId)) awaitId = null;
+          continue;
+        }
+        if (d.type !== "assistant" || !Array.isArray(content)) continue;
+        for (const c of content) {
+          if (c.type === "tool_use" && c.name === "Skill" && skillMatches(c.input?.skill, skill)) {
+            finish();
+            const ts = d.timestamp || "";
+            if (ts && Date.parse(ts) < cutoff) continue;
+            const a = c.input?.args ? `\n\n[skill args] ${c.input.args}` : "";
+            cur = { id: c.id, session: d.sessionId || f.replace(".jsonl", ""), ts, prompt: (lastUser + a).slice(0, CAP), output: null as string | null };
+            rows.push(cur); awaitId = c.id;
+          } else if (cur && !awaitId) {
+            if (c.type === "text" && c.text) parts.push(c.text);
+            else if (c.type === "tool_use") parts.push(`[tool_use ${c.name}] ${JSON.stringify(c.input ?? {}).slice(0, 500)}`);
+          }
+        }
+      }
+      finish();
+    }
+  }
+  report(rows, out);
 }
 
 // --- split: seeded shuffle -> train/test. Test MUST be unbiased random: if the
