@@ -220,6 +220,7 @@ test_partial_move_keeps_entry_restorable() {
   ! PATH="$T/shim:$PATH" "$BIN" "$T/f.txt" --reason t >/dev/null 2>"$T/err" || fail "partial move reported success"
   d="$(only_entry "$ROOT")"
   [[ -f "$d/reason.md" && -f "$d/f.txt" ]] || fail "entry lost its sidecar or item"
+  grep -q '^status: incomplete' "$d/reason.md" || fail "partial entry not marked incomplete"
   "$BIN" "$d" --restore >/dev/null
   [[ "$(cat "$T/f.txt")" == x ]] || fail "item not restored"
 }
