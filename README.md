@@ -83,9 +83,6 @@ Skills, plans, and designs share a small vocabulary of leading words — pattern
 - `ke-memory` — the recall-before/persist-after motion the `ke` CLI exists for, framed as cross-project durable memory
 - `jsonl-db` — git-tracked event bus / task store (one JSON object per line, append-only, GC); not for transactional workloads — use SQLite there
 
-**Local LLM runtime**
-- `cli-proxy` — OpenAI-compatible endpoint at `http://127.0.0.1:7890/v1` routing to claude/gemini/qwen/kilo/opencode CLIs + minimax API; use whenever code or a pipeline needs an LLM API endpoint
-
 **Domain workflows** — narrow vertical skills for specific external systems
 - `vast-cli` — drive the `vastai` CLI correctly: search/create/poll/ssh/stop, with the proxy-unset + PATH-shim + ssh-rotation traps that silently no-op the CLI
 - `vast-compute` — read-before-reserving rules for shared vast.ai GPU boxes: mandatory local smoke test, cooperative lease, keep-warm batching

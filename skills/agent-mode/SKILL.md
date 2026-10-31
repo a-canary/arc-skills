@@ -70,7 +70,7 @@ An unclear or conflicting virtue is a director clarify trigger.
   - Skip the failing-test-first discipline for non-trivial changes
   - Push to shared branches without merge-gate approval
 - **Allowed skills:** coding-standards, code-review, anti-sycophancy,
-  champion-challenger, adaptation-review, blockdoc, cli-proxy
+  champion-challenger, adaptation-review, blockdoc
 - **Exit conditions:** Task complete with evidence; task blocked (report to
   driver); worker crash (overseer respawns)
 
