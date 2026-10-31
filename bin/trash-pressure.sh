@@ -33,7 +33,7 @@ cands=$( { find "$TRASH" -mindepth 1 -maxdepth 1 ! -name '*.REASON' -print0 2>/d
     case $p in *$'\n'*|*$'\t'*) continue;; esac
     case $p in "$TMPD"/*) live "$p" && continue;; esac
     kb=$(du -sk -- "$p" 2>/dev/null | cut -f1)
-    reason=$(head -c 200 "$p.REASON" 2>/dev/null | tr '\n\t' '  ')
+    reason=$(cat -- "$p.REASON" "$p/reason.md" 2>/dev/null | head -c 200 | tr '\n\t' '  ')
     printf '%s\t%sK\t%s\t%s\n' "$p" "${kb:-0}" "$(date -r "$p" +%F)" "$reason"
   done | sort -t$'\t' -k2 -rn | head -200)
 [ -z "$cands" ] && { log "no candidates"; exit 0; }
