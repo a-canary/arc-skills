@@ -44,18 +44,20 @@ rows=$( { find "$TRASH" -mindepth 1 -maxdepth 1 ! -name '*.REASON' -print0 2>/de
     esac
     kb=$(du -sk -- "$p" 2>/dev/null | cut -f1)
     reason=$(cat -- "$p.REASON" "$p/reason.md" 2>/dev/null | head -c 200 | tr '\n\t' '  ')
+    [ "$age" = young ] && reason="RECENT ${reason}"
     printf '%s\t%s\t%sK\t%s\t%s\n' "$age" "$p" "${kb:-0}" "$(date -r "$p" +%F)" "$reason"
   done)
 old_kb=$(awk -F'\t' '$1 == "old" { s += $3 } END { print s + 0 }' <<<"$rows")
 if [ "$old_kb" -ge $((TARGET_GB * 1024 * 1024)) ]; then rows=$(grep -v $'^young\t' <<<"$rows")
 elif grep -q $'^young\t' <<<"$rows"; then log "age floor relaxed: entries older than ${MIN_AGE_DAYS}d hold only ${old_kb}K"; fi
-cands=$(grep -v '^$' <<<"$rows" | cut -f2- | sort -t$'\t' -k2 -rn | head -200)
+cands=$(grep -v '^$' <<<"$rows" | sort -t$'\t' -k1,1 -k3,3rn | cut -f2- | head -200)
 [ -z "$cands" ] && { log "no candidates"; exit 0; }
 paths=$(cut -f1 <<<"$cands")
 
 prompt="Disk / is nearly full. Pick paths to permanently delete, freeing about ${TARGET_GB}G.
 Prefer: oldest ~/trash entries, then stale /tmp build/test dirs, worktree copies, caches, logs.
 Avoid: anything that looks live or shared with other programs.
+Reasons starting RECENT were trashed under ${MIN_AGE_DAYS} days ago: pick them only if the rest cannot free the target.
 Candidates (path<TAB>size<TAB>mtime<TAB>reason):
 $cands
 

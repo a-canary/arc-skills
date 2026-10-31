@@ -12,6 +12,7 @@ entry() {  # entry <name> <age-days> [reason.md line]
   touch -d "$2 days ago" "$T/trash/$1"
 }
 entry old 10; entry young 0; entry partial 10 "status: incomplete (mv failed mid-move)"
+head -c 65536 /dev/zero >> "$T/trash/young/item"   # bigger young: size order alone would put it first
 
 run() {  # run <TARGET_GB> -> log text
   : > "$T/log"
@@ -28,6 +29,8 @@ grep -q "/trash/young " <<<"$log" && fail "young entry offered though old entrie
 log=$(run 1)   # 1G target, old entries hold KB: floor relaxes
 grep -q "would delete $T/trash/young " <<<"$log" || fail "young entry not offered after relaxing"
 grep -q "age floor relaxed" <<<"$log" || fail "relaxing not logged"
+order=$(grep -o "would delete $T/trash/[a-z]*" <<<"$log" | sed 's|.*/||' | tr '\n' ' ')
+[ "$order" = "old young " ] || fail "old entries not offered before young ones (got: $order)"
 
 grep -q "/trash/partial " <<<"$(run 0; run 1)" && fail "incomplete entry offered"
 
