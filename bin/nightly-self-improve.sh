@@ -50,8 +50,8 @@ run() {  # run() <skill> <logfile>
   # 240m: slow local lane (single-slot box, minutes per idle prompt, queue-wait
   # when the box is busy). dream is incremental (processed.json) so a
   # timeout-killed run resumes next night.
-  # Committer = nightly-<stage>: how gate() tells the stage's commits from the
-  # operator's and other crons' (env beats `-c user.name`; author is left alone).
+  # Committer = nightly-<stage> marks any commit the stage makes itself, so gate()
+  # can tell it from the operator's (env beats `-c user.name`; author untouched).
   GIT_COMMITTER_NAME="nightly-$1" GIT_COMMITTER_EMAIL="nightly@localhost" \
     timeout 240m "$PI" -p --model "$HYGIENE_MODEL" --tools $TOOLS "/$1" \
     < /dev/null >> "$LOG_DIR/$2" 2>&1
@@ -62,33 +62,79 @@ run() {  # run() <skill> <logfile>
 }
 
 # Defense gate (defend skill, DefendMerge tier): independent fresh-context model
-# attacks the stage's commits before they stand. Not CLEAR => `git revert` ONLY
-# the commits the stage made (committer nightly-<stage>). Revert is additive and
-# refuses rather than overwrite anything, so operator work and other writers are
-# never touched (the old `reset --hard` + `checkout -- .` wiped uncommitted work
-# 08-29..09-22). Anything that cannot be reverted cleanly is left in place and
-# logged REVERT_FAILED / REVERT_REFUSED for a human. Uncommitted or untracked
-# changes that appear during a stage are not attributable: logged as ALERT, never
-# touched. No VERDICT line = GATE_ERROR (infra), logged apart from ATTACKS.
-# ponytail: an adapter that `git add -A`s sweeps operator dirt into its commit;
-# reverting that commit drops the dirt from the tree (it stays in the commit, sha logged).
+# attacks the stage's edits before they stand. Not CLEAR => `git revert` ONLY the
+# stage's commits. Revert is additive and refuses rather than overwrite, so
+# operator work and other writers are never destroyed (the old `reset --hard` +
+# `checkout -- .` wiped uncommitted work 08-29..09-22).
+# Attribution: adapters leave edits uncommitted, so attribute() commits, as
+# committer nightly-<stage>, exactly the paths that were clean at the snapshot and
+# dirty after the stage (`git commit -- <paths>` leaves other staged work alone).
+# Paths the operator already had dirty can't be attributed: a change to them is
+# logged ALERT and never touched. The revert runs on a scratch index, so the
+# operator's staged work neither blocks it nor gets swept in. No VERDICT line = GATE_ERROR (infra), logged
+# apart from ATTACKS. Rewritten history or an in-progress merge/rebase/cherry-pick
+# => REVERT_REFUSED, left for a human.
+# ponytail: another writer's edit to a clean path during the stage window is
+# attributed to the stage too (worst case: reverted, still in history). Paths are
+# line-delimited in the fingerprint, so a path containing a newline is mis-tracked.
+dirt_paths() {  # dirt_paths <repo> — NUL-separated paths differing from HEAD, incl. untracked
+  local e
+  git -C "$1" status --porcelain -z -uall | while IFS= read -r -d '' e; do
+    printf '%s\0' "${e:3}"
+    case "${e:0:1}" in R|C) IFS= read -r -d '' _ ;; esac  # rename/copy: skip the old path
+  done
+}
+fingerprint() {  # fingerprint <repo> — "hash<TAB>path" per dirty path, sorted
+  local p
+  dirt_paths "$1" | while IFS= read -r -d '' p; do
+    printf '%s\t%s\n' "$(git -C "$1" hash-object -- "$p" 2>/dev/null || echo MISSING)" "$p"
+  done | sort
+}
+busy() {  # busy <repo> — operator mid merge/rebase/cherry-pick/revert or holding the index lock
+  local g; g=$(git -C "$1" rev-parse --absolute-git-dir)
+  [ -e "$g/index.lock" ] || [ -e "$g/MERGE_HEAD" ] || [ -e "$g/CHERRY_PICK_HEAD" ] \
+    || [ -e "$g/REVERT_HEAD" ] || [ -d "$g/rebase-merge" ] || [ -d "$g/rebase-apply" ]
+}
+snap_file() { echo "${SNAP_FILE}.$(printf '%s' "$1" | cksum | cut -d' ' -f1)"; }
 snap_heads() {
   local repo
   for repo in $GATE_REPOS; do
     [ -d "$repo/.git" ] || continue
-    echo "$repo $(git -C "$repo" rev-parse HEAD) $(branch_of "$repo")"
-    git -C "$repo" status --porcelain | sort > "$(dirt_list "$repo")"
+    echo "$repo $(git -C "$repo" rev-parse HEAD)"
+    fingerprint "$repo" > "$(snap_file "$repo")"
   done > "${SNAP_FILE}"
 }
-branch_of() { git -C "$1" symbolic-ref -q --short HEAD || echo DETACHED; }
-dirt_list() { echo "${SNAP_FILE}.d.$(printf '%s' "$1" | cksum | cut -d' ' -f1)"; }
-gate() {  # gate <stage> — call after run(); no-op when the stage edited nothing
-  local stage="$1" repo pre branch mine new name out verdict kind
-  while read -r repo pre branch; do
+attribute() {  # attribute <stage> — call after run(): commit the stage's edits to clean paths
+  local stage="$1" repo pre name before now
+  while read -r repo pre; do
+    name=$(basename "$repo")
+    before=$(snap_file "$repo"); now=$(fingerprint "$repo")
+    # pre-existing dirt that changed or vanished: not attributable, never touched
+    comm -23 "$before" <(printf '%s\n' "$now" | grep .) | cut -f2- | sort -u | grep . > "$before.alert"
+    [ -s "$before.alert" ] && log_event "$NIGHTLY_LOG" "gate $stage: $name ALERT operator's uncommitted files changed during the stage (not reverted): $(head -5 "$before.alert" | tr '\n' ' ')"
+    # paths clean at the snapshot and dirty now: the stage's
+    printf '%s\n' "$now" | grep . | cut -f2- | sort | comm -13 <(cut -f2- "$before" | sort) - > "$before.new"
+    [ -s "$before.new" ] || continue
+    if busy "$repo"; then
+      log_event "$NIGHTLY_LOG" "gate $stage: $name ALERT repo busy (merge/rebase/lock); stage edits left uncommitted and unreviewed: $(head -5 "$before.new" | tr '\n' ' ')"
+      continue
+    fi
+    tr '\n' '\0' < "$before.new" | xargs -0 git -C "$repo" add -A -- \
+      && tr '\n' '\0' < "$before.new" | GIT_COMMITTER_NAME="nightly-$stage" GIT_COMMITTER_EMAIL="nightly@localhost" \
+           xargs -0 git -C "$repo" commit -q --no-verify -m "nightly $stage: stage edits (auto-attributed)" -- \
+      || log_event "$NIGHTLY_LOG" "gate $stage: $name ALERT could not commit stage edits; left uncommitted and unreviewed"
+  done < "${SNAP_FILE}"
+}
+gate() {  # gate <stage> — call after attribute(); no-op when the stage committed nothing
+  local stage="$1" repo pre mine name out verdict kind idx
+  while read -r repo pre; do
     name=$(basename "$repo")
     mine=$(git -C "$repo" log --format=%H --committer="^nightly-$stage <" "$pre..HEAD")
-    new=$(git -C "$repo" status --porcelain | sort | comm -13 "$(dirt_list "$repo")" -)
-    [ -n "$new" ] && log_event "$NIGHTLY_LOG" "gate $stage: $name ALERT uncommitted changes appeared during the stage (not attributable, not reverted): $(printf '%s' "$new" | head -5 | tr '\n' ' ')"
+    if ! git -C "$repo" merge-base --is-ancestor "$pre" HEAD; then
+      log_event "$NIGHTLY_LOG" "gate $stage: $name ALERT history rewritten or branch moved during the stage (pre $pre not in HEAD); nothing reverted"
+      log_fail "$NIGHTLY_LOG" "gate-$stage-$name" 1
+      continue
+    fi
     [ -n "$mine" ] || continue
     log_event "$NIGHTLY_LOG" "gate $stage: $(echo "$mine" | wc -l) commit(s) in $name — dispatching DefendGate ($GATE_MODEL)"
     out="$LOG_DIR/gate-$stage-$name.log"
@@ -103,23 +149,33 @@ gate() {  # gate <stage> — call after run(); no-op when the stage edited nothi
       *) kind=GATE_ERROR ;;
     esac
     log_fail "$NIGHTLY_LOG" "gate-$stage-$name" 1
-    if [ "$(branch_of "$repo")" != "$branch" ]; then
-      log_event "$NIGHTLY_LOG" "gate $stage: $name $kind — REVERT_REFUSED (branch $branch -> $(branch_of "$repo")); commits left for a human: $(echo $mine)"
-    elif git -C "$repo" revert --no-edit $mine > "$out.revert" 2>&1; then  # newest first
+    if busy "$repo"; then
+      log_event "$NIGHTLY_LOG" "gate $stage: $name $kind — REVERT_REFUSED (repo busy: merge/rebase/cherry-pick/lock); commits left for a human: $(echo $mine)"
+      continue
+    fi
+    # Revert on a scratch index = HEAD, so the operator's staged work neither blocks
+    # the revert nor lands in it; then re-sync only the reverted paths in the real index.
+    idx=$(mktemp)
+    if GIT_INDEX_FILE="$idx" git -C "$repo" read-tree HEAD \
+       && GIT_INDEX_FILE="$idx" git -C "$repo" revert --no-edit $mine > "$out.revert" 2>&1; then  # newest first
+      git -C "$repo" show --name-only --format= $mine | sort -u | tr '\n' '\0' \
+        | xargs -0 git -C "$repo" reset -q HEAD -- 2>/dev/null
       log_event "$NIGHTLY_LOG" "gate $stage: $name $kind — reverted stage commits $(echo $mine). $(tail -c 300 "$out" | tr '\n' ' ')"
     else
-      git -C "$repo" revert --abort 2>/dev/null
+      # abort only the sequence this revert started (busy() ruled out an operator's)
+      [ -e "$(git -C "$repo" rev-parse --absolute-git-dir)/REVERT_HEAD" ] && GIT_INDEX_FILE="$idx" git -C "$repo" revert --abort
       log_event "$NIGHTLY_LOG" "gate $stage: $name $kind — REVERT_FAILED (see $out.revert); commits left for a human: $(echo $mine)"
     fi
+    rm -f "$idx"
   done < "${SNAP_FILE}"
 }
 
 # Order matters: dream first, then token-waste — same daily journal.
 log_event "$NIGHTLY_LOG" "nightly start"
 SNAP_FILE="/tmp/gate-snap.$$"
-snap_heads; run dream dream.log; gate dream
+snap_heads; run dream dream.log; attribute dream; gate dream
 export WASTE_DAY="$(date -d yesterday +%Y%m%d)"
-snap_heads; run token-waste token-waste.log; gate token-waste
+snap_heads; run token-waste token-waste.log; attribute token-waste; gate token-waste
 # Safety net LAST: audit the trailing window (incl. tonight's two edits) for
 # regressions. Read-only — spawns a reviewer subagent, makes no edits itself.
 export REVIEW_DAY="$(date -d yesterday +%F)"
@@ -143,7 +199,8 @@ log_event "$NIGHTLY_LOG" "agent-gaps exit=$gc"
 # gap-remediate is the second editing stage — same gate treatment.
 snap_heads
 run gap-remediate gap-remediate.log
+attribute gap-remediate
 gate gap-remediate
-rm -f "${SNAP_FILE}" "${SNAP_FILE}".d.*
+rm -f "${SNAP_FILE}" "${SNAP_FILE}".*
 
 log_event "$NIGHTLY_LOG" "nightly done (WASTE_DAY=$WASTE_DAY)"
