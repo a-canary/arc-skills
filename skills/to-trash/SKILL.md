@@ -40,7 +40,7 @@ It is the same handler `install-to-trash` hooks onto `rm` — same destination, 
 
 ```
 <trash-root>/<unix-ts>__<path-relative-to-$HOME, / as -->/
-  reason.md   from:, when:, by:, reason:  (written BEFORE the move)
+  reason.md   from:, when:, by:, reason:  (written BEFORE the move; + status: after a partial move)
   <name>      the item itself
 ```
 
