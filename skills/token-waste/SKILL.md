@@ -172,12 +172,32 @@ Combine all confirmed examples into the single output file. Compute:
 
 Write it to `$OUT` with the Write tool.
 
+### Step 5b — Tool-set prune proposal (cross-session, propose-only)
+
+Every turn carries one name line per deferred tool, used or not; none of it is a tool
+result, so Steps 3-5 never see it. `tool_prune.py` measures it over the last 7 days of
+Claude Code sessions (a day alone is often under its 5-session floor) and proposes a
+`permissions.deny` entry for each MCP server none of whose tools were called:
+
+```bash
+find ~/.claude/projects -name '*.jsonl' -newermt "$(date -d "$DAY - 6 days" +%Y-%m-%d)" \
+  ! -newermt "$NEXT 00:00:00" -print > "$WORK/prune-sessions.txt"
+python3 "$(dirname "$DETECT")/tool_prune.py" "$WORK/prune-sessions.txt" -o "$WORK/tool-prune.json"
+jq '{sessions, loaded, called, proposed_bytes_per_turn, deny: [.proposals[].deny]}' "$WORK/tool-prune.json"
+```
+
+Propose only: never write settings from this step. A server with any called tool is
+reported under `partly_used`, never proposed. After a human applies a deny, the next
+run is its check: the denied server's names must drop out of `loaded`, or the deny
+did not shrink the wire and should be reverted.
+
 ### Step 6 — Present
 
 Report to the user:
 1. Sessions analyzed and total tokens flagged as wasted
 2. `by_pattern` breakdown (which waste shape dominates)
 3. Top 5–10 examples (target, pattern, tokens wasted, the cheaper alternative)
+4. Tool-set prune proposal from Step 5b: `proposed_bytes_per_turn` of the name-line total, and the `deny` list
 
 Then proceed to Phase 2 — the analysis is the input the adapter acts on.
 
