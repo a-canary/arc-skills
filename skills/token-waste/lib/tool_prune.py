@@ -5,13 +5,16 @@ Propose-only tool pruning: which loaded MCP servers were never called.
 Claude Code defers most tools: the model gets one name line per deferred tool on
 every turn (`deferred_tools_delta.addedLines`) and the full schema only once a
 tool is surfaced. Those name lines are the per-turn tool-set cost this measures.
-A server none of whose tools were called across >= --min-sessions sessions is
-proposed as a `permissions.deny` entry (`mcp__<server>` matches every tool of it).
+A server none of whose tools were called across >= --min-sessions top-level
+sessions is proposed as a `permissions.deny` entry (`mcp__<server>` matches every
+tool of it). Subagent transcripts (`.../subagents/*.jsonl`) contribute calls but
+do not count toward the floor: one session with 4 subagents is still one session.
 
 Propose-only: prints JSON, never writes settings. Partly-used servers are
 reported, not proposed (denying a used tool breaks a workflow). After a human
-applies a deny, the next run is the check: the server's names must drop out of
-`loaded` — if they don't, the deny did not shrink the wire and should be reverted.
+applies a deny, check it on sessions STARTED AFTER the deny only (older sessions
+still list the server): the server's names must be absent from `loaded` there,
+or the deny did not shrink the wire and should be reverted.
 
 Usage:
     python tool_prune.py SESSIONS.txt [--min-sessions 5] [-o OUT.json]
@@ -30,7 +33,8 @@ def server_of(name: str) -> str:
 
 
 def scan(path: str):
-    loaded, called, turns = {}, set(), 0
+    """Names on the wire at session end (name -> line bytes) and every tool called."""
+    loaded, called = {}, set()
     with open(path, errors="ignore") as f:
         for line in f:
             try:
@@ -39,30 +43,30 @@ def scan(path: str):
                 continue
             a = r.get("attachment") or {}
             if a.get("type") == "deferred_tools_delta":
+                for n in a.get("removedNames", []):
+                    loaded.pop(n, None)
                 for n, l in zip(a.get("addedNames", []), a.get("addedLines", [])):
                     loaded[n] = len(l)
             if r.get("type") == "assistant":
-                turns += 1
                 for c in (r.get("message") or {}).get("content") or []:
                     if isinstance(c, dict) and c.get("type") == "tool_use":
                         called.add(c.get("name"))
-    return loaded, called, turns
+    return loaded, called
 
 
 def propose(paths, min_sessions: int) -> dict:
-    sessions, turns, line_bytes, called = 0, 0, {}, set()
+    sessions, line_bytes, called = 0, {}, set()
     for p in paths:
-        loaded, c, t = scan(p)
-        if not loaded:  # pre-deferral or non-Claude-Code transcript: nothing to measure
+        loaded, c = scan(p)
+        called |= c  # before any skip: a no-deferral session's calls still save its servers
+        if not loaded:  # pre-deferral or non-Claude-Code transcript: nothing loaded to measure
             continue
-        sessions += 1
-        turns += t
         line_bytes.update(loaded)
-        called |= c
-    out = {"sessions": sessions, "turns": turns, "loaded": len(line_bytes),
+        sessions += "/subagents/" not in p
+    out = {"sessions": sessions, "loaded": len(line_bytes),
            "called": len(set(line_bytes) & called), "proposals": [], "partly_used": []}
     if sessions < min_sessions:
-        out["skipped"] = f"{sessions} sessions < --min-sessions {min_sessions}"
+        out["skipped"] = f"{sessions} top-level sessions < --min-sessions {min_sessions}"
         return out
     by_server = defaultdict(list)
     for n in line_bytes:
