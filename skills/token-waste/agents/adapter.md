@@ -63,10 +63,12 @@ The absolute path to today's waste file
      on demand (progressive disclosure); for `obvious_instruction`, cut the
      extreme-obvious filler; for `confusing_instruction`, disambiguate the directive.
      The tally's `target` names the block (e.g. `skill:prototype` →
-     `~/.claude/skills/prototype/SKILL.md`); `injections` shows the multiplier.
-     A 1k-token line cut from a body re-injected 180× saves ~180k tokens — usually
-     the highest-leverage fix available, so weight these by `tokens_wasted`, which
-     already reflects the multiplier. Do NOT cut load-bearing steps to save tokens;
+     `~/.claude/skills/prototype/SKILL.md`). `tokens_wasted` is billed cost: each
+     copy is cache-written once and re-read at 0.1x on every later call until
+     compaction, so a line cut from a body that sits in long windows saves far more
+     than its size — usually the highest-leverage fix available. Weight these by
+     `tokens_wasted`; `same_window_copies` counts true duplicates, `injections` all
+     copies (re-injection after a compaction is expected, not a duplicate). Do NOT cut load-bearing steps to save tokens;
      trim only genuine filler/duplication, and never touch `~/.claude/CLAUDE.md`.
    - **rule** — append one standing rule to `~/AGENTS.md` (global behavioral
      rules live there, not in memory) — use this ONLY when no narrower surface

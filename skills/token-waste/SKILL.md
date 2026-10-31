@@ -40,9 +40,13 @@ Phase 1 flags, per session, in three families.
 *Instruction context* — the directive text the harness *re-injects* every turn (skill
 bodies, the skill catalog, memory/CLAUDE.md, system-reminders), which never flows
 through tool results and is usually the heaviest, most repetitive context in a
-session — a 1k-token skill body re-injected 180× is ~180k tokens:
-- **repeated_instruction** — the same instruction block re-injected N+ times;
-  deterministic, charges the aggregate cost of every copy past the first
+session. Cost is billed, not counted: a block is cache-written once (1.25x for 5m,
+2x for 1h) and then read at 0.1x by every later API call until a compaction drops it,
+so each candidate carries `effective_tokens` beside its raw `tokens` and ranks by it:
+- **repeated_instruction** — the same instruction block injected again while an
+  identical copy is still in the window; deterministic, charges each duplicate's
+  `effective_tokens`. A copy re-injected after a compaction replaces the one it dropped
+  and is not counted
 - **obvious_instruction** / **confusing_instruction** — the detector shortlists a
   large instruction block as `instruction_review` with a bounded excerpt; the analyst
   classifies the directive *text itself* as **obvious_instruction** (extreme-obvious
@@ -218,8 +222,8 @@ If the day was clean (no examples), report that and note no edit was made.
 - `--chars-per-token` defaults to 4; lower it for code-heavy sessions
 
 Instruction context (re-injected directive text, grouped by content fingerprint):
-- `repeated_instruction`: a block re-injected ≥ 3 times whose aggregate avoidable
-  (post-first) cost is ≥ 2000 est. tokens
+- `repeated_instruction`: ≥ 2 copies that duplicate one already in the same
+  compaction window, whose raw size is ≥ 2000 est. tokens
 - `instruction_review`: instruction blocks ≥ 800 est. tokens/copy, largest ≤ 8 per
   session, each with the same bounded excerpt for the analyst to judge
 
