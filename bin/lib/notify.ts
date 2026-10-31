@@ -25,9 +25,12 @@ export interface NotifyOptions {
   state?: string;
 }
 
+/** "deduped" = this state already reached the sink earlier; "skipped" = sink not targeted or not configured. */
+export type SinkResult = "sent" | "skipped" | "failed" | "deduped";
+
 export interface NotifyResult {
-  discord: "sent" | "skipped" | "failed";
-  chat: "sent" | "skipped" | "failed";
+  discord: SinkResult;
+  chat: SinkResult;
 }
 
 // Read at call time, not import time, so callers (and tests) can point transports elsewhere.
@@ -134,10 +137,10 @@ function readFile(key: string): DedupeFile {
   } catch { return {}; }
 }
 
-/** Last state notified on this sink, or null. Pre-arc-z5k files only hold `lastState` for all sinks. */
+/** Last state notified on this sink, or null. Pre-arc-z5k files (no `sinks`) hold one `lastState` for all sinks. */
 function readState(key: string, sink: Sink): string | null {
   const f = readFile(key);
-  return f.sinks?.[sink] ?? f.lastState ?? null;
+  return f.sinks ? (f.sinks[sink] ?? null) : (f.lastState ?? null);
 }
 
 /** Mark that `sink` has been notified for a key with a given state. */
@@ -146,6 +149,7 @@ function markNotified(key: string, sink: Sink, state: string): void {
     mkdirSync(env.stateDir(), { recursive: true });
     const f = readFile(key);
     f.sinks = { ...f.sinks, [sink]: state };
+    f.lastState = state; // pre-arc-z5k semantics (any sink sent), kept current so a revert dedupes correctly
     f.at = new Date().toISOString();
     writeFileSync(pathJoin(env.stateDir(), `${key}.json`), JSON.stringify(f, null, 2));
   } catch { /* ignore disk errors */ }
@@ -165,11 +169,13 @@ export async function notify(opts: NotifyOptions): Promise<NotifyResult> {
   if (key && !state) {
     console.error(`notify: dedupeKey "${key}" set without state — treating every send as a transition`);
   }
-  const senders: Record<Sink, (o: NotifyOptions) => Promise<NotifyResult[Sink]>> = { discord: notifyDiscord, chat: notifyChat };
+  const senders: Record<Sink, (o: NotifyOptions) => Promise<SinkResult>> = { discord: notifyDiscord, chat: notifyChat };
   for (const sink of ["discord", "chat"] as const) {
     if (target !== sink && target !== "both") continue;
     if (key && state && readState(key, sink) === state) {
-      console.error(`notify: dedupe key "${key}" unchanged (${state}) on ${sink}, skipping`);
+      // wording avoids "unchanged": trading's _cli-shared.ts treats that word as "nothing to report"
+      console.error(`notify: dedupe key "${key}" already sent (${state}) to ${sink}, skipping`);
+      results[sink] = "deduped";
       continue;
     }
     results[sink] = await senders[sink](opts);
