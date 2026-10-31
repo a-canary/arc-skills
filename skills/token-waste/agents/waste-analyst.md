@@ -98,6 +98,9 @@ re-verify them against any file. `estimated_tokens_saved` is in the same billed 
 Set `tokens_wasted` to the candidate's
 `effective_tokens` (billed cost: cache write + 0.1x per later API call until compaction;
 falls back to `tokens` when absent) — raw `tokens` is size, not cost.
+For a confirmed `obvious_instruction` / `confusing_instruction`, `effective_tokens` is the
+whole block's cost; scale it by the fraction of the block that is filler or confusing
+(e.g. 3 filler lines in a 60-line skill body ≈ 0.05), never charge the whole block.
 But weigh *avoidability*: a skill the user genuinely kept
 active all session (or a `system_reminder` the harness re-emits by design) is real
 cost but low-avoidability — the fix is to slim the body, not to stop invoking it.

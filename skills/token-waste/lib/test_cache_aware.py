@@ -64,6 +64,18 @@ def test_in_window_duplicates_are_repeated_and_priced():
     assert out["cache_write_multiplier"] == 2.0
 
 
+def test_review_cap_keeps_largest_blocks():
+    # MAX_INSTRUCTION_REVIEW + 1 distinct big blocks, the biggest inserted last (arc-dht)
+    n = detect_waste.MAX_INSTRUCTION_REVIEW + 1
+    blks = [{"fp": f"f{i}", "kind": "nested_memory", "label": f"m{i}", "text": "x", "line": i, "index": i,
+             "tokens": 5000 if i == n - 1 else 1000} for i in range(n)]
+    cands = []
+    detect_waste.detect_instruction_waste(blks, cands, {"calls": [100], "bounds": [], "write": 2.0})
+    reviewed = {c["target"] for c in cands if c["pattern"] == "instruction_review"}
+    assert len(reviewed) == detect_waste.MAX_INSTRUCTION_REVIEW
+    assert f"m{n - 1}" in reviewed
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
