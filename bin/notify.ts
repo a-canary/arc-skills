@@ -8,9 +8,10 @@
 // code reflects whether AT LEAST ONE transport succeeded.
 //
 // Exit codes:
-//   0  — at least one transport sent
+//   0  — nothing failed; at least one transport sent or was deduped (already notified)
 //   1  — usage error (missing args)
-//   2  — every configured transport failed or was skipped
+//   2  — nothing sent or deduped: every configured transport failed or was skipped
+//   3  — partial: a transport failed while another sent or was deduped (failure on stderr)
 //
 // Callers: watchdogs, deploy/health scripts and bin/health-monitor.ts exec this CLI.
 import { notify } from "./lib/notify";
@@ -35,6 +36,14 @@ for (let i = 2; i < args.length; i++) {
 }
 
 const res = await notify(opts);
-if (res.discord === "sent" || res.chat === "sent") process.exit(0);
+// "deduped" counts as delivered: that state already reached the sink on an earlier run.
+const delivered = [res.discord, res.chat].some((r) => r === "sent" || r === "deduped");
+const failed = res.discord === "failed" || res.chat === "failed";
+if (delivered && !failed) process.exit(0);
+if (delivered) {
+  // a working (or already-notified) sink must not hide a dead one (arc-z5k)
+  console.error(`notify: partial failure (discord=${res.discord}, chat=${res.chat})`);
+  process.exit(3);
+}
 console.error(`notify: all transports failed (discord=${res.discord}, chat=${res.chat})`);
 process.exit(2);
