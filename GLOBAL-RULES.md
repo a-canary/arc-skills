@@ -90,6 +90,9 @@ At session start, load these files into the system prompt:
 - **Write lane (prose rule; structural gate pending — arc-director
   DESIGN.md invariant 7).** Only write files under `~/repos/**`, `/tmp/**`,
   `~/vault/ke/**`, `~/vault/director/**`, and beads (via `bd`).
+  `~/trash/**` is move-in only — the retire/GC destination (to-trash uses
+  `~/vault/director/trash`); never author files or read config/code back
+  from it (operator ruling 2026-10-30).
   Any other path — new home dirs, `~/bin`, `~/agents`, other vault subtrees —
   requires captain approval before the first write. Check the target path
   before writing, not after.
