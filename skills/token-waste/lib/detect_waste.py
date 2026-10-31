@@ -117,6 +117,8 @@ def effective(tokens: int, index: int, pricing: dict) -> int:
     tokens * (write + 0.1 * later calls) over the API calls after `index` and before the
     next compact_boundary; 0 if no call ever sent it. Sessions with no `usage` (pi)
     stay at 1x so their ranking is unchanged."""
+    # ponytail: every later call is assumed a cache hit; TTL-expiry re-writes are not
+    # modeled. Attribute per-call cache_creation if the ranking ever needs that precision.
     w = pricing["write"]
     if w is None:
         return tokens
