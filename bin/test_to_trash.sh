@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for bin/to-trash. Run: bash bin/test_to_trash.sh
 # Each case gets a throwaway $HOME so the default trash root
-# ($HOME/vault/director/trash) and the home/vault guards are exercised for real.
+# ($HOME/trash) and the home/vault guards are exercised for real.
 set -uo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/to-trash"
 R="$(mktemp -d)"; trap 'chmod -R u+w "$R"; rm -rf "$R"' EXIT
@@ -17,7 +17,7 @@ run() {
   T="$(mktemp -d "$R/t.XXXXXX")"
   export HOME="$T/home"; mkdir -p "$HOME"
   unset TRASH_ROOT; PATH="$REAL_PATH"
-  ROOT="$HOME/vault/director/trash"
+  ROOT="$HOME/trash"
   if ( set -e; "$1" ); then echo "ok   $1"; pass=$((pass+1))
   else echo "FAIL $1"; failed=$((failed+1)); failures+=("$1"); fi
 }
