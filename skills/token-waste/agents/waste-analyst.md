@@ -48,8 +48,9 @@ Patterns the detector emits, in two families.
 **Instruction-side** (`tool: "instruction"`): the directive text the harness
 *re-injects* as attachment messages — skill bodies re-pasted every turn, the skill
 catalog, memory/CLAUDE.md, system-reminders. This is usually the heaviest, most
-repetitive context in a session (a 1k-token skill body re-injected 180× is ~180k
-tokens) and the result-only passes are blind to it. Patterns: `repeated_instruction`,
+repetitive context in a session, and the result-only passes are blind to it. Its
+`effective_tokens` is billed cost: written to cache once, then re-read at 0.1x by every
+later API call until compaction, summed over every window it was injected into. Patterns: `repeated_instruction`,
 `instruction_review`. Each carries `kind` (skill_body / skill_listing / memory /
 system_reminder), `injections` (how many times it appeared), and `target` (the block
 label, e.g. `skill:prototype`).
@@ -93,7 +94,8 @@ was injected again while an identical copy was still in the window) — you only
 severity and prescribe the fix, you don't re-judge whether it's real. Same for all
 deterministic result-side patterns (`full_file_read`, `reread`, `bash_dump`,
 `no_grep_first`, `repeated`): take the numbers as given, never re-derive, re-count, or
-re-verify them against any file. Set `tokens_wasted` to the candidate's
+re-verify them against any file. `estimated_tokens_saved` is in the same billed units.
+Set `tokens_wasted` to the candidate's
 `effective_tokens` (billed cost: cache write + 0.1x per later API call until compaction;
 falls back to `tokens` when absent) — raw `tokens` is size, not cost.
 But weigh *avoidability*: a skill the user genuinely kept
@@ -188,9 +190,9 @@ adapter sees how often the block recurs. Examples:
 {
   "session_id": "...", "project": "...", "line": 12,
   "pattern": "repeated_instruction", "tool": "instruction",
-  "target": "skill:prototype", "injections": 179,
+  "target": "skill:prototype", "injections": 30, "same_window_copies": 27,
   "tokens_wasted": 184586, "severity": "high",
-  "what_happened": "The prototype skill body (~1k tok) was re-injected 179x = ~185k tok.",
+  "what_happened": "The prototype skill body (~1k tok) was injected 27x more while a copy was already in the window; ~185k billed.",
   "cheaper": "Trim ~/.claude/skills/prototype/SKILL.md; move its bulk to a sub-file loaded on demand.",
   "estimated_tokens_saved": 120000
 }

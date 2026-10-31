@@ -49,6 +49,9 @@ def test_post_compaction_reinjection_is_not_repeated():
     out = run(lines)
     assert not [c for c in out["candidates"] if c["pattern"] == "repeated_instruction"], out["candidates"]
     assert out["compactions"] == 4 and out["api_calls"] == 8
+    # but the body's billed cost across every window still reaches the review channel
+    rev = [c for c in out["candidates"] if c["pattern"] == "instruction_review"]
+    assert len(rev) == 1 and rev[0]["effective_tokens"] == 4 * int(3000 * 2.1)
 
 
 def test_in_window_duplicates_are_repeated_and_priced():

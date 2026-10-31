@@ -72,7 +72,7 @@ MAX_QUALITY_REVIEW = 12
 # Hard cap on candidates written to the per-session JSON. The analyst reads this
 # file WHOLE to score it, so an unbounded list (231 hits / ~26k tokens on a noisy
 # session) turns the waste-hunter into the day's biggest bleed. The list is
-# size-ordered, so the kept slice holds every high-impact hit the adapter acts
+# ordered by billed cost, so the kept slice holds every high-impact hit the adapter acts
 # on; the sub-300-token tail is noise. The headline `candidate_wasted_tokens` is
 # computed from the FULL list before the trim, so the true total is preserved.
 MAX_CANDIDATES = 40
@@ -117,8 +117,9 @@ def effective(tokens: int, index: int, pricing: dict) -> int:
     tokens * (write + 0.1 * later calls) over the API calls after `index` and before the
     next compact_boundary; 0 if no call ever sent it. Sessions with no `usage` (pi)
     stay at 1x so their ranking is unchanged."""
-    # ponytail: every later call is assumed a cache hit; TTL-expiry re-writes are not
-    # modeled. Attribute per-call cache_creation if the ranking ever needs that precision.
+    # ponytail: every later call is assumed a cache hit (TTL-expiry re-writes not modeled)
+    # and a compaction is assumed to drop everything before it (compactMetadata.
+    # preservedMessages keeps a short tail, so results there are slightly undercounted). Attribute per-call cache_creation if the ranking ever needs that precision.
     w = pricing["write"]
     if w is None:
         return tokens
@@ -471,6 +472,8 @@ def detect_instruction_waste(instructions, candidates, pricing):
                 "line": first["line"],
                 "target": first["label"],
                 "pattern": "instruction_review",
+                # every copy, every window: what trimming the body would save
+                "effective_tokens": sum(effective(per_copy, b["index"], pricing) for b in blks),
                 "note": "large instruction block — analyst to judge obvious/filler "
                         "or confusing/contradictory directive text",
                 "excerpt": excerpt(first["text"]),
@@ -620,7 +623,7 @@ def detect(filepath: Path, project: str, chars_per_token: float) -> dict:
     # to the LLM, so an unbounded shortlist would be the very waste this skill hunts.
     lvc = sorted(
         (c for c in candidates if c["pattern"] == "low_value_content"),
-        key=lambda c: -c["tokens"],
+        key=lambda c: -c["effective_tokens"],
     )
     if len(lvc) > MAX_QUALITY_REVIEW:
         drop = set(id(c) for c in lvc[MAX_QUALITY_REVIEW:])
@@ -655,7 +658,7 @@ def detect(filepath: Path, project: str, chars_per_token: float) -> dict:
     full_count = len(candidates)
     kept = candidates[:MAX_CANDIDATES]
 
-    # Spend the session excerpt budget largest-result-first (kept is size-ordered).
+    # Spend the session excerpt budget costliest-first (kept is effective-ordered).
     # Past the budget a candidate keeps every field the analyst scores on — tokens,
     # pattern, target, note — and loses only the snippet, so the trim costs recall
     # on content-quality judgements for small results, never a missed big hit.
