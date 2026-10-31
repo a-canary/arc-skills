@@ -423,7 +423,7 @@ def detect_instruction_waste(instructions, candidates, pricing):
     for blk in instructions:
         groups[blk["fp"]].append(blk)
 
-    # biggest billed cost first, so the MAX_INSTRUCTION_REVIEW cap keeps the largest blocks
+    # highest billed cost (summed over copies) first, so the MAX_INSTRUCTION_REVIEW cap keeps the costliest blocks
     ordered = sorted(groups.values(), key=lambda bs: -sum(effective(bs[0]["tokens"], b["index"], pricing) for b in bs))
     reviewed = 0
     for blks in ordered:

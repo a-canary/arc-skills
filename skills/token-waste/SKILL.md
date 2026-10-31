@@ -224,8 +224,8 @@ If the day was clean (no examples), report that and note no edit was made.
 Instruction context (re-injected directive text, grouped by content fingerprint):
 - `repeated_instruction`: ≥ 2 copies that duplicate one already in the same
   compaction window, whose raw size is ≥ 2000 est. tokens
-- `instruction_review`: instruction blocks ≥ 800 est. tokens/copy, largest ≤ 8 per
-  session, each with the same bounded excerpt for the analyst to judge
+- `instruction_review`: instruction blocks ≥ 800 est. tokens/copy, the ≤ 8 per session
+  with the highest billed cost (`effective()` summed over every copy), each with the same bounded excerpt for the analyst to judge
 
 Adjust the thresholds in the script (`REPEAT_OVERLAP`, `MAX_QUALITY_REVIEW`,
 `EXCERPT_HEAD`/`EXCERPT_TAIL`, the result-side `*_TOKENS` cutoffs, and the
