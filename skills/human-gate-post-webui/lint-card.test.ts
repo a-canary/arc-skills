@@ -28,5 +28,8 @@ test("SHAs and paths stay out of the headline", () => {
   expect(err).toContain("<q>: no commit SHAs");
 });
 
+test("slash word lists are not paths", () =>
+  expect(lintCard("workbench: approve/deny/defer the upgrade", good)).toEqual([]));
+
 test("two questions in one card are rejected", () =>
   expect(lintCard("t", good.replace("container use?", "container use? And who pays?"))).toContain("<q>: one question only"));

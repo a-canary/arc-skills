@@ -5,7 +5,7 @@
 // Usage: bun lint-card.ts "<title>" <body-file>   → exit 1 + reasons on stderr.
 
 const SHA = /\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/;
-const PATH = /(?:~|\.{0,2})\/[\w.-]+\/|\b[\w-]+\.(?:ts|sh|md|json|py)\b/;
+const PATH = /(?:^|\s)(?:~|\.{1,2})?\/[\w.-]+\/|\b[\w-]+\.(?:ts|sh|md|json|py)\b/;
 // ponytail: bead ids (repos-otgb) are not flagged — no prefix list; add one if they keep leaking into titles.
 
 export function lintCard(title: string, body: string): string[] {
