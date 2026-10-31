@@ -6,7 +6,7 @@ Who uses what, when. Rules in priority order.
 
 | Work shape | Route | Why |
 |---|---|---|
-| Interactive / frontier (interviews, planning, hard debugging) | cli-proxy pools `smart`/`fast` (Max quota, no per-token cost) or anthropic/minimax direct | best intelligence, human waiting |
+| Interactive / frontier (interviews, planning, hard debugging) | anthropic/minimax direct (cli-proxy pools retired 2026-10-31) | best intelligence, human waiting |
 | Factory workers (ledger-dispatched slices) | laneproxy via `pi --model v100/fast` | queued, capped |
 | Cron / pipelines / subagents / ETL / generation | laneproxy **queue** lane via `pi --model v100/queue` | queues behind interactive idle slots; see `/slow-lane` |
 | Bulk cheap tokens on hot open models | chutes direct | subscription cap, not agentic |
@@ -26,6 +26,5 @@ Who uses what, when. Rules in priority order.
 
 ## Failure semantics
 
-- cli-proxy: pool failover per candidate list; red `smart` smoke = whole pool unusable.
 - Public providers: 401 = dead key (rotate in pass), 402 = quota (wait or switch provider), 429 = rate cap (back off).
 - **Ghost alias = silent misroute (fixed 2026-08-26)**: unknown exec aliases used to fall back to `default_alias` without error; `getAliasCommands` now throws at dispatch. Treat any *historical* `engine-alias-no-work:<alias>` ledger event whose alias is not in `config.json` as a **config defect**, not a model defect — the named alias never ran.

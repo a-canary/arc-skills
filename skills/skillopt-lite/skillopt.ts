@@ -6,7 +6,8 @@ import { readdirSync, readFileSync, writeFileSync, statSync, mkdirSync, mkdtempS
 import { join, dirname } from "path";
 import { homedir } from "os";
 
-const PROXY = "http://127.0.0.1:7890/v1/chat/completions";
+// laneproxy (private local lane) since cli-proxy :7890 retired 2026-10-31; it serves qwen3.8-27b for any model name.
+const PROXY = "http://127.0.0.1:8099/v1/chat/completions";
 // override per-run: --base https://api.featherless.ai/v1/chat/completions + SKILLOPT_API_KEY env
 const BASE = () => opt("base", PROXY)!;
 const KEY = process.env.SKILLOPT_API_KEY;
@@ -154,7 +155,7 @@ function split() {
 async function replay() {
   const spec = readFileSync(opt("spec")!, "utf8");
   const rows = readJsonl(opt("rows")!);
-  const model = opt("model", "cli/claude/haiku")!;
+  const model = opt("model", "qwen3.8-27b")!;
   const out = opt("out")!;
   const hermetic = args.includes("--hermetic");
   const conc = Number(opt("concurrency", "2"));
@@ -241,7 +242,7 @@ async function judge() {
   const rows = readJsonl(opt("rows")!);
   const a = new Map(readJsonl(opt("a")!).map((r: any) => [r.id, r.output])); // champion
   const b = new Map(readJsonl(opt("b")!).map((r: any) => [r.id, r.output])); // challenger
-  const model = opt("model", "smart")!, out = opt("out", "verdicts.jsonl")!;
+  const model = opt("model", "qwen3.8-27b")!, out = opt("out", "verdicts.jsonl")!;
   const verdicts = await pmap(rows, async (r: any) => {
     const oa = a.get(r.id), ob = b.get(r.id);
     if (!oa || !ob) return { id: r.id, winner: "skip", why: "missing output" };

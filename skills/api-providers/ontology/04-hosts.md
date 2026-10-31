@@ -7,7 +7,7 @@ Every process that fronts an LLM, and the machines underneath.
 | Router | Address | Runs on | Auth | Config | Health 2026-08-25 |
 |---|---|---|---|---|---|
 | **arc-llm-proxy** (switchboard) | `http://127.0.0.1:8091/v1` (LAN `192.168.1.159:8091`) | operator box | Bearer `FACTORY_KEY` (`source arc-llm-proxy/deploy/.keys.env`) | `switchboard.default.json` + `deploy/switchboard.local.json` (local wins) | ⛔ RETIRED 2026-10-29 (director-fqk): both units disabled; local V100 = laneproxy `:8099`, third-party = 9router `:20128` |
-| **cli-proxy** | `http://127.0.0.1:7890/v1` | operator box (systemd user unit `cli-proxy.service`) | none local | pools in `~/vault/api/models.json` | ❌ down |
+| **cli-proxy** | `http://127.0.0.1:7890/v1` | operator box (systemd user unit `cli-proxy.service`) | none local | pools in `~/vault/api/models.json` | retired 2026-10-31 |
 
 ### arc-llm-proxy contract
 
@@ -19,7 +19,7 @@ Every process that fronts an LLM, and the machines underneath.
 - Ops: `GET /__queue` (key) → `{queue, inflight, lastIdle}`; `GET /health` (open) → `{ok:true}`.
 - Switchboard `endpoints`: currently **only `e103`** (`http://192.168.1.103:1234`, Bonsai-27B). The README documents `spawn`-type and multi-endpoint ladders (e.g. `eclaude` → cli-proxy) — not wired in the live deploy.
 
-### cli-proxy contract
+### cli-proxy contract (retired 2026-10-31, historical)
 
 - Pool aliases (`smart`/`fast`/…) resolve to ordered candidate lists; per-alias health on its own health endpoint, not in PROVIDERS.md.
 - Green `smart` smoke ≠ every alias live (one can mask another); red smoke = whole pool unusable.
@@ -38,4 +38,4 @@ Every process that fronts an LLM, and the machines underneath.
 
 - **Never hit `:1234` on the model box directly** — bypasses the queue, starves interactive requests.
 - Public provider endpoints: see [01-providers.md](01-providers.md).
-- Host health is not in PROVIDERS.md (that doc covers public providers + cli-proxy smoke only). The arc-llm-proxy + 103 + LM Studio + Veles rows above are manual — probe `:8091/health`, `:1234/health`, and `curl -m 3 <host>/v1/models` when in doubt.
+- Host health is not in PROVIDERS.md (that doc covers public providers only). The arc-llm-proxy + 103 + LM Studio + Veles rows above are manual — probe `:8091/health`, `:1234/health`, and `curl -m 3 <host>/v1/models` when in doubt.

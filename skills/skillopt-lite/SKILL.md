@@ -31,9 +31,9 @@ canonical copy `skills/token-waste/agents/waste-analyst.md`).
 4. **replay** — run BOTH specs over the untouched test split:
    `replay --spec champion.md --rows test.jsonl --out replays-champion.jsonl`
    `replay --spec challenger.md --rows test.jsonl --out replays-challenger.jsonl`
-   Default model `cli/claude/haiku` (waste-analyst's production model). Spec + row
-   prompt are folded into one user message (the cli proxy refuses system roles).
-5. **judge** — `judge --rows test.jsonl --a replays-champion.jsonl --b replays-challenger.jsonl --model smart --out verdicts.jsonl`
+   Default model `qwen3.8-27b` via laneproxy :8099 (any model name gets qwen; cli-proxy retired
+   2026-10-31). Spec + row prompt are folded into one user message.
+5. **judge** — `judge --rows test.jsonl --a replays-champion.jsonl --b replays-challenger.jsonl --model qwen3.8-27b --out verdicts.jsonl`
    Pairwise blind, X/Y assignment randomized per row (seeded hash of id, recorded as
    `aIsX`). Correctness first (Output contract, strict JSON, deliverable present),
    efficiency as tiebreak.

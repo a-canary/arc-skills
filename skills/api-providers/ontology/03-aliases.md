@@ -19,7 +19,7 @@ Canonical set: `arc-llm-proxy/aliases.default.json`. Model name at the proxy: `a
 
 **Deploy reality (2026-08-25):** the live switchboard (`deploy/switchboard.local.json`) maps **all six aliases to the single endpoint `e103` = 192.168.1.103:1234 serving Bonsai-27B**. The per-alias model split above is the intended design; the local deploy has not wired the Veles/other endpoints into the switchboard. Consequence: 103 down ⇒ all six aliases dead.
 
-## B. cli-proxy pools (the interactive lane)
+## B. cli-proxy pools (retired 2026-10-31, historical)
 
 Pool → ordered candidate list, defined in `~/vault/api/models.json` (`pools` key — edit there, restart cli-proxy). Served at `127.0.0.1:7890/v1` as model name = pool.
 
