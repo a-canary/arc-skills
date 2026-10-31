@@ -89,10 +89,13 @@ The content-quality patterns (`repeated`, `low_value_content`, `instruction_revi
   times is the separate `repeated_instruction` candidate — don't conflate them.
 
 `repeated_instruction` is **deterministic** (the detector already confirmed the block
-was re-injected N times) — you only score severity and prescribe the fix, you don't
-re-judge whether it's real. Same for all deterministic result-side patterns
-(`full_file_read`, `reread`, `bash_dump`, `no_grep_first`, `repeated`): take `tokens`
-as given, never re-derive, re-count, or re-verify them against any file.
+was injected again while an identical copy was still in the window) — you only score
+severity and prescribe the fix, you don't re-judge whether it's real. Same for all
+deterministic result-side patterns (`full_file_read`, `reread`, `bash_dump`,
+`no_grep_first`, `repeated`): take the numbers as given, never re-derive, re-count, or
+re-verify them against any file. Set `tokens_wasted` to the candidate's
+`effective_tokens` (billed cost: cache write + 0.1x per later API call until compaction;
+falls back to `tokens` when absent) — raw `tokens` is size, not cost.
 But weigh *avoidability*: a skill the user genuinely kept
 active all session (or a `system_reminder` the harness re-emits by design) is real
 cost but low-avoidability — the fix is to slim the body, not to stop invoking it.

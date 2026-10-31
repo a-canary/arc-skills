@@ -42,6 +42,7 @@ Usage:
 """
 
 import argparse
+import bisect
 import json
 import re
 import sys
@@ -102,6 +103,33 @@ MAX_INSTRUCTION_REVIEW = 8
 # high-impact judgement keeps context and the waste-hunter stops being the day's
 # own top bleed.
 MAX_EXCERPT_BYTES_PER_SESSION = 6000
+
+
+# Billed-cost weights relative to a plain input token (Anthropic prompt caching): a block
+# that enters history is written to cache once by the next API call (1.25x for the 5m
+# TTL, 2x for 1h), then read at 0.1x by every later call until a compaction drops it.
+CACHE_WRITE_5M, CACHE_WRITE_1H, CACHE_READ = 1.25, 2.0, 0.1
+
+
+def effective(tokens: int, index: int, pricing: dict) -> int:
+    """Billed input-equivalent tokens of a block that entered history at `index`.
+
+    tokens * (write + 0.1 * later calls) over the API calls after `index` and before the
+    next compact_boundary; 0 if no call ever sent it. Sessions with no `usage` (pi)
+    stay at 1x so their ranking is unchanged."""
+    w = pricing["write"]
+    if w is None:
+        return tokens
+    bounds, calls = pricing["bounds"], pricing["calls"]
+    nb = bisect.bisect_right(bounds, index)
+    end = bounds[nb] if nb < len(bounds) else float("inf")
+    k = bisect.bisect_left(calls, end) - bisect.bisect_right(calls, index)
+    return int(tokens * (w + CACHE_READ * (k - 1))) if k else 0
+
+
+def segment(index: int, pricing: dict) -> int:
+    """Compaction segment an index falls in (0 before the first compact_boundary)."""
+    return bisect.bisect_right(pricing["bounds"], index)
 
 
 def est_tokens(text: str, chars_per_token: float) -> int:
@@ -278,6 +306,10 @@ def parse(filepath: Path, chars_per_token: float):
     grep_paths = []         # (index, path) of Grep/Glob targets
     read_order = []         # (index, file_path) in order
     instructions = []       # {kind, label, text, fp (fingerprint), tokens, index, line}
+    calls = []              # order index of each API call (first line of a message id with usage)
+    bounds = []             # order index where each compact_boundary takes effect
+    seen_ids = set()
+    w5 = w1 = 0
     order_index = 0
 
     with open(filepath, "r", encoding="utf-8") as f:
@@ -303,7 +335,18 @@ def parse(filepath: Path, chars_per_token: float):
                 order_index += 1
                 continue
 
+            if msg.get("type") == "system" and msg.get("subtype") == "compact_boundary":
+                bounds.append(order_index)
+                continue
+
             inner = msg.get("message") if isinstance(msg.get("message"), dict) else msg
+            usage, mid = inner.get("usage"), inner.get("id")
+            if isinstance(usage, dict) and mid and mid not in seen_ids:
+                seen_ids.add(mid)
+                calls.append(order_index)
+                cc = usage.get("cache_creation") or {}
+                w5 += cc.get("ephemeral_5m_input_tokens", 0) or 0
+                w1 += cc.get("ephemeral_1h_input_tokens", 0) or 0
             inner = canonicalize_message(inner)
             role = inner.get("role")
             content = inner.get("content")
@@ -340,7 +383,13 @@ def parse(filepath: Path, chars_per_token: float):
                         }
                 order_index += 1
 
-    return tool_uses, results, assistant_texts, grep_paths, read_order, instructions
+    # write multiplier blended from the session's own 5m/1h cache writes
+    if w5 + w1:
+        write = (CACHE_WRITE_5M * w5 + CACHE_WRITE_1H * w1) / (w5 + w1)
+    else:
+        write = CACHE_WRITE_5M if calls else None
+    pricing = {"calls": calls, "bounds": bounds, "write": write}
+    return tool_uses, results, assistant_texts, grep_paths, read_order, instructions, pricing
 
 
 def later_reference(sample: list[str], after_index: int, assistant_texts) -> bool:
@@ -351,14 +400,15 @@ def later_reference(sample: list[str], after_index: int, assistant_texts) -> boo
     return any(tok in later for tok in sample)
 
 
-def detect_instruction_waste(instructions, candidates):
+def detect_instruction_waste(instructions, candidates, pricing):
     """Emit waste candidates from the re-injected instruction context.
 
     Two shapes, mirroring the result-side passes:
-      - repeated_instruction  the SAME block (same fingerprint) re-injected N+ times.
-        Deterministic — the second copy onward is avoidable. We charge the AGGREGATE
-        re-injection cost (every copy past the first), since that is what actually
-        sat in the window, not the size of one copy.
+      - repeated_instruction  the SAME block (same fingerprint) injected again while an
+        identical copy is still in the window. Deterministic. A copy re-injected after a
+        compact_boundary replaces one the compaction dropped, so it is NOT counted (on
+        2026-10 sessions those were most of the "repeats"). We charge each duplicate's
+        cache-aware cost (effective()), since that is what was billed.
       - instruction_review    one representative copy of a large block, with a bounded
         excerpt, for the analyst to classify as obvious_instruction (extreme-obvious
         filler the model already acts on) or confusing_instruction (contradictory /
@@ -380,21 +430,29 @@ def detect_instruction_waste(instructions, candidates):
         # avoidable (post-first) cost clears the floor. system_reminders re-appear
         # by design every turn — they are still real cost, but flag them only when
         # the aggregate is large enough to be worth an adaptation.
-        if n >= REPEAT_INSTRUCTION_MIN:
-            wasted = per_copy * (n - 1)
+        seen_segs, dups = set(), []
+        for b in blks:
+            sg = segment(b["index"], pricing)
+            if sg in seen_segs:
+                dups.append(b)
+            seen_segs.add(sg)
+        if len(dups) >= REPEAT_INSTRUCTION_MIN - 1:
+            wasted = per_copy * len(dups)
             if wasted >= REPEAT_INSTRUCTION_MIN_WASTED:
                 candidates.append({
                     "tool": "instruction",
                     "kind": first["kind"],
                     "tokens": wasted,
+                    "effective_tokens": sum(effective(per_copy, b["index"], pricing) for b in dups),
                     "per_copy_tokens": per_copy,
                     "injections": n,
+                    "same_window_copies": len(dups),
                     "index": first["index"],
                     "line": first["line"],
                     "target": first["label"],
                     "pattern": "repeated_instruction",
-                    "note": f"{first['kind']} re-injected {n}x (~{per_copy} tok each); "
-                            f"{n - 1} avoidable copies = ~{wasted} tok",
+                    "note": f"{first['kind']} injected {n}x (~{per_copy} tok each); "
+                            f"{len(dups)} duplicate an in-window copy = ~{wasted} tok",
                 })
 
         # instruction_review: one big block → analyst judges obvious/confusing.
@@ -419,7 +477,7 @@ def detect_instruction_waste(instructions, candidates):
 
 
 def detect(filepath: Path, project: str, chars_per_token: float) -> dict:
-    tool_uses, results, assistant_texts, grep_paths, read_order, instructions = parse(
+    tool_uses, results, assistant_texts, grep_paths, read_order, instructions, pricing = parse(
         filepath, chars_per_token
     )
 
@@ -549,7 +607,12 @@ def detect(filepath: Path, project: str, chars_per_token: float) -> dict:
     # result-side passes above are blind to it, yet it is the heaviest, most
     # repetitive context in a session. Emits repeated_instruction (deterministic)
     # and instruction_review (analyst classifies obvious/confusing).
-    detect_instruction_waste(instructions, candidates)
+    detect_instruction_waste(instructions, candidates, pricing)
+
+    # Billed weight: a block early in a long window is re-read on every later call, one
+    # just before a compaction barely costs. Raw `tokens` stays for the size thresholds.
+    for c in candidates:
+        c.setdefault("effective_tokens", effective(c["tokens"], c["index"], pricing))
 
     # Cap low_value_content review requests to the biggest few — they carry excerpts
     # to the LLM, so an unbounded shortlist would be the very waste this skill hunts.
@@ -561,8 +624,8 @@ def detect(filepath: Path, project: str, chars_per_token: float) -> dict:
         drop = set(id(c) for c in lvc[MAX_QUALITY_REVIEW:])
         candidates = [c for c in candidates if id(c) not in drop]
 
-    # keep all distinct (pattern, tool-call) hits, ordered by size
-    candidates.sort(key=lambda c: (-c["tokens"], c["index"]))
+    # keep all distinct (pattern, tool-call) hits, ordered by billed cost
+    candidates.sort(key=lambda c: (-c["effective_tokens"], c["index"]))
 
     # headline waste counts each wasteful tool call's tokens ONCE, even when it
     # tripped several patterns (e.g. a reread that was also a full_file_read).
@@ -574,12 +637,13 @@ def detect(filepath: Path, project: str, chars_per_token: float) -> dict:
     # call index; instruction candidates dedup on the fingerprint group's first
     # index, namespaced so the two index spaces can't collide.
     REVIEW_ONLY = {"low_value_content", "instruction_review"}
-    dedup = {}
+    dedup, dedup_eff = {}, {}
     for c in candidates:
         if c["pattern"] in REVIEW_ONLY:
             continue
         key = ("instr", c["target"]) if c["tool"] == "instruction" else ("call", c["index"])
         dedup[key] = max(dedup.get(key, 0), c["tokens"])
+        dedup_eff[key] = max(dedup_eff.get(key, 0), c["effective_tokens"])
     wasted_tokens = sum(dedup.values())
 
     # Cap the per-session candidate list the analyst must Read whole (see
@@ -613,6 +677,10 @@ def detect(filepath: Path, project: str, chars_per_token: float) -> dict:
         "chars_per_token": chars_per_token,
         "total_tool_result_tokens": total_tool_tokens,
         "candidate_wasted_tokens": wasted_tokens,
+        "candidate_effective_tokens": sum(dedup_eff.values()),
+        "api_calls": len(pricing["calls"]),
+        "compactions": len(pricing["bounds"]),
+        "cache_write_multiplier": pricing["write"],
         "candidate_count": full_count,
         "candidates_truncated": full_count - len(kept),
         "excerpts_stripped": excerpts_stripped,
