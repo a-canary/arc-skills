@@ -19,9 +19,9 @@ Intel = curated score (Artificial Analysis index or internal ProgramBench) — f
 
 | Model | Provider | Notes |
 |---|---|---|
-| MiniMax-M2.7 | minimax | cli-proxy minimax default |
+| MiniMax-M2.7 | minimax | former cli-proxy minimax default (retired 2026-10-31) |
 | MiniMax-M3 | minimax | pi alias `minimax-m3`; fast-pool head (no-think) |
-| claude-fable-5 | anthropic | frontier tier; cli-proxy smart-pool head |
+| claude-fable-5 | anthropic | frontier tier (former cli-proxy smart-pool head) |
 | claude-opus-4-8 | anthropic | smart-pool fallback |
 | claude-sonnet-5 | anthropic | — |
 | claude-haiku-4-5-20251001 | anthropic | cheap/fast tier; diagnostic subagent cheap-half |

@@ -4,7 +4,7 @@
 # error, timeout, or ambiguity -> block. Nothing external is trusted.
 #
 #   Stage 1  programmatic gate  — pure bytes/regex, no network, no LLM.
-#   Stage 2  LLM injection screen — ONE no-tools model call (cli-proxy, local).
+#   Stage 2  LLM injection screen — ONE no-tools model call (laneproxy :8099, local).
 #            A no-tools model cannot be steered into acting on the payload.
 #
 # Usage:   screen.sh <file>        # screen file contents

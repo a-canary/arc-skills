@@ -34,11 +34,11 @@ The doc is GENERATED. Source of truth is `~/vault/api/models.json` (watchlist, i
 `refresh.ts` does **two** probes per provider:
 
 1. **List endpoint** (`p.list`) — model catalog, used to populate the per-model table.
-2. **Chat smoke** (`p.probe_model` → `POST {p.base}/chat/completions` with `messages:[{role:user,content:ping}]`, `max_tokens:4`) — single-token ping, catches `list=200 but inference=402/429` (chutes subscription-cap case) and tests pool failover for cli-proxy.
+2. **Chat smoke** (`p.probe_model` → `POST {p.base}/chat/completions` with `messages:[{role:user,content:ping}]`, `max_tokens:4`) — single-token ping, catches `list=200 but inference=402/429` (chutes subscription-cap case).
 
 Provider smoke result lands as a `> chat smoke:` line in PROVIDERS.md. If smoke fails, every model in that provider flips to `✗ quota` in the table. Set `probe_model` per-provider in models.json; absent = smoke skipped (the right call for anthropic, which is native Messages API, not OpenAI-compatible).
 
-**cli-proxy (:7890) was retired 2026-10-31** (repos-md87); drop its models.json entry. The note below is historical. For **cli-proxy** specifically, set `base: http://127.0.0.1:7890/v1` with `probe_model: "smart"` — that exercises the full failover chain. A green smoke on `smart` doesn't prove each alias is live (one might be silently masked by another), but a red smoke means the whole pool is unusable. arc-skills deliberately knows nothing about cli-proxy internals — it's just another OpenAI-compat endpoint that happens to be local.
+**cli-proxy (:7890) was retired 2026-10-31** (repos-md87): drop any models.json entry pointing at it. Local OpenAI-compat inference now goes through laneproxy `:8099/v1`.
 
 ## Routing
 

@@ -38,4 +38,4 @@ Every process that fronts an LLM, and the machines underneath.
 
 - **Never hit `:1234` on the model box directly** — bypasses the queue, starves interactive requests.
 - Public provider endpoints: see [01-providers.md](01-providers.md).
-- Host health is not in PROVIDERS.md (that doc covers public providers + cli-proxy smoke only). The arc-llm-proxy + 103 + LM Studio + Veles rows above are manual — probe `:8091/health`, `:1234/health`, and `curl -m 3 <host>/v1/models` when in doubt.
+- Host health is not in PROVIDERS.md (that doc covers public providers only). The arc-llm-proxy + 103 + LM Studio + Veles rows above are manual — probe `:8091/health`, `:1234/health`, and `curl -m 3 <host>/v1/models` when in doubt.

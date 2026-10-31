@@ -26,6 +26,5 @@ Who uses what, when. Rules in priority order.
 
 ## Failure semantics
 
-- cli-proxy: pool failover per candidate list; red `smart` smoke = whole pool unusable.
 - Public providers: 401 = dead key (rotate in pass), 402 = quota (wait or switch provider), 429 = rate cap (back off).
 - **Ghost alias = silent misroute (fixed 2026-08-26)**: unknown exec aliases used to fall back to `default_alias` without error; `getAliasCommands` now throws at dispatch. Treat any *historical* `engine-alias-no-work:<alias>` ledger event whose alias is not in `config.json` as a **config defect**, not a model defect — the named alias never ran.

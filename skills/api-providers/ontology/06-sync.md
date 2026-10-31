@@ -17,7 +17,7 @@ There is no generator. When any one of these changes, **every** one of these mus
 
 1. `arc-llm-proxy/switchboard.default.json` + `deploy/switchboard.local.json` — `endpoints`
 2. `~/.pi/agent/models.json` — provider entry (baseUrl, models, ctx)
-3. `~/vault/api/models.json` — provider entry (base, pass, auth, list, probe_model) + `pools` if cli-proxy should route to it
+3. `~/vault/api/models.json` — provider entry (base, pass, auth, list, probe_model)
 4. `arc-skills/skills/api-providers/ontology/01-providers.md` / `02-models.md` / `04-hosts.md`
 5. `pass` store — key present before anything routes to it
 

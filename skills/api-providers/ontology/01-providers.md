@@ -4,7 +4,7 @@ Public API providers. Keys live in the GPG `pass` store — never inline; pull a
 
 | Provider | pass path | Base URL | Auth | Wire format | Health (2026-08-25) |
 |---|---|---|---|---|---|
-| anthropic | `api/anthropic/api-key` | https://api.anthropic.com/v1 | `x-api-key` + `anthropic-version: 2023-06-01` | **native Messages API** (not OpenAI-compat) | ❌ key dead 2026-07-02 (401) — rotate; real claude availability probed via cli-proxy |
+| anthropic | `api/anthropic/api-key` | https://api.anthropic.com/v1 | `x-api-key` + `anthropic-version: 2023-06-01` | **native Messages API** (not OpenAI-compat) | ❌ key dead 2026-07-02 (401) — rotate; cli-proxy (former claude probe) retired 2026-10-31 |
 | minimax | `api/minimax/api-key` | https://api.minimax.io/v1 | Bearer | OpenAI-compat | ✅ live (M2.7 + M3 probed 01:35Z). No public list API — static watchlist |
 | openrouter | `api/openrouter/api-key` | https://openrouter.ai/api/v1 | Bearer | OpenAI-compat | ❌ 401 — key was in conjecture git history, rotate before public use |
 | cerebras | `api/cerebras/api-key` | https://api.cerebras.ai/v1 | Bearer | OpenAI-compat | ❌ 402 quota. NOT for agentic work: per-model context cap + TPM quota trips on ~90k-tok requests. Short-prompt latency tier only (judges, classifiers, extract/rewrite) |
