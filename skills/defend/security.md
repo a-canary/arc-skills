@@ -57,6 +57,7 @@ Shape: "critical — `<file>:<line>` binds the code to the self-declared distric
 ## Verdict routing
 
 Merged into the host gate's verdict: any critical or high attack blocks like a host-gate attack.
+medium/low: surfaced verbatim, advisory; file a bead; non-blocking.
 Surfaced verbatim; override = ledger note row (gate, lens, attack, why).
 
 ## Why
