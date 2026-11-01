@@ -5,6 +5,7 @@
 import { readdirSync, readFileSync, writeFileSync, statSync, mkdirSync, mkdtempSync, appendFileSync, rmSync, cpSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
+import { topUp, genPrompt, parsePrompts } from "./topup";
 
 const PROXY = "http://127.0.0.1:7890/v1/chat/completions";
 // override per-run: --base https://api.featherless.ai/v1/chat/completions + SKILLOPT_API_KEY env
@@ -271,6 +272,18 @@ Reply with STRICT JSON only, nothing else: {"winner":"X"|"Y"|"tie","why":"<20 wo
   console.error(`judged ${verdicts.length} -> ${out} ${JSON.stringify(t)}`);
 }
 
+// --- topup: fill a skill's real eval rows to --target with cached synthetic cases (arc-3or) ---
+async function topup() {
+  const spec = readFileSync(opt("spec")!, "utf8"), real = readJsonl(opt("rows")!);
+  const model = opt("model", "cli/claude/haiku")!;
+  const r = await topUp(real, spec, {
+    target: Number(opt("target", "16")), cacheDir: opt("cache-dir", join(homedir(), "vault", "skillopt", "synthetic"))!,
+    gen: async (sp, seeds, need) => parsePrompts(await llm(model, genPrompt(sp, seeds, need))),
+  });
+  writeJsonl(opt("out")!, r.rows);
+  console.error(`topup: real n=${r.real} synthetic n=${r.synthetic}${r.cached ? " (cache hit)" : ""} -> ${opt("out")}`);
+}
+
 // --- gate ---
 function gate() {
   const vs = readJsonl(opt("verdicts")!);
@@ -309,6 +322,6 @@ function selftest() {
   console.log("selftest OK");
 }
 
-const cmds: Record<string, () => any> = { mine, split, replay, rollout, judge, gate, selftest };
-if (!cmd || !cmds[cmd]) { console.error("usage: bun skillopt.ts mine|split|replay|rollout|judge|gate|selftest [--flags]"); process.exit(1); }
+const cmds: Record<string, () => any> = { mine, split, replay, rollout, topup, judge, gate, selftest };
+if (!cmd || !cmds[cmd]) { console.error("usage: bun skillopt.ts mine|split|replay|rollout|topup|judge|gate|selftest [--flags]"); process.exit(1); }
 await cmds[cmd]();

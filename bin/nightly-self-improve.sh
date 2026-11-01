@@ -213,7 +213,7 @@ revert_commits() {  # revert_commits <stage> <repo> <kind> <log> <commit...> —
   rm -f "$idx"
 }
 skillopt_gate() {  # skillopt_gate <stage> <repo> <pre> <paths> <commit...> — every skill must PROMOTE
-  local stage="$1" repo="$2" pre="$3" paths="$4" name p sk data w v arm fail="" out; shift 4
+  local stage="$1" repo="$2" pre="$3" paths="$4" name p sk data w v arm fail="" out rows ntag t; shift 4
   name=$(basename "$repo"); out="$LOG_DIR/skillopt-$stage-$name.log"; : > "$out"
   w=$(mktemp -d)
   while IFS= read -r p; do
@@ -225,14 +225,19 @@ skillopt_gate() {  # skillopt_gate <stage> <repo> <pre> <paths> <commit...> — 
       log_event "$NIGHTLY_LOG" "skillopt $stage: $name $sk NEW_SKILL (no champion) — fail closed"; fail=1; continue
     fi
     cp "$repo/$p" "$w/challenger.md"
+    # option C (arc-3or): real uses first, cached synthetic cases top up to 16; on error fall back to real-only
+    rows="$data"; ntag="real n=$(wc -l < "$data")"
+    if t=$(bun "$SKILLOPT" topup --spec "$w/challenger.md" --rows "$data" --out "$w/rows.jsonl" --target 16 \
+        --cache-dir "$SKILLOPT_DATA/synthetic/$sk" --model "$SKILLOPT_REPLAY_MODEL" --base "$SKILLOPT_BASE" < /dev/null 2>&1 \
+        | tee -a "$out" | grep -o 'real n=[0-9]* synthetic n=[0-9]*') && [ -n "$t" ]; then rows="$w/rows.jsonl"; ntag="$t"; fi
     for arm in champion challenger; do
-      timeout 60m bun "$SKILLOPT" replay --spec "$w/$arm.md" --rows "$data" --out "$w/r-$arm.jsonl" \
+      timeout 60m bun "$SKILLOPT" replay --spec "$w/$arm.md" --rows "$rows" --out "$w/r-$arm.jsonl" \
         --model "$SKILLOPT_REPLAY_MODEL" --base "$SKILLOPT_BASE" < /dev/null >> "$out" 2>&1
     done
-    timeout 60m bun "$SKILLOPT" judge --rows "$data" --a "$w/r-champion.jsonl" --b "$w/r-challenger.jsonl" \
+    timeout 60m bun "$SKILLOPT" judge --rows "$rows" --a "$w/r-champion.jsonl" --b "$w/r-challenger.jsonl" \
       --model "$SKILLOPT_JUDGE_MODEL" --base "$SKILLOPT_BASE" --out "$w/verdicts.jsonl" < /dev/null >> "$out" 2>&1
     v=$(bun "$SKILLOPT" gate --verdicts "$w/verdicts.jsonl" 2>> "$out" | tee -a "$out" | grep -o '^\(PROMOTE\|HOLD\).*' | tail -1)
-    log_event "$NIGHTLY_LOG" "skillopt $stage: $name $sk ${v:-GATE_ERROR}"
+    log_event "$NIGHTLY_LOG" "skillopt $stage: $name $sk ${v:-GATE_ERROR} ($ntag)"
     case "$v" in PROMOTE*) ;; *) fail=1 ;; esac
     rm -f "$w"/*.md "$w"/*.jsonl
   done <<< "$paths"
