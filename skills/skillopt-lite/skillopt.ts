@@ -7,6 +7,7 @@ import { join, dirname } from "path";
 import { createReadStream } from "fs";
 import { createInterface } from "readline";
 import { homedir } from "os";
+import { topUp, genPrompt, parsePrompts, decide } from "./topup";
 
 // laneproxy (private local lane) since cli-proxy :7890 retired 2026-10-31; it serves qwen3.8-27b for any model name.
 const PROXY = "http://127.0.0.1:8099/v1/chat/completions";
@@ -348,20 +349,30 @@ Reply with STRICT JSON only, nothing else: {"winner":"X"|"Y"|"tie","why":"<20 wo
       return v ? { id: r.id, aIsX, ...v } : { id: r.id, aIsX, winner: "unparsed", why: "" };
     } catch (e) { return { id: r.id, aIsX, winner: "error", why: String(e).slice(0, 80) }; }
   });
+  const synth = new Set(rows.filter((r: any) => r.synthetic).map((r: any) => r.id));
+  for (const v of verdicts) (v as any).synthetic = synth.has(v.id);
   writeJsonl(out, verdicts);
   const t: Record<string, number> = {};
   for (const v of verdicts) t[v.winner] = (t[v.winner] || 0) + 1;
   console.error(`judged ${verdicts.length} -> ${out} ${JSON.stringify(t)}`);
 }
 
+// --- topup: fill a skill's real eval rows to --target with cached synthetic cases (arc-3or) ---
+async function topup() {
+  const spec = readFileSync(opt("spec")!, "utf8"), real = readJsonl(opt("rows")!);
+  const model = opt("model", "cli/claude/haiku")!;
+  const r = await topUp(real, spec, {
+    target: Number(opt("target", "16")), cacheDir: opt("cache-dir", join(homedir(), "vault", "skillopt", "synthetic"))!,
+    gen: async (sp, seeds, need) => parsePrompts(await llm(model, genPrompt(sp, seeds, need))),
+  });
+  writeJsonl(opt("out")!, r.rows);
+  console.error(`topup: real n=${r.real} synthetic n=${r.synthetic}${r.cached ? " (cache hit)" : ""} -> ${opt("out")}`);
+}
+
 // --- gate ---
 function gate() {
-  const vs = readJsonl(opt("verdicts")!);
-  const w = vs.filter((v: any) => v.winner === "challenger").length;
-  const l = vs.filter((v: any) => v.winner === "champion").length;
-  const lb = wilsonLower(w, w + l);
-  const verdict = lb > 0.5 ? "PROMOTE" : "HOLD";
-  console.log(`${verdict} challenger wins=${w} losses=${l} (ties/skips dropped: ${vs.length - w - l}) wilson95lb=${lb.toFixed(3)}`);
+  const d = decide(readJsonl(opt("verdicts")!));
+  console.log(`${d.verdict} real w/l=${d.rw}/${d.rl} synthetic w/l=${d.sw}/${d.sl} (ties/skips dropped: ${d.dropped}) wilson95lb=${d.lb.toFixed(3)}${d.rl > 0 ? " (real loss rejects)" : ""}`);
 }
 
 // --- selftest ---
@@ -392,6 +403,6 @@ function selftest() {
   console.log("selftest OK");
 }
 
-const cmds: Record<string, () => any> = { mine, split, replay, rollout, judge, gate, selftest };
-if (!cmd || !cmds[cmd]) { console.error("usage: bun skillopt.ts mine|split|replay|rollout|judge|gate|selftest [--flags]"); process.exit(1); }
+const cmds: Record<string, () => any> = { mine, split, replay, rollout, topup, judge, gate, selftest };
+if (!cmd || !cmds[cmd]) { console.error("usage: bun skillopt.ts mine|split|replay|rollout|topup|judge|gate|selftest [--flags]"); process.exit(1); }
 await cmds[cmd]();
