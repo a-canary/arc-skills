@@ -225,9 +225,9 @@ skillopt_gate() {  # skillopt_gate <stage> <repo> <pre> <paths> <commit...> — 
       log_event "$NIGHTLY_LOG" "skillopt $stage: $name $sk NEW_SKILL (no champion) — fail closed"; fail=1; continue
     fi
     cp "$repo/$p" "$w/challenger.md"
-    # option C (arc-3or): real uses first, cached synthetic cases top up to 16; on error fall back to real-only
+    # option C (arc-3or): cases come from the INCUMBENT spec (edit must not write its own tests); real uses first, cached synthetic cases top up to 16; on error fall back to real-only
     rows="$data"; ntag="real n=$(wc -l < "$data")"
-    if t=$(bun "$SKILLOPT" topup --spec "$w/challenger.md" --rows "$data" --out "$w/rows.jsonl" --target 16 \
+    if t=$(bun "$SKILLOPT" topup --spec "$w/champion.md" --rows "$data" --out "$w/rows.jsonl" --target 16 \
         --cache-dir "$SKILLOPT_DATA/synthetic/$sk" --model "$SKILLOPT_REPLAY_MODEL" --base "$SKILLOPT_BASE" < /dev/null 2>&1 \
         | tee -a "$out" | grep -o 'real n=[0-9]* synthetic n=[0-9]*') && [ -n "$t" ]; then rows="$w/rows.jsonl"; ntag="$t"; fi
     for arm in champion challenger; do

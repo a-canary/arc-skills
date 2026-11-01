@@ -45,3 +45,18 @@ export const parsePrompts = (raw: string): string[] => {
   if (!Array.isArray(a)) throw new Error("reply not an array");
   return a.map(String);
 };
+
+// Gate rule (arc-3or): any REAL-case loss rejects outright; only with zero real losses does the pooled Wilson decide.
+export const wilsonLower = (w: number, n: number) => {
+  if (n === 0) return 0;
+  const z = 1.96, p = w / n, z2 = z * z;
+  return (p + z2 / (2 * n) - z * Math.sqrt((p * (1 - p) + z2 / (4 * n)) / n)) / (1 + z2 / n);
+};
+
+export function decide(vs: { winner: string; synthetic?: boolean }[]) {
+  const c = (syn: boolean, win: string) => vs.filter((v) => !!v.synthetic === syn && v.winner === win).length;
+  const rw = c(false, "challenger"), rl = c(false, "champion"), sw = c(true, "challenger"), sl = c(true, "champion");
+  const lb = wilsonLower(rw + sw, rw + sw + rl + sl);
+  const verdict = rl > 0 ? "HOLD" : lb > 0.5 ? "PROMOTE" : "HOLD";
+  return { verdict, rw, rl, sw, sl, lb, dropped: vs.length - rw - rl - sw - sl };
+}
