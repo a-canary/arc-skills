@@ -18,7 +18,8 @@ run ok "stop_hook_active -> allow (loop guard)" true
 { p "do work"; five; tool Bash "cd r && bd create 'f'"; say "done"; } > "$D/t"; run ok "bd create banks"
 { p "do work"; five; tool Bash 'for c in \"bd remember\"; do :; done'; say "done"; } > "$D/t"; run block "quoted mention is not banking"
 { p "do work"; tool Edit ""; say "done"; } > "$D/t"; run block "one Edit, nothing banked -> block"
-{ p "do work"; five; say "done. learn: none"; } > "$D/t"; run ok "learn: none opt-out"
+{ p "do work"; five; tool Bash ": learn-none"; say "done"; } > "$D/t"; run ok "silent learn-none opt-out"
+{ p "do work"; five; say "done. learn: none"; } > "$D/t"; run block "visible learn: none text no longer counts"
 bash "$H" start </dev/null | grep -q 'ke research' && echo "pass: start reminder" || { echo "FAIL: start reminder"; fail=1; }
 mv "$D" "${TMPDIR:-/tmp}/learn-recall-test.$$.done" 2>/dev/null
 exit $fail
