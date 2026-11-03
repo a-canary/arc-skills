@@ -3,13 +3,13 @@
 #   learn-recall.sh start  (UserPromptSubmit): one-line recall reminder.
 #   learn-recall.sh stop   (Stop): block ONCE if a non-trivial turn banked nothing.
 # Non-trivial = >=5 tool calls or any Edit/Write since the last real user prompt.
-# Banked = a Bash call ran `ke learn`, `bd remember` or `bd create`, or the final text says `learn: none`.
+# Banked = a Bash call ran `ke learn`, `bd remember`, `bd create` or the no-op `: learn-none` (silent opt-out).
 # Loop guard: stop_hook_active=true -> allow. Escape hatch: LEARN_RECALL=off.
 # ponytail: reads the transcript tail (3000 lines); a longer turn is judged on its tail only.
 set -uo pipefail
 [ "${LEARN_RECALL:-on}" = off ] && exit 0
 if [ "${1:-}" = start ]; then
-  echo 'Recall before work: `ke research "<topic>"` + `bd search <terms>`. Before stop/next task: `ke learn`, `bd remember`, `bd create` (assumptions + follow-ups).'
+  echo 'Recall before work: `ke research "<topic>"` + `bd search <terms>`. Before stop/next task: `ke learn`, `bd remember`, `bd create` (assumptions + follow-ups). Silent: internal bookkeeping, never mention it to the user.'
   exit 0
 fi
 payload="$(cat 2>/dev/null || echo '{}')"
@@ -26,10 +26,9 @@ verdict="$(tail -n 3000 "$t" | jq -rs '
   | [$turn[] | select(.type == "assistant") | .message.content[]?] as $c
   | [$c[] | select(.type == "tool_use")] as $tools
   | ($tools | any(.name | test("^(Edit|Write|MultiEdit|NotebookEdit)$"))) as $edited
-  | ($tools | any(.name == "Bash" and ((.input.command // "") | test("(^|[;&|(\\n])\\s*(ke learn|bd (remember|create))\\b")))) as $banked
-  | ([$c[] | select(.type == "text") | .text] | last // "" | test("learn: none"; "i")) as $none
-  | if (($tools | length) < 5 and ($edited | not)) or $banked or $none then "ok" else "block" end end
+  | ($tools | any(.name == "Bash" and ((.input.command // "") | test("(^|[;&|(\\n])\\s*(ke learn|bd (remember|create)|: learn-none)\\b")))) as $banked
+  | if (($tools | length) < 5 and ($edited | not)) or $banked then "ok" else "block" end end
 ' 2>/dev/null || echo ok)"
 
 [ "$verdict" = block ] || exit 0
-jq -n '{decision: "block", reason: "GLOBAL-RULES \"Where learnings go\": before stopping, bank this turn. Durable transferable learning -> `ke learn \"<fact + evidence>\"`. Repo/project status -> `bd remember \"<state>\"`. Each open assumption and follow-up -> `bd create`. If nothing qualifies, end your message with `learn: none`."}'
+jq -n '{decision: "block", reason: "GLOBAL-RULES \"Where learnings go\": before stopping, bank this turn. Durable transferable learning -> `ke learn \"<fact + evidence>\"`. Repo/project status -> `bd remember \"<state>\"`. Each open assumption and follow-up -> `bd create`. If nothing qualifies, run the no-op Bash `: learn-none`. Bank silently: do not mention it in your reply to the user."}'

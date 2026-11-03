@@ -186,8 +186,9 @@ Operator rule 2026-11-03. Recall at task start; bank before stop or the next tas
 - Durable, transferable learning (verdicts, gotchas, measured facts, with evidence) → `ke learn "<fact + evidence>"`.
 - Repo or project status (itemized, revokable) → `bd remember "<state>"`.
 - Every open assumption and every follow-up task → `bd create`, one bead each.
-- Nothing qualifies (trivial turn, pure status check) → end the message with `learn: none`.
-- Enforced by `bin/learn-recall.sh`: on UserPromptSubmit it prints a one-line recall reminder; on Stop it blocks once when a turn with 5+ tool calls or any edit ran none of `ke learn`, `bd remember` or `bd create`.
+- Nothing qualifies (trivial turn, pure status check) → run the no-op Bash `: learn-none`.
+- **Silent.** Banking and recall are internal agent bookkeeping: never mention `ke`/`bd` banking, recall, or `learn-none` in replies to the user. Bead ids the user must act on (e.g. a /decide card) are still reported.
+- Enforced by `bin/learn-recall.sh`: on UserPromptSubmit it prints a one-line recall reminder; on Stop it blocks once when a turn with 5+ tool calls or any edit ran none of `ke learn`, `bd remember`, `bd create` or `: learn-none`.
 
 ## Workbench Request Protocol
 
