@@ -65,7 +65,7 @@ In priority order:
 lane-run bead contract (description header, then a `---` fence, then the task):
 
 ```
-Branch: <pushed branch whose HEAD is a failing test>
+Branch: <pushed branch named lane/* or v100/*, whose HEAD is a failing test>
 Test: <command that goes RED → GREEN>
 ---
 <one goal, exact files, nothing else>
