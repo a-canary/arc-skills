@@ -71,6 +71,9 @@ Test: <command that goes RED → GREEN>
 <one goal, exact files, nothing else>
 ```
 
+The RED commit touches only test files (stubs go in the parent commit), or the worker can't edit the implementation (wb-zgt).
+Scope Test to the RED files: whole-project tsc fails on unrelated errors (wb-dcr).
+A Test that needs .git, docker or the DB (e.g. merge-gate.sh) can't run in the jail: claude lane only (wb-i7r).
 Success closes the bead with the GREEN commit; failure labels it `qwen-failed` for re-split, never a blind retry.
 Batch jobs go to `v100-jobs.sh` `ready/` (laneproxy); the name prefix sets priority: `1-ndiv-*`, `2-trading-*`, `3-rnd-*`.
 
