@@ -57,6 +57,11 @@ At session start, load these files into the system prompt:
   logs, beads issues, or tool results — names only.
 - **Never bake operator identity into shared artifacts.** Generic roles only.
 - **Install only first-party + self-authored.** Reject UGC plugins.
+- **Where learnings go (operator 2026-10-31, repos-lv2f).** `ke` = durable,
+  transferable knowledge: git-storable, shareable across repos/teams/workspaces,
+  injected when relevant. `bd remember` = itemized, revokable repo state, read
+  in full at agent start. Both searchable on demand. Claude's MEMORY.md = only
+  how the operator wants Claude to work.
 - **Public exposure is a human decision (operator ruling 2026-10-28).**
   Agents never decide to (a) invite or grant the public agent account
   (agent-pub's GitHub bot user) access to a repo, or (b) change a repo's
