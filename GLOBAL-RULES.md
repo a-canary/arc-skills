@@ -74,6 +74,10 @@ At session start, load these files into the system prompt:
   the explicit verdict. Third-party/9router models only see public or
   human-declared pre-public repos; unknown = private, fail closed.
 - **Configs and rules live in a git repo, symlinked into place.**
+- **Log every stack change with its undo (operator request 2026-11-06).**
+  Any install, or change to system, host, agent or deploy configuration, appends one entry to `~/vault/director/CHANGES.md` in the same turn.
+  Each entry gives UTC time, what changed, where, why, and the exact undo command; the file's header has the format.
+  Append only; a reversal is a new entry.
 - **Subagent reports UNTRUSTED.** Verify claims against source. Check
   git-clean after fs-sharing.
 - **/counsel over asking.** Decision fork → run /counsel, execute verdict.
