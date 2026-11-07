@@ -7,10 +7,10 @@
 //   bun decide.ts done <id> --reason "what you did" [--repo R]                            clear `decided`, close the gate
 // common: --context C --evidence E --latency L --meanwhile M --repo R -p 0-3 --blocks <your-bead> --replaces <old-gate> --dry --run <script>   (pin a root script for the Deploy Agent; see skills/deploy-agent)
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { lintCard } from "./lint-card";
+import { ID_SHAPE, KINDS, lintCard } from "./lint-card";
 
 const REPOS = join(homedir(), "repos");
 export const QUEUE_DIR = join(homedir(), "vault", "director", "deploy-queue");
@@ -89,6 +89,18 @@ export function repoDir(repo?: string): string {
 }
 const allDirs = () => [REPOS, ...readdirSync(REPOS).map((n) => join(REPOS, n)).filter((d) => existsSync(join(d, ".beads", "embeddeddolt")))];
 
+// Every bead id in every db: one `bd list` per db, run in parallel (~1s). Only called when a card has an id-shaped token.
+// ponytail: fails open (a db that errors adds no ids); the lint guards readability, not security.
+function realBeadIds(): Set<string> {
+  const out = join(tmpdir(), `decide-ids-${process.pid}`);
+  mkdirSync(out, { recursive: true });
+  Bun.spawnSync(["bash", "-c", 'o=$1; shift; i=0; for d; do i=$((i+1)); bd -C "$d" list --all -n 0 --json > "$o/$i" 2>/dev/null & done; wait', "_", out, ...allDirs()]);
+  const ids = new Set<string>();
+  for (const f of readdirSync(out)) try { for (const b of JSON.parse(readFileSync(join(out, f), "utf8"))) ids.add(b.id); } catch {}
+  rmSync(out, { recursive: true, force: true });
+  return ids;
+}
+
 function bd(dir: string, ...args: string[]): string {
   const r = Bun.spawnSync(["bd", "-C", dir, ...args], { stderr: "pipe" });
   if (r.exitCode !== 0) throw new Error(`bd ${args.slice(0, 2).join(" ")}: ${r.stderr.toString().trim()}`);
@@ -99,15 +111,20 @@ function bd(dir: string, ...args: string[]): string {
 export const RUN_TITLE = /^Run\b/;
 const noRun = (a: Args) => { if (a.run) throw new Error("--run only on ask cards; option A there is the run"); };
 
-function ask(a: Args, card: { q: string; opts: string[] }) {
+function ask(a: Args, card: { q: string; opts: string[]; kind?: string }) {
   const s = (k: string) => (typeof a[k] === "string" ? (a[k] as string) : undefined);
-  const title = s("title");
-  if (!title) throw new Error("--title is required: ≤70 plain chars, '<repo>: <the decision>'");
+  const head = s("title"), kind = s("kind") ?? card.kind;
+  if (!head) throw new Error("--title is required: the recommendation headline, plain words, no ids or hashes");
+  const K = kind && KINDS.find((k) => k.toLowerCase() === kind.toLowerCase());
+  if (!K) throw new Error(`--kind is required: ${KINDS.join("|").toLowerCase()}`);
+  const title = `[${K}] ${head}`;
   const base = buildCard({ ...card, context: s("context"), evidence: s("evidence"), latency: s("latency"), meanwhile: s("meanwhile"), replaces: s("replaces") });
   if (s("run") && !RUN_TITLE.test(card.opts[0] ?? "")) throw new Error('--run needs the first --opt titled "Run ..." (accept A runs the script)');
   const run = s("run") ? pinRun(s("run")!, undefined, !a.dry) : "";
   const body = run ? `${base}${base.endsWith("\n") ? "" : "\n"}\n${run}\n` : base;
-  const err = lintCard(title, body);
+  const ids = ID_SHAPE.test(`${title}\n${body}`) ? realBeadIds() : new Set<string>();
+  ID_SHAPE.lastIndex = 0;
+  const err = lintCard(title, body, (t) => ids.has(t));
   if (err.length) throw new Error(err.map((e) => `card: ${e}`).join("\n"));
   if (a.dry) return console.log(`${title}\n${body}`);
   const dir = repoDir(s("repo")), f = join(tmpdir(), `decide-${process.pid}.md`);
@@ -139,7 +156,7 @@ if (import.meta.main) {
   try {
     switch (a._[0]) {
       case "ask": ask(a, { q: String(a.q ?? ""), opts: a.opt }); break;
-      case "task": noRun(a); ask(a, taskCard(String(a.do ?? ""))); break;
+      case "task": noRun(a); ask(a, { ...taskCard(String(a.do ?? "")), kind: "Task" }); break;
       case "text": {
         noRun(a);
         if (typeof a.default !== "string") throw new Error('text needs --default "what you do if skipped"');

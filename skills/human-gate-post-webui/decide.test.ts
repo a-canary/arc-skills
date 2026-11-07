@@ -4,17 +4,17 @@ import { lintCard } from "./lint-card";
 
 test("ask: first --opt is the rec, card passes lint, evidence goes after </decide>", () => {
   const a = parseArgs(["ask", "--q", "Keep Opus for reviews?", "--opt", "Keep Opus | Better reviews. Costs budget.", "--opt", "Qwen only | No spend. Weaker reviews.", "--evidence", "x.ts:3", "--dry"]);
-  const body = buildCard({ q: a.q as string, opts: a.opt, evidence: a.evidence as string });
+  const body = buildCard({ q: a.q as string, opts: a.opt, evidence: a.evidence as string, context: "The fix is ready." });
   expect(body).toContain('<option id="A" rec="1" title="Keep Opus">Better reviews. Costs budget.</option><option id="B" title="Qwen only">');
   expect(body.split("</decide>")[1]).toContain("Evidence: x.ts:3");
-  expect(lintCard("agent-pub: review model", body)).toEqual([]);
+  expect(lintCard("[Design] Keep Opus for container reviews", body)).toEqual([]);
   expect(a.dry).toBe(true);
 });
 
 test("task card is Done / Not now and lints", () => {
-  const body = buildCard(taskCard("rotate the M1 password."));
+  const body = buildCard({ ...taskCard("rotate the M1 password."), context: "The old password leaked." });
   expect(body).toContain("<q>Will you rotate the M1 password today?</q>");
-  expect(lintCard("trading: rotate M1 password", body)).toEqual([]);
+  expect(lintCard("[Task] Rotate the M1 password today", body)).toEqual([]);
 });
 
 test("card text with < or quotes is refused, an option without a cost too", () => {
@@ -26,7 +26,7 @@ test("empty question, empty task, and 5 options are refused; a text card lints",
   expect(() => taskCard(" ")).toThrow();
   expect(() => buildCard({ q: "", opts: ["A | x", "B | y"] })).toThrow();
   expect(() => buildCard({ q: "Which?", opts: ["A | x", "B | y", "C | z", "D | w", "E | v"] })).toThrow();
-  expect(lintCard("arc-skills: where is the spec", buildCard(textCard("Which repo holds the spec?", "skip the spec check")))).toEqual([]);
+  expect(lintCard("[Design] Point the agent at the spec", buildCard({ ...textCard("Which repo holds the spec?", "skip the spec check"), context: "No spec found." }))).toEqual([]);
 });
 
 test("parseDecision reads every /decide reply shape", () => {
