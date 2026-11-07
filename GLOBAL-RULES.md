@@ -38,6 +38,7 @@ At session start, load these files into the system prompt:
 - **Prove before scaling.** Single manual run beats scheduled fleet.
 - **Never re-Read a file already read this session** unless edited since.
   Includes pager dumps. `grep -n` to find values.
+- **Loop-break rule (operator-approved 2026-11-07, arc-as4).** Same tool + same arguments + identical result twice → STOP; switch approach (different tool or query, ask via /decide, or report stuck). Repeating identical calls is never progress (2026-11-04: one lookup repeated 25× over 45 min).
 - **Never Read `tool-results/<id>.txt`** — already in context.
 - **Grep large unseen files** (>~300 lines) before reading.
 - **Never `Read` a session `.jsonl` transcript into context.** It is a raw
