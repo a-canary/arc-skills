@@ -202,8 +202,10 @@ Operator rule 2026-11-03. Recall at task start; bank before stop or the next tas
 
 - **Starting a task: recall first.** Run `ke research "<topic>"` for durable knowledge and `bd search <terms>` for prior beads and repo state, then cite what you used.
 - **Before stopping or starting the next task: bank the work.**
-- Durable, transferable learning (verdicts, gotchas, measured facts, with evidence) → `ke learn "<fact + evidence>"`.
-- Repo or project status (itemized, revokable) → `bd remember "<state>"`.
+- Durable, transferable learning (verdicts, gotchas, measured facts, with evidence) → `ke learn "<fact + evidence>"`; injected when relevant, git-storable, shareable across repos, teams and workspaces.
+- Repo or project status (itemized, revokable) → `bd remember "<state>"`; all read at agent start.
+- Harness memory files (Claude's MEMORY.md and the like) → only how the operator wants the agent to work; never facts or state (repos-lv2f A, 2026-11-07).
+- Both ke and bd remember are searchable on demand.
 - Every open assumption and every follow-up task → `bd create`, one bead each.
 - Nothing qualifies (trivial turn, pure status check) → run the no-op Bash `: learn-none`.
 - **Silent.** Banking and recall are internal agent bookkeeping: never mention `ke`/`bd` banking, recall, or `learn-none` in replies to the user. Bead ids the user must act on (e.g. a /decide card) are still reported.
