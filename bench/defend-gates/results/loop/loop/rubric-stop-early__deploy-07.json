@@ -1,0 +1,167 @@
+{
+ "approach": "rubric-stop-early",
+ "case": "deploy-07",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "Zero-config discovery loads any installed package that declares the `tasq-plugin` keyword, with no opt-in or allowlist. Any transitive dependency can run code inside tasq on every invocation, including the pre-commit hook and CI jobs the docs recommend. The removed `plugins` array was the only explicit trust decision, and this release deletes it.",
+     "evidence": "\"Any installed package with the `tasq-plugin` keyword is picked up automatically. No more `plugins: [...]` array in `tasq.config.ts`.\" and \"Discovery runs before argument parsing so that plugins can register subcommands.\" ABSENT: any trust prompt, allowlist, lockfile pinning, or config switch to disable auto-discovery."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3029,
+    "tokOut": 751,
+    "usd": 0.00080915,
+    "critMs": 3583
+   },
+   "wallMs": 56721
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The integrity-hash check that the trust model depends on is missing from the code. The prose says a plugin loads only if its installed version and integrity hash match the lock entry, but the code builds the ref without any integrity value and passes it to lock.check, which can only compare name and version.",
+     "evidence": "prose: \"2. The installed version and integrity hash still match the lock entry.\" code: \"const ref = { name: pkg.name, version: pkg.version, dir: dirname(pkgJson) }; const status = lock.check(ref); // \\\"trusted\\\" | \\\"untrusted\\\" | \\\"mismatch\\\"\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3922,
+    "tokOut": 1442,
+    "usd": 0.00133325,
+    "critMs": 6787
+   },
+   "wallMs": 17008
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback path only re-points the npm `latest` dist-tag. It does not undo what `tasq-migrate` already wrote into user repositories (rewritten config files, rewritten `require` calls, a new committed `tasq.plugins.lock`, and a removed `plugins` array). Users who migrated and then fall back to 2.9.4 would be left with configs that 2.9.4 may not read correctly, and the artifact gives no reverse migration.",
+     "evidence": "Rollback: \"re-point `latest` to `2.9.4` (`npm dist-tag add tasq@2.9.4 latest`) and publish a fix as 3.0.1.\" versus Breaking changes: \"`npx tasq-migrate` rewrites config files and `require` calls\" and \"`tasq-migrate` converts each entry in the old array into an approved entry in `tasq.plugins.lock`\"; ABSENT: a documented reverse migration or a 2.x-compatible config restore path."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4106,
+    "tokOut": 2926,
+    "usd": 0.00211205,
+    "critMs": 13669
+   },
+   "wallMs": 61922
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The artifact claims discovery cost is negligible and that build time improves because of the graph cache. Its own table contradicts both: cache-hit runs go from 0.21 s to 2.02 s, a roughly 10x regression, and every invocation pays about 1.9 s of overhead. The headline '<50 ms of task time' cache claim has no supporting measurement.",
+     "evidence": "\"Discovery is a fixed per-invocation cost and becomes negligible relative to real build work, so overall build time improves thanks to the new graph cache.\" vs. table row \"`tasq run build` (cache hit) | 0.21 s | 2.02 s\" and \"Task graph caching ... completes in under 50 ms of task time\" (ABSENT: any measurement of task time excluding discovery)"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4767,
+    "tokOut": 2892,
+    "usd": 0.00222725,
+    "critMs": 13650
+   },
+   "wallMs": 115164
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The plugin integrity check never hashes the installed bytes. The 'installed' integrity is read from the project lockfile for name@version, so the check only confirms that the lockfile matches the lock entry. Tampered or drifted files in node_modules, or a nested copy with the same name and version, pass the check and are loaded. The 'hash-pinned' guarantee is therefore weaker than the artifact states.",
+     "evidence": "\"The installed integrity hash is read from the project lockfile entry for that exact name and version.\" and the code: \"const integrity = await integrityFromProjectLock(root, pkg.name, pkg.version);\" Also: \"Plugin code is never loaded without an explicit, committed, hash-pinned approval.\" ABSENT: a hash computed over the on-disk package directory (`dir`) before loading, and a check that the discovered path is the one that was approved."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5480,
+    "tokOut": 2713,
+    "usd": 0.00228035,
+    "critMs": 12568
+   },
+   "wallMs": 28452
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The content hash that gates plugin loading excludes nested node_modules, but an approved plugin's runtime require() chain can resolve into those excluded directories. Tampered transitive dependency code would therefore execute after the plugin passes its trust check, and the artifact's 'transitive dependencies are never auto-loaded' rule only covers discovery, not code loaded through an approved plugin.",
+     "evidence": "\"computes a content hash over the files actually on disk in that package directory (sorted relative paths plus file bytes, excluding any nested `node_modules`) ... The plugin is then loaded from that verified path.\" ABSENT: any hash or integrity check covering the plugin's transitive dependency files that will execute when the plugin is loaded."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 6157,
+    "tokOut": 1010,
+    "usd": 0.00156425,
+    "critMs": 5008
+   },
+   "wallMs": 67382
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The trust check is time-of-check/time-of-use: files are hashed once in discovery, then the plugin is loaded from disk later. Nothing in the artifact says the loader executes the bytes that were hashed, or re-verifies on load. A writer to node_modules could swap a file after the hash and before require, and the path-based resolution hook would still allow it because it only checks that the path is in the verified set.",
+     "evidence": "\"Before anything is loaded, tasq computes a content hash over the files actually on disk and compares it to the lock entry... The plugin is then loaded from the verified paths with a module-resolution hook that refuses to load any module file outside the verified set\". ABSENT: any statement that the hashed bytes are the loaded bytes (e.g., read-once into memory, or re-hash at load time or file pinning)."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 6817,
+    "tokOut": 2398,
+    "usd": 0.00239025,
+    "critMs": 10996
+   },
+   "wallMs": 35270
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "tasq-migrate mints trust approvals from whatever is currently on disk. If node_modules was modified after the plugin was last trusted, the migration pins the tampered bytes as approved, so the trust lock records drifted code as trusted. The artifact's claim that nothing new is trusted implicitly does not hold for this path.",
+     "evidence": "\"`tasq-migrate` converts each entry in the old array into an approved entry in `tasq.plugins.lock` (name, version, install path, on-disk content hash including the plugin's runtime dependency closure, and project-lockfile integrity hash, all computed from the currently installed copy), so previously trusted plugins keep working and nothing new is trusted implicitly\". ABSENT: any verification that the installed copy matches the project lockfile integrity or a prior approval before the migration hashes it."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 7233,
+    "tokOut": 1247,
+    "usd": 0.0018979500000000002,
+    "critMs": 6096
+   },
+   "wallMs": 19921
+  }
+ ],
+ "artifact": "# Release proposal: tasq 3.0.0 (npm)\n\nMaintainers: core team · Publish: Thu 2026-11-12 · Tracking: #1840 · Blog: \"tasq 3: plugins for everyone\"\n\n## Highlights\n\n- **Zero-config plugin discovery with explicit trust.** Installed packages with the `tasq-plugin` keyword are discovered automatically, but they only load once approved with `tasq plugins trust`. Approvals are recorded in a committed `tasq.plugins.lock`, pinned to the plugin's install path and to a hash of its on-disk files and the on-disk files of the runtime dependencies it loads. No more `plugins: [...]` array in `tasq.config.ts`.\n- **Task graph caching** keyed on input file hashes; repeated `tasq run build` with unchanged inputs skips task execution. Note: in 3.0.0-rc.2 the end-to-end cache-hit time is dominated by per-invocation plugin discovery (see Performance); we have no measurement of task time excluding discovery, so no sub-50 ms claim is made.\n- **ESM-only**, Node 20+.\n\n## Breaking changes\n\n| Change | Migration |\n|---|---|\n| Node 18 support dropped | Node 18 is EOL since April 2025; `engines` field enforces `>=20` |\n| CommonJS `require('tasq')` removed | `npx tasq-migrate` rewrites config files and `require` calls; tested on 40 public repos, 38 fully automatic, 2 needed manual edits (documented) |\n| `plugins` array in config ignored | Replaced by discovery plus the trust lockfile; `tasq-migrate` converts each entry in the old array into an approved entry in `tasq.plugins.lock` (name, version, install path, on-disk content hash including the plugin's runtime dependency closure, and project-lockfile integrity hash, all computed from the currently installed copy), so previously trusted plugins keep working and nothing new is trusted implicitly |\n| Plugins load only when approved | Newly installed plugins are discovered but not loaded until `tasq plugins trust <name>` is run and the lockfile change is committed |\n| `tasq lint-staged` output format | JSON reporter unchanged; pretty reporter shows grouped output |\n| Higher per-invocation startup time in rc.2 | Every command pays roughly 1.8–2.1 s of discovery overhead on the reference monorepo (see Performance); this is a known regression and a promotion gate (see Release and support plan) |\n\n## Reverting a migration\n\nThe npm dist-tag rollback (see Release and support plan) only changes which version `npm install tasq` resolves. It does not touch files already written into user repositories. To make going back to 2.9.4 safe:\n\n- `tasq-migrate` is non-destructive by default. Before editing, it writes a backup of every file it changes to `.tasq-migrate-backup/` (originals plus a manifest listing each change). It also refuses to run on a dirty git working tree unless `--force` is passed, so users can always `git revert` or `git checkout` the migration commit.\n- `npx tasq-migrate --revert` restores the files from `.tasq-migrate-backup/`: original config files, original `require` calls, and the original `plugins` array. It also removes the generated `tasq.plugins.lock`. The 2.x line ignores that file, so leaving it in place is harmless if a user prefers to keep it.\n- Users who migrated and then pin back to 2.9.4 without reverting will have ESM configs and no `plugins` array. 2.9.4 reads ESM configs, but it will not see plugins that were only recorded in `tasq.plugins.lock`; `--revert` (or restoring the array by hand) is required for those plugins to load again.\n- `--revert` and the backup/dirty-tree behavior are release blockers listed under QA and are documented in the migration guide.\n\n## How plugin discovery and trust work\n\nOn every invocation (`tasq run`, `tasq lint-staged`, `tasq watch` restarts, `tasq list`), the CLI walks `node_modules` (including nested `node_modules` in workspaces), reads each `package.json`, and finds the ones whose `keywords` include `tasq-plugin`. Discovery only reads metadata. **It never executes package code.**\n\nA discovered plugin is loaded only if all of these hold:\n\n1. It is listed in `tasq.plugins.lock`, which records name, version, the install path relative to the project root, a content hash covering the package directory and its runtime dependency closure (see item 3), and the package's integrity hash from the project lockfile.\n2. The discovered install path is the same path that was approved. A second copy of the same name and version at a different path (for example a nested `node_modules` copy) is a different plugin and is not loaded until it is approved by that path.\n3. Before anything is loaded, tasq reads the files actually on disk **once, into memory**, computes a content hash over those bytes, and compares it to the lock entry. The hashed set is:\n   - the plugin's package directory, **including** its nested `node_modules`; and\n   - the runtime dependency closure: every package reachable from the plugin's `dependencies`, `optionalDependencies`, and `peerDependencies`, resolved with Node's resolution algorithm from the plugin's location. This includes hoisted copies that live outside the plugin directory, such as in the root `node_modules`. Each is hashed by its resolved real path (sorted relative paths plus file bytes), and the resolved paths are recorded in the hash input.\n\n   Edited, added, or removed files anywhere in this set, or a dependency that now resolves to a different path, change the hash, so tampered or drifted code in `node_modules` is not loaded.\n\n   **The bytes that were hashed are the bytes that run.** The verified in-memory snapshot is the only source for module code: the loader's resolution and load hooks serve each module's source from the snapshot and never re-read module files from disk after hashing, so a file swapped on disk after the hash is computed cannot be executed. Native addons (`.node` files), which cannot be loaded from memory, are written from the snapshot to a private temporary directory (mode 0700, created fresh per invocation) and loaded from there. The hooks refuse to load any module file outside the verified set (Node built-ins and tasq itself excepted). A plugin that `require`s or `import`s an undeclared package, or reaches a file outside the verified set by any other means, therefore fails with an error naming the file instead of executing unverified code. Limit: this covers module code. Files a plugin reads as data at runtime (for example via `fs`) are outside the guarantee, and an attacker who can already run code as the same user is outside the threat model.\n4. The version and the project-lockfile integrity value still match the lock entry. This is a secondary drift check and does not replace the content hash. A changed version or integrity, or an integrity value that cannot be resolved, means the plugin is not loaded until re-approved.\n5. It is a direct dependency (or devDependency) of the root or a workspace `package.json`. Transitive dependencies are never auto-discovered or auto-loaded as plugins; they must be approved explicitly by name. (This rule governs discovery. Code a plugin itself pulls in is covered by the dependency closure hash and the snapshot-backed loader in item 3.)\n\nUnapproved or mismatched plugins are skipped with a warning naming the package and the reason (path, content, version, or integrity mismatch). In CI and other non-interactive runs (`CI=true` or no TTY), tasq never prompts. With `--frozen-plugins` (the default when `CI=true`), an unapproved plugin fails the run rather than being silently skipped.\n\nPlugins that register subcommands do so from the lockfile metadata, so the discovery step still runs before argument parsing without executing unapproved code.\n\nBecause the content hash covers installed files, a plugin or dependency whose files differ between machines (for example, one that generates files at install time) will need approval on the machine where the lock is produced and may fail verification elsewhere; the warning says so, and re-running `tasq plugins trust <name>` after reinstalling updates the entry. Any change to a dependency of an approved plugin, including a routine dependency update, also requires re-approval of that plugin.\n\nControls:\n\n- `tasq plugins list` shows discovered plugins and their trust status.\n- `tasq plugins trust <name>` and `tasq plugins untrust <name>` edit `tasq.plugins.lock`.\n- `autoDiscover: false` in `tasq.config.ts` or `TASQ_NO_PLUGINS=1` disables discovery and plugin loading entirely.\n\n```ts\n// src/plugins/discover.ts\nexport async function discoverPlugins(root: string, lock: PluginLock): Promise<PluginRef[]> {\n  const found: PluginRef[] = [];\n  for await (const pkgJson of glob(\"**/node_modules/**/package.json\", { cwd: root })) {\n    const pkg = JSON.parse(await readFile(join(root, pkgJson), \"utf8\"));\n    if (!pkg.keywords?.includes(\"tasq-plugin\")) continue;\n    const dir = dirname(pkgJson); // path relative to root\n    // Secondary drift check: integrity from the project lockfile (npm/pnpm/yarn)\n    // entry for this exact name@version; undefined if it cannot be resolved.\n    const integrity = await integrityFromProjectLock(root, pkg.name, pkg.version);\n    const ref = { name: pkg.name, version: pkg.version, integrity, dir };\n    // check() requires the entry's name, version, and path to match first. Only then\n    // does it read the files on disk once into an in-memory snapshot\n    // (snapshotPluginClosure: the package dir including nested node_modules, plus the\n    // resolved runtime dependency closure), hash the snapshot bytes, and compare that to\n    // the approved content hash, and compare integrity. An undefined integrity never\n    // matches. The snapshot itself (not the paths) is handed to the loader, whose\n    // resolve/load hooks serve module source from it and never re-read module files from disk.\n    const status = await lock.check(ref, () => snapshotPluginClosure(root, dir));\n    // \"trusted\" | \"untrusted\" | \"path-mismatch\" | \"content-mismatch\" | \"mismatch\"\n    if (status === \"trusted\" && isDirectDependency(root, pkg.name)) found.push(ref);\n    else reportSkipped(ref, status); // warn, or throw under --frozen-plugins\n  }\n  return found;\n}\n```\n\n## Performance (reference monorepo: 61 workspaces, 2,430 installed packages, M2 MacBook Air, warm disk cache)\n\n| Command | 2.9.4 | 3.0.0-rc.2 |\n|---|---|---|\n| `tasq --version` | 0.11 s | 1.94 s |\n| `tasq lint-staged` (3 staged files) | 0.38 s | 2.31 s |\n| `tasq run build` (cache hit) | 0.21 s | 2.02 s |\n| `tasq run build` (cold, full build) | 48.7 s | 46.1 s |\n\nThese numbers show a real regression in rc.2. Every invocation pays about 1.8–1.9 s of fixed discovery overhead on this monorepo, so cache-hit runs are roughly 10x slower than 2.9.4 and `lint-staged` in pre-commit hooks is about 6x slower. The overhead is negligible only for long builds: the cold build is about 5% faster (48.7 s to 46.1 s), but that figure is a single configuration and we have not isolated how much of it comes from the graph cache. We do not claim that overall build time improves from caching, and we have not measured task time excluding discovery. The rc.2 numbers do not yet include the on-disk content hash check for approved plugins, nor the extra hashing of each plugin's runtime dependency closure, nor the in-memory snapshot and snapshot-backed loader; all of these must be included in the re-measurement.\n\nBecause short, frequent commands (pre-commit hooks, editor integrations, `tasq run` in watch loops) are the documented primary use of tasq, this regression is a promotion gate:\n\n- Before promotion to `latest`, discovery must be made cheap on warm runs (for example, caching the discovery result keyed on the project lockfile and `node_modules` mtimes, and restricting the walk to direct dependencies), and the table above must be re-measured on the final build. Any such cache may skip the directory walk, but it must not skip the content hash verification of a plugin that is about to be loaded; only the hashing of the few approved plugins and their dependency closures runs on each invocation.\n- Target: `tasq --version` and cache-hit `tasq run build` within 2x of 2.9.4 on the reference monorepo. If the target is not met, 3.0.0 stays on `next`.\n- Any \"task time\" figure (such as a sub-50 ms cache-hit claim) will appear in the blog or docs only after it is measured separately from discovery.\n\n## Supply chain and licensing\n\n- Published from GitHub Actions with npm provenance (`--provenance`); 2FA required for all maintainers.\n- No `postinstall` scripts in tasq or its dependencies.\n- New runtime deps: `fast-glob` (MIT), `semver` (ISC). License scan: no copyleft dependencies.\n- Plugin code is never loaded without an explicit, committed approval pinned to an install path and to a hash of the files on disk, covering the plugin and its runtime dependency closure. Enforcement happens at load time: the hashed bytes are held in memory and are the bytes executed, and a resolution hook blocks anything outside the verified set (see above).\n\n## QA summary\n\n- Unit + integration: 1,912 tests pass on Linux/macOS/Windows, Node 20 and 22.\n- `tasq-migrate` on 40 public repos (list in #1840): 38 automatic, 2 manual (Yarn PnP projects, documented).\n- Smoke test of top 15 community plugins under auto-discovery: all load and register subcommands once trusted. Must be re-run with the dependency closure hash and the snapshot-backed loader enabled.\n- Trust-model tests required before promotion to `latest`: an unapproved plugin is not executed, a version or integrity mismatch blocks loading, a plugin whose integrity cannot be resolved is not loaded, a plugin with any file modified, added, or removed in `node_modules` (project lockfile unchanged) is not loaded, a plugin whose nested `node_modules` dependency file is modified is not loaded, a plugin whose hoisted dependency (outside the plugin directory) is modified is not loaded, a plugin that loads a file outside the verified set (undeclared dependency) fails instead of executing it, a plugin file swapped on disk after hashing but before load (TOCTOU) still executes the originally hashed bytes (or fails) and never the swapped bytes, including for a native addon, a copy of an approved name@version at a different path is not loaded, transitive plugins are not auto-loaded, `--frozen-plugins` fails CI, and `TASQ_NO_PLUGINS=1` loads nothing.\n- Reverse-migration tests required before publish: `tasq-migrate` writes `.tasq-migrate-backup/` and refuses a dirty tree without `--force`; `tasq-migrate --revert` restores original configs, `require` calls, and the `plugins` array on the same 40 public repos, and the restored repos run under 2.9.4.\n- Performance re-measurement required before promotion to `latest`: the Performance table re-run on the final build (including content hash verification and snapshotting of plugins and their dependency closures), meeting the 2x-of-2.9.4 target for `tasq --version` and cache-hit `tasq run build`, with task time measured separately from discovery.\n\n## Release and support plan\n\n1. Publish `3.0.0` under `next` dist-tag; promote to `latest` after 7 days with no P1 issues **and** the performance gate above is met.\n2. `2.x` moves to `latest-2` dist-tag and receives security fixes until 2027-11-12. Announced in the README and blog post.\n3. Rollback: if a P1 is found after promotion, re-point `latest` to `2.9.4` (`npm dist-tag add tasq@2.9.4 latest`) and publish a fix as 3.0.1. Re-pointing the tag does not change files in user repositories; users who already ran `tasq-migrate` follow \"Reverting a migration\" above (`npx tasq-migrate --revert`, or `git revert` of the migration commit), and the rollback announcement links those steps.\n4. Blog post and changelog go live at publish; Discord announcement links the migration guide, including the plugin trust workflow and the revert steps. They must not claim a sub-50 ms cache-hit time or faster overall builds unless backed by the re-measured numbers.",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 30598,
+  "tokOut": 30268,
+  "usd": 0.425044,
+  "critMs": 160433
+ },
+ "status": "cap"
+}

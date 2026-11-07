@@ -1,0 +1,70 @@
+{
+ "approach": "cascade",
+ "case": "deploy-12",
+ "rounds": [
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "`sync.meta` uploads a device name, which often contains a real name. That contradicts the statement that no name data is stored. Privacy-policy sections were updated, but the wording should be reconciled.",
+     "evidence": "\"sync.meta sidecar (slot, playtime, last-modified, device name)\" vs \"No email, name, payment or friends data.\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "Cloud data is deleted after 24 months without a sync, and no email is stored, so the player cannot be warned. If the PC is lost, this could remove the only copy of a save, which sits uneasily with the agreed 'never lose a save' rule.",
+     "evidence": "\"Cloud data with no sync for 24 months is deleted\" / ABSENT: pre-deletion notice"
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The patch-notes line says saves on this PC stay where they are. Sync can replace the local slot with a newer cloud copy, though the old version is backed up. The wording could mislead.",
+     "evidence": "\"Your saves on this PC stay where they are.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Conflict detection relies on 'changed since last sync'. The artifact does not say whether that uses a baseline hash or device-clock timestamps. After a 1.3 session that does not update the sidecar, the result is unverified. The 1.3 downgrade test checked only that a 1.4 save loads, not a load, save and re-sync round trip.",
+     "evidence": "\"Loads, sidecar and modifier keys ignored\" / ABSENT: round-trip test"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Restoring 1.3 as the default branch does not revert installed 1.4 clients. The kill switch is the real mitigation. The downgrade test was done only on the Steam beta branch, not on Epic. Unlink-and-delete has no described confirmation step.",
+     "evidence": "\"1.3 is restored as the default branch on both stores\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The storage forecast does not match its own formula: about 109k opted-in players × 5 versions × 420 KB is roughly 229 GB per slot, not 140 GB. At about $3/month the budget impact is negligible. The mechanism of the hard budget stop is not described.",
+     "evidence": "\"forecast ~140 GB at 60% opt-in, about $3/month\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "Under-13 handling covers only Epic cabined accounts. It is not stated that the server enforces this, and there is no age handling for Steam accounts.",
+     "evidence": "\"for them linking is not offered and the screen explains why.\""
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 10807,
+    "tokOut": 16484,
+    "usd": 0.052524690000000006,
+    "critMs": 81809
+   },
+   "wallMs": 204683
+  }
+ ],
+ "artifact": "# Release proposal: Lanternfall 1.4 \"Cross-Save\" patch\n\nOwner: Driftwood Games (live ops) · Patch: Wed 2026-12-02 10:00 PT on Steam and Epic · Patch notes + Steam/Epic news post: same time · Change: LF-140\n\n## What ships\n\n- **Cross-Save (optional)**: link your Steam and Epic accounts and continue the same save on either store. Off until a player turns it on in Settings > Cross-Save.\n- Two new difficulty modifiers and 31 bug fixes (full list in patch notes). Modifiers are stored in the existing v3 `options` map, whose unknown keys 1.3 already ignores.\n\nPlayers: ~182k monthly active (Steam 71%, Epic 29%). PC only.\n\n## How Cross-Save works\n\n- Linking: in-game, the player signs in with the other store's account (Steam OpenID / Epic Account Services). Our backend validates the Steam session ticket and Epic EOS token server-side, then stores the link `steam_id ↔ epic_account_id`. Each store account can be in at most one link.\n- Epic under-13 (cabined) accounts get a restricted status from EOS; for them linking is not offered and the screen explains why.\n- Save files are unchanged: same v3 format as 1.3. Sync uploads the existing save slots plus a small `sync.meta` sidecar (slot, playtime, last-modified, device name). 1.3 ignores the sidecar, so a player moved back to 1.3 keeps a working save.\n- On launch the game downloads the newest cloud copy if the local slot is older. If both changed since last sync, the game asks: \"Keep the save on this PC (12 h 41 m, today 18:02) or the cloud save (13 h 05 m, today 21:40)?\" Nothing is overwritten without that choice.\n- Every replaced version is kept: the server keeps the last 5 versions per slot, and the game keeps the last 3 locally in `saves/backup/`. Settings > Cross-Save > Restore lists them.\n- The game never blocks on the network: offline or on any sync error, play continues on the local save and syncs next launch. The title screen shows \"Cross-Save: synced 2 min ago\" or \"Cross-Save: offline, will sync later\".\n\n## Data, privacy and store policy\n\n- We store: Steam ID, Epic account ID, save blobs, `sync.meta`. No email, name, payment or friends data. Storage region: EU (Frankfurt) for all players.\n- Settings > Cross-Save > \"Unlink and delete cloud saves\" removes the link and all server copies within 24 h (local saves untouched). Cloud data with no sync for 24 months is deleted; if that player launches again, local saves are simply uploaded fresh.\n- Privacy policy updated (sections 2, 5, 7) and linked from the Cross-Save screen before linking; reviewed by our counsel (PP-v6).\n- Epic store page \"online features\" updated to list optional account linking; Epic Account Services scopes requested: basic profile id only. Steam requires no listing change.\n\n## Security\n\n- Save blobs are treated as untrusted: the server never parses them, accepts max 2 MB per slot, 10 slots per player, and 60 uploads per hour per player.\n- The client verifies the save's checksum and v3 schema before loading; a blob that fails is not loaded, the previous version is kept, and the player sees \"This cloud save could not be read. Your local save was kept.\"\n- API requires a short-lived token minted from the validated store session; tokens are scoped to one player and expire after 1 h. Linking requires valid sessions from both stores at the same time.\n\n## Cost\n\n- Storage: ~420 KB per slot × up to 5 versions; forecast ~140 GB at 60% opt-in, about $3/month. Requests and egress ~$90/month.\n- Cloud billing alert at $250/month and hard project budget stop at $600/month; at the stop, the kill switch below is flipped automatically.\n\n## QA summary\n\nQA ran on the release build 1.4.0 (Steam build 18204411 on a private branch, Epic build 1.4.0-cl5521 on the Epic dev sandbox) pointed at the production Cross-Save backend with the production config.\n\n| Check | Result |\n|---|---|\n| Link Steam→Epic and Epic→Steam; play on one, continue on the other (4 PCs) | Pass |\n| Conflict: play offline on both, reconnect → prompt shows both; each choice keeps the other in backups | Pass |\n| Restore from server versions 1-5 and local backups 1-3 | Pass |\n| Corrupted / oversized / wrong-schema blob uploaded via API | Rejected or not loaded, local save kept |\n| Token from player A used on player B's slots | 403 |\n| Downgrade to 1.3 (Steam beta branch `1.3-legacy`) with a synced save using both new modifiers | Loads, sidecar and modifier keys ignored |\n| Epic cabined test account | Linking not offered, explanation shown |\n| Linking an account already in a link | Refused with \"unlink first\" message |\n| Unlink and delete → server copies gone within 24 h; local saves remain | Pass |\n| Offline launch, backend 503, timeouts | Game starts on local save, status shows offline |\n| Controller-only, keyboard-only and 200% UI scale on Cross-Save screens; screen narration for the conflict prompt | Pass |\n| Steam Deck incl. Epic sign-in flow, and 1280×720 | Pass |\n| Load test: 30k concurrent launches syncing in 10 min | p95 410 ms, 0 errors |\n\n## Rollout\n\n1. Nov 18-30: public opt-in beta branch on Steam (2,300 players) and Epic sandbox testers (150). 0 lost saves; 11 conflict prompts, all resolved by players.\n2. Dec 2 10:00 PT: 1.4 to all players on both stores; Cross-Save available to everyone who turns it on.\n3. Patch notes say: \"Cross-Save between Steam and Epic is here. It's optional; turn it on in Settings > Cross-Save. Your saves on this PC stay where they are.\"\n\n## Monitoring\n\n- Dashboard: link success rate, sync errors by type, conflict prompts, restore usage, API 5xx and p95, spend.\n- Alerts: sync error rate > 2% for 15 min, API 5xx > 1%, any spike in restores > 3× the beta rate.\n\n## Rollback\n\n- Kill switch `cross_save_enabled=false` (server config, read on launch and every 10 min): sync stops, the game plays local saves and shows \"Cross-Save is temporarily unavailable. Your saves on this PC are safe.\" Server copies and links are kept so sync resumes when re-enabled.\n- If the patch itself must be reverted, 1.3 is restored as the default branch on both stores; saves written by 1.4 are the same v3 format and load in 1.3 (tested above).",
+ "fixerUsage": {
+  "calls": 0,
+  "tokIn": 0,
+  "tokOut": 0,
+  "usd": 0,
+  "critMs": 0
+ },
+ "status": "cleared"
+}

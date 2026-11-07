@@ -1,0 +1,113 @@
+{
+ "approach": "cascade",
+ "case": "merge-05",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "accessibility",
+     "severity": "major",
+     "claim": "The embargo badge text is hard-coded white (#ffffff) on var(--surface), which is #ffffff in the default light theme. The text is effectively invisible (about 1:1 contrast), which fails WCAG 1.4.3 AA, a stated release requirement. The hard-coded color also bypasses the theme tokens.",
+     "evidence": ".embargo { background: var(--surface); color: #ffffff; } with :root --surface: #ffffff"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "major",
+     "claim": "The unpublish control is a click-only <span>. It is not focusable, has no role=button, no key handler, and no accessible name, because the icon is aria-hidden. Keyboard-only and screen-reader editors cannot reach or operate it, which fails WCAG 2.1.1 and 4.1.2.",
+     "evidence": "<span className={styles.unpublish} onClick={handleUnpublish}><TrashIcon aria-hidden=\"true\" /></span>"
+    },
+    {
+     "lens": "ui",
+     "severity": "major",
+     "claim": "In the light theme, which is the default, the embargo badge shows only an amber outline with invisible text. Editors cannot read the lift time, so the feature's main purpose fails.",
+     "evidence": "color: #ffffff on background: var(--surface) (#ffffff)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The unpublish handler has no try/catch, no pending or busy state, and no error feedback. A rejected promise or a double activation gives the editor no signal on a public-content action.",
+     "evidence": "if (ok) await onUnpublish(draft.id);"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Server-side authorization for unpublish is not shown in the diff. The client only gates on status === \"published\". This is likely handled by the existing endpoint, but it is unverified.",
+     "evidence": "ABSENT: no permission check or authz described for onUnpublish"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The badge shows the lift time without a timezone label. Editors outside the newsroom timezone, and screen-reader users, may misread it.",
+     "evidence": "formatInNewsroomTz(draft.embargoUntil!, \"MMM d, HH:mm\") with no tz suffix"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The PR has no screenshots, tests, or contrast checks for either theme, even though WCAG AA is a release requirement. A check would have caught the white-on-white text.",
+     "evidence": "ABSENT: no tests or contrast results in the PR"
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 9094,
+    "tokOut": 5043,
+    "usd": 0.03125152,
+    "critMs": 25490
+   },
+   "wallMs": 88282
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The first-pass major is not supported. The PR only exposes an existing unpublish action through a new `onUnpublish` prop, and the handler and its server-side authorization are outside the diff. The description says unpublish already existed (four clicks today), so authz belongs to that existing endpoint. The only residual gap is whether the button should be hidden from roles that cannot unpublish.",
+     "evidence": "onUnpublish: (id: string) => Promise<void>; ABSENT: any change to the unpublish endpoint or its permissions"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A rejected `onUnpublish` is not handled locally and the button has no pending state. The modal confirm limits double-submit, and the parent may already surface errors, so this is a hardening nit rather than a blocker.",
+     "evidence": "if (ok) await onUnpublish(draft.id);"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "After a confirmed unpublish the row's status may change or the row may leave the list, and nothing manages focus afterward. Keyboard and screen-reader users could lose their place. The dark-theme values of `--text-muted` and `--danger` are not visible in the truncated tokens hunk, so the first-pass 2.7:1 hover-contrast figure cannot be verified from the artifact.",
+     "evidence": "ABSENT: focus management after onUnpublish; tokens.css dark block shown only through --text"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The embargo time is rendered without a timezone label. This is a minor clarity risk for editors working across zones.",
+     "evidence": "formatInNewsroomTz(draft.embargoUntil!, \"MMM d, HH:mm\")"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "`e.stopPropagation()` has no apparent effect, because the parent `<li>` has no click handler. The `!` non-null assertion relies on the `embargoed` check made earlier in the function.",
+     "evidence": "e.stopPropagation(); ... draft.embargoUntil!"
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 8891,
+    "tokOut": 10200,
+    "usd": 0.048993220000000004,
+    "critMs": 54853
+   },
+   "wallMs": 127915
+  }
+ ],
+ "artifact": "PR #644: Embargo badge + quick unpublish in the draft queue\n\nDesk editors keep opening drafts just to check whether they are under embargo, and pulling a story that went out early takes four clicks.\nThis adds an embargo badge (amber outline, shows the lift time in the newsroom's timezone) and a one-click unpublish action on each queue row.\nUnpublish still goes through the standard confirm dialog.\n\nAccessibility notes: the badge text uses the theme `--text` token, so it meets AA contrast in both light and dark themes. The unpublish action is a native `<button>` with an accessible name that includes the headline, so it is keyboard-focusable and operable and is announced by screen readers.\n\ndiff --git a/web/src/queue/DraftRow.tsx b/web/src/queue/DraftRow.tsx\nindex 6d1e0b4..b38f7c2 100644\n--- a/web/src/queue/DraftRow.tsx\n+++ b/web/src/queue/DraftRow.tsx\n@@ -1,31 +1,57 @@\n import { Draft } from \"../api/types\";\n import { formatByline } from \"../lib/format\";\n+import { formatInNewsroomTz } from \"../lib/time\";\n+import { useConfirm } from \"../ui/confirm\";\n+import { TrashIcon } from \"../ui/icons\";\n import styles from \"./DraftRow.module.css\";\n\n type Props = {\n   draft: Draft;\n   onOpen: (id: string) => void;\n+  onUnpublish: (id: string) => Promise<void>;\n };\n\n-export function DraftRow({ draft, onOpen }: Props) {\n+export function DraftRow({ draft, onOpen, onUnpublish }: Props) {\n+  const confirm = useConfirm();\n+  const embargoed =\n+    draft.embargoUntil !== null && new Date(draft.embargoUntil) > new Date();\n+\n+  async function handleUnpublish(e: React.MouseEvent) {\n+    e.stopPropagation();\n+    const ok = await confirm({\n+      title: \"Unpublish this story?\",\n+      body: `\"${draft.headline}\" will be removed from the site and returned to drafts.`,\n+      confirmLabel: \"Unpublish\",\n+      destructive: true,\n+    });\n+    if (ok) await onUnpublish(draft.id);\n+  }\n+\n   return (\n     <li className={styles.row}>\n       <button className={styles.open} onClick={() => onOpen(draft.id)}>\n         <span className={styles.headline}>{draft.headline}</span>\n         <span className={styles.byline}>{formatByline(draft.authors)}</span>\n       </button>\n+      {embargoed && (\n+        <span className={styles.embargo}>\n+          Embargo until {formatInNewsroomTz(draft.embargoUntil!, \"MMM d, HH:mm\")}\n+        </span>\n+      )}\n       <span className={styles.status} data-status={draft.status}>\n         {draft.status}\n       </span>\n+      {draft.status === \"published\" && (\n+        <button\n+          type=\"button\"\n+          className={styles.unpublish}\n+          aria-label={`Unpublish \"${draft.headline}\"`}\n+          onClick={handleUnpublish}\n+        >\n+          <TrashIcon aria-hidden=\"true\" />\n+        </button>\n+      )}\n     </li>\n   );\n }\ndiff --git a/web/src/queue/DraftRow.module.css b/web/src/queue/DraftRow.module.css\nindex 1a2b3c4..5d6e7f8 100644\n--- a/web/src/queue/DraftRow.module.css\n+++ b/web/src/queue/DraftRow.module.css\n@@ -1,24 +1,52 @@\n .row {\n   display: flex;\n   align-items: center;\n   gap: 12px;\n   padding: 10px 16px;\n   background: var(--surface);\n   border-bottom: 1px solid var(--border);\n }\n\n .open {\n   flex: 1;\n   text-align: left;\n   background: none;\n   border: 0;\n   color: var(--text);\n }\n+\n+.embargo {\n+  font-size: 12px;\n+  padding: 2px 8px;\n+  border-radius: 999px;\n+  border: 1px solid var(--warn);\n+  background: var(--surface);\n+  color: var(--text);\n+  white-space: nowrap;\n+}\n+\n+.unpublish {\n+  display: inline-flex;\n+  padding: 6px;\n+  border: 0;\n+  border-radius: 6px;\n+  background: none;\n+  color: var(--text-muted);\n+  cursor: pointer;\n+}\n+\n+.unpublish:hover {\n+  color: var(--danger);\n+  background: var(--surface-hover);\n+}\n+\n+.unpublish:focus-visible {\n+  outline: 2px solid var(--text);\n+  outline-offset: 2px;\n+}\ndiff --git a/web/src/theme/tokens.css b/web/src/theme/tokens.css\nindex 0c9a8e1..4f27b1d 100644\n--- a/web/src/theme/tokens.css\n+++ b/web/src/theme/tokens.css\n@@ -1,11 +1,13 @@\n :root {\n   --surface: #ffffff;\n   --surface-hover: #f2f3f5;\n   --text: #1b1d21;\n   --text-muted: #5f6672;\n   --border: #e2e4e8;\n+  --warn: #b45309;\n   --danger: #b91c1c;\n }\n [data-theme=\"dark\"] {\n   --surface: #16181d;\n   --surface-hover: #22252c;\n+  --warn: #f59e0b;\n   --text: #e7e9ee;",
+ "fixerUsage": {
+  "calls": 1,
+  "tokIn": 2880,
+  "tokOut": 2487,
+  "usd": 0.036386,
+  "critMs": 24761
+ },
+ "status": "cleared"
+}

@@ -1,0 +1,167 @@
+{
+ "approach": "rubric-stop-early",
+ "case": "deploy-04",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "createShareLink embeds the owner's full project API key in the public share URL, and the share page returns it to any viewer as `replayKey`. Anyone with the link, including crawlers that unfurl it, can use the owner's key to spend the owner's quota and bill. Share links are advertised as public and survive session deletion only if the share row is removed.",
+     "evidence": "url.searchParams.set(\"k\", project.apiKey); ... return { messages: share.messages, model: share.model, replayKey: url.searchParams.get(\"k\") };"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3029,
+    "tokOut": 372,
+    "usd": 0.00061965,
+    "critMs": 2110
+   },
+   "wallMs": 19162
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The anonymous replay endpoint spends the share owner's project credential on behalf of any unauthenticated caller who has the link. The only limits are per-share and per-IP, and per-IP is trivially bypassed. A link shared publicly, or leaked, can drain the owner's key or pro-tier quota, and the artifact does not say what limits apply to the project key itself.",
+     "evidence": "const key = await secrets.getProjectKey(share.projectId); ... await enforceLimits({ shareId: share.id, ip: getClientAddress() }); // per-share + per-IP caps, 429 on exceed"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3373,
+    "tokOut": 761,
+    "usd": 0.00088295,
+    "critMs": 4611
+   },
+   "wallMs": 21557
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Share pages return the full stored conversation (`messages`, `model`) to anyone who requests `/s/[id]`, with no owner auth, and the artifact never states how the share id is generated. If ids are short, sequential, or otherwise guessable, anyone can enumerate other users' Playground conversations, which may contain pasted secrets or personal data.",
+     "evidence": "\"The share URL contains only the opaque share id.\" ... `const share = await db.shares.get(params.id); ... return { messages: share.messages, model: share.model };` ABSENT: id length, entropy source (e.g. CSPRNG), and any rate limit on the GET share route."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3947,
+    "tokOut": 2245,
+    "usd": 0.00173975,
+    "critMs": 11547
+   },
+   "wallMs": 25017
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The shipped free-tier rate limit does not match the public promise. The changelog promises 20 requests per minute, but the gateway config that deploys to prod sets 20 requests per second with a burst of 40. QA validated a different config (staging used `per: minute`), so the 429 behaviour that passed QA is not what will ship.",
+     "evidence": "Changelog: \"Free accounts get **20 requests per minute**\". Config diff: \"rate_limit: { requests: 20, per: second, burst: 40 }\". QA: \"21st request inside a minute returned 429 ... (staging config used `per: minute`).\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4809,
+    "tokOut": 2154,
+    "usd": 0.00186665,
+    "critMs": 11643
+   },
+   "wallMs": 34696
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Share links are public to anyone holding the URL and persist the full conversation server-side with no stated expiry, retention limit, or cascade on account deletion. Conversations shared at launch may contain personal data, and nothing bounds how long it stays exposed unless the owner manually deletes it.",
+     "evidence": "\"Shares can be deleted from Playground → History; deleted shares return 404\" — ABSENT: any TTL or default expiry on the shares table, a retention policy for share rows, or deletion of shares when the owner's account is deleted."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4858,
+    "tokOut": 3500,
+    "usd": 0.00254945,
+    "critMs": 18629
+   },
+   "wallMs": 96319
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The published free-tier limit of 20 requests per minute contradicts the prod gateway config, which sets burst to 40. Under that config a client can send up to 40 requests immediately, so the advertised limit is wrong in production. The QA check (21st request got 429) ran on staging, and the artifact does not show the staging burst value.",
+     "evidence": "Changelog: \"Free accounts get **20 requests per minute**\". Config: \"rate_limit: { requests: 20, per: minute, burst: 40 }\". QA: \"21st request inside a minute returned 429 with `Retry-After`: pass (staging config used `per: minute`).\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5716,
+    "tokOut": 3729,
+    "usd": 0.00283555,
+    "critMs": 19040
+   },
+   "wallMs": 77862
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The published free-tier quota of 100k tokens per day is not enforced by the gateway config diff. The free tier block sets requests-per-minute, max_tokens_per_request and a pool, but has no daily_tokens field, while the pro tier explicitly sets daily_tokens: null. Nothing else in the artifact shows the 100k/day limit being applied, so the public changelog promise and the enforced behaviour may diverge.",
+     "evidence": "Changelog: \"Free accounts get **20 requests per minute** and **100k tokens per day**\". Diff: \"free: models: [...], rate_limit: { requests: 20, per: minute, burst: 20 }, max_tokens_per_request: 4096, pool: free-8b\". ABSENT: any daily_tokens: 100000 (or equivalent) on the free tier, and any other enforcement point for the daily token cap."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5896,
+    "tokOut": 2592,
+    "usd": 0.00230305,
+    "critMs": 16076
+   },
+   "wallMs": 36662
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The public changelog promises that anyone with a share link can re-run the conversation, but the replay route rejects any share whose model is not on the free allow-list. Shares of pro-model sessions will return 403 on re-run, and the launch copy does not say so.",
+     "evidence": "Release notes: \"Anyone with the link can view the conversation and re-run it, even without a Lumen account.\" Replay route: \"if (!FREE_MODELS.includes(share.model)) throw error(403);\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 6146,
+    "tokOut": 3860,
+    "usd": 0.0029870499999999998,
+    "critMs": 24287
+   },
+   "wallMs": 85379
+  }
+ ],
+ "artifact": "# Release proposal: Lumen Gateway: Free tier GA + Playground share links\n\nOwner: platform · Deploy: Wed 2026-11-04 16:00 UTC · Launch post: Wed 17:00 UTC (blog, HN, X)\n\n## Release notes (public changelog)\n\n- **Free tier is generally available.** Sign up with email, no card required. Free accounts get **20 requests per minute** and **100k tokens per day** on `llama-3.1-8b-instruct` and `qwen2.5-7b-instruct`.\n- **Share from Playground.** Click \"Share\" on any playground session to get a link. Anyone with the link can view the conversation and re-run it, even without a Lumen account. Share links expire automatically after 30 days by default (you can choose 7 or 90 days), and you can delete them at any time. Deleting your account deletes all of your shares.\n- New `GET /v1/usage` endpoint returns your current daily token usage.\n\n## Gateway config change (`deploy/prod/gateway.yaml`, diff)\n\n```diff\n tiers:\n+  free:\n+    models: [llama-3.1-8b-instruct, qwen2.5-7b-instruct]\n+    rate_limit: { requests: 20, per: minute, burst: 20 }\n+    daily_tokens: 100000\n+    max_tokens_per_request: 4096\n+    pool: free-8b\n   pro:\n     models: [\"*\"]\n     rate_limit: { requests: 600, per: minute, burst: 120 }\n     daily_tokens: null\n     pool: shared-h100\n pools:\n+  free-8b:\n+    gpu: h100-80g\n+    min_replicas: 2\n+    max_replicas: 24\n+    scale_on: queue_depth > 8 for 60s\n   shared-h100:\n     gpu: h100-80g\n     min_replicas: 6\n     max_replicas: 40\n```\n\nNote: the free-tier `burst` is set to 20 (previously 40) so that the enforced limit matches the published 20 requests per minute; a burst of 40 would have let a client send 40 requests immediately.\n\nNote: the free tier now sets `daily_tokens: 100000` explicitly, so the published 100k tokens/day limit is enforced by the gateway (same field the pro tier sets to `null` for unlimited). Daily usage resets at 00:00 UTC, and requests over the cap return 429. `GET /v1/usage` reports usage against this same counter.\n\n## Capacity and cost\n\n- Projection: 3,000 free DAU in month 1, avg 35 requests/day each, ~1.2k tokens per request.\n- Two H100 replicas serve the projected free load at < 30% utilization; at the GPU provider's on-demand rate of $2.49/h that is ~$3.6k/month, within the $4k/month free-tier budget.\n- Free pool is isolated from `shared-h100`, so free traffic cannot degrade paid latency.\n- Anonymous share replays are served from the free pool under a dedicated replay credential with its own global daily token cap (below), so they count against the free-tier marketing budget and never against any customer's quota or bill.\n\n## Playground share links (`apps/playground/src/share.ts`)\n\nThe share URL contains only the opaque share id. No customer project API key is ever placed in a URL, sent to the browser, or used for anonymous replays. Anonymous re-runs go through a server-side replay endpoint that uses a dedicated, platform-owned replay credential (`REPLAY_KEY`). That credential is:\n\n- bound to the `free` tier and the `free-8b` pool, so it can only call the free-tier allow-listed models and can never reach pro models or pro quota;\n- capped globally at a daily token budget (`REPLAY_GLOBAL_DAILY_TOKENS`, initially 2M tokens/day, about 1.5% of projected free-tier volume), after which replays return 429 until the next UTC day;\n- subject to per-share caps (total replays per share per day), per-IP caps, and a bot-challenge check on every replay.\n\nBecause the owner's key and quota are not involved, a leaked or publicly posted link can at worst consume the shared replay budget, which is bounded and does not affect the owner or paid capacity.\n\n### Share id security\n\nShare links are capability URLs: possession of the id is the only access control, so the id must be unguessable.\n\n- **Generation:** the id is 128 bits from a CSPRNG (`crypto.randomBytes(16)`, base64url-encoded, 22 characters). It is never sequential, time-based, or derived from the session or project id. The database primary key for shares is this id, with no separate guessable public key.\n- **Enumeration resistance:** at 128 bits, guessing a valid id is computationally infeasible. As defense in depth, the GET route is rate limited per IP (60 requests/min); repeated 404s from one IP (more than 20 in 5 minutes) trigger a temporary block and a bot challenge. Unknown, malformed, expired and deleted ids all return an identical 404.\n- **No leakage via crawlers or referrers:** share pages are served with `X-Robots-Tag: noindex, nofollow` and `Referrer-Policy: no-referrer`, and are excluded from the sitemap.\n- **User expectation:** the Share dialog warns that anyone with the link can view the full conversation (which may include personal data), states when the link will expire, and shares can be revoked at any time (see below).\n\n### Retention and deletion\n\nShares persist a full copy of the conversation, so their lifetime is bounded:\n\n- **Default expiry:** every share has a mandatory `expiresAt`. Default is 30 days from creation; the owner can pick 7 or 90 days in the Share dialog. 90 days is the maximum; there is no \"never expires\" option. The owner can create a new share after expiry.\n- **Enforcement:** the GET and replay routes both reject shares past `expiresAt` with the same 404 as unknown ids, independent of whether the purge job has run yet.\n- **Purge:** a daily job hard-deletes expired share rows (including the stored `messages`), so expired content does not remain in the database for more than about 24 hours after expiry. The job's last-success time is monitored (see Rollout).\n- **Owner deletion:** deleting a share from Playground → History hard-deletes the row immediately. Deleting a playground session also deletes all shares of that session.\n- **Account and project deletion:** `shares.project_id` is a foreign key with `ON DELETE CASCADE`, so deleting a project or account hard-deletes all of its shares in the same transaction; no orphaned shares remain reachable.\n\n```ts\nconst SHARE_TTL_DAYS = { default: 30, allowed: [7, 30, 90] as const };\n\nexport async function createShareLink(\n  session: Session,\n  project: Project,\n  ttlDays: number = SHARE_TTL_DAYS.default,\n): Promise<string> {\n  if (!SHARE_TTL_DAYS.allowed.includes(ttlDays as 7 | 30 | 90)) throw new Error(\"invalid ttl\");\n  // 128-bit CSPRNG id, base64url (22 chars). Not sequential or derivable.\n  const id = crypto.randomBytes(16).toString(\"base64url\");\n  const now = new Date();\n  const share = await db.shares.insert({\n    id,\n    sessionId: session.id,\n    projectId: project.id, // FK ... ON DELETE CASCADE\n    messages: session.messages,\n    model: session.model,\n    createdAt: now,\n    expiresAt: new Date(now.getTime() + ttlDays * 24 * 60 * 60 * 1000), // NOT NULL\n  });\n  // No credentials in the URL. Replays use the platform replay credential (see replay route).\n  return new URL(\"/s/\" + share.id, PLAYGROUND_ORIGIN).toString();\n}\n```\n\n```ts\n// apps/playground/src/routes/s/[id].ts\nexport async function load({ params, setHeaders, getClientAddress }) {\n  // Per-IP rate limit on share reads; blocks enumeration attempts. 429 on exceed.\n  await enforceShareReadLimits({ ip: getClientAddress() });\n  setHeaders({\n    \"X-Robots-Tag\": \"noindex, nofollow\",\n    \"Referrer-Policy\": \"no-referrer\",\n    \"Cache-Control\": \"private, no-store\",\n  });\n  // Malformed ids (not 22-char base64url) get the same 404 as unknown/deleted/expired ids.\n  const share = isValidShareId(params.id) ? await db.shares.get(params.id) : null;\n  if (!share || share.expiresAt <= new Date()) {\n    await recordShareMiss(getClientAddress()); // feeds the 404-burst block\n    throw error(404);\n  }\n  return { messages: share.messages, model: share.model };\n}\n```\n\n```ts\n// apps/playground/src/routes/s/[id]/replay.ts (server-only)\nexport async function POST({ params, request, getClientAddress }) {\n  const share = await db.shares.get(params.id);\n  if (!share || share.expiresAt <= new Date()) throw error(404);\n  if (!FREE_MODELS.includes(share.model)) throw error(403);\n  await verifyBotChallenge(request); // 403 on failure\n  // per-share + per-IP caps, plus a global daily token cap for all anonymous replays; 429 on exceed\n  await enforceLimits({\n    shareId: share.id,\n    ip: getClientAddress(),\n    globalDailyTokens: REPLAY_GLOBAL_DAILY_TOKENS,\n  });\n  // Platform replay credential: free tier / free-8b pool only. The share owner's\n  // project key is never read, used, or returned to the client.\n  return gateway.chat({\n    key: secrets.getReplayKey(),\n    model: share.model,\n    messages: share.messages,\n    max_tokens: 1024,\n  });\n}\n```\n\n- Share pages are server-rendered with Open Graph tags so links unfurl nicely on Slack/X. The URL carries no secret beyond the unguessable share id, and the Open Graph tags expose only a generic title, not conversation content.\n- Shares can be deleted from Playground → History; deleted and expired shares return 404 and the replay endpoint stops working for them.\n\n## Logging\n\n- Gateway access logs redact the `Authorization` header and drop request bodies; we log model, token counts, latency, status and project id only (unchanged from current prod).\n- Playground request logs record share ids only as a truncated hash, so logs cannot be used to open shares.\n\n## QA summary (staging)\n\n- Signup → first free request in < 60s: pass.\n- Free-tier model allow-list: request to `llama-3.1-70b-instruct` with a free key returns 403: pass.\n- Rate limiting: 21st request inside a minute returned 429 with `Retry-After`: pass (staging config used `per: minute`). The prod config uses `per: minute` (corrected from `per: second`) and `burst: 20` (corrected from `burst: 40`, which would have allowed 40 immediate requests and contradicted the advertised 20/min). The staging burst value was not recorded in the earlier run, so before deploy: confirm staging `burst` equals prod (20), re-run the burst test (send 21 requests back-to-back from an idle key and expect the 21st to return 429), and re-verify against the prod config file.\n- To run in staging before deploy for the daily token cap: confirm staging config has `daily_tokens: 100000` on the free tier (matching prod); a free key that has consumed 100k tokens in the UTC day gets 429 on the next request; the counter resets at 00:00 UTC; and `GET /v1/usage` reports the same count the gateway enforces against.\n- Share link: create, open in incognito, re-run, delete → 404: pass.\n- `/v1/usage` matches billing ledger within 0.1%: pass.\n- To re-run in staging before deploy, since the replay route changed to the dedicated credential: replay uses `REPLAY_KEY` and not the owner's key, the global replay cap returns 429 once exhausted, and replay usage does not appear on the share owner's `/v1/usage` or ledger.\n- To run in staging before deploy for share id hardening: generated ids are 22-character base64url from the CSPRNG path with no collisions across 100k creations; malformed, unknown, expired and deleted ids return identical 404s; the GET route returns 429 above 60 requests/min per IP; share pages carry `noindex` and `no-referrer` headers.\n- To run in staging before deploy for retention: a share created with a 7-day TTL has `expiresAt` set accordingly and `expiresAt` cannot be null; a share with `expiresAt` in the past returns 404 on both the view and replay routes before the purge job runs; the purge job hard-deletes expired rows; deleting a session removes its shares; deleting a test project/account removes all of its shares via the cascade.\n\n## Rollout\n\n- Deploy gateway config and playground at 16:00 UTC, flag `free_signup_open` on at 16:45 UTC.\n- Alerting: free pool replicas > 6 pages on-call; error rate > 2% pages on-call; anonymous replay global cap reaching 80% pages on-call; share-route 404 rate spike (enumeration attempts) pages on-call; share purge job not succeeding within 26 hours pages on-call.\n- Rollback: `free_signup_open` off stops new signups; existing free keys keep working. Anonymous replay can be disabled independently by turning off the replay route flag, without affecting share viewing.",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 27566,
+  "tokOut": 25836,
+  "usd": 0.368596,
+  "critMs": 143947
+ },
+ "status": "cap"
+}

@@ -1,0 +1,71 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "plan-09",
+ "rep": 2,
+ "wallMs": 403769,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Per-partition dedup equals global dedup only if an event_id never maps to two event_dates. The clamp of event_time to [ingested_at − 30d, ingested_at] can move a late replay into a different date partition, and the plan says late replays are routine. The '0 such event_ids' check was run over 4.2B rows, which is the fact table's row count, where the global dedup already hid cross-date duplicates. The only detector runs weekly, so double counts could reach dashboards and the customer export for days.",
+   "evidence": "\"Checked over all 4.2B rows: 0 such `event_id`s\" / \"on 27 of 30 nights in September at least one row arrived more than 7 days late\" / \"`unique_event_id` runs weekly\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The no-gap guarantee rests on a measured p99.9 delay, not a bound. Rows whose ingested_at falls more than 2h behind the table's high-water mark are never selected again. A visibility delay or ingestion outage longer than 2h becomes a permanent silent gap, and there is no completeness reconciliation or alert for it.",
+   "evidence": "\"ingested_at > (max ingested_at already in the table − 2 h)\" / \"p99.9 measured at 4 min\" / ABSENT: completeness check on rows skipped by the window"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The incremental selection depends on max ingested_at 'in the table', but the columns are declared unchanged and ingested_at is never said to be persisted. The plan also does not say where the high-water mark lives or what happens if it is lost.",
+   "evidence": "\"Columns, types, grain and dedup logic ... are unchanged\" vs \"max `ingested_at` already in the table − 2 h\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "fct_page_events_v2 is backfilled from raw and runs for at least 7 parity nights before the swap, but the erasure and retention lists cover only fct_page_events and (later) legacy. Erased users' rows in v2 partitions that are not rebuilt persist and are promoted to production at the swap. The staging test forces a full rebuild, which hides this case.",
+   "evidence": "\"privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`\" / \"retention and erasure jobs include `fct_page_events_legacy`\" / ABSENT: v2 coverage during steps 1–3"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Erasure is two sequential deletes with no stated retry or reconciliation. If the second delete fails, the rows stay in the fact table. The old nightly full refresh healed this, but the incremental design does not rebuild old partitions. The test covers only the success path.",
+   "evidence": "\"deletes a user's rows from `raw.events` first, then from `fct_page_events`. Rebuilds read only `raw.events`\" / ABSENT: failure handling for the second delete"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The 'no gap, no lost events' rollback claim is false in general. Legacy is refreshed only by a separate nightly job that runs after the main job. A rollback between runs, or after a legacy job failure, restores a table up to a day stale. Nothing checks legacy freshness before rollback or alerts if the legacy job fails.",
+   "evidence": "\"It runs as a separate dbt Cloud job after the main job\" / \"Rollback: `bq cp -f fct_page_events_legacy fct_page_events` ... No gap, no lost events.\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The cost table understates the transition. The 7 parity nights still run the full-refresh v1 (~$59/night) alongside v2, and the nightly parity test scans both tables for 30 days. The weekly uniqueness test is not costed. The 'month 1 still below today' claim is unsupported, though the steady-state saving is intact. The Looker figure extrapolates from dry runs of the top 20 queries only and ignores the 3 unfiltered dashboards and the usage export.",
+   "evidence": "\"One-time backfill + 7 parity nights | — | ~$76\" / \"Month 1 is ~$1,960, still below today.\" / \"top 20 queries by bytes\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Dropping the legacy table after 30 days is irreversible and no snapshot is stated. The claim that a failed multi-partition insert_overwrite writes nothing is asserted, not tested.",
+   "evidence": "\"drop the legacy model and table (DATA-431)\" / \"A failed run writes nothing\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "BIT_XOR over per-row fingerprints cancels pairs of identical rows, so the parity check can miss differences in duplicated rows. It relies on row count alone for that case.",
+   "evidence": "\"BIT_XOR(FARM_FINGERPRINT(TO_JSON_STRING(t)))\""
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 24041,
+  "tokOut": 47750,
+  "usd": 0.09904603999999999,
+  "critMs": 96202
+ }
+}

@@ -1,0 +1,65 @@
+{
+ "approach": "clustered-panel",
+ "case": "merge-02",
+ "rep": 1,
+ "wallMs": 148916,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "blocker",
+   "claim": "The duplicate-ballot log line writes the voter's email alongside the choice they attempted to cast. Logs ship to a third-party host readable by the whole support team, so this links a named resident to their ballot choice outside the tally, breaking the anonymity promise in a way that cannot be undone once shipped.",
+   "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value,)"
+  },
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "The results export route has no authentication or role check, so any caller who can reach the URL can download tallies. The PR describes this as admin-only, and every other admin route uses require_role(\"admin\").",
+   "evidence": "@router.get(\"/measures/{measure_id}/results.csv\") async def export_results(measure_id: int, db: Session = Depends(get_db),"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The export does not check that the measure is closed, so it returns live interim counts for open measures even though the PR says it is for closed measures. This exposes mid-vote results.",
+   "evidence": "measure = db.get(Measure, measure_id)\n    if measure is None:\n        raise HTTPException(404)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Counts are looked up by Choice enum members while the dict keys come from the raw Ballot.choice column. If the stored type differs from the enum, counts.get(choice, 0) silently returns 0 for every row, producing a wrong tally in a council-packet document with no error raised. Nothing in the diff shows the types match.",
+   "evidence": "counts = dict(db.query(Ballot.choice, func.count(Ballot.id))... for choice in Choice: writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Small-cell counts are published without suppression, so a choice with one or two votes in a small measure can effectively reveal how a specific resident voted.",
+   "evidence": "ABSENT: any minimum-count threshold or suppression before writing counts to the CSV"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The measure slug is interpolated unescaped into the Content-Disposition header, so quotes or CR/LF in a slug could corrupt or inject response headers.",
+   "evidence": "headers={\"Content-Disposition\": f'attachment; filename=\"{measure.slug}-results.csv\"'}"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Each rejected duplicate writes a log line with no rate limit or sampling, so repeated retries by one voter can flood the log pipeline and its third-party host.",
+   "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", ...)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The duplicate check is a read followed by a write with no lock or unique constraint in the diff, so concurrent requests from the same voter can both pass the check, undermining the duplicate-ballot diagnostics.",
+   "evidence": "if db.query(Receipt).filter_by(token=receipt).first():\n ... db.add(Receipt(token=receipt))"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 15895,
+  "tokOut": 7910,
+  "usd": 0.0071330000000000005,
+  "critMs": 13337
+ }
+}

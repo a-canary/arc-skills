@@ -1,0 +1,53 @@
+{
+ "approach": "single-strong",
+ "case": "merge-01",
+ "rep": 1,
+ "wallMs": 85371,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The client_order_id is generated inside the retry loop, so every attempt carries a fresh UUID. A retry after a timeout (where the first order may have reached the broker and filled) is a new order from the broker's view, so broker-side dedupe never fires and duplicate fills become possible. This directly violates the agreed constraint and the PR's own safety claim.",
+   "evidence": "for (let attempt = 1; ...) { const clientOrderId = randomUUID(); try { ... client_order_id: clientOrderId"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "sizeBuy changed Math.floor to Math.ceil, so quantity rounds UP to the next lot. This can push notional above maxNotional, breaking the risk cap that sizing must never exceed. Example: maxNotional 10,000, price 30, lotSize 1 gives 334 shares, which is $10,020. The short-cover test also expects 120 shares, which is $12,000 against a $10,000 cap, so the test encodes the violation.",
+   "evidence": "const lots = headroom / price / lotSize; return Math.ceil(lots) * lotSize;  and  currentQty: -20 ... toBe(120)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR asserts that the broker dedupes on client_order_id and that retries are therefore safe, but offers no evidence such as broker docs, a test, or a sandbox check. The code contradicts the claim because the ID changes per attempt. No test covers the retry path, and the added sizing tests do not exercise floor-vs-ceil edge cases where the result is not an exact multiple.",
+   "evidence": "\"the broker dedupes on it, so a retry after a timeout cannot double-fill.\"  ABSENT: tests for submitOrder retry/ID reuse"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "After the final attempt times out, the error is thrown with no reconciliation (query by client_order_id) to learn whether the order actually landed. The caller may treat it as unplaced and resubmit, or leave an untracked live position. The 4s timeout plus retries is also unbounded in relation to the caller's latency budget, and no metric or alert is emitted beyond a warn log.",
+   "evidence": "if (!retryable || attempt === MAX_ATTEMPTS) throw err;  ABSENT: order-status lookup / alerting"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "This deploys to a live brokerage account before the next open with real-money side effects (duplicate fills, oversized positions) that cannot be rolled back after the orders execute. There is no flag, kill-switch, or staged rollout.",
+   "evidence": "\"about to merge to main and deploy before the next market open\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The sizing change is bundled into a PR titled and described as a retry change, and it is described as a 'tidy' even though it alters risk-critical behavior, so reviewers are likely to overlook it.",
+   "evidence": "\"Also tidies the sizing helper so quantities are rounded to the broker's lot size\""
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3314,
+  "tokOut": 1088,
+  "usd": 0.0206532,
+  "critMs": 8108
+ }
+}

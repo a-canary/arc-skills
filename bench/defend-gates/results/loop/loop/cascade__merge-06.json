@@ -1,0 +1,118 @@
+{
+ "approach": "cascade",
+ "case": "merge-06",
+ "rounds": [
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "Tests cover only TenantLimiter.take. The route's upstream-429 retry path and the Retry-After parsing and 5s cap are untested. This is non-blocking because the logic is small and the bucket test is correct.",
+     "evidence": "ABSENT: tests for completions route retry or retryAfterMs"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The limit config is not validated: ratePerSec of 0 gives an Infinity wait. An empty upstream Retry-After parses as 0, so the retry fires immediately. The retry sleep also ignores req.signal, so it continues after a client disconnect.",
+     "evidence": "Math.ceil(((1 - b.tokens) / limits.ratePerSec) * 1000); Number(header); await new Promise((r) => setTimeout(r, delay));"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A single bounded retry on upstream 429 is acceptable at this scale, with at most 5s of added latency. It has no retry budget, but impact is limited because per-tenant caps now bound request volume.",
+     "evidence": "MAX_UPSTREAM_RETRY_MS = 5_000"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "A truncated hash of the key is logged on each rejection. This is a pseudonymous identifier and does not expose the key, so it is consistent with the no-keys-in-logs rule.",
+     "evidence": "key: keyFingerprint(tenant.apiKey)"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The new default limit takes effect for all tenants on deploy, with no flag or impact list. The change is a plain revert, so this is low risk.",
+     "evidence": "default 20 rps / burst 40"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Nothing blocking. The raw key is never passed to the logger, only its hash.",
+     "evidence": "nothing in artifact"
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "Nothing blocking. State is in-process and no new vendor dependency is added beyond lru-cache. Horizontal scaling is a stated future constraint.",
+     "evidence": "single process per region (no horizontal scaling yet)"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Nothing blocking. The LRU bounds state at 10k entries against ~120 tenants.",
+     "evidence": "new LRUCache<string, Bucket>({ max: 10_000 })"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Nothing blocking. At most one extra upstream call happens per upstream 429.",
+     "evidence": "nothing in artifact"
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "Nothing found. The change is API-only.",
+     "evidence": "nothing in artifact"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "Nothing found. The change addresses the observed starvation incident.",
+     "evidence": "one batch job at 400 rps pushed everyone else into upstream 429s"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "Nothing blocking. Added latency is bounded at 5s and occurs only on an upstream 429.",
+     "evidence": "MAX_UPSTREAM_RETRY_MS = 5_000"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "Nothing found. The change is API-only.",
+     "evidence": "nothing in artifact"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "Nothing found.",
+     "evidence": "nothing in artifact"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The module-level limiter singleton is slightly harder to test in isolation. This is acceptable.",
+     "evidence": "const limiter = new TenantLimiter();"
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 9744,
+    "tokOut": 8420,
+    "usd": 0.04607172,
+    "critMs": 45907
+   },
+   "wallMs": 122743
+  }
+ ],
+ "artifact": "PR #377: Per-tenant token-bucket rate limiting + upstream 429 handling\n\nTenants on the shared gateway can currently starve each other: one batch job at 400 rps pushed everyone else into upstream 429s on Tuesday.\nThis adds an in-process token bucket per tenant (limits from tenant config, default 20 rps / burst 40) and returns 429 with Retry-After when a tenant is over.\nWhen the upstream itself returns 429 we retry once, honoring its Retry-After capped at 5s; any other upstream error is passed straight through.\nBucket state is bounded by an LRU (10k tenants), so idle tenants do not accumulate.\nRate-limit decisions are logged with a key fingerprint for debugging.\n\ndiff --git a/src/ratelimit/bucket.ts b/src/ratelimit/bucket.ts\nnew file mode 100644\nindex 0000000..f1e2d3c\n--- /dev/null\n+++ b/src/ratelimit/bucket.ts\n@@ -0,0 +1,36 @@\n+import { createHash } from \"node:crypto\";\n+import { LRUCache } from \"lru-cache\";\n+\n+export type Limits = { ratePerSec: number; burst: number };\n+type Bucket = { tokens: number; updatedMs: number };\n+\n+export class TenantLimiter {\n+  private buckets = new LRUCache<string, Bucket>({ max: 10_000 });\n+\n+  constructor(private now: () => number = Date.now) {}\n+\n+  /** Returns 0 when admitted, otherwise milliseconds until a token is available. */\n+  take(tenantId: string, limits: Limits): number {\n+    const nowMs = this.now();\n+    const b = this.buckets.get(tenantId) ?? { tokens: limits.burst, updatedMs: nowMs };\n+    const elapsedSec = (nowMs - b.updatedMs) / 1000;\n+    b.tokens = Math.min(limits.burst, b.tokens + elapsedSec * limits.ratePerSec);\n+    b.updatedMs = nowMs;\n+    if (b.tokens >= 1) {\n+      b.tokens -= 1;\n+      this.buckets.set(tenantId, b);\n+      return 0;\n+    }\n+    this.buckets.set(tenantId, b);\n+    return Math.ceil(((1 - b.tokens) / limits.ratePerSec) * 1000);\n+  }\n+}\n+\n+export function keyFingerprint(apiKey: string): string {\n+  return createHash(\"sha256\").update(apiKey).digest(\"hex\").slice(0, 10);\n+}\ndiff --git a/src/routes/completions.ts b/src/routes/completions.ts\nindex 8d2c4e1..3b7a9f0 100644\n--- a/src/routes/completions.ts\n+++ b/src/routes/completions.ts\n@@ -1,22 +1,49 @@\n import type { FastifyInstance } from \"fastify\";\n import { authenticate } from \"../auth\";\n import { upstream } from \"../upstream\";\n+import { TenantLimiter, keyFingerprint } from \"../ratelimit/bucket\";\n+import { limitsFor } from \"../tenants\";\n+\n+const limiter = new TenantLimiter();\n+const MAX_UPSTREAM_RETRY_MS = 5_000;\n+\n+function retryAfterMs(header: string | undefined): number {\n+  const secs = Number(header);\n+  if (!Number.isFinite(secs) || secs < 0) return 1_000;\n+  return Math.min(secs * 1000, MAX_UPSTREAM_RETRY_MS);\n+}\n\n export async function completionsRoutes(app: FastifyInstance) {\n   app.post(\"/v1/chat/completions\", async (req, reply) => {\n     const tenant = await authenticate(req);\n-    const res = await upstream.chat(req.body, { signal: req.signal });\n+\n+    const waitMs = limiter.take(tenant.id, limitsFor(tenant));\n+    if (waitMs > 0) {\n+      req.log.info(\n+        { tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs },\n+        \"tenant rate limited\",\n+      );\n+      return reply\n+        .code(429)\n+        .header(\"Retry-After\", String(Math.ceil(waitMs / 1000)))\n+        .send({ error: { type: \"rate_limited\", message: \"tenant rate limit exceeded\" } });\n+    }\n+\n+    let res = await upstream.chat(req.body, { signal: req.signal });\n+    if (res.status === 429) {\n+      const delay = retryAfterMs(res.headers.get(\"retry-after\") ?? undefined);\n+      req.log.warn({ tenant: tenant.id, delay }, \"upstream 429, retrying once\");\n+      await new Promise((r) => setTimeout(r, delay));\n+      res = await upstream.chat(req.body, { signal: req.signal });\n+    }\n     return reply.code(res.status).headers(res.forwardHeaders()).send(res.body);\n   });\n }\ndiff --git a/src/ratelimit/bucket.test.ts b/src/ratelimit/bucket.test.ts\nnew file mode 100644\nindex 0000000..77aa012\n--- /dev/null\n+++ b/src/ratelimit/bucket.test.ts\n@@ -0,0 +1,18 @@\n+import { expect, test } from \"bun:test\";\n+import { TenantLimiter } from \"./bucket\";\n+\n+test(\"admits burst, then rate-limits, then refills\", () => {\n+  let t = 0;\n+  const l = new TenantLimiter(() => t);\n+  const lim = { ratePerSec: 2, burst: 3 };\n+  expect([l.take(\"a\", lim), l.take(\"a\", lim), l.take(\"a\", lim)]).toEqual([0, 0, 0]);\n+  expect(l.take(\"a\", lim)).toBe(500);\n+  t = 500;\n+  expect(l.take(\"a\", lim)).toBe(0);\n+});\n+\n+test(\"tenants are isolated\", () => {\n+  const l = new TenantLimiter(() => 0);\n+  const lim = { ratePerSec: 1, burst: 1 };\n+  expect([l.take(\"a\", lim), l.take(\"b\", lim)]).toEqual([0, 0]);\n+});",
+ "fixerUsage": {
+  "calls": 0,
+  "tokIn": 0,
+  "tokOut": 0,
+  "usd": 0,
+  "critMs": 0
+ },
+ "status": "cleared"
+}

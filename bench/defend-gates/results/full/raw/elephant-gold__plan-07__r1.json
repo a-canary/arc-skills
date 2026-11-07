@@ -1,0 +1,179 @@
+{
+ "approach": "elephant-gold",
+ "case": "plan-07",
+ "rep": 1,
+ "wallMs": 217833,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "The input cost is computed for one day but presented as a monthly total. 2.28B tokens/day at $0.50/1M is about $1,140/day, roughly $34k per 30-day month, about 23x the $1,500 budget, so the 'within budget' conclusion is false.",
+   "evidence": "\"Input: 38M lines x 60 tokens = 2.28B tokens -> ~$1,140\" / \"Estimated total: ~$1,150/month, within the $1,500 budget.\""
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "Spend is unbounded. Every log line is forwarded with no sampling, filtering, per-call token cap, rate limit, or spend alert. Peak day (61M lines) is not costed, and cost scales with the log storms that occur during incidents, when the tool runs.",
+   "evidence": "\"forwards every application log line to the summarizer queue.\" ABSENT: any cost cap, sampling, token limit, budget alert, or peak-day cost projection (peak 61M)"
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The input estimate omits the fixed prompt and per-call instructions that are resent on each of the 8,640 daily calls. The prompt size and the Corvid-mini pricing source are not stated, so input tokens are understated.",
+   "evidence": "\"sends the last 5 minutes of logs per service to the LLM with a fixed prompt\" / ABSENT: prompt token count and vendor pricing reference"
+  },
+  {
+   "lens": "staffing",
+   "severity": "major",
+   "claim": "The 12 eng-week plan assumes both engineers spend 100% of six weeks on build work, but the charter says on-call and interrupts take about 50% of their time. Available build capacity is about 6 eng-weeks, so the schedule and labor estimate are understated by about half, with no backfill or coverage plan.",
+   "evidence": "\"on-call/interrupt work averages 50% of their time\" vs. \"Staffing: both platform engineers full-time for 6 weeks (2 x 6 = 12 eng-weeks).\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Per-call input size is unbounded. Each 5-minute service window averages about 4,400 lines (~260k tokens), more on peak days, with no context limit, truncation, sampling, or chunking. The summarizer may fail or truncate during the large incidents it is meant to help with.",
+   "evidence": "\"every 5 minutes, sends the last 5 minutes of logs per service to the LLM with a fixed prompt\" / \"Average line length: ~60 tokens after redaction.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Throughput and rate limits are not sized. Synchronized 5-minute batches across 30 services imply about 1.5-2.5M tokens/min, with no provider quota, concurrency bound, retry policy, or backpressure. A slow batch can overlap the next window and grow the queue without limit.",
+   "evidence": "\"30 services x 288 windows/day = 8,640 summaries/day\" is the only throughput statement; ABSENT: rate limits, quotas, concurrency, retry, or backlog behavior"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "log-tap copies every application log line into a new queue with no stated bound, retention, or drop policy. At 38-61M lines/day this is multi-GB/day in Redis. If the LLM falls behind, the queue grows without limit, and log-tap on the live Vector pipeline could backpressure the primary logging path.",
+   "evidence": "\"forwards every application log line to the summarizer queue.\" / \"Queue + storage: existing Redis and Postgres, negligible.\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Redaction is described as covering only emails, tokens, card numbers and IPs, yet all post-redaction application logs are sent to a third-party LLM. Names, user/account IDs, phone numbers, addresses, and request payloads are not addressed, so personal data may leave the company's infrastructure unmasked.",
+   "evidence": "\"which already masks emails, tokens, card numbers and IPs for our log retention policy (audited in Q1)\" / ABSENT: coverage of other PII, secrets, or payload fields, and audit reference"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "Log content is attacker-influenceable (user-supplied fields, headers, error messages) and is fed directly into the LLM prompt. The output is posted to PagerDuty incident comments and stored with no prompt-injection defense, output validation, or sanitization, so a crafted log line could mislead responders.",
+   "evidence": "\"sends the last 5 minutes of logs per service to the LLM with a fixed prompt and stores a structured summary\" / \"the PagerDuty incident gets an auto-comment with the latest summaries\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Summaries derived from logs are persisted in Postgres and posted to PagerDuty, and the log-tap queue holds raw lines. The plan gives no retention period, access-control model, or statement that derived data follows the source log retention policy, so personal data persists in new stores and a third-party system.",
+   "evidence": "ABSENT: retention for stored summaries and queue contents; read-access model for the summary store; \"stores a structured summary\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "The DPA is cited, but nothing confirms that customer contracts and the sub-processor disclosures cover LLM processing of production logs. Where Corvid processes and stores the data is also not stated, so residency requirements cannot be assessed.",
+   "evidence": "\"Corvid account has zero-retention enabled; data processing addendum signed by Legal (ref DPA-0417).\" / ABSENT: customer contract coverage, sub-processor check, processing region"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "major",
+   "claim": "The summarizer depends on one vendor model with no fallback, self-hosted option, or degraded mode. An outage, deprecation, or price change stops the feature, and the plan does not say what on-call receives instead.",
+   "evidence": "\"Model: Corvid-mini\" ABSENT: fallback provider, self-hosted alternative, or degraded-mode behavior"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "There is no failure handling for the summarizer: no timeouts, retry/backoff, dead-lettering, or defined behavior when the LLM is down or rate-limited. Nothing tells on-call that a summary is stale, missing, or failed, so an old or empty comment may look authoritative during an incident.",
+   "evidence": "ABSENT: timeout, retry, backoff, degraded mode, staleness timestamp, or failure marker; \"On page: the PagerDuty incident gets an auto-comment with the latest summaries\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The summarizer becomes a new production dependency on the incident path, but there are no SLOs or alerts for summary freshness, queue lag, LLM error rate, or cost burn. The 2-person team already spends 50% of its time on interrupts and has no owner, runbook scope, or kill switch for the new pipeline.",
+   "evidence": "\"Hardening, dashboards, runbook | 2\" ABSENT: alert criteria, SLOs, post-launch owner, kill switch"
+  },
+  {
+   "lens": "rollback",
+   "severity": "major",
+   "claim": "log-tap is attached to the live Vector pipeline, but there is no feature flag, rollback, or disable procedure for log-tap, the summarizer, or the PagerDuty auto-comment. A faulty subscriber could affect the primary logging path, and the plan does not say how it would be isolated or removed.",
+   "evidence": "\"log-tap (new): subscribes to the existing Vector pipeline after the redaction stage\" ABSENT: rollback, feature flag, or disable procedure"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Retention, cleanup, and retraction are undefined for stored summaries in Postgres and Redis, and for PagerDuty comments once posted. Rollback could leave orphaned data and external comments that cannot be recalled.",
+   "evidence": "ABSENT: retention or deletion plan for stored summaries; statement on retracting posted PagerDuty comments"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The goal of a summary 'within seconds of a page' does not match the design. Summaries are produced on a 5-minute batch cadence and cover only the last 5 minutes, so the attached summary can be up to 5 minutes old plus LLM latency, and it can miss an incident whose onset came earlier.",
+   "evidence": "\"within seconds of a page\" vs. \"every 5 minutes, sends the last 5 minutes of logs per service\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The MTTR target (47 to 30 min) and the 70%-useful launch gate are not linked. No baseline or timeline shows that log-grepping in the first 15-20 minutes is the bottleneck, and no prototype or pilot shows the summaries shorten resolution. A launch could pass the quality gate while MTTR stays flat.",
+   "evidence": "\"Target: median MTTR 47 min -> 30 min within one quarter of launch.\" / \"Launch gate: >= 70% useful, <= 5% misleading.\" ABSENT: baseline timeline, pilot, or prototype"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The 40-incident replay is graded by a single incident commander per incident, with no grading rubric or repeatability check. Replay data may be redacted or retained differently, and the eval has no check for confident but wrong 'suspected deploy' attributions.",
+   "evidence": "\"have the incident commander grade it (useful / partially / misleading)\" ABSENT: rubric, grader count, retention check for replay windows, held-out set"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "There is no owner for maintaining the prompt, eval set, and log-tap after launch, and no automated test or schema validation for the structured LLM output. Regressions from prompt or model changes cannot be caught in CI.",
+   "evidence": "ABSENT: post-launch ownership, schema validation, or automated test; \"stores a structured summary (top errors, new error signatures, affected endpoints, suspected deploy)\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "major",
+   "claim": "No LLM latency budget is stated. Each call carries about 260k input tokens, and the plan does not show that 30 such calls complete within the 5-minute cycle, so summaries may lag the design.",
+   "evidence": "\"Input: 38M lines x 60 tokens = 2.28B tokens\" ABSENT: latency, per-call timing, or cycle-completion target"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "'Suspected deploy' is a required output field, but the architecture consumes only logs and lists no deploy-event input, so the field cannot be populated as designed.",
+   "evidence": "\"stores a structured summary (top errors, new error signatures, affected endpoints, suspected deploy)\" with no deploy-event source"
+  },
+  {
+   "lens": "hidden coupling",
+   "severity": "minor",
+   "claim": "log-tap depends on Vector's stage ordering and the redaction configuration. A change to either silently changes what the summarizer receives, with no interface contract or check.",
+   "evidence": "\"subscribes to the existing Vector pipeline after the redaction stage\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Delivery is a single PagerDuty comment limited to the paging service and its direct dependencies, while about 8,640 summaries/day are generated. Most output may never be read, and failures more than one hop away are omitted without rationale.",
+   "evidence": "\"30 services x 288 windows/day = 8,640 summaries/day\" / \"for the paging service and its direct dependencies (from the service catalog)\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "Fixed clock-aligned windows can split one error burst across two windows, producing repeated or flip-flopping top errors and new-signature entries in the comment.",
+   "evidence": "\"every 5 minutes, sends the last 5 minutes of logs per service\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The 'negligible' storage claim is unsupported. Redis and Postgres capacity and retention are not sized against the stated volumes, and the peak-day figure is never used.",
+   "evidence": "\"Queue + storage: existing Redis and Postgres, negligible.\""
+  },
+  {
+   "lens": "duplication",
+   "severity": "minor",
+   "claim": "Windowed per-service grouping overlaps existing alerting, log query, and Vector processing. The plan does not explain why this needs a new component rather than an extension of existing tooling.",
+   "evidence": "ABSENT: comparison with existing log querying, alert enrichment, or Vector processing"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 48895,
+  "tokOut": 26967,
+  "usd": 0.0232591,
+  "critMs": 44857
+ }
+}

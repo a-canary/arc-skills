@@ -1,0 +1,232 @@
+{
+ "approach": "self-consistency-3",
+ "case": "deploy-03",
+ "rep": 2,
+ "wallMs": 74014,
+ "verdict": "ATTACKS",
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Backfill runs after full deploy with no stated gate, and dry-run used a prod snapshot; the live backfill of 18.4M rows writes into a table while 2.15 dual-writes and clients read, with no defined abort criteria, lag/load limits, or mismatch check before the 10% flag step.",
+   "evidence": "\"Backfill job starts after full deploy.\" / \"dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The backfill creates one event per day of current streak, but the streak model keys events on (user_id, habit_id, day) with source_device, and the artifact does not say how backfilled rows get source_device or how timezone-derived 'day' is assigned, which matters given the tested UTC-8 to UTC+9 change; a timezone shift could shift or duplicate days and skew streak counts.",
+   "evidence": "\"one `streak_events` row per day of each habit's current streak\" / \"idempotent on `(user_id, habit_id, day)`\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Dual-write of streak_count by 2.15 is not specified as to which system is authoritative when 3.2 clients (event-based) and 3.1 clients (streak_count) disagree; a 3.1 user completing a habit could write streak_count while the event path computes a different value, and the mismatch gate only compares server vs client recompute, not 3.1 reads.",
+   "evidence": "\"`habits.streak_count` is **kept** and dual-written by 2.15 so 3.1 clients ... keep working unchanged.\" / \"`streak_mismatch_total` (server vs client recompute) < 0.1%\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The rollback claim for the backend is inconsistent with the schema: 2.14 is said to run unchanged against the migrated DB, but 2.14 does not write streak_events, so any completions made under 2.15 after the 10% step would have streak_count updated only if dual-write holds; the rollback leaves the event table diverging with no reconciliation plan, and the staging verification only covered the 3.2 client against 2.14 with sync disabled.",
+   "evidence": "\"2.14 runs against the migrated database unchanged (verified in staging).\" / \"3.2 client against 2.14 API (server rollback scenario) | staging | Pass (sync silently disabled, local streak shown)\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The crash-free gate is evidenced only by a 6-day internal beta of 1,900 users, far below the ~400k MAU population and the 99.5% threshold is checked against that small sample; the staging remote-config differs from prod in streak_sync_v2 by design, so staging results are not a faithful prod proxy for the flag.",
+   "evidence": "\"Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%\" / \"only `streak_sync_v2` differed (on in staging)\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The streak_events table grows by one row per habit per day per device-completion with no retention or partition plan; the backfill alone adds 18.4M rows and the stated p95 <250ms gate has no load test at 10-100x volume.",
+   "evidence": "\"streaks-svc p95 < 250ms\" / ABSENT: load test or retention policy for streak_events"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "source_device is a per-install random ID that is now stored per completion event, creating a persistent cross-device linkability record; the claim of no new data is asserted rather than shown for the event history retention window.",
+   "evidence": "\"`source_device` stores a per-install random ID\" / ABSENT: retention period for streak_events rows"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "The reminder pre-prompt and iOS provisional-then-full authorization flow is described, but the 'Remind me' action on Android 13+ and the denial deep link should be checked against platform guidance on rationale-before-prompt; the artifact does not show this was reviewed.",
+   "evidence": "\"Denial is stored and the reminder toggle shows \"Turn on in system settings\" with a deep link.\""
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "The disabled-state saver label hardcodes a date (Nov 28) that is a fixed string in four localizations; if the 30-day window is computed from user timezone or repair date, the date copy may be wrong.",
+   "evidence": "\"Streak saver available again on Nov 28\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The 'Repair yesterday' copy and saver logic imply a repair of a missed day, but the proposal does not state whether repair itself counts as an event in streak_events or how it interacts with the one-per-30-days server limit across devices.",
+   "evidence": "\"one missed day per 30 days can be repaired from the streak screen\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Dual-write of streak_count and the new streak_events table is not described as atomic or reconciled; a partial failure or a 3.1 write path that bypasses 2.15 would make streak_count diverge from events, and the mismatch gate only measures server vs client recompute, not server-side streak_count vs streak_events.",
+   "evidence": "\"`habits.streak_count` is **kept** and dual-written by 2.15 so 3.1 clients ... keep working unchanged.\" / ABSENT: transaction boundary for dual-write, and a check comparing streak_count to streak_events during rollout."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Backfill runs after full deploy with a dry-run on a snapshot, but live writes during the backfill (completions from 2.15 and 2.14 pods during canary) can race with backfill inserts; idempotency key (user_id, habit_id, day) covers duplicates, but the backfill's derivation of events from streak_count is not shown to handle a streak changing mid-run.",
+   "evidence": "\"Backfill job starts after full deploy.\" / \"one `streak_events` row per day of each habit's current streak\" with ABSENT: concurrency handling against live writes."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Canary is 10% of pods for 1h, but the rollout gates (crash-free, mismatch, p95) are only listed for remote-config steps; there is no explicit rollback trigger or alert for the backend canary, and a 2.15 regression would affect 100% of traffic after the 1h canary.",
+   "evidence": "\"canary 10% of pods for 1h, then full\" / ABSENT: backend canary success criteria and alerting thresholds."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Store and backend deploy land on the same day with the feature flag at 1% only after 2.15 is fully deployed, but the rollback for the backend is a redeploy of 2.14 which requires the backfill and dual-write to remain compatible; the 2.14 compatibility claim was verified only against staging data, not the 18.4M-row prod dataset.",
+   "evidence": "\"2.14 runs against the migrated database unchanged (verified in staging).\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The 3.2 client against 2.14 API passes with 'sync silently disabled', but the release gating depends on crash-free sessions measured only on an internal beta of 1,900 users; this sample is too small to validate the 99.5% gate for ~400k MAU and the beta duration was 6 days.",
+   "evidence": "\"Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "QA lists the timezone and DST case as passing, but the 'Streak saver' limit of one per 30 days is stated as enforced server-side while the disabled label says 'available again on Nov 28' with no stated timezone basis for computing that date.",
+   "evidence": "\"Streak saver available again on Nov 28\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "source_device is a per-install random ID linked to user_id and habit_id with created_at across every event; this is a persistent behavioural log of device usage per user. The privacy claim covers only identifier type, not retention or linkability.",
+   "evidence": "\"`source_device` stores a per-install random ID, not a hardware identifier.\" / ABSENT: retention period for streak_events."
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "The pre-prompt and notification permission flow is described for iOS and Android 13+, but the notification reminder is scheduled at a user-chosen time and the artifact does not address whether reminder copy and timing comply with platform notification guidelines or the Android pre-13 path, which is silently unspecified.",
+   "evidence": "\"Android 13+: POST_NOTIFICATIONS is requested only after \\\"Remind me\\\".\" / ABSENT: behaviour on Android 12 and below."
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Streak saver allows one repair per 30 days, but the 'Repair yesterday' button only repairs yesterday; repairing older misses is not supported, which may not match the user-value framing.",
+   "evidence": "\"one missed day per 30 days can be repaired from the streak screen\" / \"Repair yesterday\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The rollback claim that 3.2 with flag off is equivalent to 3.1 is untested for data written by 3.2 clients (streak_events entries from synced devices) which 3.1 cannot read, so streaks written during the flag-on window may be lost from the displayed streak on rollback.",
+   "evidence": "\"3.2 with flag off is functionally equivalent to 3.1 plus copy changes.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The streak_events table will grow by one row per completion per habit per day with no retention or partition plan stated; at 400k MAU this is unbounded growth, and the 18.4M-row backfill is already a sizeable write burst at 22 minutes.",
+   "evidence": "ABSENT: retention, partitioning, or growth estimate for streak_events."
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "No cost estimate is given for the backfill compute or the storage growth of streak_events.",
+   "evidence": "ABSENT: cost of 22-minute backfill job and ongoing table storage."
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "QA passed for VoiceOver/TalkBack and large text, but the reminder-off state 'Turn on in system settings' deep link and the disabled saver button's reason are not verified for screen readers.",
+   "evidence": "\"Saver button ... (disabled state label: \"Streak saver available again on Nov 28\")\" / ABSENT: verification of disabled-state announcement and deep link accessibility."
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The client-to-server write path for streak events and the server's authorization check that a user can only write events for their own user_id are not described.",
+   "evidence": "ABSENT: authn/authz description for streak_events writes."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Dual-write of streak_count plus event-derived streak creates two sources of truth that must be kept in sync until 3.4; the removal plan depends on STR-1244, which is an external tracking item not guaranteed to complete.",
+   "evidence": "\"Dropping `streak_count` is **not** part of this release. It is scheduled for 3.4\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The artifact says the store and backend deploy both go on Mon 2026-11-02, but the deploy time is 10:00 UTC while the store submission date is listed without a time, so the ordering relative to the backend is unclear.",
+   "evidence": "\"Store submission: Mon 2026-11-02 · Backend deploy: Mon 2026-11-02 10:00 UTC\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The backfill job runs after the full 2.15 deploy, but the rollout relies on the feature flag only for client behavior. Backfill of 18.4M rows at 22 min is a dry-run figure on a snapshot; production write load, replication lag and lock contention during live dual-writes are unvalidated, and there is no stated abort or throttle criterion for the backfill itself.",
+   "evidence": "\"Backfill job starts after full deploy.\" / \"dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Dual-write consistency between streak_events and habits.streak_count is not specified for the window where 2.15 writes both and 2.14 pods still serve during canary/rollout, nor for the case where streak_events is authoritative but streak_count is written from a different computation. A 2.14 rollback after 2.15 has accepted synced events will leave streak_count stale relative to events that the 3.2 clients created, and the artifact does not say how that drift is reconciled.",
+   "evidence": "\"`habits.streak_count` is **kept** and dual-written by 2.15\" / \"2.14 runs against the migrated database unchanged (verified in staging).\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The rollback claim that 2.14 runs unchanged against the migrated database is verified only in staging with rc2 data; once cross-device events exist in streak_events that 2.14 cannot read, 3.2 clients that synced will show streaks that 2.14-era server data does not reflect, and the artifact gives no data-reconciliation step after rollback.",
+   "evidence": "\"schema is additive and `streak_count` remains authoritative-compatible, so 2.14 runs against the migrated database unchanged (verified in staging).\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The crash-free gate of 99.5% is evidenced only by a 1,900-user internal beta over 6 days, which is a small and non-representative sample against 400k MAU; the store rollout gates would be judged on a number with wide confidence intervals at the 1% step.",
+   "evidence": "\"Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The QA table does not cover the streak-saver and sync load at production volume, and the 3.2 client against 2.14 scenario is marked Pass yet the artifact does not state what happens to saver repairs made locally on 3.2 while sync is disabled, which may conflict with the server-side 1-per-30-days limit.",
+   "evidence": "\"3.2 client against 2.14 API (server rollback scenario) | staging | Pass (sync silently disabled, local streak shown)\" / \"Streak saver: limit 1 per 30 days enforced server-side\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The 30-day saver limit is described as 'one missed day per 30 days' while the disabled label gives a fixed date; the artifact does not define whether the window is rolling or calendar-based, and timezone changes (tested) could shift the boundary.",
+   "evidence": "\"Streak saver available again on Nov 28\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "streak_events stores habit-level daily completion history with source_device and timestamps, which is a richer behavioural record than streak_count; the privacy section only addresses the device ID and third-party sharing, not retention or deletion of the new event table.",
+   "evidence": "\"`source_device` stores a per-install random ID\" / ABSENT: retention and deletion policy for streak_events"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "The notification pre-prompt and iOS provisional-then-full authorization flow is described, but the 3-day trigger and the 'once per 30 days' suppression are not tied to a stated consent record, and the Android deep-link copy is not localized in the listed en/es/de/fr/pt-BR set.",
+   "evidence": "\"Turn on in system settings\" with a deep link / ABSENT: localization for Android settings copy"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The streak_mismatch_total gate of <0.1% and the p95 <250ms gate are not tied to a load test at 10x the canary traffic; the canary is 10% for 1h only.",
+   "evidence": "\"canary 10% of pods for 1h, then full\""
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "Accessibility was verified on the streak screen and pre-prompt; the 'Repair yesterday' disabled state and the reminder toggle's 'Turn on in system settings' state are not listed as tested.",
+   "evidence": "\"VoiceOver / TalkBack on streak screen and pre-prompt | device lab | Pass\""
+  }
+ ],
+ "usage": {
+  "calls": 3,
+  "tokIn": 10008,
+  "tokOut": 5793,
+  "usd": 0.00299712,
+  "critMs": 10832
+ }
+}

@@ -1,0 +1,399 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "deploy-04",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "secrets",
+     "severity": "blocker",
+     "claim": "Share links embed the owner's live project API key in the URL query string, and the public share page returns it to any viewer as `replayKey`. Anyone with the link (including Slack/X unfurl crawlers, referrers, browser history, HN readers) obtains a working paid credential. Deleting the share does not revoke the key, so the exposure is irreversible once links are posted.",
+     "evidence": "url.searchParams.set(\"k\", project.apiKey); ... return { messages: share.messages, model: share.model, replayKey: url.searchParams.get(\"k\") };"
+    },
+    {
+     "lens": "authz",
+     "severity": "major",
+     "claim": "Anonymous viewers replay requests against the owner's project quota with no per-viewer identity, rate limit, or spend cap. Public links can drain a paid project's budget and contradict the claimed pool isolation.",
+     "evidence": "// Viewers without an account replay against the owner's project quota."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Rollback does not cover the share feature or already-exposed keys. Disabling signups leaves share links working, deleting a share (404) does not rotate or revoke the leaked key, and there is no key-rotation step or kill switch for share pages short of a code rollback.",
+     "evidence": "Rollback: `free_signup_open` off stops new signups; existing free keys keep working. ... Shares can be deleted from Playground → History; deleted shares return 404."
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Prod config sets the free rate limit to 20 requests per SECOND (burst 40), while the public changelog promises 20 per minute. This is a 60x discrepancy, and QA only validated a staging config with `per: minute`, so the shipped limiter was never tested. This undermines both the cost model and the public promise, which can't be retracted after the launch post.",
+     "evidence": "rate_limit: { requests: 20, per: second, burst: 40 } vs \"Free accounts get **20 requests per minute**\" and QA \"(staging config used `per: minute`)\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The advertised 100k tokens/day free cap is not present in the free tier config (no `daily_tokens`), so the daily limit is not enforced at the gateway and no QA test covers it. Token consumption scales with signups rather than the stated quota.",
+     "evidence": "free: models: [...] rate_limit: {...} max_tokens_per_request: 4096 pool: free-8b (no daily_tokens) vs \"100k tokens per day\""
+    },
+    {
+     "lens": "cost",
+     "severity": "blocker",
+     "claim": "The $4k/month hard budget has no enforcement. The estimate (~$3.6k for 2 replicas) leaves ~$400 headroom, yet the pool autoscales to 24 H100s (~$43k/month) on queue depth. Combined with email-only signup, the missing daily token cap, and the 60x rate limit, an HN/X launch spike or abuse can blow the budget many times over. The only alert pages at >6 replicas, after spend begins, and there is no spend alarm or ceiling.",
+     "evidence": "free-8b: min_replicas: 2, max_replicas: 24, scale_on: queue_depth > 8 for 60s; Alerting: free pool replicas > 6 pages on-call; \"~$3.6k/month, within the $4k/month free-tier budget\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Rollback cannot stop spend or abuse: turning off `free_signup_open` only blocks new signups, while existing free keys and the autoscaler keep running. There is no kill switch for free-tier inference traffic.",
+     "evidence": "Rollback: `free_signup_open` off stops new signups; existing free keys keep working."
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The capacity estimate is an average-day figure with no peak or launch-spike factor, no tokens/sec derivation, no load test, and no scale-up latency or provider capacity check. The projected load (~126M tokens/day) is also not reconciled with the 100k/day per-key cap. The '<30% utilization' claim is unsupported for the launch window.",
+     "evidence": "\"Projection: 3,000 free DAU in month 1, avg 35 requests/day each, ~1.2k tokens per request.\" / \"Two H100 replicas serve the projected free load at < 30% utilization\""
+    },
+    {
+     "lens": "authn",
+     "severity": "major",
+     "claim": "Email-only signup with no card has no described email verification, signup rate limiting, or abuse controls, so an attacker can mint unlimited free keys to bypass per-key limits and exhaust the free pool.",
+     "evidence": "Sign up with email, no card required. ABSENT: email verification, signup rate limiting, or abuse controls"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Shared conversations are copied into a table and served to anyone with the URL, with no expiry, consent/disclosure, or retention policy. Changelog copy does not tell users that re-runs consume their quota. Deletion semantics (hard purge vs soft delete) are unstated, and personal data in messages may be exposed publicly.",
+     "evidence": "messages: session.messages ... \"Anyone with the link can view the conversation and re-run it, even without a Lumen account.\" ... Shares can be deleted from Playground → History; deleted shares return 404."
+    },
+    {
+     "lens": "secrets",
+     "severity": "minor",
+     "claim": "Logging redaction covers only the Authorization header and bodies; the `k` query parameter carrying the raw key on share/replay URLs is not stated to be redacted, so keys may appear in access logs.",
+     "evidence": "Gateway access logs redact the `Authorization` header and drop request bodies; we log model, token counts, latency, status and project id only"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "No legal/privacy/ToS review or acceptable-use controls are referenced for a public no-card free tier and public share pages before the launch.",
+     "evidence": "ABSENT: legal/privacy sign-off or ToS/privacy policy update in Rollout or QA summary"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Three unrelated features (free tier, share links, /v1/usage) ship in one deploy with only a signup flag for gating, so a problem in share links forces rollback of everything and there is no independent gate for sharing.",
+     "evidence": "Deploy gateway config and playground at 16:00 UTC, flag `free_signup_open` on at 16:45 UTC."
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 57977,
+    "tokOut": 24005,
+    "usd": 0.11289640000000001,
+    "critMs": 31012
+   },
+   "wallMs": 132474
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The $4k/month budget is not actually enforced by the design. The 2-replica floor alone costs ~$3.6k/month, and the auto-trip at $3.8k only returns 503s, so the pool keeps billing at min_replicas. The $150/day ceiling is about $120/day at baseline, and the artifact defines no action when it is hit. Metering lag for the trip is unstated, so overspend is possible, and the 1,500/day signup cap does not bound spend.",
+     "evidence": "\"2 H100 replicas ... ~$3.6k/month, which leaves only ~$400 of headroom\"; \"free_inference_enabled off => free-tier requests return 503\"; \"spend_ceiling_usd_per_day: 150\" (ABSENT: action on trip, scale-to-zero on trip, spend-metering latency)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The rollout and rollback depend on a `free_signup_open` flag that is not defined in the config diff. The signup block and kill_switches block contain no such flag, so the signup gate the launch relies on has no specified implementation.",
+     "evidence": "\"flag `free_signup_open` on at 16:45 UTC\" vs. kill_switches listing only `free_inference_enabled` and `share_pages_enabled`"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Share pages are public bearer URLs, so confidentiality rests entirely on the share ID being unguessable. The artifact never states how IDs are generated (entropy or random source), so enumeration of /s/* is not ruled out.",
+     "evidence": "ABSENT: share.id generation scheme; code only shows `new URL(\"/s/\" + share.id, PLAYGROUND_ORIGIN)`"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The rate limit config is inconsistent with its QA expectation. A burst of 5 on top of 20/min can allow ~25 requests in the first minute, so the '21st request returns 429' test may fail or the public 20 req/min claim may be imprecise.",
+     "evidence": "\"rate_limit: { requests: 20, per: minute, burst: 5 }\" vs. \"21st request in a minute returns 429 with `Retry-After`\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Operational mechanics for the emergency controls are underspecified. The flag source and reload time are not stated even though the kill switch lives in a deployed yaml and is said to work 'without a deploy'. The counter store's fail-open/closed behavior and the config rollback step are also missing.",
+     "evidence": "\"free_inference_enabled off stops all free-tier inference immediately (503), without a deploy\"; ABSENT: flag reload mechanism, counter-store failure policy, config revert step"
+    },
+    {
+     "lens": "data-exposure",
+     "severity": "minor",
+     "claim": "Deletion semantics are internally inconsistent. The load code checks a soft-delete flag while the text describes a hard purge, and cached renders may persist up to 24 hours despite 'immediate 404'. Copies in unfurl caches and backups are not addressed, and no third-party takedown path exists for public share pages.",
+     "evidence": "\"share.deletedAt\" in load() vs. \"removes the row (and cached renders) within 24 hours at most; the URL returns 404 immediately\""
+    },
+    {
+     "lens": "authz",
+     "severity": "minor",
+     "claim": "The ownership check in createShareLink and the server-side replay route's auth check are not shown, so the claims that only the owner can publish a session and that replay requires sign-in are unverifiable from the artifact. The QA re-run covers replay but not share-creation ownership.",
+     "evidence": "\"createShareLink(session: Session, project: Project)\" with no ownership check; ABSENT: replay route code"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The changelog does not disclose that free inference may be cut off for the rest of the month by the auto-trip. User-facing messaging for 503s, the daily-cap 429 and the waitlist is also undefined.",
+     "evidence": "\"also trips automatically at $3.8k month-to-date\" (not in changelog); QA only says \"a clear message\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "There is no stated review of Llama/Qwen license and acceptable-use obligations, no ToS update for public sharing, and no sanctions screening for global no-card signups.",
+     "evidence": "ABSENT: license review, ToS/AUP update, sanctions screening"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The cost arithmetic is mislabeled. $10.8k is about 6 replicas pinned, not 24 as the text says, and the text claims requests queue 'rather than adding GPUs' while the pool autoscales on queue depth.",
+     "evidence": "\"reduced from 24 to 6 (~$10.8k/month if pinned at max 24/7\"; \"scale_on: queue_depth > 8 for 60s\""
+    }
+   ],
+   "usage": {
+    "calls": 18,
+    "tokIn": 102449,
+    "tokOut": 61814,
+    "usd": 0.16433071999999999,
+    "critMs": 56061
+   },
+   "wallMs": 143716
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The daily spend-ceiling config contradicts itself and the prose. `action: scale_to_min_and_shed` keeps the 2-replica floor, but `trip_free_inference: true` trips the kill switch, which scales the pool to zero. Prose says the ceiling only scales to the floor and sheds. A daily trip could take free inference offline with no defined reset.",
+     "evidence": "on_spend_ceiling: { action: scale_to_min_and_shed, trip_free_inference: true }  ...  \"Daily spend ceiling of $150 scales the pool back to the 2-replica floor and sheds load\""
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The budget guarantee rests on unverified controls and an unvalidated demand model. The 2-replica floor is ~90% of the $4k budget and the utilization figure is withdrawn. The $3.8k monthly trip and scale-to-zero are marked 'to verify'. Nothing alerts if the metering sampler stalls or the trip fails, and the replica alert fires only above 4.",
+     "evidence": "\"~$3.6k/month, which leaves only ~$400 of headroom\"; \"(to verify before deploy: confirm the sampling interval and that the scale-to-zero action fires in staging.)\"; alerting: \"free pool replicas > 4 pages on-call\""
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "Abuse bounds are weak. The signup cap limits new accounts per day, not total accounts or spend. The cap is described per key in the gateway section but per account in the changelog, so multiple keys could multiply the allowance. Email aliasing is not addressed. The artifact concedes the cap bounds demand, not spend.",
+     "evidence": "\"Per-key 100k tokens/day and 20 req/min limits enforced at the gateway.\" vs changelog \"Free accounts get ... 100k tokens per day\"; \"This bounds demand, not spend\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Overflow behavior is unbounded or unspecified. The queue has no depth bound, timeout, or retry guidance, and scale-up latency is unmeasured. The limiter's fail-open or fail-closed behavior is unstated, though it protects the budget. Recovery after a daily ceiling trip is undefined, and nothing alerts when the ceiling fires.",
+     "evidence": "\"Requests beyond capacity queue, then return 429/503 rather than adding GPUs.\"; ABSENT: queue bound/timeout, limiter failure mode, ceiling-trip alert"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The automatic $3.8k monthly trip scales free inference to zero, but no re-enable owner or procedure, counter-reset behavior, or cold-start plan is given. Users are not told in the changelog that free access can vanish mid-month. Signups also stay open after a trip.",
+     "evidence": "\"Automatic trip of `free_inference_enabled` at $3.8k month-to-date, which scales the free pool to zero\"; the only runbook is \"Key compromise runbook\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "A public free tier opens with no ToS/AUP acceptance at signup, no sanctions or export screening, no privacy notice or retention statement for signup data, and no abuse-report path for publicly viewable share pages. The launch post publicizes all of this on HN and X.",
+     "evidence": "ABSENT: ToS/AUP acceptance, sanctions screening, privacy notice, and report mechanism for /s/*; \"Sign up with email (verification required), no card required.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The artifact has no evidence that the Llama 3.1 license conditions (use policy, attribution/notice) were reviewed for public hosting.",
+     "evidence": "ABSENT: model license review or attribution notice; \"[llama-3.1-8b-instruct, qwen2.5-7b-instruct]\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The share-page read path is a public hot path for a viral launch link but has no caching or CDN. Every view hits the DB with the full messages payload, and per-IP limiting does not bound aggregate load.",
+     "evidence": "const share = await db.shares.get(params.id);  ...  `/s/*` is also rate limited per IP"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Playground deploy introduces a persisted `shares` table with no migration or rollback path. The kill switch disables pages but does not define the fate of stored rows if the code is reverted.",
+     "evidence": "ABSENT: migration plan or rollback procedure for the `db.shares` table; Rollout lists only flag-based kill switches"
+    },
+    {
+     "lens": "free",
+     "severity": "major",
+     "claim": "The configured rate limit (burst 5 on top of 20/min) may not yield the QA expectation that the 21st request in a minute returns 429, since bucket semantics could permit ~25 in the first minute. The public promise and QA test may disagree with the config.",
+     "evidence": "rate_limit: { requests: 20, per: minute, burst: 5 } ... \"21st request in a minute returns 429 with Retry-After\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The deletion 'hard purge' claim covers only the live row and cached renders. Backups, replicas, and logs holding share content are unaddressed, and processing/retention of prompts by the GPU hosts is not stated.",
+     "evidence": "\"Deletion is a hard purge: ... removes the row (and cached renders) within 24 hours at most\"; ABSENT: backup retention, subprocessor terms"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 111595,
+    "tokOut": 58364,
+    "usd": 0.1525301,
+    "critMs": 65589
+   },
+   "wallMs": 209151
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The public changelog promises deleted shares 'stop working immediately' and the rollback section says the share kill switch disables pages 'immediately'. The design does not deliver that. Pages are CDN-cached for 60s. The per-replica in-process `shareCache` has no stated TTL or invalidation on delete. User-deleted rows use a `deletedAt` soft-delete, and the only scheduled purge covers expired shares, so the '24h removal' promise has no mechanism for them. This is a public, legally relevant claim that is not supported.",
+     "evidence": "changelog: \"Deleted shares stop working immediately and are removed from our live systems within 24 hours.\" vs code \"short-TTL in-process cache\", \"cache-control: public, s-maxage=60\", \"share.deletedAt\", and \"Expired shares are purged by a nightly job.\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The max_replicas cost note is mislabeled. ~$10.8k/month corresponds to 6 replicas pinned, not the old 24 cap. The 2-replica floor (~$3.6k, ~$3.7k in a 31-day month) sits within about $100–200 of the $3.8k trip. Any sustained autoscaling therefore trips free inference mid-month. The artifact acknowledges this but does not state the expected outage as an accepted outcome.",
+     "evidence": "\"`max_replicas` is reduced from 24 to 6 (~$10.8k/month if pinned at max 24/7\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The 50/hour per-email-domain signup limit applies to common providers such as gmail.com. Under HN-driven launch traffic it will throttle most legitimate signups. It is not reconciled with the 10x first-hour spike scenario.",
+     "evidence": "per_email_domain_limit: { requests: 50, per: hour } ... global_cap: { new_accounts: 1500, per: day }"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "Sanctions screening cites billing-country data, but the free tier collects no card or billing country. Which control actually applies is unclear. There is also no DMCA agent or notice-and-action process for the public UGC share pages. Both are pending legal sign-off, which is gated.",
+     "evidence": "\"IP/geo and billing-country screening\" alongside \"No card required.\"; ABSENT: DMCA designated agent"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Alerting has gaps. There is no alert for limiter or metering backend unreachability, pool saturation at max replicas, or nightly purge job failure. The kill-switch reload and propagation mechanism is not specified.",
+     "evidence": "alerting list has no limiter, saturation or purge-job alert; \"without a deploy\" with no stated flag-store mechanism"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The artifact does not state that replay re-validates the viewer's tier model allow-list and max_tokens against the stored `share.model`. It also does not state output escaping for stored message content on `/s/*`. These are likely handled by the gateway and framework but should be confirmed.",
+     "evidence": "\"messages: share.messages,\" ; ABSENT: replay allow-list re-check and render sanitization statement"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 190567,
+    "tokOut": 76434,
+    "usd": 0.21660590000000002,
+    "critMs": 79170
+   },
+   "wallMs": 182098
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Admin takedown, legal takedown and abuse-report takedown all use the same soft-delete path, and an hourly job then hard-deletes the row. Reports are triaged within 24h and the report form captures only a reason and URL. Evidence for a report, a legal request or a mandatory abuse referral can be destroyed before anyone reviews it. No preservation or legal-hold step exists for takedowns.",
+     "evidence": "\"an hourly purge job hard-deletes every row with `deletedAt` set\"; \"The same path covers legal takedown requests.\"; \"Reports are triaged within 24 hours.\" ABSENT: evidence-preservation or legal-hold step for takedowns"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The kill switch and signup flag are declared as static values in the deployed config file (`free_inference_enabled: true`, `signup.open: false`), but the monthly trip and manual recovery change them at runtime. The artifact does not say whether these are runtime flags or file values. A later config deploy that reapplies the file could silently re-enable free inference mid-month after a trip and resume spend. It could also undermine the claim that signup can be closed 'without a deploy'.",
+     "evidence": "\"kill_switches: free_inference_enabled: true\" with \"Setting it back to `false` stops new signups without a deploy.\" and \"re-enable is manual, see runbook\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A stale metering sampler only pages a human. No automatic action is defined for the free pool, so the daily ceiling and the $3.8k trip are both blind during a stall. The provider-side backstop is itself unverified.",
+     "evidence": "\"metering sampler stale (no spend sample for > 15 min) pages on-call\"; ABSENT: automatic action when the sampler is stale"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The shares table migration is described and verified only in staging. The Rollout section has no production migration step or ordering relative to the playground deploy.",
+     "evidence": "\"applied and verified in staging before the 16:00 UTC deploy\"; ABSENT: prod migration step in Rollout"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The text says share payload size is capped at creation, but the shown `createShareLink` inserts `session.messages` with no size check.",
+     "evidence": "\"Message payload per share is size-capped at creation.\" vs `messages: session.messages,`"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The signup config cites billing-country screening, but the free tier takes no card, so only IP/geo screening can run. Legal confirmation of the approach is still pending.",
+     "evidence": "\"IP/geo and billing-country screening\" vs \"No card required.\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 203784,
+    "tokOut": 77975,
+    "usd": 0.214544,
+    "critMs": 62967
+   },
+   "wallMs": 183787
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The cost figure for the old replica cap is wrong. 6 replicas at $2.49/h over 730h is about $10.9k/month, while 24 replicas would be about $43.6k. The spend controls, not the replica cap, are the real bound, so this misstatement does not change the design.",
+     "evidence": "`max_replicas` is reduced from 24 to 6 (~$10.8k/month if pinned at max 24/7"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The sanctions control cites billing-country screening, but the free tier takes no card, so IP/geo is the only real signal. Legal's adequacy sign-off is still pending, and it is already a gated verify item.",
+     "evidence": "blocked_regions: sanctions_list_v1 # IP/geo and billing-country screening ...; \"No card required.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The overflow response sends a fixed `Retry-After: 30` while the notes say clients retry with jitter. Identical hints can synchronize retries during the launch spike.",
+     "evidence": "on_overflow: \"429, Retry-After: 30\" ... \"Clients are told to back off and retry with jitter.\""
+    },
+    {
+     "lens": "failure-modes",
+     "severity": "minor",
+     "claim": "The evidence copy is described as atomic with the `deletedAt` write, yet it spans two stores and has a separate 'confirmed' state. The mechanism that records confirmation is not defined. The purge guard fails safe, since unconfirmed rows are not deleted and an alert fires, but the state machine should be written down.",
+     "evidence": "\"in the same transaction that sets `deletedAt`, copies the share row ... only until the copy is confirmed\""
+    },
+    {
+     "lens": "secrets",
+     "severity": "minor",
+     "claim": "The share ID in the URL path is the only access control for viewing. Only query strings are excluded from Playground logs, so path logging at the app, CDN or edge would record the bearer ID.",
+     "evidence": "\"Playground access logs do not record query strings for `/s/*`.\" and \"The ID is the only access control for viewing\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 236201,
+    "tokOut": 76145,
+    "usd": 0.2231505,
+    "critMs": 63146
+   },
+   "wallMs": 192874
+  }
+ ],
+ "artifact": "# Release proposal: Lumen Gateway — Free tier GA + Playground share links\n\nOwner: platform · Deploy: Wed 2026-11-04 16:00 UTC · Launch post: Wed 17:00 UTC (blog, HN, X)\n\n**Status: revised after third review gate.** Share links carry no credential, and free-tier limits in prod config match the public changelog. This revision also:\n- removes the contradictory daily-ceiling trip\n- adds budget-control monitoring\n- adds overflow and limiter failure behavior\n- defines recovery after a budget trip\n- adds ToS/AUP, sanctions, privacy and abuse-report requirements\n- adds a model license review\n- adds share-page caching and a table migration/rollback plan\n- aligns the burst setting with the QA expectation\n- states the scope of deletion honestly\n- aligns the deletion and kill-switch claims with the actual cache and purge design (bounded delay of up to 60s, not \"immediately\"; hourly hard-delete of user-deleted rows)\n- adds an evidence-preservation / legal-hold step for abuse-report, admin and legal takedowns, so evidence is not destroyed by the hourly purge before review\n- clarifies that the kill switches, `signup.open` and the trip threshold are runtime flags (authoritative state in the flag store), and that the config file only seeds them, so a config deploy cannot silently re-enable free inference or signup\n\nItems marked *(to verify before deploy)* must pass in staging, or be signed off, before the 16:00 UTC deploy. If any fails, the launch post is held.\n\n## Release notes (public changelog)\n\n- **Free tier is generally available.** Sign up with email (verification required) and accept the Terms of Service and Acceptable Use Policy. No card required. Free accounts get **20 requests per minute** and **100k tokens per day per account** (all of an account's keys share one allowance) on `llama-3.1-8b-instruct` and `qwen2.5-7b-instruct`. Free-tier capacity is limited. During very high demand, signups may be temporarily paused or waitlisted. **If the free-tier monthly budget is reached, free inference may be paused until the start of the next month (UTC), or until we re-enable it.** Paid projects are unaffected.\n- **Share from Playground.** Click \"Share\" on any playground session to get a link. Anyone with the link can view the conversation (including anyone you send it to, and anyone it is posted to). Viewers can re-run it **only if they sign in**, and re-runs use the **viewer's own** quota, never yours. Shares expire after 30 days by default and can be deleted at any time from Playground → History. Deleted shares stop working within about a minute (cached copies of the page can remain viewable for up to 60 seconds) and are removed from our live systems within 24 hours. Copies in encrypted backups age out within the backup retention window (see Privacy and retention). Content removed after an abuse report or legal request may be preserved in restricted storage for trust & safety review or as required by law. Every shared page has a \"Report\" link. Don't share conversations containing personal or sensitive information.\n- Models are provided under their respective licenses. Llama 3.1 is licensed under the Llama 3.1 Community License (\"Built with Llama\"), and use is subject to Meta's Acceptable Use Policy.\n- New `GET /v1/usage` endpoint returns your current daily token usage.\n\n## Gateway config change (`deploy/prod/gateway.yaml`, diff)\n\n```diff\n tiers:\n+  free:\n+    models: [llama-3.1-8b-instruct, qwen2.5-7b-instruct]\n+    limit_scope: account         # all keys of an account share one bucket\n+    rate_limit: { requests: 20, per: minute, burst: 0 }   # strict: 21st request in a minute is rejected\n+    daily_tokens: 100000\n+    max_tokens_per_request: 4096\n+    pool: free-8b\n+    on_limiter_unavailable: fail_closed   # limiter/metering backend down => free requests return 503; paid unaffected\n+    queue: { max_depth_per_replica: 16, max_wait: 10s, on_overflow: \"429, Retry-After: 30\" }\n   pro:\n     models: [\"*\"]\n     rate_limit: { requests: 600, per: minute, burst: 120 }\n     daily_tokens: null\n     pool: shared-h100\n pools:\n+  free-8b:\n+    gpu: h100-80g\n+    min_replicas: 2\n+    max_replicas: 6\n+    scale_on: queue_depth > 8 for 60s\n+    spend_ceiling_usd_per_day: 150\n+    on_spend_ceiling: { action: scale_to_min_and_shed, resets: \"00:00 UTC\", alert: page }   # does NOT trip the kill switch\n+    month_to_date_trip: { threshold_usd: 3800, action: trip_free_inference, close_signup: true, resets: \"first day of month 00:00 UTC (counter) -- re-enable is manual, see runbook\" }   # threshold is a runtime-flag-store value; the file value only seeds it\n+    on_kill_switch_off: scale_to_zero   # free_inference_enabled=false => replicas 0 after 5 min drain\n   shared-h100:\n     gpu: h100-80g\n     min_replicas: 6\n     max_replicas: 40\n+signup:\n+  open: false                    # SEED VALUE ONLY for runtime flag `free_signup_open`; seeded if the flag is absent, never overwrites existing runtime state; flipped on at 16:45 UTC by the rollout step (flag store, not a deploy)\n+  require_email_verification: true\n+  require_tos_aup_acceptance: true\n+  normalize_email_aliases: true  # strip +tags, collapse dots for gmail-style providers; one account per normalized address\n+  per_ip_limit: { requests: 5, per: hour }\n+  per_email_domain_limit: { requests: 50, per: hour }\n+  disposable_email_blocklist: true\n+  blocked_regions: sanctions_list_v1   # IP/geo and billing-country screening against comprehensively sanctioned regions\n+  global_cap: { new_accounts: 1500, per: day }\n+  total_cap: { active_free_accounts: 10000 }\n+kill_switches:                   # SEED VALUES ONLY: runtime flags in the flag store are authoritative (seed-if-absent; config deploys never overwrite them)\n+  free_inference_enabled: true   # off => free-tier requests return 503 and free-8b scales to zero; paid unaffected\n+  share_pages_enabled: true      # off => /s/* returns 503 (cached copies expire within 60s unless the CDN is purged) and replay is disabled\n```\n\nNotes on the config:\n- The rate limit is `per: minute` with `burst: 0`, so it is a strict limit and the 21st request in a minute is rejected. This matches the changelog and the QA test. Staging is changed to the same values, and a CI check asserts that the prod and staging `free` tier blocks are identical and that the changelog values match the config.\n- **Runtime flags vs config file:** `free_inference_enabled`, `share_pages_enabled`, `free_signup_open` (`signup.open`) and the `month_to_date_trip.threshold_usd` value are runtime flags held in the flag store. The values in `gateway.yaml` are seed values applied only when the flag does not yet exist. A config deploy never overwrites the current runtime value. The automatic $3.8k trip, on-call flips and the manual recovery all write to the flag store and are audit-logged (who/when/why). This is what makes \"without a deploy\" true, and it means a later config deploy that reapplies the file cannot re-enable free inference or signup after a trip. The gateway reads flag state at startup and on a short refresh (≤ 30s), and if the flag store is unreachable it keeps the last known value, with a fail-closed default of off for free inference and signup on a cold start with no known value. A CI check fails any change that makes the deploy tooling write these keys to the flag store on apply. *(to verify before deploy: in staging, trip free inference via the simulated $3.8k path, redeploy the unchanged and a modified config, and confirm `free_inference_enabled`, `free_signup_open` and the threshold keep their runtime values and free requests still return 503. Also confirm that flipping `free_signup_open` and `free_inference_enabled` via the flag store takes effect within 30s with no deploy.)*\n- `daily_tokens: 100000` and the rate limit are enforced per **account** (`limit_scope: account`), not per key. Creating additional keys does not increase the allowance. *(to verify before deploy: create several keys on one account in staging and confirm they share one bucket.)*\n- Email aliasing: addresses are normalized (plus-tags, dots for providers that ignore them), with one account per normalized address, plus the disposable-domain blocklist and per-domain hourly limit. Custom-domain aliasing is not fully preventable. It is bounded by the per-IP limit, the daily new-account cap, the 10,000 total free-account cap, and ultimately by the pool spend controls below.\n- `signup.open` is the seed value for the runtime flag `free_signup_open` referenced in Rollout and Rollback. It ships `false` and is flipped on in the flag store only at 16:45 UTC after the re-run QA passes. Setting the flag back to `false` stops new signups without a deploy.\n- Daily ceiling vs monthly trip are separate. The `$150/day` ceiling only scales the pool back to `min_replicas` and sheds excess load (429/503). It never trips `free_inference_enabled` and resets automatically at 00:00 UTC. The ceiling firing pages on-call. The `$3.8k` month-to-date trip is the only automatic action that takes free inference offline.\n- `max_replicas` is reduced from 24 to 6 (~$10.8k/month if pinned at max 24/7, so the hard stop is the daily spend ceiling and monthly trip, not the replica cap).\n- Overflow behavior: each replica queues at most 16 requests, and a request waits at most 10s. Beyond either bound the gateway returns 429 with `Retry-After: 30` (or 503 if the pool is draining or down). Clients are told to back off and retry with jitter. Scale-up latency is measured in the load test below, and `queue.max_wait` is tuned against it.\n- Limiter failure mode is fail-closed for the free tier. If the rate/token limiter or metering backend is unreachable, free requests return 503 rather than going unmetered, because the limiter protects the budget. Paid traffic uses a separate path and is unaffected. *(to verify before deploy: kill the limiter backend in staging and confirm free requests return 503 and paid requests succeed.)*\n- `min_replicas: 2` costs ~$120/day, so the daily ceiling only bounds autoscaling above baseline. $4.5k/30 days at the ceiling is above budget, so the ceiling is paired with the monthly trip. When month-to-date free-pool spend reaches $3.8k, the gateway trips `free_inference_enabled` off automatically (in the flag store), which also scales the free pool to zero (after a short drain) and closes free signup, so billing stops rather than continuing at the 2-replica floor.\n- Metering lag: spend is computed from replica-hours (provider billing for allocated GPUs, not token usage) sampled every 5 minutes, so lag is bounded to about 5 minutes plus drain (~$0.50 of overshoot per replica at $2.49/h over ~10 minutes). The $3.8k trip leaves $200 of margin, well above this. *(to verify before deploy: confirm the sampling interval and that the scale-to-zero action fires in staging.)*\n- Monitoring of the controls themselves (see Rollout alerting): the sampler staleness alert, the trip-failure alert, and an independent provider-side budget alert are the backstop if the gateway's own metering stalls.\n\n## Capacity and cost\n\n- Projection: 3,000 free DAU in month 1, avg 35 requests/day each, ~1.2k tokens per request ≈ 126M tokens/day at the average. Note that the per-account cap of 100k tokens/day (≈ 83 requests at 1.2k) bounds each user at about 100k; 3,000 users at the cap is a 300M tokens/day ceiling. The projection is an average, not a worst case.\n- Steady-state estimate: 2 H100 replicas at the on-demand rate of $2.49/h is ~$3.6k/month, which leaves only ~$400 of headroom. The 2-replica floor alone is ~90% of the budget, and any autoscaling beyond baseline exceeds it. The budget is therefore enforced by controls rather than by the estimate, and those controls are themselves monitored:\n  - Month-to-date spend alarm at 50% / 75% / 90% of $4k (pages on-call at 75%).\n  - Automatic trip of `free_inference_enabled` at $3.8k month-to-date, which scales the free pool to zero so spend stops accruing (a 503-only trip would not stop billing at the replica floor).\n  - Daily spend ceiling of $150 scales the pool back to the 2-replica floor and sheds load (pages on-call when it fires). It does not by itself guarantee the monthly budget, which is why the monthly trip exists.\n  - Independent backstop: a provider-account budget alert/hard cap at $4k on the free GPU project, so a stalled gateway sampler cannot silently overspend. *(to verify before deploy: confirm the provider supports a hard cap or alert on that project and that it pages on-call.)*\n  - Signup caps: 1,500 new accounts/day and 10,000 total free accounts, with waitlist beyond them. These bound demand, not spend; spend is bounded by the controls above.\n  - Per-account 100k tokens/day and 20 req/min limits enforced at the gateway, fail-closed.\n- Capacity validation *(to verify before deploy)*: derive tokens/sec per replica for the 8B models from a load test in staging at 3x the projected average and at the launch-spike scenario (assume 10x signups in the first hour); confirm scale-up latency (time to add a replica) and cold-start time from zero replicas; confirm with the GPU provider that 6 replicas are available on demand; load test the `/s/*` read path (see Share links). The \"<30% utilization\" figure is withdrawn until that load test is complete; results will be attached to this proposal. If the floor proves unaffordable relative to measured demand, `min_replicas` is lowered to 1 before launch.\n- Free pool is isolated from `shared-h100`, so free traffic cannot degrade paid latency.\n\n## Model licensing\n\n- `llama-3.1-8b-instruct` is served under the Llama 3.1 Community License. Before launch, legal confirms *(to verify before deploy)*:\n  - public hosting is permitted under the license\n  - the \"Built with Llama\" attribution and license notice are displayed on the model page, the docs and the Playground\n  - Meta's Acceptable Use Policy is incorporated into our AUP and flowed down to free users\n  - no license threshold (e.g. user-count conditions) applies to us\n- `qwen2.5-7b-instruct` is released under Apache 2.0, and its license notice is included in the model docs. Legal confirms this at the same time *(to verify before deploy)*.\n- Launch is blocked on written legal sign-off for both.\n\n## Legal, privacy and abuse-handling requirements\n\n- **ToS/AUP:** signup requires explicit acceptance of the Terms of Service and Acceptable Use Policy (checkbox, with version and timestamp stored on the account). Unaccepted signups cannot obtain a key. *(to verify before deploy.)*\n- **Sanctions/export screening:** signup is screened against comprehensively sanctioned regions (IP/geo) and denied-party lists, per the `blocked_regions` config. Legal confirms the screening approach is adequate for a no-card free tier *(to verify before deploy)*.\n- **Privacy notice:** the signup form links the privacy notice, which covers email and IP address collected at signup, abuse-prevention processing, token-count and request metadata logging, share-content retention (including preservation of content removed after an abuse report or legal request), and subprocessors (GPU provider, email provider). Signup data is retained while the account is active and for a defined period afterwards, as set out in the notice. Legal signs off on the notice before launch.\n- **Abuse reporting for share pages:** every `/s/*` page has a \"Report\" link that opens a form (reason, URL) routed to the trust & safety queue, and `abuse@` is listed in the AUP. Reports are triaged within 24 hours. The owner can take down any share via an admin tool that sets `deletedAt`, evicts the in-process cache and purges the CDN cache, using the same path as user deletion. The same path covers legal takedown requests.\n- **Evidence preservation / legal hold for takedowns:** any takedown that originates from an abuse report, an admin action or a legal request (as opposed to the owner deleting their own share) does not lose its content to the hourly purge before review. The takedown tool, in the same transaction that sets `deletedAt`, copies the share row (messages, model, ids, timestamps, owner project id) plus the report/request record into a restricted-access evidence store (`share_evidence`, access limited to trust & safety and legal, encrypted, access-logged) and sets `legalHold = true` on the live row's purge exemption flag only until the copy is confirmed. The live row is then hard-deleted by the hourly job as normal, so the public URL and live data are gone within the stated bounds. The evidence record is retained pending triage and any referral or legal obligation (including mandatory reporting where it applies), then deleted after a retention period set by legal, or earlier if trust & safety closes the case as unfounded. Legal can place or release an extended hold on any record. The purge job refuses to hard-delete a takedown-originated row that has no confirmed evidence copy, and alerts instead. User self-deletions are not preserved. If a user deletes a share that already has an open report, the evidence copy is taken at that point. The evidence store and its retention are disclosed in the privacy notice. *(to verify before deploy: in staging, file a report and take the share down, then confirm the evidence copy exists with restricted access, the live row is hard-deleted within the hour, a takedown with a failed copy is not purged and alerts, and a plain user deletion creates no evidence copy. Legal confirms the retention period and mandatory-reporting handling.)*\n\n## Playground share links (`apps/playground/src/share.ts`)\n\n```ts\nexport async function createShareLink(session: Session, project: Project): Promise<string> {\n  const share = await db.shares.insert({\n    id: randomBytes(16).toString(\"base64url\"), // 128 bits from the CSPRNG; not sequential, not derived from session/project ids\n    sessionId: session.id,\n    projectId: project.id,\n    messages: session.messages,\n    model: session.model,\n    createdAt: new Date(),\n    expiresAt: addDays(new Date(), 30),\n  });\n  // No credentials are ever placed in the URL. Viewers must sign in to re-run,\n  // and re-runs are billed to the viewer's own project and limits.\n  return new URL(\"/s/\" + share.id, PLAYGROUND_ORIGIN).toString();\n}\n```\n\n```ts\n// apps/playground/src/routes/s/[id].ts\nexport async function load({ params, locals, setHeaders }) {\n  if (!flags.share_pages_enabled) throw error(503);\n  // In-process cache: hard 5s TTL, entries are evicted on delete/takedown on the replica that\n  // handles it; other replicas converge within the 5s TTL. Cached entries are re-checked for\n  // deletedAt/expiresAt on every read.\n  const share = await shareCache.getOrLoad(params.id, () => db.shares.get(params.id), { ttlMs: 5_000 });\n  if (!share || share.deletedAt || share.expiresAt < new Date()) throw error(404);\n  // Anonymous page body is identical for every viewer, so it can be cached at the CDN.\n  // Replay eligibility is resolved client-side from the session, never baked into the cached HTML.\n  setHeaders({ \"cache-control\": \"public, s-maxage=60, max-age=0\" });\n  return {\n    messages: share.messages,\n    model: share.model,\n  };\n}\n```\n\n- No API key is ever included in the URL or in the page payload. Replays are executed server-side under the viewer's own identity (signed-in only, determined at request time by a separate non-cached endpoint), with the viewer's own rate limits and token cap. Replay checks `deletedAt`/`expiresAt` and the kill switch on the uncached path, so replay of a deleted share stops immediately.\n- **Read-path scaling:** `/s/*` is expected to be the hot path for a viral link. Rendered pages are cached at the CDN (`s-maxage=60`) and by a short-TTL (5s) in-process cache, so repeated views of one link do not hit the DB. Cache misses for unknown IDs are rate limited per IP and protected by a global limit on DB-backed `/s/*` misses. Message payload per share is size-capped at creation. **Deletion latency:** on delete or takedown the row is marked `deletedAt`, the handling replica's in-process cache entry is evicted and the CDN entry is purged by key. A deleted share is therefore a 404 immediately on the uncached path, within 5s on other replicas, and at the CDN edge immediately after a successful purge, or within the 60s TTL if the purge fails. The bound we state publicly is about a minute. `share_pages_enabled` off is the circuit breaker: the flag is checked on every uncached request, replay stops immediately, and CDN-cached page views expire within 60s (on-call can run a CDN purge-all to make it immediate). The `/s/*` read path is included in the staging load test at 100x the expected launch-spike view rate *(to verify before deploy)*.\n- **Share ID unguessability:** share IDs are 128-bit random values from the CSPRNG (`randomBytes(16)`, base64url), so enumeration of `/s/*` is infeasible. The ID is the only access control for viewing, so it is never derived from sequential or guessable values. `/s/*` is also rate limited per IP, and 404 responses for unknown, expired and deleted IDs are identical. *(to verify before deploy: confirm the DB id column stores the generated value and no autoincrement/default ID is used.)*\n- **Existing keys:** the prior implementation was never deployed to prod, but any staging shares created with it embedded keys. Before deploy, all staging project keys used in share testing are rotated, and staging share rows are purged *(to verify before deploy)*. A CI/log scan confirms no `?k=` query parameter appears in prod access logs or share tables.\n- Share pages are server-rendered with Open Graph tags that include only the model name and a generic title, not conversation content, so link unfurls do not leak message text. Pages are served with `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex`.\n- **Deletion mechanism:** user deletion and takedown soft-delete the row (`deletedAt`) so the URL stops working at once, and an **hourly purge job hard-deletes every row with `deletedAt` set** (and purges its CDN key again), so removal from the live primary completes within about an hour, well inside the 24h promise (replicas follow via replication). Takedowns from abuse reports, admin action or legal requests first have their content copied to the restricted evidence store (see Legal, privacy and abuse-handling requirements), and the purge job will not hard-delete such a row until that copy is confirmed. Expired shares are hard-deleted by a nightly job. The purge job alerts if it fails or if any `deletedAt` row is older than 24h *(to verify before deploy: delete a share in staging and confirm the row is gone within the hour and the stale-row alert fires when the job is disabled)*. See Privacy and retention for backups, the evidence store and other copies. Retention in live systems is at most 30 days unless deleted earlier.\n- The Share button shows a disclosure before creating a link: the conversation will be viewable by anyone with the link, and may contain personal information.\n- **Table migration and rollback:** the `shares` table is created by an additive, backward-compatible migration (`CREATE TABLE`, no changes to existing tables), applied and verified in staging before the 16:00 UTC deploy. It can safely exist with no code using it. If the playground code is reverted, the table and its rows are left in place and remain inert because the routes are gone. The hourly deleted-row purge and nightly expiry/purge jobs are deployed independently of the playground release, so expiry and deletion keep working after a revert. If a full removal is needed, an operator runs a documented purge (`DELETE FROM shares`, then CDN purge), after confirming that any rows under takedown have evidence copies, and the table is dropped only in a later migration after the retention window has passed. `share_pages_enabled` off is used first, since it disables viewing without touching data. *(to verify before deploy: apply the migration, revert the playground build, confirm the purge jobs still run and no errors occur.)*\n\n## Privacy and retention\n\n- Gateway and Playground logs contain no message content (see Logging). Share content lives in the `shares` table, its read replicas, and encrypted DB backups.\n- Deletion stops the page working within about a minute (see Share links), and the hourly job hard-deletes the primary row (and replicas via replication) and cached renders, within 24 hours at most. **Backups are not edited.** Deleted share content ages out of backups when they expire at the backup retention period. The backup retention period is confirmed and published in the privacy notice, with a target of 30 days or less *(to verify before deploy)*. Share content in backups is never restored into production except in disaster recovery, and a re-purge of deleted/expired IDs runs after any restore.\n- **Exception for takedowns:** content removed after an abuse report, admin action or legal request is preserved in the restricted evidence store described above (not served, not in live product systems) until triage and any legal obligations are complete, and then deleted per the retention period set by legal. This is disclosed in the privacy notice.\n- Inference runs on rented GPUs from our GPU provider, acting as a subprocessor. Prompts and completions are processed in memory for inference. Before launch we confirm the provider's terms do not permit retention or training on customer data, and list the provider as a subprocessor in the privacy notice *(to verify before deploy)*.\n- The changelog and the Share disclosure state that deleted shares stop working within about a minute, that deletion is complete in live systems within 24 hours, that backup copies age out per the retention window, and that content removed after a report or legal request may be preserved in restricted storage.\n\n## Logging\n\n- Gateway access logs redact the `Authorization` header and drop request bodies; we log model, token counts, latency, status and project id only (unchanged from current prod).\n- Playground access logs do not record query strings for `/s/*`.\n\n## QA summary (staging)\n\nPreviously passed:\n- Signup → first free request in < 60s: pass.\n- Free-tier model allow-list: request to `llama-3.1-70b-instruct` with a free key returns 403: pass.\n- `/v1/usage` matches billing ledger within 0.1%: pass.\n\nRe-run required against the final prod config *(to verify before deploy)*:\n- Rate limiting with `per: minute, burst: 0` from the prod config file itself (not a staging override): requests 1–20 in a minute succeed, the 21st returns 429 with `Retry-After`.\n- Account-scoped limits: multiple keys on one account share the same rate and daily token bucket.\n- Daily cap: 100k tokens consumed, next request returns 429 with a clear message; resets at 00:00 UTC.\n- Overflow: saturate the pool and confirm the queue bound (16/replica) and 10s wait produce 429 with `Retry-After`, not unbounded waiting.\n- Limiter failure: with the limiter backend down, free requests return 503 (fail-closed) and paid requests are unaffected.\n- Signup controls: with `free_signup_open` false (seeded from `signup.open: false`) signups are blocked and with it true they are allowed; unverified email cannot obtain a key; ToS/AUP acceptance is required; alias-normalized duplicates are rejected; blocked regions are denied; per-IP, global and total caps trigger as configured.\n- Runtime flag persistence: after a trip (or manual flag flip), a config redeploy does not change `free_inference_enabled`, `free_signup_open`, `share_pages_enabled` or the trip threshold; flag changes take effect within 30s without a deploy.\n- Share link: create, open in incognito, confirm no key in URL/HTML/network payload, replay requires sign-in and consumes the viewer's quota (not the owner's), expire, delete → 404 within the stated bound (in-process cache 5s, CDN purged, and with the purge disabled, at most 60s), row hard-deleted by the hourly job within the hour, and CDN entry purged; Report link submits to the trust & safety queue.\n- Takedown evidence preservation: report → takedown creates a restricted evidence copy before the live row is purged; a takedown with a failed copy is not purged and alerts; user self-deletion creates no copy.\n- Kill switches: `free_inference_enabled` off returns 503 for free keys, scales the free pool to zero, and leaves paid traffic unaffected; `share_pages_enabled` off returns 503 on uncached `/s/*` requests, disables replay immediately, and CDN-cached pages expire within 60s.\n- Spend controls: simulated daily spend at $150 scales the pool to `min_replicas`, sheds load, pages on-call, does **not** trip the kill switch, and clears at 00:00 UTC; simulated month-to-date spend at $3.8k trips the free-inference switch, closes signup, and scales the pool to zero; stalling the sampler pages on-call; a failed trip (spend > $3.9k with replicas > 0) pages on-call.\n- Recovery drill: execute the \"free budget trip recovery\" runbook below end to end in staging, including cold start from zero.\n- Share table migration/rollback drill as described above.\n- Load test as described under Capacity and cost, including the `/s/*` read path.\n- Legal sign-offs: model licenses, sanctions screening approach, ToS/AUP, privacy notice, and evidence-retention/mandatory-reporting handling.\n\n## Rollout\n\n- Deploy gateway config and playground at 16:00 UTC (with `free_signup_open` seeded `false`); flag `free_signup_open` (seeded from config key `signup.open`) is turned on in the flag store at 16:45 UTC, only after the re-run QA above is complete and the launch post is held otherwise.\n- Alerting:\n  - free pool replicas > 2 for 30 min notifies on-call (autoscaling above the floor is spend); replicas > 4 pages on-call\n  - error rate > 2% pages on-call\n  - month-to-date free spend alarms at 50/75/90% of $4k\n  - daily spend ceiling reached pages on-call\n  - metering sampler stale (no spend sample for > 15 min) pages on-call\n  - trip failure (month-to-date spend ≥ $3.9k and free replicas > 0, or `free_inference_enabled` still true) pages on-call\n  - provider-side budget alert at the $4k hard cap pages on-call\n  - signup rate above 2x the expected rate pages on-call\n  - `/s/*` DB-backed miss rate or p95 latency above threshold pages on-call\n  - share purge job failure, any soft-deleted share row older than 24h, or any takedown row without a confirmed evidence copy, pages on-call\n  - any change to a kill-switch or signup runtime flag outside the trip/runbook path (e.g. made by a deploy) notifies on-call\n- Rollback and kill switches (all are runtime flags in the flag store, flipped without a deploy, and unaffected by config redeploys):\n  - `free_signup_open` off (set in the flag store; seed `signup.open: false`) stops new signups.\n  - `free_inference_enabled` off stops all free-tier inference (503) within the ≤30s flag refresh and scales the free pool to zero; it also trips automatically at $3.8k month-to-date, and signup closes with it.\n  - `share_pages_enabled` off disables all share pages and replay without a code rollback. Replay and uncached page requests stop immediately; CDN-cached page views stop within 60s (the cache TTL), or immediately if on-call also runs a CDN purge-all.\n  - Key compromise runbook: if any project key is ever suspected exposed, rotate it from the project settings (or via the admin tool) and invalidate old keys immediately; deleting a share is not a substitute for rotation.\n- **Free budget trip recovery runbook** (owner: platform on-call; decision-maker: platform lead, with the marketing budget owner informed):\n  - After the automatic $3.8k trip, free inference stays off. It is not re-enabled automatically within the same month, and config deploys do not re-enable it (the flag store value is authoritative). The platform lead decides whether to raise the budget or leave it off.\n  - Month-to-date counter: it resets at 00:00 UTC on the first day of the month. After the reset, on-call re-enables manually by setting the runtime flag `free_inference_enabled: true` in the flag store, then waits for the pool to cold start from zero (expected time measured in the load test, ~minutes; cold-start time is posted to the status page) before re-opening `free_signup_open`.\n  - Mid-month re-enable (if budget is raised): update the runtime `month_to_date_trip.threshold_usd` value, set `free_inference_enabled: true`, confirm replicas reach `min_replicas` and a test free request succeeds, then re-open signup. Also update the seed value in `gateway.yaml` afterwards so the file does not drift from the runtime state.\n  - Communication: the status page and a banner on the signup page and Playground state that free access is paused for the rest of the month and when it is expected to return; the changelog already warns users that free access can be paused mid-month. Waitlisted signups are emailed when it returns.\n  - Daily ceiling hits are handled separately: no action required beyond acknowledging the page. Load shedding clears automatically at 00:00 UTC, and on-call reviews whether demand or abuse caused it.",
+ "fixerUsage": {
+  "calls": 5,
+  "tokIn": 36995,
+  "tokOut": 42476,
+  "usd": 0.5727200000000001,
+  "critMs": 244550
+ },
+ "status": "cleared"
+}

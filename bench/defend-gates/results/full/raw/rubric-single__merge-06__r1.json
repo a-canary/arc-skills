@@ -1,0 +1,131 @@
+{
+ "approach": "rubric-single",
+ "case": "merge-06",
+ "rep": 1,
+ "wallMs": 82658,
+ "verdict": "ATTACKS",
+ "confidence": 0.82,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The default of 20 rps / burst 40 applies to every tenant on merge, with no flag or staged rollout. Any existing tenant running above 20 rps, which is the batch-job pattern this PR is meant to address, starts receiving 429s immediately, and the PR gives no way to roll that back other than reverting.",
+   "evidence": "\"limits from tenant config, default 20 rps / burst 40\" — ABSENT: feature flag, per-tenant migration, or check of current tenant traffic against the default."
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The upstream retry doubles upstream calls during a 429 storm and holds each client connection open for up to 5s. Under sustained upstream throttling every request retries once, which amplifies load on the already throttled provider and creates synchronized retry waves. There is no concurrency cap or retry budget.",
+   "evidence": "\"let res = await upstream.chat(req.body, { signal: req.signal }); if (res.status === 429) { ... await new Promise((r) => setTimeout(r, delay)); res = await upstream.chat(...)\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Per-tenant limits do not bound aggregate upstream load. About 120 tenants at a 20 rps default can together reach roughly 2400 rps, and nothing caps the shared upstream quota. The PR therefore may not prevent the cross-tenant 429 starvation it describes.",
+   "evidence": "ABSENT: any global or upstream-level limiter; only \"new TenantLimiter()\" per tenant is added."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The retry delay timer is not cancelled when the client disconnects. After req.signal aborts, the handler still waits and then issues a second upstream call that will fail immediately, which wastes work and adds a dangling timer per request.",
+   "evidence": "\"await new Promise((r) => setTimeout(r, delay));\" — no abort listener on req.signal."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Date.now() is not monotonic. A backward clock step makes elapsedSec negative, which can drive tokens below zero and produce large or incorrect waitMs values. performance.now() or a clamp on elapsed time would avoid this.",
+   "evidence": "\"const elapsedSec = (nowMs - b.updatedMs) / 1000;\" with the default clock \"now: () => number = Date.now\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Retry-After as an HTTP-date is parsed with Number(), which yields NaN and falls back to a fixed 1s delay. This ignores the upstream's actual requested wait.",
+   "evidence": "\"const secs = Number(header); if (!Number.isFinite(secs) || secs < 0) return 1_000;\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "When a bucket is evicted from the 10k LRU, the tenant's next request starts with a full burst. Eviction therefore grants a temporary limit reset, which is a bypass of the limiter for any tenant that gets evicted.",
+   "evidence": "\"const b = this.buckets.get(tenantId) ?? { tokens: limits.burst, updatedMs: nowMs };\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The key fingerprint is an unsalted, truncated SHA-256 (40 bits) of the secret API key. It is a stable, linkable identifier for the key in logs. Preferably use a keyed HMAC or a per-process secret, and confirm the key is high-entropy so the hash cannot be brute-forced.",
+   "evidence": "\"createHash(\"sha256\").update(apiKey).digest(\"hex\").slice(0, 10)\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Logs now emit tenant ID together with a stable key fingerprint on every rate-limit decision, which makes tenant behaviour linkable across log retention. No retention or access policy is mentioned.",
+   "evidence": "\"req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, \\\"tenant rate limited\\\")\" — ABSENT: retention policy."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The retry path, the 429 pass-through, retryAfterMs parsing, the LRU eviction behaviour, and the route-level 429 response are all untested. The only tests cover the bucket math and tenant isolation. The claimed starvation fix has no load or regression evidence.",
+   "evidence": "bucket.test.ts contains only \"admits burst, then rate-limits, then refills\" and \"tenants are isolated\"; no completions route test."
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Each upstream 429 retry doubles upstream calls. If the provider bills or counts quota for throttled attempts, the retry increases spend during exactly the periods when the gateway is already overloaded.",
+   "evidence": "ABSENT: any statement on whether upstream 429 responses consume quota or billing."
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "Limiter state is in-process and per region, so a tenant's effective limit is multiplied by the number of regional processes. Future horizontal scaling would silently break the limits. This is an acknowledged constraint, not a defect in this PR.",
+   "evidence": "Context: \"single process per region (no horizontal scaling yet)\"."
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "Lens reviewed: no finding. The change is API-only and produces no rendered UI.",
+   "evidence": "ABSENT: UI surface in the diff."
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "Lens reviewed: no finding. The 429 JSON error is machine-consumed, and no accessibility-relevant surface is introduced.",
+   "evidence": "ABSENT: UI or media in the diff."
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Lens reviewed: no finding in the artifact. Upstream provider rate-limit and retry terms were not checked, but the artifact cites none.",
+   "evidence": "ABSENT: provider ToS review for retry behaviour."
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "Lens reviewed: no finding beyond the retry latency already noted. Clients still receive a 429 with Retry-After, which is a reasonable contract.",
+   "evidence": "\"return reply.code(429).header(\\\"Retry-After\\\", ...)\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Lens reviewed: the change addresses the stated tenant-starvation problem only partially, because aggregate upstream load remains uncapped (see correctness attack).",
+   "evidence": "\"Tenants on the shared gateway can currently starve each other\" — ABSENT: a global cap."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The module-level singleton limiter and the module-level MAX_UPSTREAM_RETRY_MS constant are hard to test, and the retry logic is embedded in the route handler, which couples policy to HTTP plumbing.",
+   "evidence": "\"const limiter = new TenantLimiter();\" at module scope in completions.ts"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Lens reviewed: no other gate-worthy findings.",
+   "evidence": "ABSENT: none beyond the attacks above."
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3679,
+  "tokOut": 5440,
+  "usd": 0.0032861200000000004,
+  "critMs": 24661
+ }
+}

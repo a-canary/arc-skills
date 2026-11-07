@@ -1,0 +1,95 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-08",
+ "rep": 2,
+ "wallMs": 388762,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "The replace directive points go.uber.org/zap at an unpinned local sibling directory. The binary distributed to on-call laptops would embed whatever code sits at ../zap on the builder, bypassing the module version pin and checksum, and the change persists in main until someone removes it.",
+   "evidence": "+replace go.uber.org/zap => ../zap"
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "CI builds the distributed binary from a clean checkout, which has no ../zap. The build fails there, or where a sibling exists it is not reproducible from main and ignores the pinned pseudo-version.",
+   "evidence": "CI builds a static binary from main in a clean checkout and distributes it to on-call laptops. +replace go.uber.org/zap => ../zap"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "printPlan sizes batches with floor over len(hosts), while computeBatches uses ceil over len(rest) after removing the canary. With 10 hosts and max-surge 0.25 the plan prints batches of 2 and the real run uses 3, so the plan on-call is asked to trust is wrong for the target case.",
+   "evidence": "per := int(float64(len(hosts)) * o.MaxSurge) vs size := int(math.Ceil(float64(len(rest)) * o.MaxSurge))"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "With --canary set, printPlan prints the canary as batch 0 and then iterates over the full host list, so the canary appears again in a later batch. computeBatches excludes it via without(), so the printed plan does not match execution.",
+   "evidence": "for i := 0; i < len(hosts); i += per { (no without(hosts, o.CanaryHost))"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR says dry-run exits without touching the orchestrator API, but Run calls api.Hosts before the DryRun check. The stated contract is false, and dry-run still requires API access and credentials. The call is read-only, so this is a documentation and contract defect rather than a mutation risk.",
+   "evidence": "\"exits without touching the orchestrator API\" vs hosts, err := api.Hosts(ctx, o.Service) placed before if o.DryRun {"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "Batch logic is duplicated in printPlan instead of sharing computeBatches. This duplication is the root cause of the divergence, and any future batching change will silently desync the dry-run output.",
+   "evidence": "func printPlan(w io.Writer, hosts []string, o Options) { ... per := int(float64(len(hosts)) * o.MaxSurge)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "No test covers printPlan, the --dry-run path, or plan-equals-computeBatches parity for canary and non-divisible host counts. One parity assertion would have caught both correctness blockers.",
+   "evidence": "ABSENT: no _test.go change in the diff for printPlan or the --dry-run path"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The PR justifies the zap bump by the upstream JSON encoder fix, but the replace overrides the pinned pseudo-version, so the built binary does not demonstrably contain that fix. This is folded into the replace blocker.",
+   "evidence": "Also bumps zap to pick up the JSON encoder fix we upstreamed. ... +replace go.uber.org/zap => ../zap"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The zap dependency bump is bundled into a dry-run feature PR, so the two cannot be reviewed or reverted independently.",
+   "evidence": "Also bumps zap to pick up the JSON encoder fix we upstreamed."
+  },
+  {
+   "lens": "dependency-integrity",
+   "severity": "minor",
+   "claim": "The go.mod pseudo-version changes with no go.sum change visible in the diff. If go.sum is not updated, the clean build will fail on checksum verification. The diff may be partial, so this needs confirmation.",
+   "evidence": "ABSENT: go.sum change in the diff"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The canary hostname is not validated against the fleet host list. A typo prints a plan containing a nonexistent canary, and the real run would still attempt to deploy to it.",
+   "evidence": "ABSENT: membership check of o.CanaryHost against hosts before computeBatches or printPlan"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "printPlan discards fmt.Fprintf write errors and Run returns nil afterward, so a broken stdout could yield a truncated plan with exit 0 that on-call reads as complete.",
+   "evidence": "fmt.Fprintf(w, \"  batch %d: %s\\n\", n, strings.Join(hosts[i:end], \", \")) followed by return nil"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "No import change for rollout.go is shown, so whether printPlan's use of io, fmt, and strings compiles cannot be confirmed from the artifact. This needs a compile check.",
+   "evidence": "ABSENT: import block change for internal/rollout/rollout.go"
+  }
+ ],
+ "usage": {
+  "calls": 12,
+  "tokIn": 101171,
+  "tokOut": 48477,
+  "usd": 0.039974710000000004,
+  "critMs": 93431
+ }
+}

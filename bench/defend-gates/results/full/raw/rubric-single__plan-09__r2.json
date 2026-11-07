@@ -1,0 +1,65 @@
+{
+ "approach": "rubric-single",
+ "case": "plan-09",
+ "rep": 2,
+ "wallMs": 207620,
+ "verdict": "ATTACKS",
+ "confidence": 0.72,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The 2h overlap is sized from a p99.9 visibility delay of 4 minutes, but the tail beyond p99.9 is unmeasured. A row that becomes visible after its ingested_at falls outside the `ingested_at > max − 2h` window, is never selected, and is silently absent from the table. This violates the agreed no-gaps constraint.",
+   "evidence": "\"The 2 h overlap covers streaming-insert visibility delay (p99.9 measured at 4 min in September); overwrite is idempotent, so the overlap cannot double count.\" ABSENT: max or p99.99 visibility delay, and any mechanism that catches rows arriving after the window."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Per-partition dedup equals global dedup only if an event_id never maps to two event_dates. event_date comes from event_time clamped against ingested_at, so a re-sent event with an out-of-window event_time can land on a different date. Offline-replay late data is exactly the population where such re-sends would appear, and the plan's evidence covers only historical data and fast SDK retries. A mismatch would double count, which the plan treats as a hard constraint.",
+   "evidence": "\"Checked over all 4.2B rows: 0 such `event_id`s … SDK retries happen within minutes of the original send.\" ABSENT: analysis of late-replayed duplicates and their clamped event_date."
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "v2 is backfilled once and afterwards only rebuilds partitions that receive new raw rows. Erasure is specified for fct_page_events and for the legacy table during rollback, but not for v2 during the 7 parity nights. Erased users' rows can remain in untouched v2 partitions and be promoted to production at the swap.",
+   "evidence": "\"privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`.\" and \"For those 30 days the retention and erasure jobs include `fct_page_events_legacy`.\" ABSENT: erasure and retention coverage for `fct_page_events_v2` between backfill and swap."
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The parity nights run the full-refresh v1 model in the same invocation as v2. At $1,760/30 that is about $59 per night, so 7 nights cost roughly $430 before the $2.40 incremental runs. The stated one-time total of ~$76 is understated by about $350, and the parity test's own scan cost is not budgeted.",
+   "evidence": "\"v1 and v2 run in the same dbt invocation with a shared `run_cutoff`\" and \"One-time backfill + 7 parity nights | — | ~$76\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The Looker saving compares the total September spend of 61.2 TiB with dry runs of only the top 20 queries by bytes (8.7 TiB). The two figures are not on the same basis, so the 86% reduction is not established for the full query set.",
+   "evidence": "\"dry runs of September's top 20 queries by bytes against v2: 61.2 → 8.7 TiB\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The watermark is defined as the max ingested_at in the table, but the plan also says columns are unchanged and never names the column that stores ingested_at. The incremental predicate therefore relies on a field whose presence in fct_page_events is not established.",
+   "evidence": "\"every `event_date` that appears in raw rows with `ingested_at` > (max `ingested_at` already in the table − 2 h)\" with \"Columns, types, grain and dedup logic … are unchanged.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Alerting fires on dbt job failure and on the parity test, but both stop when legacy is dropped at DATA-431. Silent omission of rows (the tail case above) produces no failed job, so after cleanup there is no detector for the gap case.",
+   "evidence": "\"Failure alerting is the existing dbt Cloud job alert to #data-oncall.\" and \"After 30 clean parity nights: drop the legacy model and table (DATA-431).\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Rollback restores legacy, which was last rebuilt by the separate job after the previous night's run. Rows ingested since then are absent from production until the next full refresh, so the claim of no gap is overstated.",
+   "evidence": "\"Rollback: `bq cp -f fct_page_events_legacy fct_page_events`, then revert the PR; … No gap, no lost events.\""
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3937,
+  "tokOut": 11707,
+  "usd": 0.0058930499999999995,
+  "critMs": 53620
+ }
+}

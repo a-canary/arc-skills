@@ -1,0 +1,141 @@
+{
+ "approach": "rubric-stop-early@v100",
+ "case": "merge-08",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "printPlan shows a different batch plan than the actual rollout uses, so a dry-run can't be trusted to preview the real execution. computeBatches puts the canary in its own batch and splits only the remaining hosts, while printPlan iterates over all hosts including the canary, yielding different batch counts and host groupings whenever a canary is set.",
+     "evidence": "computeBatches: `rest = without(hosts, o.CanaryHost)` then `size := int(math.Ceil(float64(len(rest)) * o.MaxSurge))` ... printPlan: `per := int(float64(len(hosts)) * o.MaxSurge)` then `for i := 0; i < len(hosts); i += per`"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1795,
+    "tokOut": 185,
+    "usd": 0,
+    "critMs": 17672
+   },
+   "wallMs": 57944
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The PR adds a local `replace` directive for zap that points at a sibling directory (`../zap`). CI builds the binary from a clean checkout of deployctl only, so that directory will not exist and the build will fail, breaking the distribution path for on-call.",
+     "evidence": "replace go.uber.org/zap => ../zap"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1757,
+    "tokOut": 101,
+    "usd": 0,
+    "critMs": 14296
+   },
+   "wallMs": 14296
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "computeBatches never removes the canary host from `rest`, so when --canary is set the canary host appears in both batch 0 and a subsequent batch. The dry-run plan therefore shows a duplicate that the real rollout would also execute, defeating the purpose of the feature.",
+     "evidence": "rest := hosts\nif o.CanaryHost != \"\" {\n\tbatches = append(batches, []string{o.CanaryHost})\n\trest = without(hosts, o.CanaryHost)\n}\nsize := int(math.Ceil(float64(len(rest)) * o.MaxSurge))"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1769,
+    "tokOut": 158,
+    "usd": 0,
+    "critMs": 16976
+   },
+   "wallMs": 80658
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR claims to bump zap \"to pick up the JSON encoder fix we upstreamed\" and that this is a \"pinned upstream pseudo-version,\" but v1.27.1-0.20260914181502-9d3e1c0f7a2b is a commit-based pseudo-version (not a release tag) that resolves to an arbitrary upstream commit, not necessarily the specific fix claimed. The PR provides no evidence (link to upstream PR, commit message, or test) that this particular commit contains the JSON encoder fix, making the dependency bump unverifiable and potentially pulling in unintended changes.",
+     "evidence": "go.uber.org/zap v1.27.1-0.20260914181502-9d3e1c0f7a2b ... 'bumps zap to pick up the JSON encoder fix we upstreamed. The bump is a pinned upstream pseudo-version'"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1835,
+    "tokOut": 238,
+    "usd": 0,
+    "critMs": 23583
+   },
+   "wallMs": 57500
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The zap bump pins a commit-based pseudo-version with no evidence that the commit actually contains the claimed JSON encoder fix. The PR description itself admits the fix has not been verified against the pinned commit and that the commit may include unrelated upstream changes, so the binary distributed to on-call laptops could be built against an unverified dependency state.",
+     "evidence": "\"the author needs to add the following to this description: a link to the upstream PR and commit for the JSON encoder fix, confirming 9d3e1c0f7a2b contains it\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2126,
+    "tokOut": 143,
+    "usd": 0,
+    "critMs": 13278
+   },
+   "wallMs": 70784
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The canary host is never validated to be a member of the service's host list. In a real rollout, if `o.CanaryHost` is not in `hosts`, it is still deployed alone in batch 0 (wrong host, or host outside the service), and it is also absent from the remaining batches. The dry-run plan silently shows the same incorrect plan, giving on-call false confidence. This is a trust boundary violation: an arbitrary user-supplied hostname is sent to the orchestrator as a deployment target.",
+     "evidence": "`if o.CanaryHost != \"\" { batches = append(batches, []string{o.CanaryHost}); rest = without(hosts, o.CanaryHost) }` — no check that `o.CanaryHost` is in `hosts` before it is used as a batch target."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1857,
+    "tokOut": 200,
+    "usd": 0,
+    "critMs": 102047
+   },
+   "wallMs": 177354
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2156,
+    "tokOut": 17,
+    "usd": 0,
+    "critMs": 8295
+   },
+   "wallMs": 72947
+  }
+ ],
+ "artifact": "PR #219: deployctl rollout --dry-run\n\nOn-call wants to see exactly which hosts go in which batch before kicking off a rollout, especially for the 60+ host services.\n`deployctl rollout <service> <version> --dry-run` now prints the batch plan and exits without touching the orchestrator API beyond the host listing.\nThe plan is printed from `computeBatches`, the same function the real rollout uses, so the dry-run output can't drift from what actually executes (canary alone in batch 0, remaining hosts split by `ceil(len(rest) * MaxSurge)`).\nReview note: `computeBatches` already removes the canary from the remaining hosts (`rest = without(hosts, o.CanaryHost)`, unchanged context in the diff below) before computing batch size and splitting. The canary appears only in batch 0, in both the dry-run plan and the real rollout.\nCanary validation (added after review): previously `--canary` was never checked against the service's host list, so a typo or a host outside the service would be deployed alone in batch 0 and the dry-run would print that same wrong plan. `Run` now calls `validateCanary` right after listing hosts, before the dry-run branch. If the canary is not in the service's host list, both the dry-run and the real rollout fail with an error and nothing is deployed. `computeBatches` is unchanged, and the dry-run and real paths share the same check.\n\nThe zap bump has been dropped from this PR. An earlier revision moved zap from v1.27.0 to the commit-based pseudo-version `v1.27.1-0.20260914181502-9d3e1c0f7a2b`, intended to pick up the JSON encoder fix we upstreamed. We could not confirm that commit `9d3e1c0f7a2b` contains the fix, and a pseudo-version may pull in other upstream changes. CI builds the binary that goes to on-call laptops, so it should not ship an unverified dependency state. `go.mod` is unchanged and zap stays at v1.27.0. The bump will go in a follow-up PR once the fix is in a tagged zap release, or, if we still need a pseudo-version, once that PR links the upstream fix commit, confirms it is an ancestor of the pinned commit, and lists the other commits from `git log v1.27.0..<commit>`. The dry-run change does not depend on it.\n\ndiff --git a/internal/rollout/rollout.go b/internal/rollout/rollout.go\nindex 6b2e4d1..a9c3f05 100644\n--- a/internal/rollout/rollout.go\n+++ b/internal/rollout/rollout.go\n@@ -18,30 +18,61 @@ type Options struct {\n \tService    string\n \tVersion    string\n \tMaxSurge   float64 // fraction of hosts per batch, e.g. 0.25\n \tCanaryHost string\n+\tDryRun     bool\n }\n\n // computeBatches splits hosts into rollout batches. The canary host (if any)\n // always goes alone in batch 0; the rest are split into batches of\n // ceil(len(rest) * MaxSurge) hosts.\n func computeBatches(hosts []string, o Options) [][]string {\n \tvar batches [][]string\n \trest := hosts\n \tif o.CanaryHost != \"\" {\n \t\tbatches = append(batches, []string{o.CanaryHost})\n \t\trest = without(hosts, o.CanaryHost)\n \t}\n \tsize := int(math.Ceil(float64(len(rest)) * o.MaxSurge))\n \tif size < 1 {\n \t\tsize = 1\n \t}\n \tfor i := 0; i < len(rest); i += size {\n \t\tbatches = append(batches, rest[i:min(i+size, len(rest))])\n \t}\n \treturn batches\n }\n\n+// validateCanary returns an error if a canary host is set but is not one of\n+// the service's hosts, so an unknown host is never used as a deploy target.\n+func validateCanary(hosts []string, o Options) error {\n+\tif o.CanaryHost == \"\" {\n+\t\treturn nil\n+\t}\n+\tfor _, h := range hosts {\n+\t\tif h == o.CanaryHost {\n+\t\t\treturn nil\n+\t\t}\n+\t}\n+\treturn fmt.Errorf(\"canary host %q is not in the host list for service %s\", o.CanaryHost, o.Service)\n+}\n+\n+func printPlan(w io.Writer, hosts []string, o Options) {\n+\tfmt.Fprintf(w, \"rollout plan: %s -> %s (%d hosts)\\n\", o.Service, o.Version, len(hosts))\n+\tfor i, batch := range computeBatches(hosts, o) {\n+\t\tlabel := \"\"\n+\t\tif i == 0 && o.CanaryHost != \"\" {\n+\t\t\tlabel = \" (canary)\"\n+\t\t}\n+\t\tfmt.Fprintf(w, \"  batch %d%s: %s\\n\", i, label, strings.Join(batch, \", \"))\n+\t}\n+}\n+\n func Run(ctx context.Context, api Orchestrator, w io.Writer, o Options) error {\n \thosts, err := api.Hosts(ctx, o.Service)\n \tif err != nil {\n \t\treturn fmt.Errorf(\"list hosts: %w\", err)\n \t}\n+\tif err := validateCanary(hosts, o); err != nil {\n+\t\treturn err\n+\t}\n+\tif o.DryRun {\n+\t\tprintPlan(w, hosts, o)\n+\t\treturn nil\n+\t}\n \tfor i, batch := range computeBatches(hosts, o) {\n \t\tif err := deployBatch(ctx, api, o, batch); err != nil {\n \t\t\treturn fmt.Errorf(\"batch %d: %w\", i, err)\n \t\t}\ndiff --git a/cmd/rollout.go b/cmd/rollout.go\nindex 0e4d7c2..51b8a90 100644\n--- a/cmd/rollout.go\n+++ b/cmd/rollout.go\n@@ -31,6 +31,7 @@ func newRolloutCmd() *cobra.Command {\n \tcmd.Flags().Float64Var(&o.MaxSurge, \"max-surge\", 0.25, \"fraction of hosts per batch\")\n \tcmd.Flags().StringVar(&o.CanaryHost, \"canary\", \"\", \"host to deploy first, alone\")\n+\tcmd.Flags().BoolVar(&o.DryRun, \"dry-run\", false, \"print the batch plan and exit\")\n \treturn cmd\n }",
+ "fixerUsage": {
+  "calls": 6,
+  "tokIn": 16116,
+  "tokOut": 13311,
+  "usd": 0.19755000000000003,
+  "critMs": 76571
+ },
+ "status": "cleared"
+}

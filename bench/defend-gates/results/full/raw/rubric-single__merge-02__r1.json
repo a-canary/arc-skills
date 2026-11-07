@@ -1,0 +1,71 @@
+{
+ "approach": "rubric-single",
+ "case": "merge-02",
+ "rep": 1,
+ "wallMs": 90974,
+ "verdict": "ATTACKS",
+ "confidence": 0.93,
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "blocker",
+   "claim": "The duplicate-ballot log line writes the voter's email together with the choice they selected, which links a resident's identity to a ballot choice outside the tally. This breaks the stated anonymity promise, and the logs are readable by the whole support team and shipped to a third-party host.",
+   "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value,)"
+  },
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "The results export is described as admin-only but has no role check, so any unauthenticated caller can download tallies. The route also does not check whether the measure is closed, so running tallies for open measures can be read by anyone.",
+   "evidence": "@router.get(\"/measures/{measure_id}/results.csv\")\nasync def export_results(\n    measure_id: int,\n    db: Session = Depends(get_db),\n):"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The PR says the export is for closed measures, but the handler only checks that the measure exists. It returns counts for open measures, which contradicts the spec and exposes in-progress results.",
+   "evidence": "measure = db.get(Measure, measure_id)\n    if measure is None:\n        raise HTTPException(404)"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The export publishes exact per-choice counts with no minimum-count suppression. For measures with few ballots, a count of 1 reveals an individual resident's choice, which undermines ballot secrecy even though the ballots themselves have no user ids.",
+   "evidence": "ABSENT: no minimum-count threshold or suppression logic in export_results before writing counts.get(choice, 0) rows"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Log lines containing voter emails and choices are shipped to a third-party host. Once shipped, the data cannot be recalled, so this exposure cannot be rolled back by reverting the PR.",
+   "evidence": "\"duplicate ballot rejected measure=%s voter=%s choice=%s\" (no redaction, retention limit, or scrubbing step in the diff)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The lookup uses Choice enum members as dict keys, but the query returns the raw column values. If the column is not typed as the enum, every count silently falls back to 0 with no error.",
+   "evidence": "counts = dict(db.query(Ballot.choice, func.count(Ballot.id))...)\n...writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The measure slug is interpolated unescaped into the Content-Disposition header and the CSV cells. A slug containing quotes or a leading '=' could break the header or inject spreadsheet formulas into a file attached to a council packet.",
+   "evidence": "headers={\"Content-Disposition\": f'attachment; filename=\"{measure.slug}-results.csv\"'}  and  writer.writerow([measure.slug, ...])"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Publishing per-choice counts and logging voter identity alongside choices may conflict with election ballot-secrecy rules. This needs review by someone who knows the applicable law, and the PR has no sign-off on it.",
+   "evidence": "ABSENT: no compliance review or reference to ballot-secrecy requirements in PR description"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The PR adds an unauthenticated export route and a PII-bearing log line but includes no tests for auth, closed-state gating, or log content. The anonymity claim is unverified.",
+   "evidence": "ABSENT: no test files in the diff for export_results or the duplicate-ballot logging path"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 2853,
+  "tokOut": 3496,
+  "usd": 0.00214892,
+  "critMs": 18228
+ }
+}

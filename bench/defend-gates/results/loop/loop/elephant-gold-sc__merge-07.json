@@ -1,0 +1,611 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "merge-07",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "injection",
+     "severity": "blocker",
+     "claim": "`_upload` builds a shell command string with `shell=True` from `local` and `dest`, and `dest` embeds `src.stem`, which comes from partner-chosen SFTP filenames. A crafted filename (e.g. `$(...)`, `;`, backticks) executes arbitrary commands on a worker holding write credentials for the whole raw bucket. Even benign names with spaces break the upload.",
+     "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True) ... Partners upload via SFTP and choose their own filenames."
+    },
+    {
+     "lens": "partial-failure-marker",
+     "severity": "blocker",
+     "claim": "The `_SUCCESS` marker is written unconditionally, even when `failed > 0`. Downstream dashboards read the partition as soon as the marker appears, so partially ingested partner days (with orphaned chunks from failed files) are published as complete, and the task still reports success with no alert.",
+     "evidence": "except Exception:\n            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n            failed += 1\n    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+    },
+    {
+     "lens": "timezone-partition",
+     "severity": "blocker",
+     "claim": "`partition_date()` changed from UTC to naive local time. Workers run with TZ=America/Los_Angeles and the job runs at 01:30 UTC (~18:30 previous day PT), so data and the marker land in the previous day's dt partition, contradicting the UTC-date contract dashboards read. The PR description never mentions this change.",
+     "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")"
+    },
+    {
+     "lens": "failure-modes",
+     "severity": "major",
+     "claim": "Per-file failures are swallowed and `ingest_partner` returns None, so the Airflow task succeeds and no alert fires. Failed files are discoverable only by reading logs.",
+     "evidence": "ABSENT: no raise, non-zero exit, or alert when failed > 0; only log.info(\"partner=%s dt=%s ok=%d failed=%d\", ...)"
+    },
+    {
+     "lens": "partial-failure",
+     "severity": "major",
+     "claim": "On mid-file failure, chunks already uploaded stay in GCS with no cleanup or manifest, and local chunk files in work_dir are never unlinked (unlink only after a successful upload; no try/finally). Retries can produce mixed chunk sets, and local disk (with partner PII) accumulates on the worker.",
+     "evidence": "for chunk in _write_chunks(src, work_dir):\n                _upload(chunk, partner, dt, src.stem)\n                chunk.unlink()  -- no cleanup in except branch"
+    },
+    {
+     "lens": "normalise-input-type",
+     "severity": "major",
+     "claim": "The claim that normalisation is unchanged is unsupported. `normalise_row` previously received a pandas Series (NaN for missing) and now receives a csv.DictReader dict (None/'' for missing, extra columns under a None key). DictWriter fieldnames are also fixed from the first row of each chunk, so differing keys on later rows raise ValueError mid-file or produce inconsistent chunk headers. No tests or fixture comparison are provided.",
+     "evidence": "norm = normalise_row(row)\n            if writer is None:\n                writer = csv.DictWriter(out, fieldnames=list(norm.keys()))\n                writer.writeheader()"
+    },
+    {
+     "lens": "path-layout-change",
+     "severity": "major",
+     "claim": "The output layout changed from one `{stem}.csv.gz` object per source file to a per-file directory of numbered chunks. The PR does not mention this or any migration/update of downstream readers.",
+     "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\""
+    },
+    {
+     "lens": "timeouts-retries",
+     "severity": "major",
+     "claim": "`subprocess.run` has no timeout and `_upload` has no retry/backoff. A hung gsutil blocks the nightly task indefinitely, and one transient error fails an entire multi-GB file, forcing a full re-normalise and re-upload.",
+     "evidence": "ABSENT: timeout= on subprocess.run and any retry around _upload; single check=True call inside the per-file try/except."
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The stated rationale for gsutil (parallel composite uploads for multi-GB objects) does not apply: chunks are capped at 500k rows and gzip-compressed, likely far below the 150M threshold, so composite upload is likely never used. Each chunk spawns a separate serial gsutil process with no throughput evidence against the 01:30 schedule.",
+     "evidence": "CHUNK_ROWS = 500_000 ... \"-o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The OOM fix is asserted but not demonstrated; no memory measurement or test run on a large feed is shown, and no tests are added for chunking, boundaries, or the failure path.",
+     "evidence": "ABSENT: any before/after memory figure, benchmark, or test files in the diff; only pipelines/partner_ingest.py is modified"
+    },
+    {
+     "lens": "scope-drift",
+     "severity": "minor",
+     "claim": "Empty or header-only files produce zero chunks and are counted `ok`, hiding truncated drops; `ingest_partner` gained a required `work_dir` arg with no shown call-site updates; gsutil becomes an undeclared runtime dependency.",
+     "evidence": "for chunk in _write_chunks(src, work_dir): ... ok += 1 ; def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 58555,
+    "tokOut": 35716,
+    "usd": 0.11156959999999999,
+    "critMs": 37081
+   },
+   "wallMs": 94981
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "An existing `_SUCCESS` marker is never removed when a run starts. A re-run of the same dt deletes and rewrites file prefixes while the old marker stays visible, and a failed re-run leaves it in place. Dashboards that read once `_SUCCESS` appears can then see a partial or missing day, which contradicts the 'never see a partial day' claim.",
+     "evidence": "\"`_SUCCESS` is written only when every file succeeded, so dashboards never see a partial day.\" The diff has `_delete_prefix(bucket, prefix)` at the start of `_ingest_file` and no code that removes an existing marker."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The author's own merge precondition is unmet. The output layout changes from one `{stem}.csv.gz` to a numbered chunk prefix, and downstream readers have not been confirmed to read by prefix/glob. Old flat objects from earlier runs are also never cleaned up, so a glob reader on the same dt could double-count rows.",
+     "evidence": "\"**Downstream readers must be confirmed to read by prefix/glob before this merges.** I have not verified that here.\" ABSENT: any cleanup of `raw/{partner}/dt={dt}/{stem}.csv.gz`."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The claim that a row whose normalised keys differ fails the file is only true for extra keys. `csv.DictWriter` is built with no `restval`/`extrasaction`, so a later row that normalises to fewer keys is written silently with blank cells, producing corrupt rows without an error. No test covers key mismatch.",
+     "evidence": "\"a row whose normalised keys differ fails the file explicitly\" vs `writer = csv.DictWriter(out, fieldnames=fieldnames)` followed by `writer.writerow(norm)`"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The two core behavioural changes are unvalidated. Peak memory on the 3.1 GB file is unmeasured, so the OOM fix is unproven. Output equivalence with the pandas path is also undiffed, and the tests mock `normalise_row` as identity so they cannot show it. Both checks are deferred to staging.",
+     "evidence": "\"I have not yet measured peak memory on the 3.1 GB Northwind file.\" and \"I have not diffed the output against the pandas path on real data.\" and `monkeypatch.setattr(partner_ingest, \"normalise_row\", lambda row: dict(row))`"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The failure paths the PR relies on are untested: per-file cleanup, the failed count, the RuntimeError, and the suppressed `_SUCCESS`. `ingest_partner` builds `storage.Client()` inline, which makes these paths hard to test.",
+     "evidence": "Tests cover only `_write_chunks`; code has `bucket = storage.Client().bucket(BUCKET)` inside `ingest_partner`."
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "`_write_chunks` writes every chunk to local disk and returns the full list before any upload starts. `chunk.unlink()` therefore does not bound peak disk use, which is the full compressed output of the file, and nothing checks free space.",
+     "evidence": "`for chunk in _write_chunks(src, Path(tmp)): _upload(...); chunk.unlink()` where `_write_chunks` returns the complete `chunks` list."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Cleanup in the except branch is unguarded. If `_delete_prefix` raises, the original error is masked and orphaned chunks may remain. A hard kill such as an OOM also skips cleanup, though the next run clears the prefix. Overlapping runs for the same partner and date are not coordinated.",
+     "evidence": "`except Exception:\\n            _delete_prefix(bucket, prefix)  # no orphaned chunks from a failed file\\n            raise`; ABSENT: any lock or run-id scoping."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Output differs subtly from the pandas path. A header-only file now yields no object but is counted ok, `DictWriter` emits `\\r\\n` line terminators, and the encoding is unpinned. None of these is covered by the proposed staging diff.",
+     "evidence": "`csv.DictWriter(out, fieldnames=fieldnames)` with no `lineterminator`; `gzip.open(path, \"wt\", newline=\"\")` with no `encoding`; the first chunk is created only inside the row loop."
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 86551,
+    "tokOut": 36863,
+    "usd": 0.1116395,
+    "critMs": 54018
+   },
+   "wallMs": 102269
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR changes the output layout and deletes the legacy flat object, but it admits that downstream readers (dashboards) have not been confirmed to read by prefix or glob. The listed merge blockers are all still open, so the artifact is not ready to merge.",
+     "evidence": "\"Downstream readers must be confirmed to read by prefix/glob before this merges. I have not verified that here.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The normaliser's input changed from a pandas Series to a DictReader dict, with \"\" replacing NaN and new rejection rules. Equivalence is unverified, and the tests stub the normaliser with an identity function. The OOM fix is also unmeasured, so the PR's motivating claim is unproven.",
+     "evidence": "\"The unit tests stub the normaliser with an identity function, so they cannot show equivalence.\" / \"Until then the OOM is **not** claimed fixed.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Destructive deletes run before the replacement is known to be good. Each file's chunk prefix and its legacy flat object are deleted first, so a failed ingest leaves neither old nor new data for that stem. There is no versioning or rollback, and reverting the PR does not restore the deleted legacy objects.",
+     "evidence": "_delete_prefix(bucket, prefix)  # clear leftovers from an earlier attempt\n    # Legacy flat layout object; would be double-counted by a glob reader.\n    _delete_if_exists(bucket, f\"raw/{partner}/dt={dt}/{src.stem}.csv.gz\")"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "An empty drop directory yields ok=0 and failed=0, so `_SUCCESS` is written. Dashboards then see a complete partition with no data, and no alert fires. This contradicts the PR's claim that the marker is only written for a complete day.",
+     "evidence": "ok = failed = 0 ... if failed: raise ... write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")  (no check that ok > 0)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "A header-only or zero-row file produces no chunks, because the header is only written when the first row is seen. Its legacy flat object is deleted and the file still counts as ok, so the stem silently disappears. The pandas path wrote a header-only csv.gz.",
+     "evidence": "for i, row in enumerate(reader): ... if i % CHUNK_ROWS == 0: ... writeheader()  (no output when there are no rows)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Files are read and written with the platform default encoding and no BOM handling. pandas defaulted to UTF-8, so non-UTF-8 files can fail or decode differently. A BOM turns the first header key into '\\ufeff...', which can break the normaliser. csv.DictReader also silently keeps only the last of duplicate header names, where pandas renames them, so data is lost with no test.",
+     "evidence": "with src.open(newline=\"\") as fh:\n            reader = csv.DictReader(fh, restval=\"\")  /  gzip.open(path, \"wt\", newline=\"\")"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "`_write_chunks` writes every chunk to local disk and returns the list before any upload starts. Local disk use is the full gzipped size of the file, not one chunk. The PR discusses only memory, so a small temp or work_dir can fail on the 3.1 GB file.",
+     "evidence": "for chunk in _write_chunks(src, Path(tmp)): _upload(...)  /  \"    return chunks\" after the full read loop"
+    },
+    {
+     "lens": "failure-modes",
+     "severity": "minor",
+     "claim": "Cleanup is guarded only against ordinary exceptions. A SIGKILL or OOM kill leaves local temp chunks and uploaded orphan chunks. A failure inside the unguarded `_delete_prefix` in the except block masks the original error. Overlapping runs for the same partition are not locked, so one run's `_SUCCESS` could sit over another's changing data.",
+     "evidence": "except Exception:\n            _delete_prefix(bucket, prefix)  # no orphaned chunks from a failed file\n            raise"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The new tests cover only `_write_chunks`. The safety behaviours the PR relies on are untested: marker deletion and rewrite, failure cleanup, legacy-object deletion, the RuntimeError, and the empty-drop case.",
+     "evidence": "ABSENT: no test for ingest_partner or _ingest_file; all four tests call partner_ingest._write_chunks"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 103833,
+    "tokOut": 42855,
+    "usd": 0.1268357,
+    "critMs": 54761
+   },
+   "wallMs": 160697
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR declares itself not ready to merge, with three self-listed merge blockers still open. Downstream readers have not been confirmed to read by prefix/glob. Peak memory on the 3.1 GB file is unmeasured, so the OOM fix is unproven. Equivalence with the pandas path is unverified, because the tests stub the normaliser with an identity function.",
+     "evidence": "\"**Status: not ready to merge.**\" ... \"This PR must not merge until each is done.\" / \"I have not verified that here.\" / \"The unit tests stub the normaliser with an identity function, so they cannot show equivalence.\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "The layout change from a flat `{stem}.csv.gz` to numbered chunks under a per-stem prefix can break or double-count for downstream readers. With the default `delete_legacy=False`, a glob reader sees both the legacy object and the new chunks for any partition that already has a flat file.",
+     "evidence": "\"each source file now produces `raw/{partner}/dt={dt}/{stem}/{stem}-NNNN.csv.gz` ... instead of a single `{stem}.csv.gz`\" / `delete_legacy: bool = False`"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "A re-run overwrites same-named chunks in place with no versioning and no backup. If the re-run fails, the failure path deletes the new chunks, so the earlier good data for that file is gone for good. The `_SUCCESS` marker was already deleted at the start, so dashboards lose the day.",
+     "evidence": "\"overwritten old chunks cannot be restored because the bucket has no object versioning\" / \"A failed attempt removes the chunks it uploaded\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "There is no lock or run identity for concurrent runs on the same partner and dt, such as a manual re-run during the scheduled run. One run's stale-chunk sweep can delete chunks the other run just uploaded, and one run can then write `_SUCCESS` over an incomplete set.",
+     "evidence": "\"for blob in bucket.list_blobs(prefix=prefix): if blob.name not in keep: blob.delete()\" (no lock or run-id scoping)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Chunk rollback and temp-file cleanup run only on Python exceptions. The OOM-kill this PR targets, or a SIGKILL, skips both and leaves uploaded partner chunks in the bucket and a local chunk on disk. Separately, the rollback loop is not best-effort: one failing delete aborts the loop, orphans the remaining chunks, and masks the original error.",
+     "evidence": "\"except Exception:\\n            for name in uploaded:  # no orphaned chunks from a failed file\\n                _delete_if_exists(bucket, name)\\n            raise\" with `_delete_if_exists` catching only NotFound"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Orphaned output is published under the marker. Stale cleanup runs only for files present in the current drop. If a partner re-uploads under a different filename, chunks from the earlier stem stay under the partition and `_SUCCESS` is then written over them, so data is double-counted or stale.",
+     "evidence": "\"for src in sorted(drop_dir.glob(\\\"*.csv\\\")):\" (no cleanup of prefixes for files not in this run) ... write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Header-only files get the raw source header while all other files get the normalised header. A reader that globs the partition can see mixed schemas, and the PR admits this is unverified against the pandas output.",
+     "evidence": "\"Its header is the source header, since the normaliser never runs without a row.\" / `csv.writer(hout).writerow(header)`"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "`csv.DictWriter` and `csv.writer` default to CRLF line endings, whereas pandas writes LF on Linux. The output bytes therefore differ from the pandas path, and the tests use `splitlines()`, which hides the difference.",
+     "evidence": "writer = csv.DictWriter(out, fieldnames=fieldnames) ... csv.writer(hout).writerow(header) (no lineterminator set)"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "All new tests target `_write_chunks` only. The upload and overwrite path, stale sweep, failure rollback, `_SUCCESS` invalidation and publication, empty-drop guard and `delete_legacy` are untested. They are the behaviours that protect dashboards, and the code gives no seam to inject a fake bucket.",
+     "evidence": "\"Tests: new tests cover chunk boundaries, per-chunk headers, ragged-row rejection...\" ; `bucket = storage.Client().bucket(BUCKET)`"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Partner-controlled drop files are opened without a regular-file check. A symlink named `*.csv` could cause the worker, which holds bucket-wide credentials, to read and upload an unintended file.",
+     "evidence": "for src in sorted(drop_dir.glob(\"*.csv\")): ... src.open(newline=\"\", encoding=\"utf-8-sig\")"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Failing the whole file on duplicate headers, including multiple empty header names, is a data-loss behaviour change from pandas, which renamed such columns. It is disclosed but only partly.",
+     "evidence": "if len(set(header)) != len(header): raise ValueError(f\"{src.name}: duplicate header names {header}\")"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The marker is deleted at the start of every run, so a previously published day disappears from dashboards for the whole run. Row and chunk counts are no longer logged.",
+     "evidence": "\"any existing `_SUCCESS` for the partition is deleted at the start of each run\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 132256,
+    "tokOut": 55595,
+    "usd": 0.1565489,
+    "critMs": 60035
+   },
+   "wallMs": 154255
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "The PR declares itself not mergeable and lists four open merge blockers: unverified downstream readers for the new layout, no memory measurement, no equivalence diff against the pandas path with the real normaliser, and no object versioning. The merge gate cannot be crossed while these stand.",
+     "evidence": "\"**Status: not ready to merge.**\" ... \"This PR must not merge until each is done.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "Re-runs overwrite same-named chunks in place without versioning. A failed re-run then deletes the chunks it uploaded, so the file's prefix ends up with neither the old nor the new data. The stale-chunk sweep also deletes old chunks before the partition-wide unexpected-objects check can abort the run. The loss is irreversible until versioning is enabled or the risk is explicitly accepted.",
+     "evidence": "\"Overwritten old chunks cannot be restored because the bucket has no object versioning\" / \"Enable object versioning on the raw bucket (or explicitly accept the risk).\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The output layout changed from one flat object to a per-stem prefix of numbered chunks, and downstream dashboards have not been confirmed to read by prefix/glob. The normaliser's input contract also changed (dict instead of Series, \"\" instead of NaN), and the tests stub it with an identity function. Header-only parity with the pandas path is asserted but unchecked.",
+     "evidence": "\"I have not verified that here.\" / \"The unit tests stub the normaliser with an identity function, so they cannot show equivalence.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR is motivated by an OOM on a 3.1 GB file, but peak memory after the rewrite is unmeasured, so there is no evidence the fix works.",
+     "evidence": "\"peak memory on the 3.1 GB file is unmeasured (see blocker 2).\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "A chunk is added to `uploaded` only after `_upload` returns. If an upload times out or errors after the server committed the object, rollback never sees it. The orphan stays under the failed file's prefix, contradicting the stated guarantee that a failed attempt removes its chunks.",
+     "evidence": "\"_upload(bucket, chunk, name)  # same-named chunks are overwritten\\n                uploaded.append(name)\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Lock handling has gaps. `_acquire_lock` sits outside the try/finally, so an ambiguous failure after the lock was committed orphans it. The `finally` release only tolerates NotFound, so any other delete error replaces the real failure reason, or turns an already-published day into a failure. An OOM-kill or SIGKILL leaves the lock with no staleness check, and the next scheduled run fails until a human deletes it.",
+     "evidence": "\"finally:\\n        _delete_if_exists(bucket, lock)\" and \"If a run is SIGKILLed or OOM-killed, the lock stays and the next run fails\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "`delete_legacy=True` irreversibly deletes the legacy flat object per file, before the partition-level checks run and before the new output has been verified against the pandas path. The legacy object may be the only copy of that data.",
+     "evidence": "\"_delete_if_exists(bucket, f\\\"raw/{partner}/dt={dt}/{src.stem}.csv.gz\\\")\" inside `_ingest_file`"
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "A `_SUCCESS` marker can be published over an incomplete day. The case-sensitive `*.csv` glob silently skips other names such as `FEED.CSV`. There is also no check that an SFTP upload has finished, so a truncated file passes the row checks. This contradicts the claim that dashboards never see a partial day.",
+     "evidence": "files = sorted(drop_dir.glob(\"*.csv\")) ... ABSENT: any size, mtime, or stability check on drop files"
+    },
+    {
+     "lens": "trust boundaries",
+     "severity": "major",
+     "claim": "Partner-supplied `*.csv` entries are opened without checking that they are regular files. A symlink placed in the drop directory could cause a worker-local file to be read and uploaded using the worker's bucket-wide write credentials.",
+     "evidence": "ABSENT: any is_file()/is_symlink() check on `src` before `src.open(...)`"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 200362,
+    "tokOut": 67714,
+    "usd": 0.1775254,
+    "critMs": 64795
+   },
+   "wallMs": 188811
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The stale-chunk sweep deletes objects irreversibly and is on by default. Bucket versioning is still unconfirmed (blocker 4), so a bad run cannot be undone. The sweep also has no per-delete error isolation, and it runs before `write_success_marker`. A failure at either point leaves the partition half-cleaned with no marker.",
+     "evidence": "\"The sweep itself is still an irreversible delete without versioning (blocker 4).\" / `for blob in bucket.list_blobs(prefix=f\"{base}{s}/\"): if blob.name not in kept: blob.delete()`"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The output layout changed from a flat object to numbered chunks under a stem prefix. Downstream readers are unverified, so a glob reader could double-count or mis-read every partition. Blocker 1 is still open.",
+     "evidence": "\"Downstream readers must be confirmed to read by prefix/glob before this merges. I have not verified that here.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The motivating OOM fix is unmeasured. No peak-memory evidence exists for the 3.1 GB Northwind file, so the PR's purpose is unproven. Blocker 2 is still open.",
+     "evidence": "\"peak memory on the 3.1 GB file is unmeasured (see blocker 2).\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The normaliser's input contract changed from a pandas Series with NaN to a dict with `\"\"`. Tests stub it with an identity function, and no real-data diff against the pandas path exists, including for the header-only file. Output equivalence is unshown, and blocker 3 is still open.",
+     "evidence": "\"The unit tests stub the normaliser with an identity function, so they cannot show equivalence.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The docs say drop-directory checks run before anything is touched. But `_SUCCESS` is deleted before the loop, and the empty-drop check runs only afterwards. An empty drop therefore unpublishes a valid partition before raising. The same unpublish happens on a re-run of a day the old pipeline already published, when the legacy check then fails the run.",
+     "evidence": "`_delete_if_exists(bucket, base + \"_SUCCESS\")` precedes the loop; `if ok == 0: raise RuntimeError(... no *.csv files found ...)` follows it."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "`run_id` has one-second resolution, so the claim that a run never overwrites an earlier run's objects is not guaranteed. A uuid, which the lock code already generates, would fix this.",
+     "evidence": "run_id = datetime.now(timezone.utc).strftime(\"%Y%m%dT%H%M%SZ\")"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The symlink guard checks the file in `_ingest_file`, but the file is opened later in `_write_chunks`. A partner-writable directory leaves a check-then-use race. Hardlinks also pass both checks.",
+     "evidence": "`if src.is_symlink() or not src.is_file():` ... later `with src.open(newline=\"\", encoding=\"utf-8-sig\") as fh:`"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A SIGKILL or OOM-kill leaves `_LOCK`, orphaned chunks and temp files behind. Retries then fail until an operator clears the lock by hand. This is disclosed, and it fails closed with an alert. Lock release is also a read followed by an unconditional delete, so a narrow race remains.",
+     "evidence": "\"There is no automatic staleness break: delete `_LOCK` by hand\" / `if blob.download_as_text() == token: blob.delete()`"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 248460,
+    "tokOut": 73217,
+    "usd": 0.2069281,
+    "critMs": 68939
+   },
+   "wallMs": 186973
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The stale-chunk sweep is on by default and irreversibly deletes objects in the raw bucket, but versioning is neither enabled nor explicitly accepted as a risk. The PR itself lists this as an open merge blocker and says it must not merge until done.",
+     "evidence": "\"Enable object versioning on the raw bucket (or explicitly accept the risk)... the stale-chunk sweep and `delete_legacy` still delete objects irreversibly without versioning.\" / \"**Status: not ready to merge.**\""
+    },
+    {
+     "lens": "test-correctness",
+     "severity": "major",
+     "claim": "`test_failed_sweep_delete_is_isolated_and_blocks_marker` reads `gcs.bucket`, but the `gcs` fixture returns a `(store, markers)` tuple. The test would raise AttributeError, so the claimed coverage of the failed-sweep path is not real.",
+     "evidence": "gcs.bucket.fail_delete.add(PFX + \"feed/a-old.csv.gz\")"
+    },
+    {
+     "lens": "concurrency",
+     "severity": "major",
+     "claim": "If a retried lock upload hits PreconditionFailed because an earlier attempt already committed the lock, the code reports 'another run holds' and never compares the token. The run's own `_LOCK` is left behind and blocks every later run until it is deleted by hand. This contradicts the stated ambiguous-failure handling.",
+     "evidence": "except PreconditionFailed:\n        raise RuntimeError(\n            f\"partner={partner} dt={dt}: another run holds {name}; \" ... except Exception:\n        # Ambiguous: the write may have been committed."
+    },
+    {
+     "lens": "trust-boundary",
+     "severity": "major",
+     "claim": "The symlink guard is a check-then-use race. The path is checked with is_symlink()/is_file() and later opened by name, following symlinks. The drop directory is partner-writable, so a swap between check and open could upload a worker-local file with the worker's bucket credentials. This contradicts the 'cannot' claim.",
+     "evidence": "if src.is_symlink() or not src.is_file(): raise ValueError(...) ... with src.open(newline=\"\", encoding=\"utf-8-sig\") as fh:"
+    },
+    {
+     "lens": "partial-failure",
+     "severity": "major",
+     "claim": "The legacy-object deletion loop has no per-object exception isolation, unlike the sweep. A non-NotFound failure part way leaves some irreversible deletes done, others not, and no marker. The same loop is also an irreversible step that runs before `write_success_marker`.",
+     "evidence": "for name in legacy: # Irreversible; opt-in, and only after the new chunks are complete. _delete_if_exists(bucket, name)"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "`delete_legacy=True` is a public parameter that irreversibly deletes the legacy flat objects, and nothing in code enforces the stated preconditions (reader check, staging diff, versioning). The artifact says the legacy object may be the only copy of that day's data, yet there is no copy or verification step first.",
+     "evidence": "\"Enable it only after blockers 1, 3 and 4 are done, since the legacy object may be the only copy of that day's data\"; code: \"for name in legacy: _delete_if_exists(bucket, name)\""
+    },
+    {
+     "lens": "retention",
+     "severity": "major",
+     "claim": "Enabling versioning, the proposed fix for blocker 4, keeps every swept or deleted partner chunk as a noncurrent version. The PR specifies no lifecycle or expiry for those versions, so deleted partner data and storage cost can grow without bound.",
+     "evidence": "ABSENT: any noncurrent-version lifecycle or retention limit for the raw bucket."
+    },
+    {
+     "lens": "ops-burden",
+     "severity": "major",
+     "claim": "A SIGKILL or OOM-kill, the exact failure this PR targets, leaves `_LOCK` in place and blocks every later run for that partner and date until a human deletes it by hand. There is no staleness break or runbook, and the orphaned chunks also stay in the bucket until then.",
+     "evidence": "There is no automatic staleness break: delete `_LOCK` by hand after checking that no run is active."
+    },
+    {
+     "lens": "coupling",
+     "severity": "major",
+     "claim": "`normalise_row` is shared, but its input contract changes at this call site (dict instead of Series, `\"\"` instead of NaN, extra fields rejected). The PR does not show that other callers were checked. It also does not verify equivalence with the real normaliser; blocker 3 stays open and the tests use an identity stub.",
+     "evidence": "`normalise_row` itself is unchanged, but it now receives a `csv.DictReader` dict rather than a pandas Series."
+    },
+    {
+     "lens": "failure-modes",
+     "severity": "major",
+     "claim": "The partition date comes from the wall clock, not the Airflow logical date. A retry or manual re-run after 00:00 UTC writes to a different dt partition, so the failed partition is never completed.",
+     "evidence": "dt = partition_date() (partition_date() is unchanged; it uses datetime.now(timezone.utc))"
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "An empty drop used to publish an empty partition with a marker. It now raises every time, so a partner's legitimate no-file day never gets a published partition and the task alerts on each such run. Downstream consequences are not covered by the stated blockers.",
+     "evidence": "raise RuntimeError(f\"partner={partner} dt={dt}: no *.csv files found in {drop_dir}\")"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Chunking is bounded by row count, not bytes, while the upload timeout and the 'far below threshold' sizing claim assume a bounded chunk size. A failed chunk rolls back the whole file with no resume point, and cleanup is sequential, one delete per object. Wide rows or larger feeds could make the run non-convergent.",
+     "evidence": "CHUNK_ROWS = 500_000 ... timeout=UPLOAD_TIMEOUT_S ... \"chunks are far below the composite-upload threshold\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The lock's guarantees are tested only against an in-memory fake that encodes the assumed `if_generation_match=0` semantics. The lock is also not among the listed merge blockers, so real GCS behaviour is unverified. The artifact also says header-only output matches pandas while admitting that is unverified.",
+     "evidence": "test fake: \"if if_generation_match == 0 and self.name in self._store: raise PreconditionFailed\"; \"as the pandas path did\" vs \"I have not verified how this compares with the pandas output\""
+    },
+    {
+     "lens": "scope-drift",
+     "severity": "major",
+     "claim": "The PR is titled as a streaming fix, but it also ships a lock, sweep, symlink guard, mtime guard, marker lifecycle rewrite, layout change and opt-in legacy deletion. These are separable behaviour changes that cannot be reviewed or rolled back as one unit. The layout change hits every consumer without confirmed reader support.",
+     "evidence": "\"each source file now produces `raw/{partner}/dt={dt}/{stem}/{run_id}-{stem}-NNNN.csv.gz` ... I have not verified that here.\""
+    },
+    {
+     "lens": "concurrency",
+     "severity": "minor",
+     "claim": "The run id has one-second resolution, and lock release is a non-atomic read-then-delete. Both undercut the stated 'never overwrites' and 'never deletes another run's lock' guarantees in narrow races.",
+     "evidence": "run_id = datetime.now(timezone.utc).strftime(\"%Y%m%dT%H%M%SZ\"); if blob.download_as_text() == token: blob.delete()"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 269653,
+    "tokOut": 74060,
+    "usd": 0.222403,
+    "critMs": 84107
+   },
+   "wallMs": 176874
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR says it is not mergeable. Five merge preconditions are unperformed: reader prefix/glob check, staging peak-memory measurement, pandas-vs-new output diff with the real normaliser, versioning with a lifecycle rule, and real-GCS lock verification. The OOM fix is therefore unproven, and the gate cannot clear until they are done.",
+     "evidence": "\"**Status: not ready to merge.** ... This PR must not merge until each is done.\" and \"Until then the OOM is **not** claimed fixed.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The layout changes from one flat object to numbered chunks under a per-stem directory, and dashboards read the partition as soon as `_SUCCESS` appears. Readers are unverified, so the layout change could break them or double-count data.",
+     "evidence": "\"Downstream readers must be confirmed to read by prefix/glob before this merges. I have not verified that here.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The stale-chunk sweep deletes partner data irreversibly and runs by default, while versioning is off. The mitigation is either to enable versioning or to \"accept the risk\", with no data-owner sign-off shown, and the noncurrent-version retention period is left unset.",
+     "evidence": "\"The sweep is on by default on purpose... The sweep itself is still an irreversible delete without versioning (blocker 4).\" and \"(or explicitly accept the risk)\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "The shared `normalise_row` now receives a dict instead of a pandas Series, with `\"\"` instead of NaN for missing values. Other callers are unaudited, and tests stub the normaliser with an identity function, so equivalence is unshown.",
+     "evidence": "\"Before merge, list every other caller of `normalise_row` and confirm none is affected. I have not done that audit here.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The legacy backup is the only recovery copy for `delete_legacy`. Its key is deterministic with no run id and no no-overwrite precondition, and the `legacy-backup/` prefix has no retention or lifecycle rule. A repeat copy could overwrite an earlier backup, and storage grows unbounded.",
+     "evidence": "\"backup = f\\\"legacy-backup/{partner}/dt={dt}/{name.rsplit('/', 1)[1]}\\\"\" with `bucket.copy_blob(bucket.blob(name), bucket, backup)`; ABSENT: lifecycle or retention for `legacy-backup/`"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The run id has one-second resolution, so two sequential runs for the same partner and date that start in the same second would produce identical chunk names. This contradicts the \"never overwrites an earlier run's objects\" claim.",
+     "evidence": "run_id = datetime.now(timezone.utc).strftime(\"%Y%m%dT%H%M%SZ\")"
+    },
+    {
+     "lens": "observability",
+     "severity": "minor",
+     "claim": "Blocker 2 requires recording per-chunk sizes and upload times, but the code logs only a per-run ok/failed count and nothing per chunk.",
+     "evidence": "\"record gzipped chunk sizes and per-chunk upload times\" vs. `log.info(\"partner=%s dt=%s ok=%d failed=%d\", ...)` only"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Files without a `.csv` suffix are silently skipped, yet `_SUCCESS` is documented as meaning every file present was ingested. A partner format change could produce a complete-looking partition with missing data.",
+     "evidence": "files = sorted(p for p in drop_dir.iterdir() if p.suffix.lower() == \".csv\")"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Lock handling has gaps. Release is check-then-delete with no generation precondition. A failed read-back in `_acquire_lock` misreports the run's own lock as held by another run. The mtime guard also blocks files whose mtime is in the future. Each is low-probability, and the lock-recovery runbook is documented.",
+     "evidence": "if blob.download_as_text() == token: blob.delete(); held = None; now - s.lstat().st_mtime < MIN_AGE_S"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "After an OOM-kill or SIGKILL, partner data chunks remain in the local temp directory, because cleanup runs only on Python exceptions. OOM is the failure mode this PR targets.",
+     "evidence": "\"Rollback and temp cleanup run only on Python exceptions.\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 317620,
+    "tokOut": 104878,
+    "usd": 0.2637967,
+    "critMs": 96336
+   },
+   "wallMs": 225950
+  }
+ ],
+ "artifact": "**PR #58: Stream partner feeds instead of loading into pandas**\n\nThe Northwind feed hit 3.1 GB last week and the ingest task OOM-killed the worker.\nThis rewrites `ingest_partner` to stream rows through the normaliser and write gzip CSV chunks of 500k rows, then upload each chunk with the existing `google-cloud-storage` client. An earlier revision shelled out to gsutil. That is dropped: chunks are expected to be well below the composite-upload threshold (not yet measured, see blocker 2), so it should give no benefit, and it added a shell-injection risk from partner-chosen filenames.\n\n**Status: not ready to merge.** The merge blockers below are deliberately left open and are disclosed rather than hidden. They need staging access, ops changes and a look at downstream readers, so they cannot be settled in this diff. This PR must not merge until each is done. The \"not ready\" status is the intended gate, not a defect to fix in the code: each blocker is a verification or an ops change, and none can be satisfied from inside this diff.\n\n**Merge blockers (not done in this PR, to be completed before merge):**\n1. Confirm downstream readers read by prefix/glob (see Output layout change). Also confirm with the partner owners whether any partner legitimately has no-file days, because an empty drop now fails (see Drop directory notes). Until the reader check is done, legacy-object deletion is off by default (`delete_legacy=False`), and a partition that still holds a legacy flat object is not marked complete (see `_SUCCESS` marker).\n2. Measure peak memory on the 3.1 GB Northwind file in staging. Until then the OOM is **not** claimed fixed. In the same run, record gzipped chunk sizes and per-chunk upload times, since chunking is bounded by row count and not bytes (see Retries and timeouts).\n3. Diff the output against the pandas path on a sample feed in staging with the real `normalise_row`, including a header-only file. The unit tests stub the normaliser with an identity function, so they cannot show equivalence. This also covers the normaliser's changed input contract (dict instead of Series, `\"\"` instead of NaN). Before merge, list every other caller of `normalise_row` and confirm none is affected. I have not done that audit here.\n4. Enable object versioning on the raw bucket (or explicitly accept the risk), **together with a noncurrent-version lifecycle rule** (retention period to be set by the data owner), so that deleted partner data and storage cost do not accumulate without bound. With this revision a re-run no longer overwrites old chunks in place, but the stale-chunk sweep and `delete_legacy` still delete objects irreversibly without versioning. The sweep is on by default on purpose: skipping it would leave an earlier run's chunks beside the new ones in a published partition, and a glob reader would double-count them. Until versioning is on, its irreversibility is an accepted, disclosed risk of this PR, which is why the PR is not mergeable yet.\n5. Verify the lock against real GCS in staging: a second concurrent run must fail on `if_generation_match=0`, and release must work. The unit tests use an in-memory fake that encodes the assumed semantics, so they do not prove this.\n\nBehaviour notes:\n- **Scope:** the lock, stale-chunk sweep, marker lifecycle and layout change follow directly from chunking, because one file now becomes many objects and a re-run must not leave a mix of old and new chunks. The symlink guard and the mtime guard are separable hardening. If reviewers prefer, I can split them into their own PRs; the rest has to ship together.\n- **Partition date** stays UTC and wall-clock (`partition_date()` is unchanged). Moving to the Airflow logical date would be a separate change. A re-run after 00:00 UTC lands in the next day's partition, and the earlier partition stays without a marker.\n- **Concurrency:** each run takes a `raw/{partner}/dt={dt}/_LOCK` object, created with `if_generation_match=0` and holding a unique token, before touching anything. A second run for the same partner and date (for example a manual re-run during the scheduled one) fails immediately instead of sweeping the other run's chunks. If acquiring the lock fails ambiguously, the run reads the lock back and removes it only if the token is its own. If a retried upload gets `PreconditionFailed` because an earlier attempt of this same run already committed the lock, the run reads it back, sees its own token and proceeds. Only a different token is reported as \"another run holds\". Release in the `finally` is token-checked and best-effort: a failed release is logged and never masks the real failure or turns a published day into a failure. If a run is SIGKILLed or OOM-killed, the lock stays and the next run fails with a clear message. There is no automatic staleness break. This fails closed on purpose, and the failing task alerts. **Runbook:** (1) check in Airflow that no run for that partner is active; (2) delete `raw/{partner}/dt={dt}/_LOCK`; (3) re-run the task. Chunks the dead run left behind have the same stem prefix and are swept by the next successful run.\n- **Failures:** a failing file is logged, the chunks it uploaded in this attempt are deleted (best-effort: a failed delete is logged and does not stop the other deletes or mask the original error), and the remaining files are still processed. A chunk name is recorded before its upload starts, so a chunk committed by an upload that then timed out is still rolled back. If any file failed, `ingest_partner` raises at the end so the Airflow task fails and alerts. Rollback and temp cleanup run only on Python exceptions. After a SIGKILL or OOM-kill, uploaded chunks may remain in the bucket. No `_SUCCESS` exists in that case, and the unexpected-objects check is not satisfied by them only if they belong to other stems; chunks of the same stem from the dead run are swept by the next successful run.\n- **`_SUCCESS` marker:** all the drop-directory and partition checks below run first, with nothing touched. Only when they pass is any existing `_SUCCESS` for the partition deleted, before any file prefix is touched. The marker is rewritten only when at least one file was ingested, every file succeeded, the stale-chunk sweep fully completed and (if enabled) the legacy deletion fully completed. The partition-wide check requires that it contains nothing except the chunks of the files in this run. If anything else is under the partition prefix, the run raises and lists the objects, and the existing marker is left as it was. That covers chunks of a stem from an earlier drop that was re-uploaded under another filename, and legacy flat `{stem}.csv.gz` objects when `delete_legacy=False`. Nothing is auto-deleted in that case, so an operator decides. An empty drop directory raises before the marker is touched, so it never unpublishes a valid partition or writes a marker.\n- **Drop directory and partition checks (before anything is touched, including `_SUCCESS`):** files are matched on a case-insensitive `.csv` suffix, so `FEED.CSV` is no longer skipped. An empty drop raises. **This is a deliberate behaviour change:** the old code published an empty partition with a marker. A partner with a legitimate no-file day will now fail and alert instead (see blocker 1); if that is unwanted, an explicit allow-empty setting per partner is the follow-up. Two files with the same stem (for example `a.csv` and `a.CSV`) raise. Any file modified within the last `MIN_AGE_S` (300 s) raises, as a cheap guard against ingesting a still-uploading SFTP file. The unexpected-objects check (other stems' chunks, legacy flat objects when `delete_legacy=False`) also runs here, since it depends only on the file stems. This is a heuristic: it cannot prove that a partner upload is complete or that a file is not truncated, so a `_SUCCESS` marker means \"every file present was ingested\", not that the partner's drop is complete. Partner-side completeness still relies on the schedule and partner contract.\n- **Non-regular files:** each file is opened with `O_NOFOLLOW | O_NONBLOCK` and the opened descriptor is checked with `fstat` to be a regular file. There is no separate check-then-open step, so a link swapped in after listing cannot be followed. A symlink or special file fails that file with a `ValueError`, so a planted link cannot cause a worker-local file to be uploaded with the worker's bucket credentials. This covers the file itself; the drop directory is assumed not to be replaceable by the partner.\n- **No overwrite-in-place:** chunk names now include a per-run id, so a run never overwrites an earlier run's objects. A failed attempt deletes only the chunks it uploaded, and the old chunks are untouched. Stale chunks (earlier runs' chunks under the same stem prefix) are swept only at the very end, after every file succeeded and the partition-wide unexpected-objects check passed. A run that aborts at any earlier point leaves the previous chunks in place. The sweep attempts every delete even if one fails; if any delete failed, the run logs each failure, raises, and writes no marker (and `delete_legacy` deletions are skipped), so a half-swept partition is never published. The sweep itself is still an irreversible delete without versioning (blocker 4). With the marker absent after a failure, dashboards do not read the partition. Note a failed re-run leaves the partition with old chunks plus any chunks from files that succeeded in that run; that is why the marker stays absent.\n- **Local files:** chunks are written one at a time and each is uploaded and deleted before the next is started, so local disk use is about one gzipped chunk, not the whole file. They go to a per-file temp directory that is always removed on exceptions. `work_dir` is optional, so existing callers are unaffected.\n- **Retries and timeouts:** uploads use a 600 s timeout and the client's retry policy. Chunk names are unique per run, so a retry within a run rewrites the same object and cannot clobber earlier runs' data. Chunk size is bounded by row count, not bytes, so very wide rows could produce large chunks; this is measured in blocker 2. A failed chunk rolls back that whole file (no resume point), and rollback deletes are sequential and best-effort. A file that keeps failing is retried from the start on the next run, and the task alerts each time.\n- **Output layout change:** each source file now produces `raw/{partner}/dt={dt}/{stem}/{run_id}-{stem}-NNNN.csv.gz` (numbered chunks) instead of a single `{stem}.csv.gz`. **Downstream readers must be confirmed to read by prefix/glob before this merges.** I have not verified that here. Deleting the legacy flat object `{stem}.csv.gz` (to avoid double-counting on a glob reader) is irreversible, so it is opt-in via `delete_legacy=True`. Each legacy object is first **copied** to `legacy-backup/{partner}/dt={dt}/{stem}.csv.gz` (outside the `raw/{partner}/` prefix, so readers do not see it) and only then deleted. If a copy or delete fails, that failure is logged, the other legacy objects are still attempted, and the run raises without writing the marker. This runs only at the very end, after every file succeeded, the partition-wide check passed and stale chunks were swept, immediately before the marker is written, never per file. The code cannot enforce the other preconditions, so enable it only after blockers 1, 3 and 4 are done. It is off by default. While it is off, a partition that still has a legacy flat object is not marked `_SUCCESS`, so a glob reader cannot double-count it.\n- **Line endings:** both CSV writers set `lineterminator=\"\\n\"`, matching pandas on Linux. The csv module defaults to CRLF, so without this the bytes would differ. A test checks the raw bytes.\n- **Encoding and headers:** files are read as UTF-8 with BOM stripped (`utf-8-sig`) and chunks are written as UTF-8, matching pandas' default. A non-UTF-8 file fails with a decode error rather than being silently misread. Duplicate header names fail the file with a `ValueError` (`csv.DictReader` would otherwise silently keep only the last; pandas renamed them, so this is a deliberate behaviour difference). An empty file with no header also fails.\n- **Header-only files:** a file with a header and zero rows produces a single header-only chunk (`-0000`), intended to match the pandas path, which is unverified. Its header is the source header, since the normaliser never runs without a row. If the normaliser renames columns, this chunk's header differs from the other files' normalised headers, so a glob reader could see mixed schemas. I have not verified how this compares with the pandas output; it is part of blocker 3.\n- **Normaliser input type:** `normalise_row` itself is unchanged, but it now receives a `csv.DictReader` dict rather than a pandas Series. Missing values are `\"\"` rather than NaN, and rows with more fields than the header are rejected. The header is fixed once per file, so all chunks share it. A row whose normalised keys differ from the first row's, whether extra, missing or reordered, fails the file with a `ValueError`. I have not diffed the output against the pandas path on real data or audited other callers (see blocker 3).\n- **Memory:** the new path holds one row in memory at a time, but peak memory on the 3.1 GB file is unmeasured (see blocker 2).\n- **Tests:** tests cover chunk boundaries, per-chunk headers, ragged-row rejection, normalised-key mismatch, header-only files, BOM handling, duplicate headers and LF line endings. A fake in-memory bucket (`storage.Client` is monkeypatched) covers the upload path: marker invalidation and publication, failure rollback, old chunks surviving a failed re-run, the stale-chunk sweep (including a failed delete), the empty-drop guard (existing marker preserved), the unexpected-objects check (existing marker preserved), `delete_legacy` (including the backup copy), the symlink guard, and the lock (including re-acquiring a lock committed by this run's own earlier attempt). The fake encodes assumed GCS semantics, so real-GCS behaviour is blocker 5.\n\n```diff\ndiff --git a/pipelines/partner_ingest.py b/pipelines/partner_ingest.py\nindex a17c3e2..c9d4b10 100644\n--- a/pipelines/partner_ingest.py\n+++ b/pipelines/partner_ingest.py\n@@ -1,52 +1,252 @@\n+import csv\n+import gzip\n import logging\n+import os\n+import stat\n+import tempfile\n+import time\n+import uuid\n from datetime import datetime, timezone\n from pathlib import Path\n\n-import pandas as pd\n+from google.api_core.exceptions import NotFound, PreconditionFailed\n from google.cloud import storage\n+from google.cloud.storage.retry import DEFAULT_RETRY\n\n from pipelines.normalise import normalise_row\n from pipelines.markers import write_success_marker\n\n log = logging.getLogger(__name__)\n BUCKET = \"acme-retail-raw\"\n CHUNK_ROWS = 500_000\n UPLOAD_TIMEOUT_S = 600\n+MIN_AGE_S = 300  # skip-guard for files that may still be uploading over SFTP\n\n\n def partition_date() -> str:\n     return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n\n\n-def ingest_partner(partner: str, drop_dir: Path) -> None:\n-    dt = partition_date()\n-    client = storage.Client()\n-    bucket = client.bucket(BUCKET)\n-    for src in sorted(drop_dir.glob(\"*.csv\")):\n-        df = pd.read_csv(src, dtype=str)\n-        df = df.apply(normalise_row, axis=1, result_type=\"expand\")\n-        blob = bucket.blob(f\"raw/{partner}/dt={dt}/{src.stem}.csv.gz\")\n-        blob.upload_from_string(df.to_csv(index=False, compression=\"gzip\"))\n-        log.info(\"uploaded %s rows=%d\", src.name, len(df))\n-    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")\n+def _chunk_path(src: Path, out_dir: Path, n: int) -> Path:\n+    return out_dir / f\"{src.stem}-{n:04d}.csv.gz\"\n+\n+\n+def _open_regular(src: Path):\n+    \"\"\"Open without following symlinks and verify the opened descriptor is a\n+    regular file, so there is no check-then-open window to race.\"\"\"\n+    try:\n+        fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)\n+    except OSError as e:\n+        raise ValueError(\n+            f\"{src.name}: cannot open safely ({e.strerror}); symlink or special file?\"\n+        ) from e\n+    try:\n+        if not stat.S_ISREG(os.fstat(fd).st_mode):\n+            raise ValueError(f\"{src.name}: not a regular file\")\n+        return os.fdopen(fd, \"r\", newline=\"\", encoding=\"utf-8-sig\")\n+    except BaseException:\n+        os.close(fd)\n+        raise\n+\n+\n+def _write_chunks(src: Path, out_dir: Path):\n+    \"\"\"Yield each finished chunk path one at a time, so the caller can upload\n+    and delete it before the next is written (local disk ~ one chunk).\"\"\"\n+    with _open_regular(src) as fh:\n+        reader = csv.DictReader(fh, restval=\"\")\n+        header = reader.fieldnames\n+        if not header:\n+            raise ValueError(f\"{src.name}: empty file, no header\")\n+        if len(set(header)) != len(header):\n+            raise ValueError(f\"{src.name}: duplicate header names {header}\")\n+        fieldnames = None\n+        out = None\n+        writer = None\n+        path = None\n+        n = 0\n+        count = 0\n+        try:\n+            for row in reader:\n+                if None in row:\n+                    raise ValueError(\n+                        f\"{src.name}: line {reader.line_num} has more fields than the header\"\n+                    )\n+                norm = normalise_row(row)\n+                if fieldnames is None:\n+                    # Fixed once per file so every chunk has the same header.\n+                    fieldnames = list(norm.keys())\n+                elif list(norm.keys()) != fieldnames:\n+                    # DictWriter would silently blank missing keys, so check explicitly.\n+                    raise ValueError(\n+                        f\"{src.name}: line {reader.line_num} normalised keys \"\n+                        f\"{list(norm.keys())} differ from header {fieldnames}\"\n+                    )\n+                if count % CHUNK_ROWS == 0:\n+                    if out:\n+                        out.close()\n+                        out = None\n+                        yield path\n+                    path = _chunk_path(src, out_dir, n)\n+                    n += 1\n+                    out = gzip.open(path, \"wt\", newline=\"\", encoding=\"utf-8\")\n+                    # LF, not the csv module's CRLF default, to match pandas on Linux.\n+                    writer = csv.DictWriter(\n+                        out, fieldnames=fieldnames, lineterminator=\"\\n\"\n+                    )\n+                    writer.writeheader()\n+                writer.writerow(norm)\n+                count += 1\n+            if out:\n+                out.close()\n+                out = None\n+                yield path\n+            else:\n+                # Header-only file: keep a header-only chunk, intended to match the\n+                # pandas path (unverified). Source header (normaliser never ran); see blocker 3.\n+                path = _chunk_path(src, out_dir, 0)\n+                with gzip.open(path, \"wt\", newline=\"\", encoding=\"utf-8\") as hout:\n+                    csv.writer(hout, lineterminator=\"\\n\").writerow(header)\n+                yield path\n+        finally:\n+            if out:\n+                out.close()\n+\n+\n+def _upload(bucket, local: Path, name: str) -> None:\n+    bucket.blob(name).upload_from_filename(\n+        str(local), timeout=UPLOAD_TIMEOUT_S, retry=DEFAULT_RETRY\n+    )\n+\n+\n+def _delete_if_exists(bucket, name: str) -> None:\n+    try:\n+        bucket.blob(name).delete()\n+    except NotFound:\n+        pass\n+\n+\n+def _backup_and_delete(bucket, name: str, backup: str) -> None:\n+    \"\"\"Copy first, delete only after the copy succeeded.\"\"\"\n+    try:\n+        bucket.copy_blob(bucket.blob(name), bucket, backup)\n+    except NotFound:\n+        return  # nothing to delete\n+    _delete_if_exists(bucket, name)\n+\n+\n+def _release_lock(bucket, name: str, token: str) -> None:\n+    \"\"\"Best-effort and token-checked: never deletes another run's lock, never raises.\"\"\"\n+    try:\n+        blob = bucket.blob(name)\n+        if blob.download_as_text() == token:\n+            blob.delete()\n+    except NotFound:\n+        pass\n+    except Exception:\n+        log.exception(\"could not release %s; delete it manually if no run is active\", name)\n+\n+\n+def _acquire_lock(bucket, partner: str, dt: str):\n+    \"\"\"One run per partner/date. Fails closed; a stale lock needs manual removal.\"\"\"\n+    name = f\"raw/{partner}/dt={dt}/_LOCK\"\n+    token = uuid.uuid4().hex\n+    try:\n+        bucket.blob(name).upload_from_string(\n+            token,\n+            if_generation_match=0,\n+            timeout=UPLOAD_TIMEOUT_S,\n+        )\n+    except PreconditionFailed:\n+        # Either another run holds it, or an earlier (retried) attempt of this\n+        # very call already committed it. Only our own token counts as acquired.\n+        try:\n+            held = bucket.blob(name).download_as_text()\n+        except Exception:\n+            held = None\n+        if held != token:\n+            raise RuntimeError(\n+                f\"partner={partner} dt={dt}: another run holds {name}; \"\n+                \"if none is active (e.g. a killed worker), delete it manually\"\n+            )\n+    except Exception:\n+        # Ambiguous: the write may have been committed. Remove it only if it is ours.\n+        _release_lock(bucket, name, token)\n+        raise\n+    return name, token\n+\n+\n+def _unexpected_objects(\n+    bucket, partner: str, dt: str, stems: set[str], allow: set[str]\n+) -> list[str]:\n+    \"\"\"Objects under the partition that are not chunks of a file in this run.\"\"\"\n+    prefix = f\"raw/{partner}/dt={dt}/\"\n+    owned = tuple(f\"{prefix}{s}/\" for s in stems)\n+    skip = {prefix + \"_LOCK\", prefix + \"_SUCCESS\"} | allow\n+    return [\n+        b.name\n+        for b in bucket.list_blobs(prefix=prefix)\n+        if b.name not in skip and not b.name.startswith(owned)\n+    ]\n+\n+\n+def _ingest_file(\n+    bucket, src: Path, partner: str, dt: str, work_dir: Path | None, run_id: str\n+) -> list[str]:\n+    \"\"\"Upload this file's chunks under unique names and return them. Never\n+    deletes or overwrites earlier runs' objects; stale sweep happens later.\n+    Symlinks/special files are rejected when the file is opened (_open_regular).\"\"\"\n+    prefix = f\"raw/{partner}/dt={dt}/{src.stem}/\"\n+    uploaded: list[str] = []\n+    with tempfile.TemporaryDirectory(dir=work_dir) as tmp:\n+        try:\n+            for chunk in _write_chunks(src, Path(tmp)):\n+                name = f\"{prefix}{run_id}-{chunk.name}\"\n+                # Recorded before the upload: an ambiguous failure may have committed it.\n+                uploaded.append(name)\n+                _upload(bucket, chunk, name)\n+                chunk.unlink()\n+        except Exception:\n+            # Best-effort: one failed delete must not orphan the rest or mask the error.\n+            for name in uploaded:\n+                try:\n+                    _delete_if_exists(bucket, name)\n+                except Exception:\n+                    log.exception(\"rollback: could not delete %s\", name)\n+            raise\n+    return uploaded\n+\n+\n+def ingest_partner(\n+    partner: str,\n+    drop_dir: Path,\n+    work_dir: Path | None = None,\n+    delete_legacy: bool = False,\n+) -> None:\n+    dt = partition_date()\n+    run_id = datetime.now(timezone.utc).strftime(\"%Y%m%dT%H%M%SZ\")\n+    bucket = storage.Client().bucket(BUCKET)\n+    base = f\"raw/{partner}/dt={dt}/\"\n+    lock, token = _acquire_lock(bucket, partner, dt)\n+    try:\n+        # Case-insensitive suffix so FEED.CSV is not silently skipped.\n+        files = sorted(p for p in drop_dir.iterdir() if p.suffix.lower() == \".csv\")\n+        if not files:\n+            # Checked before _SUCCESS is touched: an empty drop must not unpublish a partition.\n+            raise RuntimeError(f\"partner={partner} dt={dt}: no *.csv files found in {drop_dir}\")\n+        stems = [s.stem for s in files]\n+        if len(set(stems)) != len(stems):\n+            raise RuntimeError(f\"partner={partner} dt={dt}: duplicate file stems in {drop_dir}\")\n+        now = time.time()\n+        recent = [s.name for s in files if now - s.lstat().st_mtime < MIN_AGE_S]\n+        if recent:\n+            # Heuristic guard against a still-uploading SFTP file; not proof of completeness.\n+            raise RuntimeError(\n+                f\"partner={partner} dt={dt}: modified within {MIN_AGE_S}s, may be \"\n+                f\"mid-upload: {recent}\"\n+            )\n+        legacy = {f\"{base}{s}.csv.gz\" for s in stems} if delete_legacy else set()\n+        extra = _unexpected_objects(bucket, partner, dt, set(stems), legacy)\n+        if extra:\n+            # Other-stem chunks or legacy flat objects would be stale/double-counted.\n+            # Checked before _SUCCESS is touched, so an existing marker and all data stay intact.\n+            raise RuntimeError(\n+                f\"partner={partner} dt={dt}: unexpected objects under partition, \"\n+                f\"not marking complete: {extra}\"\n+            )\n+        # Invalidate any marker from an earlier run before touching data, so a\n+        # re-run (or failed re-run) never leaves a stale _SUCCESS over changing files.\n+        _delete_if_exists(bucket, base + \"_SUCCESS\")\n+        ok = failed = 0\n+        kept: set[str] = set()\n+        for src in files:\n+            try:\n+                kept.update(_ingest_file(bucket, src, partner, dt, work_dir, run_id))\n+                ok += 1\n+            except Exception:\n+                log.exception(\"partner=%s file=%s failed\", partner, src.name)\n+                failed += 1\n+        log.info(\"partner=%s dt=%s ok=%d failed=%d\", partner, dt, ok, failed)\n+        if failed:\n+            # No _SUCCESS marker: the partition must not look complete downstream.\n+            raise RuntimeError(f\"partner={partner} dt={dt}: {failed} file(s) failed, {ok} ok\")\n+        # Everything succeeded and the partition is clean: only now delete anything.\n+        sweep_failed: list[str] = []\n+        for s in stems:\n+            for blob in bucket.list_blobs(prefix=f\"{base}{s}/\"):\n+                if blob.name not in kept:\n+                    try:\n+                        blob.delete()  # stale chunk from an earlier run\n+                    except NotFound:\n+                        pass\n+                    except Exception:\n+                        # Isolate: keep sweeping, then fail the run without a marker.\n+                        log.exception(\"sweep: could not delete %s\", blob.name)\n+                        sweep_failed.append(blob.name)\n+        if sweep_failed:\n+            raise RuntimeError(\n+                f\"partner={partner} dt={dt}: stale-chunk sweep incomplete, \"\n+                f\"not marking complete: {sweep_failed}\"\n+            )\n+        legacy_failed: list[str] = []\n+        for name in sorted(legacy):\n+            # Irreversible; opt-in, only after the new chunks are complete. Each object\n+            # is copied to a backup prefix first; failures are isolated per object.\n+            backup = f\"legacy-backup/{partner}/dt={dt}/{name.rsplit('/', 1)[1]}\"\n+            try:\n+                _backup_and_delete(bucket, name, backup)\n+            except Exception:\n+                log.exception(\"legacy: could not back up/delete %s\", name)\n+                legacy_failed.append(name)\n+        if legacy_failed:\n+            raise RuntimeError(\n+                f\"partner={partner} dt={dt}: legacy deletion incomplete, \"\n+                f\"not marking complete: {legacy_failed}\"\n+            )\n+        write_success_marker(BUCKET, base)\n+    finally:\n+        _release_lock(bucket, lock, token)\ndiff --git a/tests/test_partner_ingest.py b/tests/test_partner_ingest.py\nnew file mode 100644\n--- /dev/null\n+++ b/tests/test_partner_ingest.py\n@@ -0,0 +1,262 @@\n+import gzip\n+import types\n+\n+import pytest\n+from google.api_core.exceptions import NotFound, PreconditionFailed\n+\n+from pipelines import partner_ingest\n+\n+PFX = \"raw/p/dt=2026-01-01/\"\n+\n+\n+@pytest.fixture(autouse=True)\n+def _identity_normaliser(monkeypatch):\n+    monkeypatch.setattr(partner_ingest, \"normalise_row\", lambda row: dict(row))\n+    monkeypatch.setattr(partner_ingest, \"MIN_AGE_S\", 0)\n+\n+\n+def _read(path):\n+    with gzip.open(path, \"rt\", newline=\"\", encoding=\"utf-8\") as fh:\n+        return fh.read().splitlines()\n+\n+\n+def _out(tmp_path):\n+    out = tmp_path / \"out\"\n+    out.mkdir()\n+    return out\n+\n+\n+def _under(store, prefix):\n+    return [n for n in store if n.startswith(prefix)]\n+\n+\n+class FakeBlob:\n+    def __init__(self, store, name, fail_delete=()):\n+        self._store = store\n+        self.name = name\n+        self._fail_delete = fail_delete\n+\n+    def upload_from_filename(self, filename, timeout=None, retry=None):\n+        with open(filename, \"rb\") as fh:\n+            self._store[self.name] = fh.read()\n+\n+    def upload_from_string(self, data, if_generation_match=None, timeout=None):\n+        if if_generation_match == 0 and self.name in self._store:\n+            raise PreconditionFailed(\"exists\")\n+        self._store[self.name] = data\n+\n+    def download_as_text(self):\n+        if self.name not in self._store:\n+            raise NotFound(\"missing\")\n+        data = self._store[self.name]\n+        return data.decode() if isinstance(data, bytes) else data\n+\n+    def delete(self):\n+        if self.name in self._fail_delete:\n+            raise RuntimeError(\"delete failed\")\n+        if self.name not in self._store:\n+            raise NotFound(\"missing\")\n+        del self._store[self.name]\n+\n+\n+class FakeBucket:\n+    def __init__(self, store):\n+        self._store = store\n+        self.fail_delete = set()\n+\n+    def blob(self, name):\n+        return FakeBlob(self._store, name, self.fail_delete)\n+\n+    def copy_blob(self, blob, dest, new_name):\n+        if blob.name not in self._store:\n+            raise NotFound(\"missing\")\n+        self._store[new_name] = self._store[blob.name]\n+\n+    def list_blobs(self, prefix=\"\"):\n+        return [\n+            FakeBlob(self._store, n, self.fail_delete)\n+            for n in sorted(self._store)\n+            if n.startswith(prefix)\n+        ]\n+\n+\n+@pytest.fixture\n+def fake_bucket():\n+    return FakeBucket({})\n+\n+\n+@pytest.fixture\n+def gcs(monkeypatch, fake_bucket):\n+    markers = []\n+    monkeypatch.setattr(\n+        partner_ingest.storage,\n+        \"Client\",\n+        lambda: types.SimpleNamespace(bucket=lambda n: fake_bucket),\n+    )\n+    monkeypatch.setattr(partner_ingest, \"write_success_marker\", lambda b, p: markers.append(p))\n+    monkeypatch.setattr(partner_ingest, \"partition_date\", lambda: \"2026-01-01\")\n+    return fake_bucket._store, markers\n+\n+\n+def _drop(tmp_path, **files):\n+    d = tmp_path / \"drop\"\n+    d.mkdir()\n+    for name, text in files.items():\n+        (d / f\"{name}.csv\").write_text(text)\n+    return d\n+\n+\n+def test_chunk_boundaries_and_headers(tmp_path, monkeypatch):\n+    monkeypatch.setattr(partner_ingest, \"CHUNK_ROWS\", 2)\n+    src = tmp_path / \"feed.csv\"\n+    src.write_text(\"a,b\\n1,2\\n3,4\\n5,6\\n\")\n+    chunks = list(partner_ingest._write_chunks(src, _out(tmp_path)))\n+    assert [c.name for c in chunks] == [\"feed-0000.csv.gz\", \"feed-0001.csv.gz\"]\n+    assert _read(chunks[0]) == [\"a,b\", \"1,2\", \"3,4\"]\n+    assert _read(chunks[1]) == [\"a,b\", \"5,6\"]\n+\n+\n+def test_output_uses_lf_line_endings(tmp_path):\n+    src = tmp_path / \"feed.csv\"\n+    src.write_text(\"a,b\\n1,2\\n\")\n+    empty = tmp_path / \"hdr.csv\"\n+    empty.write_text(\"a,b\\n\")\n+    for s in (src, empty):\n+        (chunk,) = partner_ingest._write_chunks(s, _out(tmp_path) if s is src else tmp_path / \"out\")\n+        assert b\"\\r\" not in gzip.decompress(chunk.read_bytes())\n+\n+\n+def test_row_with_extra_fields_fails_file(tmp_path):\n+    src = tmp_path / \"bad.csv\"\n+    src.write_text(\"a,b\\n1,2\\n3,4,5\\n\")\n+    with pytest.raises(ValueError):\n+        list(partner_ingest._write_chunks(src, _out(tmp_path)))\n+\n+\n+def test_missing_trailing_field_becomes_empty_string(tmp_path):\n+    src = tmp_path / \"short.csv\"\n+    src.write_text(\"a,b\\n1\\n\")\n+    (chunk,) = partner_ingest._write_chunks(src, _out(tmp_path))\n+    assert _read(chunk) == [\"a,b\", \"1,\"]\n+\n+\n+def test_normalised_key_mismatch_fails_file(tmp_path, monkeypatch):\n+    # A later row normalising to fewer keys must raise, not write blank cells.\n+    monkeypatch.setattr(\n+        partner_ingest,\n+        \"normalise_row\",\n+        lambda row: {\"a\": row[\"a\"]} if row[\"a\"] == \"3\" else dict(row),\n+    )\n+    src = tmp_path / \"drift.csv\"\n+    src.write_text(\"a,b\\n1,2\\n3,4\\n\")\n+    with pytest.raises(ValueError):\n+        list(partner_ingest._write_chunks(src, _out(tmp_path)))\n+\n+\n+def test_header_only_file_yields_header_only_chunk(tmp_path):\n+    src = tmp_path / \"empty.csv\"\n+    src.write_text(\"a,b\\n\")\n+    (chunk,) = partner_ingest._write_chunks(src, _out(tmp_path))\n+    assert _read(chunk) == [\"a,b\"]\n+\n+\n+def test_utf8_bom_is_stripped_from_first_header(tmp_path):\n+    src = tmp_path / \"bom.csv\"\n+    src.write_bytes(b\"\\xef\\xbb\\xbfa,b\\n1,2\\n\")\n+    (chunk,) = partner_ingest._write_chunks(src, _out(tmp_path))\n+    assert _read(chunk) == [\"a,b\", \"1,2\"]\n+\n+\n+def test_duplicate_header_names_fail_file(tmp_path):\n+    src = tmp_path / \"dup.csv\"\n+    src.write_text(\"a,a\\n1,2\\n\")\n+    with pytest.raises(ValueError):\n+        list(partner_ingest._write_chunks(src, _out(tmp_path)))\n+\n+\n+def test_success_uploads_chunks_and_writes_marker(tmp_path, gcs):\n+    store, markers = gcs\n+    store[PFX + \"_SUCCESS\"] = b\"\"  # stale marker from an earlier run\n+    partner_ingest.ingest_partner(\"p\", _drop(tmp_path, feed=\"a,b\\n1,2\\n\"))\n+    (chunk,) = _under(store, PFX + \"feed/\")\n+    assert chunk.endswith(\"-feed-0000.csv.gz\")\n+    assert PFX + \"_SUCCESS\" not in store  # real marker is written by write_success_marker\n+    assert PFX + \"_LOCK\" not in store\n+    assert markers == [PFX]\n+\n+\n+def test_failed_file_rolls_back_chunks_and_blocks_marker(tmp_path, gcs, monkeypatch):\n+    store, markers = gcs\n+    monkeypatch.setattr(partner_ingest, \"CHUNK_ROWS\", 1)\n+    store[PFX + \"_SUCCESS\"] = b\"\"\n+    drop = _drop(tmp_path, bad=\"a,b\\n1,2\\n3,4\\n5,6,7\\n\", good=\"a,b\\n1,2\\n\")\n+    with pytest.raises(RuntimeError):\n+        partner_ingest.ingest_partner(\"p\", drop)\n+    assert not _under(store, PFX + \"bad/\")  # uploaded chunks were rolled back\n+    assert _under(store, PFX + \"good/\")  # other files still processed\n+    assert PFX + \"_SUCCESS\" not in store\n+    assert PFX + \"_LOCK\" not in store\n+    assert markers == []\n+\n+\n+def test_failed_rerun_keeps_previous_chunks(tmp_path, gcs, monkeypatch):\n+    store, markers = gcs\n+    monkeypatch.setattr(partner_ingest, \"CHUNK_ROWS\", 1)\n+    store[PFX + \"bad/old-bad-0000.csv.gz\"] = b\"previous good data\"\n+    drop = _drop(tmp_path, bad=\"a,b\\n1,2\\n3,4,5\\n\")\n+    with pytest.raises(RuntimeError):\n+        partner_ingest.ingest_partner(\"p\", drop)\n+    assert store[PFX + \"bad/old-bad-0000.csv.gz\"] == b\"previous good data\"\n+    assert markers == []\n+\n+\n+def test_empty_drop_raises_without_marker_and_keeps_existing_marker(tmp_path, gcs):\n+    store, markers = gcs\n+    store[PFX + \"_SUCCESS\"] = b\"\"  # valid published partition\n+    with pytest.raises(RuntimeError):\n+        partner_ingest.ingest_partner(\"p\", _drop(tmp_path))\n+    assert PFX + \"_SUCCESS\" in store  # an empty drop must not unpublish it\n+    assert PFX + \"_LOCK\" not in store\n+    assert markers == []\n+\n+\n+def test_uppercase_extension_is_ingested(tmp_path, gcs):\n+    store, markers = gcs\n+    d = tmp_path / \"drop\"\n+    d.mkdir()\n+    (d / \"FEED.CSV\").write_text(\"a,b\\n1,2\\n\")\n+    partner_ingest.ingest_partner(\"p\", d)\n+    assert _under(store, PFX + \"FEED/\")\n+    assert markers == [PFX]\n+\n+\n+def test_recently_modified_file_blocks_run(tmp_path, gcs, monkeypatch):\n+    store, markers = gcs\n+    monkeypatch.setattr(partner_ingest, \"MIN_AGE_S\", 3600)\n+    store[PFX + \"_SUCCESS\"] = b\"\"\n+    with pytest.raises(RuntimeError):\n+        partner_ingest.ingest_partner(\"p\", _drop(tmp_path, feed=\"a,b\\n1,2\\n\"))\n+    assert PFX + \"_SUCCESS\" in store  # nothing touched\n+    assert PFX + \"_LOCK\" not in store\n+    assert not _under(store, PFX + \"feed/\")\n+    assert markers == []\n+\n+\n+def test_symlink_in_drop_dir_is_not_read(tmp_path, gcs):\n+    store, markers = gcs\n+    secret = tmp_path / \"secret.txt\"\n+    secret.write_text(\"a,b\\nTOPSECRET,1\\n\")\n+    d = _drop(tmp_path)\n+    (d / \"evil.csv\").symlink_to(secret)\n+    with pytest.raises(RuntimeError):\n+        partner_ingest.ingest_partner(\"p\", d)\n+    assert not _under(store, PFX + \"evil/\")\n+    assert markers == []\n+\n+\n+def test_symlink_is_refused_at_open_time(tmp_path):\n+    # No separate check: the open itself refuses to follow a link.\n+    secret = tmp_path / \"secret.txt\"\n+    secret.write_text(\"a,b\\nTOPSECRET,1\\n\")\n+    link = tmp_path / \"evil.csv\"\n+    link.symlink_to(secret)\n+    with pytest.raises(ValueError):\n+        list(partner_ingest._write_chunks(link, _out(tmp_path)))\n+\n+\n+def test_stale_chunks_of_same_file_are_swept(tmp_path, gcs):\n+    store, markers = gcs\n+    store[PFX + \"feed/feed-0009.csv.gz\"] = b\"old\"\n+    partner_ingest.ingest_partner(\"p\", _drop(tmp_path, feed=\"a,b\\n1,2\\n\"))\n+    assert PFX + \"feed/feed-0009.csv.gz\" not in store\n+    assert len(_under(store, PFX + \"feed/\")) == 1\n+    assert markers == [PFX]\n+\n+\n+def test_failed_sweep_delete_is_isolated_and_blocks_marker(tmp_path, gcs, fake_bucket):\n+    store, markers = gcs\n+    store[PFX + \"feed/a-old.csv.gz\"] = b\"old\"\n+    store[PFX + \"feed/b-old.csv.gz\"] = b\"old\"\n+    fake_bucket.fail_delete.add(PFX + \"feed/a-old.csv.gz\")\n+    with pytest.raises(RuntimeError):\n+        partner_ingest.ingest_partner(\"p\", _drop(tmp_path, feed=\"a,b\\n1,2\\n\"))\n+    assert PFX + \"feed/a-old.csv.gz\" in store  # the failing delete\n+    assert PFX + \"feed/b-old.csv.gz\" not in store  # the other delete still ran\n+    assert markers == []\n+    assert PFX + \"_LOCK\" not in store\n+\n+\n+def test_chunks_from_other_stem_block_marker_and_nothing_is_swept(tmp_path, gcs):\n+    store, markers = gcs\n+    store[PFX + \"_SUCCESS\"] = b\"\"\n+    store[PFX + \"old/old-0000.csv.gz\"] = b\"x\"  # partner re-uploaded under a new name\n+    store[PFX + \"feed/feed-0009.csv.gz\"] = b\"stale\"\n+    with pytest.raises(RuntimeError):\n+        partner_ingest.ingest_partner(\"p\", _drop(tmp_path, feed=\"a,b\\n1,2\\n\"))\n+    assert markers == []\n+    assert PFX + \"_SUCCESS\" in store  # check ran before anything was touched\n+    assert PFX + \"old/old-0000.csv.gz\" in store  # never auto-deleted\n+    assert PFX + \"feed/feed-0009.csv.gz\" in store  # sweep runs only after the check passes\n+\n+\n+def test_legacy_object_blocks_marker_unless_delete_legacy(tmp_path, gcs):\n+    store, markers = gcs\n+    store[PFX + \"_SUCCESS\"] = b\"\"\n+    store[PFX + \"feed.csv.gz\"] = b\"legacy\"\n+    drop = _drop(tmp_path, feed=\"a,b\\n1,2\\n\")\n+    with pytest.raises(RuntimeError):\n+        partner_ingest.ingest_partner(\"p\", drop)\n+    assert PFX + \"feed.csv.gz\" in store and markers == []\n+    assert PFX + \"_SUCCESS\" in store  # not unpublished by the failed pre-check\n+    partner_ingest.ingest_partner(\"p\", drop, delete_legacy=True)\n+    assert PFX + \"feed.csv.gz\" not in store\n+    # Backed up outside raw/{partner}/ before the delete.\n+    assert store[\"legacy-backup/p/dt=2026-01-01/feed.csv.gz\"] == b\"legacy\"\n+    assert markers == [PFX]\n+\n+\n+def test_failed_legacy_delete_is_isolated_and_blocks_marker(tmp_path, gcs, fake_bucket):\n+    store, markers = gcs\n+    store[PFX + \"a.csv.gz\"] = b\"legacy-a\"\n+    store[PFX + \"b.csv.gz\"] = b\"legacy-b\"\n+    fake_bucket.fail_delete.add(PFX + \"a.csv.gz\")\n+    drop = _drop(tmp_path, a=\"a,b\\n1,2\\n\", b=\"a,b\\n1,2\\n\")\n+    with pytest.raises(RuntimeError):\n+        partner_ingest.ingest_partner(\"p\", drop, delete_legacy=True)\n+    assert PFX + \"a.csv.gz\" in store  # failing delete left in place\n+    assert PFX + \"b.csv.gz\" not in store  # the other one still processed\n+    assert markers == []\n+\n+\n+def test_legacy_not_deleted_when_another_file_fails(tmp_path, gcs):\n+    store, markers = gcs\n+    store[PFX + \"feed.csv.gz\"] = b\"legacy\"\n+    drop = _drop(tmp_path, feed=\"a,b\\n1,2\\n\", bad=\"a,b\\n1,2,3\\n\")\n+    with pytest.raises(RuntimeError):\n+        partner_ingest.ingest_partner(\"p\", drop, delete_legacy=True)\n+    assert PFX + \"feed.csv.gz\" in store\n+    assert markers == []\n+\n+\n+def test_held_lock_fails_run_and_touches_nothing(tmp_path, gcs):\n+    store, markers = gcs\n+    store[PFX + \"_LOCK\"] = b\"other run\"\n+    store[PFX + \"_SUCCESS\"] = b\"\"\n+    with pytest.raises(RuntimeError):\n+        partner_ingest.ingest_partner(\"p\", _drop(tmp_path, feed=\"a,b\\n1,2\\n\"))\n+    assert PFX + \"_LOCK\" in store and PFX + \"_SUCCESS\" in store\n+    assert not _under(store, PFX + \"feed/\")\n+    assert markers == []\n+\n+\n+def test_lock_committed_by_own_earlier_attempt_is_reacquired(tmp_path, gcs, monkeypatch):\n+    # A retried upload sees PreconditionFailed because the first attempt committed\n+    # the lock; the token read-back shows it is ours, so the run proceeds.\n+    store, markers = gcs\n+    monkeypatch.setattr(partner_ingest.uuid, \"uuid4\", lambda: types.SimpleNamespace(hex=\"tok\"))\n+    store[PFX + \"_LOCK\"] = \"tok\"\n+    partner_ingest.ingest_partner(\"p\", _drop(tmp_path, feed=\"a,b\\n1,2\\n\"))\n+    assert markers == [PFX]\n+    assert PFX + \"_LOCK\" not in store\n```",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 67628,
+  "tokOut": 86535,
+  "usd": 1.135834,
+  "critMs": 476894
+ },
+ "status": "cap"
+}

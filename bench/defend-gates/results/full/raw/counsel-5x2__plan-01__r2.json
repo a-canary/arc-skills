@@ -1,0 +1,131 @@
+{
+ "approach": "counsel-5x2",
+ "case": "plan-01",
+ "rep": 2,
+ "wallMs": 254154,
+ "verdict": "ATTACKS",
+ "confidence": 0.92,
+ "attacks": [
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "The chain_poller design needs about 160 req/min (40 underlyings polled every 15 s). That is about 32x Starter's 5 req/min limit and above Growth's 100 req/min, so the design cannot run on any tier the plan names.",
+   "evidence": "\"chain_poller (new): every 15 s ... 40 underlyings => 160 requests/min during RTH.\" vs. \"Starter | $79 | 5 req/min | 15-min delayed\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Starter serves 15-minute delayed option quotes, so delta, DTE/extrinsic, and gap triggers would act on data up to 15 minutes old. That contradicts the stated purpose of rolling the moment a trigger fires.",
+   "evidence": "\"rolls short calls the moment a roll trigger fires\" vs. \"Starter | $79 | 5 req/min | 15-min delayed\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "Migration 0042 drops positions.roll_history on prod in the same transaction as a backfill that keeps only 90 days. Older history is destroyed irreversibly, and no snapshot, dump, or down-migration is specified.",
+   "evidence": "\"In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.\" and \"older entries are not needed by roll_engine.\""
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The $139 total is valid only for Starter, which cannot support the design. Growth plus VPS is $259, over the $250 cap, so every tier that could meet the polling rate breaks the agreed cost constraint. The plan does not disclose this tradeoff.",
+   "evidence": "\"Monthly run cost: Optiq Starter $79 + existing VPS $60 = $139, comfortably inside the $250 cap.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The fallback path is unverified. roll_eod.py is kept through week 4, but the plan does not show it is independent of roll_history, which the week-1 migration drops. The safety net may be broken from the start.",
+   "evidence": "\"roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4.\" alongside \"ALTER TABLE positions DROP COLUMN roll_history.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The +3.8% net APR headline has no backtest, simulation, paper P&L, or cited dataset. It rests on anecdotal desk notes and an unnamed claim about peer funds, and it does not net out higher roll frequency or repricing slippage. The paper phase compares intent decisions, not P&L.",
+   "evidence": "\"Expected impact: +3.8% net APR vs. EOD rolling (see §2).\" and \"Desk notes from the last two quarters list several days where a mid-session roll 'would have been better'.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The success criterion is weakly powered. Thirty live days cannot reliably detect a 3.8% APR difference, no variance or significance threshold is stated, and the window extends past the 4-week build with no action defined if the target is missed.",
+   "evidence": "\"realized net APR over the first 30 live days >= EOD baseline + 3.8%\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The gap trigger has no defined reference price (prior close, open, or last print), and the delta trigger depends on a greeks feed the plan never names. Both determine when rolls fire, so the trigger semantics are not implementable as written.",
+   "evidence": "\"Underlying gaps > 4% through strike within the session.\" and \"Short call delta >= 0.70\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "It is unclear whether the $0.05 credit for the 'next strike up' rule is net or gross of the buy-to-close cost. The behaviour for a negative credit or an unavailable next strike is also undefined.",
+   "evidence": "\"next strike up if the credit is >= $0.05\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The caps of 1 roll per contract per day and 8 roll orders per account per day are small for a 40-name book. The plan does not say what happens when the cap is hit or how limited slots are prioritised, so positions may stay unrolled.",
+   "evidence": "\"max 1 roll per contract per day and max 8 roll orders per account per day; both are hard limits checked before submit\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The 60 s staleness guard checks only broker heartbeat, not market-data freshness. Throttled (429) or delayed vendor quotes would still produce roll intents, which is the more likely failure mode.",
+   "evidence": "\"roll_engine stops emitting intents when the last successful broker heartbeat is > 60 s old.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Reconciliation after a combo is cancelled at the third reprice is unspecified. The plan relies on an unverified all-or-none broker assumption, and it does not say how the local positions table is reconciled against the broker after a cancel or heartbeat loss.",
+   "evidence": "\"re-priced every 20 s up to 3 times, then cancelled\" and \"combo orders are all-or-none at the broker; a rejected combo leaves the original short call untouched.\""
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "ROLLER_KILL is an environment-variable switch with no specified behaviour when the variable is missing or unreadable, no authenticated or out-of-band stop, and no statement that it cancels in-flight repriced orders. It is the main control on an unattended order loop.",
+   "evidence": "\"plus a ROLLER_KILL env switch read on every loop.\""
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "All live option data depends on one vendor with no named fallback feed or exit path, and chain_poller is coupled to that vendor's request schema.",
+   "evidence": "\"Current vendor: Optiq Data.\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "No review is stated of the vendor's licence terms for automated or real-time use on the Starter tier, or of broker API terms for automated intraday order routing.",
+   "evidence": "ABSENT: no licence or broker-terms review in §4, §6, or §7"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "No alerting, metrics, or runbook is specified for stalled pollers, rejected combos, cap hits, or kill-switch activation in an unattended intraday loop.",
+   "evidence": "ABSENT: no alerting, metrics, or on-call procedure in §3 or §7"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Write volume from 15 s snapshots across 40 names, plus RollIntent and reprice events, is not sized against Postgres or the VPS, and no retention policy is given.",
+   "evidence": "\"chain_poller (new): every 15 s, fetch a real-time option chain snapshot for each held underlying\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Retention and access policy for the new roll_intents and rolls tables is unspecified, covering records of the family office's trading activity.",
+   "evidence": "ABSENT: retention and access policy for roll_intents and rolls tables"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Two engineers must deliver a poller, an engine, a router extension, and a schema migration in four weeks, and no test strategy beyond paper mode is stated. The 'next strike up' rule also changes exposure close to the out-of-scope position-sizing boundary, which is not defined.",
+   "evidence": "\"Build: 4 weeks, 2 engineers\" and \"No change to contract counts (position sizing is out of scope).\""
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 110923,
+  "tokOut": 36034,
+  "usd": 0.03644614,
+  "critMs": 60062
+ }
+}

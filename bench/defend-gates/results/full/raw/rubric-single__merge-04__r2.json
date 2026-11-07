@@ -1,0 +1,125 @@
+{
+ "approach": "rubric-single",
+ "case": "merge-04",
+ "rep": 2,
+ "wallMs": 92389,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The up migration drops the existing notes column after adding an empty private_notes column, so every user's notes are destroyed. The down migration only re-adds an empty notes column, so the data cannot be restored. Users cannot recover these notes elsewhere.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR describes the change as a pure rename with no data change, but the SQL is an add plus drop, which loses data. A rename would be ALTER TABLE ... RENAME COLUMN.",
+   "evidence": "Pure rename, no data change; the down migration restores the old name."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The migration runs automatically on deploy against a ~140M-row table with no lock timeout or expand/contract sequencing. DROP COLUMN takes an ACCESS EXCLUSIVE lock that can queue behind long reads and stall all queries on user_recipes. Old application instances still reading `notes` will also fail during a rolling deploy.",
+   "evidence": "Migrations run automatically on deploy after merge to main. ... BEGIN; ALTER TABLE user_recipes ADD COLUMN private_notes text; ALTER TABLE user_recipes DROP COLUMN notes; COMMIT;"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The handler fetches every saved row for the user on every page request and slices in JavaScript. For users with 200k+ saves this is a full join and transfer per page, which breaks the 300ms p99 budget and makes paging through all items O(N²/limit) in total work. The LIMIT was moved out of SQL.",
+   "evidence": "ORDER BY ur.saved_at DESC, ur.id DESC`,\n    [userId],\n  );\n\n  const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "If the cursor id is no longer in the result set (recipe unsaved or deleted between pages), findIndex returns -1, so start becomes 0 and the client restarts from the first page. This produces duplicates and can loop the client indefinitely. Keyset pagination on (saved_at, id) would avoid this.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A negative limit passes through Math.min unchanged. The slice is empty, and when start + limit < rows.length the code reads page[-1].id, which throws and returns a 500.",
+   "evidence": "const limit = Math.min(Number(req.query.limit) || 50, 100);"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The PR says the client already sends cursor from nextCursor, but the old response never included nextCursor, so the client cannot have been relying on it. The motivating claim that offsets drifted is also unsupported by any data in the PR.",
+   "evidence": "The client already sends `cursor` from the previous page's `nextCursor`. Offsets were drifting when users saved recipes while scrolling."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The test removes offset coverage without adding tests for an unknown or stale cursor, for the notes-preservation migration, or for a large-N page boundary. The tests would not catch the blocker or the restart bug.",
+   "evidence": "it(\"pages with cursor\", async () => { const a = await get(\"/api/recipes/saved?limit=2\");"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Irreversible deletion of user-written free text without a backup or user notice may conflict with stated data-retention or privacy commitments. The PR does not address this.",
+   "evidence": "ABSENT: any backup, export, or retention review for the dropped notes data"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Each page request now reads and transfers the full saved set, so paging through a 200k-item collection multiplies database and bandwidth spend roughly by the page count.",
+   "evidence": "const { rows } = await db.query<SavedRow>(... [userId],"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "Nothing blocking. The cursor is only compared in JavaScript and never interpolated into SQL, and requireUser is retained.",
+   "evidence": "saved.get(\"/api/recipes/saved\", requireUser, async (req, res) => {"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Nothing blocking. private_notes is returned only through the owner-scoped endpoint, and the rename is intended to prevent exposure on shared views.",
+   "evidence": "WHERE ur.user_id = $1"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "Nothing. No vendor or residency dependency is introduced.",
+   "evidence": "ABSENT: no change in provider or hosting dependency"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Nothing blocking. Keyset-style cursoring addresses the stated drift problem, but the restart-on-stale-cursor behavior undermines it.",
+   "evidence": "Offsets were drifting when users saved recipes while scrolling."
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "Nothing separate from the scale finding. Full-set fetches per page add latency to every scroll step.",
+   "evidence": "ABSENT: any measured latency for the paginated endpoint"
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "Nothing. The diff contains no rendering or copy changes.",
+   "evidence": "ABSENT: no UI files in diff"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "Nothing. The diff contains no user-facing controls.",
+   "evidence": "ABSENT: no UI files in diff"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Nothing further.",
+   "evidence": "ABSENT: no additional gate-relevant issues"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3453,
+  "tokOut": 4685,
+  "usd": 0.0023772100000000003,
+  "critMs": 21560
+ }
+}

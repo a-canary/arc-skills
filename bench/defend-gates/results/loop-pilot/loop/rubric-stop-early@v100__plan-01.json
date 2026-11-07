@@ -1,0 +1,53 @@
+{
+ "approach": "rubric-stop-early@v100",
+ "case": "plan-01",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The plan requires real-time option quotes to make intraday roll decisions, but the selected data tier (Starter) provides only 15-minute delayed quotes, making the core functionality infeasible.",
+     "evidence": "ARTIFACT §4: 'We stay on Starter.' and table shows Starter provides '15-min delayed' quotes vs. Growth/Pro which provide 'real-time'. ARTIFACT §3: 'chain_poller (new): every 15 s, fetch a real-time option chain snapshot' — cannot fetch real-time quotes from a tier that only offers 15-minute delayed data."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1645,
+    "tokOut": 157,
+    "usd": 0,
+    "critMs": 89257
+   },
+   "wallMs": 259011
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "cost",
+     "severity": "blocker",
+     "claim": "The plan's data model migration runs in-place against production on Monday pre-market with no rollback path; if the migration or backfill fails mid-transaction, live trading data is corrupted with no recovery procedure defined.",
+     "evidence": "Migration 0042 runs in-place against prod Monday 08:00 ET (pre-market). Backfill copies roll_history entries from the last 90 days into rolls; older entries are not needed by roll_engine. In the same transaction, ALTER TABLE positions DROP COLUMN roll_history."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1968,
+    "tokOut": 138,
+    "usd": 0,
+    "critMs": 35242
+   },
+   "wallMs": 157918
+  }
+ ],
+ "artifact": "# Plan: Auto-Roller v2 — intraday roll decisions\n\nOwner: trading-infra | Build: 4 weeks, 2 engineers | Status: **blocked on a budget decision (see §4); not ready for dispatch**\n\n## Summary\nReplace the end-of-day roll script (roll_eod.py) with an intraday engine that rolls short calls the moment a roll trigger fires, instead of waiting for the 15:45 ET batch.\nExpected impact: +3.8% net APR vs. EOD rolling (see §2).\n\n## 1. Roll triggers (unchanged semantics, new timing)\n- Short call delta >= 0.70, or\n- DTE <= 5 and extrinsic value < $0.10, or\n- Underlying gaps > 4% through strike within the session.\nRoll target: same strike +1 expiry, or next strike up if the credit is >= $0.05. No change to contract counts (position sizing is out of scope).\n\n## 2. Rationale\nRolling at the close means we routinely roll after the intraday mean-reversion has already happened. On high-volatility days the short leg is often cheapest to buy back mid-morning, after the opening spike fades. Desk notes from the last two quarters list several days where a mid-session roll \"would have been better\". Capturing those windows systematically, plus avoiding the wide closing spreads we see after 15:30, is where the improvement comes from. Intraday rolling is also standard practice among the option-income funds we follow.\n\n## 3. Architecture\n- chain_poller (new): every 30 s, fetch a real-time option chain snapshot for each held underlying (front expiry + next expiry), one chain request per underlying covering both expiries. 40 underlyings => 80 requests/min during RTH, under the Growth tier's 100 req/min limit with headroom for retries. If the vendor API requires one request per expiry, poll every 60 s instead (also 80 req/min). Confirm which applies in week 1 before sizing the poller.\n- roll_engine (new): consumes snapshots, evaluates §1 triggers, emits RollIntent rows.\n- order_router (existing broker client, extended): turns RollIntent into a single combo order (buy-to-close + sell-to-open) with a limit at mid minus 1 tick, re-priced every 20 s up to 3 times, then cancelled.\n- Postgres: new tables roll_intents, rolls; positions table changes in §5.\n\n## 4. Market data vendor\nCurrent vendor: Optiq Data. Plan tiers:\n\n| Tier    | Price/mo | Rate limit   | Option quotes   |\n|---------|----------|--------------|-----------------|\n| Starter | $79      | 5 req/min    | 15-min delayed  |\n| Growth  | $199     | 100 req/min  | real-time       |\n| Pro     | $499     | unlimited    | real-time       |\n\nStarter cannot support this design: its quotes are 15-minutes delayed and its 5 req/min limit is far below the polling load. Intraday trigger evaluation needs real-time quotes, so the minimum viable tier is Growth.\n\nCost: Optiq Growth $199 + existing VPS $60 = **$259/mo, which exceeds the agreed $250 cap by $9.** Pro ($499) is further over. This is an unresolved conflict, and the build must not start until the owner picks one of:\n1. Cut at least $9/mo from infra (e.g., downsize or renegotiate the VPS) so Growth + infra is <= $250.\n2. Get an explicit, recorded waiver of the $250 cap to at least $259.\n3. Drop the vendor requirement by confirming that the existing broker API client provides real-time option chains at sufficient rate limits, in which case Starter or no vendor tier is needed for this feature. This must be verified, not assumed.\n\nUntil one is chosen, the plan's cost line is not \"comfortably inside the cap\".\n\n## 5. Data model migration (week 1)\npositions.roll_history (JSONB array of every roll since account inception) is replaced by a normalized rolls table. The migration is additive only (expand phase); nothing is dropped during the 4-week build.\n\nPre-migration safeguards:\n- Take a full pg_dump (or verified base backup) immediately before running, and confirm it restores cleanly. Keep it until the contract step below is complete.\n- Rehearse migration 0042 end to end on a restored copy of prod before the prod run, recording runtime, row counts, and lock behavior. The prod run is a go/no-go on a clean rehearsal.\n\nMigration 0042 (prod, Monday 08:00 ET pre-market):\n- Create the rolls table and indexes. Backfill ALL roll_history entries (full account history, not just the last 90 days) into rolls, in a single transaction. Postgres DDL is transactional, so a failure rolls back and leaves positions untouched.\n- positions.roll_history is NOT dropped. It remains the source of truth for roll_eod.py, which stays deployed behind ROLLER_V2=false as the fallback path through week 4; dropping the column would break that fallback.\n- Validation before sign-off: per-position count of rolls rows equals jsonb_array_length(roll_history), and spot-checked entries match field for field. If validation fails, drop the rolls table and re-run; the original data is unchanged.\n- While both paths exist, new rolls are written to both roll_history and rolls (dual-write) so the two stay consistent; the reconciliation check runs daily during paper mode.\n\nRollback: because the migration is additive, rollback is \"set ROLLER_V2=false and drop rolls/roll_intents\"; no restore is needed. If positions data is ever found damaged, restore from the pre-migration dump.\n\nContract step (separate migration 0043, after the week-4 go-live has run clean for 30 live days and the owner signs off): archive roll_history to a backup table or file, then drop the column. This is a distinct change with its own backup and rehearsal, and not part of the 4-week build.\n\n## 6. Rollout\n- Week 1: migration, chain_poller, roll_engine skeleton.\n- Week 2-3: paper mode (RollIntent written, no orders) alongside roll_eod.py; compare intents vs. EOD decisions daily.\n- Week 4: ROLLER_V2=true on 5 underlyings, then all 40.\n- Success criterion: realized net APR over the first 30 live days >= EOD baseline + 3.8%.\n\n## 7. Risks and mitigations\n- Runaway order loop: order_router enforces max 1 roll per contract per day and max 8 roll orders per account per day; both are hard limits checked before submit, plus a ROLLER_KILL env switch read on every loop.\n- Partial fills on combo: combo orders are all-or-none at the broker; a rejected combo leaves the original short call untouched.\n- Broker API outage: roll_engine stops emitting intents when the last successful broker heartbeat is > 60 s old.\n- Stale market data: roll_engine must not evaluate triggers on snapshots older than 60 s, and must stop emitting intents if the vendor feed is delayed or rate-limited.\n- Migration failure or data loss: mitigated by the additive-only migration, pre-run backup, prod-copy rehearsal, and validation in §5.",
+ "fixerUsage": {
+  "calls": 2,
+  "tokIn": 5278,
+  "tokOut": 5328,
+  "usd": 0.074384,
+  "critMs": 33612
+ },
+ "status": "running"
+}

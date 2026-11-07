@@ -1,0 +1,125 @@
+{
+ "approach": "elephant-gold",
+ "case": "deploy-04",
+ "rep": 1,
+ "wallMs": 191482,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "The share link embeds the owner's raw project API key in the URL query string, and the share page returns it to any viewer as replayKey. Anyone with the link obtains a live credential that spends the owner's paid quota and reaches their project, and the key leaks via browser history, referrers, logs, and Slack/X unfurl crawlers.",
+   "evidence": "url.searchParams.set(\"k\", project.apiKey); ... return { messages: share.messages, model: share.model, replayKey: url.searchParams.get(\"k\") };"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "Deleting a share removes only the DB row and returns 404 for the page. The API key embedded in already-posted links stays valid, and no revocation or rotation step is documented, so the exposure cannot be contained after the launch posts go out.",
+   "evidence": "Shares can be deleted from Playground → History; deleted shares return 404. ... replayKey: url.searchParams.get(\"k\")"
+  },
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "Free-tier rate limit is 20 requests per second with burst 40 per key, not the 20 per minute promised. Combined with unlimited email signups, aggregate load is unbounded by any global cap.",
+   "evidence": "rate_limit: { requests: 20, per: second, burst: 40 } vs \"Free accounts get **20 requests per minute**\""
+  },
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "No spend cap enforced at the gateway for the free tier. The free pool can autoscale to 24 H100s at $2.49/h (about $43k/month if sustained) against a $4k/month budget, and the only control is a page at more than 6 replicas. The free block also has no daily_tokens cap.",
+   "evidence": "free-8b: min_replicas: 2, max_replicas: 24, scale_on: queue_depth > 8 for 60s; free: ... max_tokens_per_request: 4096, pool: free-8b (no daily_tokens)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The 100k tokens/day free quota promised in the changelog has no corresponding config key in the free tier block, so the advertised daily cap is not enforced by the diff.",
+   "evidence": "\"Free accounts get 20 requests per minute and 100k tokens per day\" vs free block with no daily_tokens key"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "QA rate-limit verification ran against staging per-minute config, not the shipped per-second burst-40 config, so the production 429 behavior is untested.",
+   "evidence": "Rate limiting: 21st request inside a minute returned 429 with Retry-After: pass (staging config used `per: minute`)."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The $3.6k/month budget figure is asserted rather than derived. 3,000 DAU × 35 req × 1.2k tokens is roughly 126M tokens/month, and the figure assumes two replicas at under 30% utilization with no throughput basis or peak/HN-spike load test.",
+   "evidence": "Two H100 replicas serve the projected free load at < 30% utilization; at $2.49/h that is ~$3.6k/month"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The replay path trusts a caller-supplied k query parameter without checking it against the share record or project, so the authorization is not bound to the share.",
+   "evidence": "replayKey: url.searchParams.get(\"k\")"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "Anonymous viewers replay against the owner's project quota with no rate limit or replay cap, so any public or leaked link lets unauthenticated parties spend the owner's paid tokens on the owner's bill.",
+   "evidence": "// Viewers without an account replay against the owner's project quota."
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Full session transcripts are stored and made publicly viewable by link with no stated retention, expiry, or consent notice, and deletion is not stated to purge the stored messages from the database, backups, or caches.",
+   "evidence": "messages: session.messages, ... Shares can be deleted from Playground → History; deleted shares return 404."
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Open Graph tags on server-rendered share pages expose conversation content to Slack/X unfurl crawlers and their caches, beyond the link recipient, and the artifact does not say whether OG metadata includes message text.",
+   "evidence": "Share pages are server-rendered with Open Graph tags so links unfurl nicely on Slack/X."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Alerting does not cover the failure modes that matter for the launch: no spend or budget alert, no 429 rate, no queue depth or latency alert, and the only error alert has no evaluation window.",
+   "evidence": "Alerting: free pool replicas > 6 pages on-call; error rate > 2% pages on-call."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Rollback only stops new signups. Existing free keys keep consuming the pool, and the rollback does not cover already-created share links or the config change, so there is no kill path for abuse under load.",
+   "evidence": "Rollback: `free_signup_open` off stops new signups; existing free keys keep working."
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Unlimited email-only signups let one actor mint many keys, each with 20 req/s and burst 40, so aggregate free load scales with key count. No per-IP or per-account ceiling is described.",
+   "evidence": "Sign up with email, no card required."
+  },
+  {
+   "lens": "ux-value",
+   "severity": "major",
+   "claim": "The Share copy does not disclose that the link exposes the owner's project API key or that viewers consume the owner's quota, so users will not realize the risk when sharing on Slack/X.",
+   "evidence": "Click \"Share\" on any playground session to get a link. Anyone with the link can view the conversation and re-run it, even without a Lumen account."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "The release bundles three independent changes (free tier GA with new pool, share links, and /v1/usage) into one deploy, so a fault in any one forces rollback of all, and share links have no feature flag while signups do.",
+   "evidence": "Deploy gateway config and playground at 16:00 UTC, flag `free_signup_open` on at 16:45 UTC."
+  },
+  {
+   "lens": "data residency",
+   "severity": "major",
+   "claim": "Share records persist full conversation messages and free-tier request payloads go to an external GPU provider, with no stated residency region for either.",
+   "evidence": "await db.shares.insert({ ... messages: session.messages, ... }) and \"at the GPU provider's on-demand rate of $2.49/h\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Free signup collects email with no terms acceptance, age gate, consent record, or lawful basis described for a public launch that includes EU/UK users.",
+   "evidence": "Sign up with email, no card required."
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 58509,
+  "tokOut": 23550,
+  "usd": 0.0234734,
+  "critMs": 31494
+ }
+}

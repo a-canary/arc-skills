@@ -1,0 +1,125 @@
+{
+ "approach": "clustered-panel",
+ "case": "deploy-11",
+ "rep": 2,
+ "wallMs": 281676,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The offline expiry check only catches a device clock set earlier than the download-time server stamp. A clock set back to a time after download but before real `valid_until`, a drifting clock, or an unsynced clock lets an expired forecast stay in color offline. This violates the agreed rule that expired ratings are never shown as current, including in offline maps. The artifact has no forward-skew, monotonic-time, or server-anchored elapsed-time guard.",
+   "evidence": "\"The expiry rule above applies on-device using device time... The app also stores the server time at download; if the device clock reads earlier than that, the stored forecast is treated as expired.\" ABSENT: any guard for a device clock set back after download but before real expiry."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The kill switch does not reach offline phones. Flag-off takes effect only on the next foreground with a successful remote-config fetch, so devices holding a cached flag=true and stored forecasts keep showing them. The claim that no stale ratings remain on phones is not supported, and no maximum time to removal is bounded.",
+   "evidence": "\"Set `avalanche_layer=false` (remote config, takes effect on next app foreground)... so no stale ratings remain on phones.\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "When a center asks to stop, its offline copies stay colored on devices until `valid_until`, which can be up to a full validity period. No purge on removal is specified, which may conflict with the data-agreement display terms and with the center's request.",
+   "evidence": "\"A single center can be removed by editing `config/avy_centers.json` (e.g. if a center asks us to stop); its zones disappear within 10 min and any offline copies expire at their `valid_until`.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The server-side freshness guarantee covers the origin API only. The CDN TTL for `/avy/v1/zones` is not stated, so the CDN could serve a forecast past its `valid_until` and past the 10-minute poll cycle. The client-side check mitigates this only if it runs correctly, which the first blocker calls into question.",
+   "evidence": "\"our API keeps serving forecasts still inside `valid_until` and expires them on time\" ABSENT: CDN TTL for /avy/v1/zones responses."
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The `bbox` parameter is untrusted input with no stated validation, maximum area, response size cap, or cache-key normalization. Randomized bboxes bypass the CDN and count against origin, and the per-IP limit excludes CDN hits. An attacker spreading requests across IPs can drive origin load to the autoscaling cap of 6 instances.",
+   "evidence": "\"`GET /avy/v1/zones?bbox=…` is read-only, unauthenticated, rate limited at origin to 120 req/min per IP (CDN-cached responses are not counted)\" ABSENT: bbox validation, max area, or cache-key normalization."
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The origin rate limit is per IP. Carrier NAT or trailhead Wi-Fi can place many users behind one IP, and CDN miss fills may share origin IPs, so legitimate users can receive 429s. Paging covers only 5xx, so throttling would be silent.",
+   "evidence": "\"rate limited at origin to 120 req/min per IP\" and \"endpoint 5xx > 1% for 10 min\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Launch assumes the warm 92% CDN hit rate, but flag-on at 100% and the public blog post land in a short window with a cold cache. Origin autoscaling is capped at 6 instances, and the QA table has no load or launch-spike test.",
+   "evidence": "\"Nov 23 08:00: flag on for 100%. Blog post and in-app card go live at 10:00\" and \"origin autoscaling capped at 6 instances\" ABSENT: load or performance test in QA."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The rollout moves from 40 beta testers directly to 100% with no percentage ramp. A ratings or mapping defect reaches the full user base in one step.",
+   "evidence": "\"flag on for staff and 40 ski-patrol beta testers\" followed by \"Nov 23 08:00: flag on for 100%.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Post-launch monitoring cannot detect incorrect data. There are no alerts for parse or mapping failures, rating mismatches against WADE, or client render errors. The only correctness check is a one-time manual render check before the blog post.",
+   "evidence": "\"Dashboard: WADE poll success, last update per center, endpoint 5xx and p95, CDN hit rate, crash-free sessions on 6.12.\" and \"after a check that all 19 centers render\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The pre-launch go-live gate is a manual 'check that all 19 centers render' with no pass/fail criteria, owner, or recorded result. Out-of-season centers legitimately show no forecast, so 'render' is an ambiguous and weak check for a safety-data launch.",
+   "evidence": "\"Blog post and in-app card go live at 10:00 after a check that all 19 centers render.\" ABSENT: check criteria, owner, or recorded result."
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "The agreement permits display only when the layer is not behind a paywall, and the artifact states the layer is free for all users. The QA table has no paid-tier test that verifies the 6.12 build is ungated for paid users.",
+   "evidence": "\"display in our app is permitted for free and paid users as long as the layer is not behind a paywall\" ABSENT: a paid-tier check in the QA table for 6.12."
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Device location is not sent, but the requested viewport bbox plus per-tap zone-id analytics can indicate where a user is looking in the backcountry, and the bbox is linkable to IP in CDN and origin logs. The artifact states no log retention limit and no handling of identifiers.",
+   "evidence": "\"The app requests forecasts by zone id for the visible map tiles; device location is not sent.\" ABSENT: log retention and identifier handling."
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Budget math covers only origin cost (~$140/month). CDN egress for 1.8M requests/day is not projected, so the $400/month CDN alert has no stated basis, and there is no origin-cost alert.",
+   "evidence": "\"origin cost ~$140/month. CDN budget alert at $400/month\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The zone color is the highest of the three band ratings, which is a derived value. The artifact does not confirm that this equals the WADE-issued overall rating, which the agreement requires the app to show as issued.",
+   "evidence": "\"The zone color uses the highest of the three\" versus \"We show the rating exactly as issued\" ABSENT: confirmation that the WADE overall rating equals the band maximum."
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "QA accuracy covers 3 consecutive days for the 19 centers, and the out-of-season and no-forecast states are tested for one center only, so coverage across seasons is not demonstrated.",
+   "evidence": "\"for 3 consecutive days | Pass, 0 mismatches\" and \"Out-of-season center (no forecast) | Pass\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The 26-hour stale-center alert fires only during a center's season, so a center that silently stops updating in the first days after launch may go unnoticed.",
+   "evidence": "\"any center not updated for 26 h during its season\""
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "All ratings depend on one aggregator under one contract, the CDN provider is unnamed, and the artifact has no exit plan for loss of WADE access.",
+   "evidence": "\"WADE data agreement signed 2026-09-30 (contract C-2209)\""
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "The card shows issue and valid-until times without specifying timezone or whether they are local or the center's zone, which can mislead users comparing a forecast to current local time across regions.",
+   "evidence": "\"The card shows the center's name and logo... the issue time, the valid-until time\""
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 22948,
+  "tokOut": 23020,
+  "usd": 0.01350776,
+  "critMs": 66354
+ }
+}

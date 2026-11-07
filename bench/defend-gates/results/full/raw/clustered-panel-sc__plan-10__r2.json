@@ -1,0 +1,101 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "plan-10",
+ "rep": 2,
+ "wallMs": 353027,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Post-commit processor deletions (Stripe customer id, Apple refresh token, Amplitude/Customer.io/Zendesk ids) depend on identifiers that the purge transaction has just deleted. No durable outbox or pending-processor record is written inside the transaction. A crash or permanent failure after commit can leave processors un-notified with no record of what is still owed, and the 7-day retries and the purge-failed ticket have nothing to work from.",
+   "evidence": "\"each account is one DB transaction across `users` and the 23 tables that reference it.\" / \"After the DB transaction commits: Amplitude... Stripe... Sign in with Apple users\" / ABSENT: durable outbox or persisted processor identifiers"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Nothing prevents a race between 'Keep my account' and the nightly purge. The plan has no row lock, no re-check of deactivation status inside the purge transaction, and no idempotency rule for re-runs. A user restoring at the deadline could have the account purged, which is irreversible.",
+   "evidence": "\"Nightly `AccountPurgeJob` processes accounts whose grace period has ended\" / \"'Keep my account', which restores the account exactly as it was\" / ABSENT: lock or eligibility re-check"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The irreversible purge has no halt mechanism. The flag is explicitly ignored by the job, the dry-run covers only the first batch, and a registry error (wrong delete vs nullify) cannot be stopped without a deploy.",
+   "evidence": "\"the purge job ignores the flag\" / \"The first real purge batch ... runs in dry-run mode first\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The registry completeness check is name-based and catches only `user_id` and `*_user_id` columns. Other references (owner_id, learner_id, sender, polymorphic subject_id, email-keyed rows) are missed, so 'new tables cannot be forgotten' does not hold.",
+   "evidence": "\"A CI test fails if any such column in `db/schema.rb` is missing from the registry, so new tables cannot be forgotten.\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The claim that no other system holds user-level data rests on an inventory reference with no verification step. The plan itself pauses push, yet names no push provider or device-token store, no transactional email provider and no object storage. It also has no Google sign-in step, so erasure completeness is unverified.",
+   "evidence": "\"No other system holds user-level data beyond the processors below (data inventory DPI-2026, reviewed Sep 2026).\" / \"push and marketing email are paused\""
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The logged-out web path lets an emailed link stand in for re-authentication on an irreversible action. The plan states no expiry, single-use rule or signing for this confirmation link (only the cancel link has them), and mailbox access becomes the sole factor.",
+   "evidence": "\"we email a confirmation link to the account address, and clicking it counts as re-auth\" / ABSENT: expiry, single-use or signing for the confirmation link"
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "For web Stripe subscribers, deletion silently sets the subscription to cancel at period end. The screen-1 subscription notice is specified only for store subscriptions, so users get no disclosure of the cancellation or of possible loss of paid time. This risks consumer-protection and subscription-cancellation rules.",
+   "evidence": "\"Subscription notice, only when relevant (§3)\" / \"at confirm, the subscription is set to `cancel_at_period_end`\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The Art. 17 timing claim is not substantiated. The one-month clock runs from the request, and the plan does not say when the 7-day retry clock starts. Failure after 7 days only opens a ticket, with no owner, deadline or tracking of residual personal data.",
+   "evidence": "\"Worst case (14 + 7 days) stays inside the one-month Art. 17 deadline.\" / \"anything still failing opens a `purge-failed` ticket for the privacy lead\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The restore runbook depends on `deleted_accounts` to re-apply purges, but the plan does not say how a restore interacts with processors already called, or that the table survives the restore itself. The purge of a restored account is also not handled for external systems.",
+   "evidence": "\"the restore runbook re-applies purges from it after any restore\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The plan does not bound nightly batch size, lock duration for the 23-table transaction, or the processor API fan-out and rate limits.",
+   "evidence": "\"each account is one DB transaction across `users` and the 23 tables that reference it\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The export promise is not reconciled with purge timing. An export that is delayed past day 14 could be empty or lost, and no ordering is specified.",
+   "evidence": "\"An export requested here is still delivered after you confirm deletion.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Store subscriptions keep billing after the account is purged. The disclosure is only a conditional notice and a button, not an acknowledgement step.",
+   "evidence": "\"Deleting your account does not cancel your App Store subscription\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The schedule puts staged rollout and App Store resubmission in the same week with no buffer for review time, even though all iOS releases are blocked until it ships. Rollback is also not covered by the tests listed.",
+   "evidence": "\"Week 3: staff accounts (60) first, then 100%, then App Store resubmission the same week.\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The single-use cancel link can be consumed by email scanner prefetch, which would silently break the recovery path. The export link also sits before re-auth.",
+   "evidence": "\"The link is single-use, signed, valid until the purge.\""
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 24684,
+  "tokOut": 28154,
+  "usd": 0.078004,
+  "critMs": 75267
+ }
+}

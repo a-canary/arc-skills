@@ -1,0 +1,320 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "merge-04",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The migration is not a rename. It adds an empty private_notes column and drops notes with no data copy, so every user's notes are destroyed on deploy. The PR calls it a 'pure rename, no data change' and the notes cannot be recovered elsewhere.",
+     "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;  vs PR text: \"Pure rename, no data change\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The down migration cannot restore the data. It re-adds an empty notes column and drops private_notes, so rollback loses everything too. Migrations run automatically after merge to main, so there is no human gate or backup before the destructive DROP.",
+     "evidence": "ALTER TABLE user_recipes ADD COLUMN notes text;\nALTER TABLE user_recipes DROP COLUMN private_notes;  / ABSENT: data copy, backup, or approval gate"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "No expand/contract sequencing. The migration drops notes immediately on merge, while instances still running the previous release select ur.notes and will error during a rolling deploy. A single RENAME COLUMN would be metadata-only and keep the data, but would still need a compatible deploy order.",
+     "evidence": "-    `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.notes`  alongside DROP COLUMN notes, with no staged rollout described"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The handler removes LIMIT and the cursor predicate from SQL. It fetches the user's entire saved set (200k+ rows for heavy users, joined to recipes, including note text) on every page request and slices in memory. Cost is O(N) per page, which threatens the 300ms p99 budget. Keyset pagination in SQL is needed.",
+     "evidence": "WHERE ur.user_id = $1\n      ORDER BY ur.saved_at DESC, ur.id DESC`,\n    [userId],\n  ); ... const page = rows.slice(start, start + limit);"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "An unknown or stale cursor (e.g. the recipe was unsaved between pages) makes findIndex return -1, so start becomes 0 and the endpoint silently returns page one again. Clients can duplicate items or loop, with no error returned.",
+     "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Removing offset is a breaking API change with no fallback or deprecation. Old or cached clients still sending offset silently get page one every time. The claim that the client already sends cursor is not verified for all consumers.",
+     "evidence": "-  const offset = Math.max(Number(req.query.offset) || 0, 0);  (no handling of offset in new code)"
+    },
+    {
+     "lens": "ui",
+     "severity": "major",
+     "claim": "The response key silently changes from notes to private_notes because the SELECT has no alias. Existing clients reading `notes` will show blank notes, and the PR does not mention this as a breaking change.",
+     "evidence": "SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.private_notes"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "Tests cover only the happy path: no unknown or deleted cursor, empty list, offset transition, or data-preservation check for the migration. There is also no evidence that other code references to user_recipes.notes were found and updated.",
+     "evidence": "ABSENT: tests for stale cursor/empty result/migration data survival; no grep showing all notes references updated"
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 20661,
+    "tokOut": 11286,
+    "usd": 0.0544869,
+    "critMs": 23823
+   },
+   "wallMs": 69897
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The 400-on-malformed-cursor guarantee does not hold. decodeCursor only checks that `t` and `id` are strings, so a well-formed base64/JSON cursor with a non-timestamp `t` reaches the `$2::timestamptz` cast, Postgres throws, and the client gets a 500. Any client can trigger this.",
+     "evidence": "if (typeof v?.t === \"string\" && typeof v?.id === \"string\") { return { t: v.t, id: v.id }; } ... ($2::timestamptz, $3::text)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Legacy offset is silently clamped to 10000. A legacy client paging past that point (users with 200k+ saves) receives the page at offset 10000 again with no error. It sees duplicates or loops, a silent regression from the uncapped original endpoint. The PR says 'capped' but does not state this consequence.",
+     "evidence": "Math.min(Math.max(Number(req.query.offset) || 0, 0), 10000)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Migration 0087 runs automatically on deploy against a ~140M-row table using CREATE INDEX CONCURRENTLY with IF NOT EXISTS. If the build fails or is cancelled, an INVALID index is left behind and every rerun silently no-ops, so the broken index persists with no alert. The migration has no lock/statement timeout, no validity check, and no duration estimate.",
+     "evidence": "CREATE INDEX CONCURRENTLY IF NOT EXISTS user_recipes_user_saved_idx ON user_recipes (user_id, saved_at DESC, id DESC);"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Whether the migration runner supports non-transactional files is unconfirmed. Migrations auto-run after merge, so if the runner wraps files in a transaction, the deploy fails at this step. The author explicitly defers the confirmation to reviewers before merge, and the artifact does not show it was done.",
+     "evidence": "Please confirm the migration runner supports non-transactional files before merge."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The keyset predicate compares `ur.id` with `$3::text`. The schema type of user_recipes.id is not shown. If it is uuid or integer, the comparison errors on every cursor request, or text ordering diverges from the numeric ORDER BY and rows are skipped or repeated. Tests use string ids like \"r5\" and cannot catch this.",
+     "evidence": "(ur.saved_at, ur.id) < ($2::timestamptz, $3::text) ... ABSENT: type of user_recipes.id; tests use ids like \"r5\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The claim that per-page cost is bounded by page size is unproven. The `$2::text IS NULL OR (...)` construct with parameters may keep the planner from using the new index, causing O(total) work for 200k-row users. The legacy OFFSET path scans and discards up to 10000 rows. The query can also ship before the CONCURRENTLY build finishes. No EXPLAIN or latency evidence is given against the 300ms p99 budget.",
+     "evidence": "Cost per page is bounded by the page size, not the user's total saved count. ... ABSENT: EXPLAIN output or latency measurement for 200k-row users"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The offset deprecation plan depends on request logs showing no offset traffic, but the diff adds no counter or log for offset vs cursor usage, so the sunset criterion cannot be measured.",
+     "evidence": "offset support stays until request logs show no `offset` traffic. ABSENT: any logging or metric in the diff"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The cursor round-trips `saved_at` through `saved_at::text`, which depends on session TimeZone settings. This is fragile across pooled connections.",
+     "evidence": "ur.saved_at::text AS saved_at_text"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The PR says the response shape is unchanged, but a new top-level `nextCursor` field is added. The change is additive but the description is inaccurate.",
+     "evidence": "The response shape is unchanged: the field is still `notes`. ... nextCursor"
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 29312,
+    "tokOut": 18039,
+    "usd": 0.0698403,
+    "critMs": 31007
+   },
+   "wallMs": 138132
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The PR is at the merge gate but its own blocking pre-merge checklist is unmet: runner transaction behavior, id column type, EXPLAIN against the 300ms p99 budget, and a 140M-row build rehearsal. Migrations auto-run on merge, so the unverified CREATE INDEX CONCURRENTLY (statement_timeout=0) would execute in production. Failure modes are mostly a failed deploy or slow pages rather than data loss, hence major rather than blocker.",
+     "evidence": "**Before merge (blocking, not yet done):** ... \"I have not verified this\" ... \"No measurement has been made yet\" ... \"I have no estimate yet.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "If the migration runner wraps files in a transaction, 0087 fails at deploy. The out-of-band fallback is described but not implemented in the PR.",
+     "evidence": "\"If it wraps files in a transaction, the deploy fails at 0087. In that case the index must be created out-of-band first and 0087 dropped or converted.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "decodeCursor only accepts string ids, but encodeCursor stores whatever node-pg returns. If user_recipes.id is an integer type, pg returns a number, every nextCursor is rejected with 400 on page two, and the claim that integer ids work is wrong. The type is unconfirmed and the text-id tests cannot catch it.",
+     "evidence": "\"typeof v?.id === \\\"string\\\" && v.id.length > 0\" vs \"Text, uuid and integer ids all compare correctly this way.\" and \"Confirm the type of `user_recipes.id`. I have not verified it.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "A repeated cursor parameter (array) fails the typeof string check and is treated as no cursor, so the request silently falls to the offset path and returns page one. This is the silent restart the PR claims to prevent.",
+     "evidence": "`if (typeof req.query.cursor === \"string\" && req.query.cursor !== \"\") {` ... `if (!cursor) { legacyOffset = Math.max(Number(req.query.offset) || 0, 0);`"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "New code may serve traffic before the index exists, so keyset queries for 200k+ save users can exceed the 300ms p99 budget. The PR leaves the ordering as an undecided either/or with no recorded decision.",
+     "evidence": "\"Either let the index build complete before the new code takes traffic, or accept the temporary slowness.\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "The 400 for offset above 10000 breaks legacy clients for the heaviest users, who cannot recover because legacy clients ignore nextCursor. This contradicts the 'old or cached clients keep working' framing, and the diff adds no logging or metric to show when offset traffic has drained.",
+     "evidence": "\"so old or cached clients keep working\" vs \"will get an error instead of the rest of its list.\"; ABSENT: no offset-usage logging or metric in the diff"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "lock_timeout does not bound CREATE INDEX CONCURRENTLY's wait for older transactions, so the PR's description overstates its protection. A stalled or failed build can leave an INVALID index that the migration's drop-and-check handles on rerun.",
+     "evidence": "\"`lock_timeout = '5s'` so it cannot queue behind a long transaction and block other work.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Non-integer limit or offset values reach LIMIT/OFFSET, and on the legacy path the class-22 mapping does not apply, so they produce a 500 instead of a 400.",
+     "evidence": "\"legacyOffset = Math.max(Number(req.query.offset) || 0, 0);\" and \"if (cursor && typeof err?.code === ...\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "Tests omit tie-breaking on equal saved_at, repeated or empty cursors, and out-of-range timestamps hitting the class-22 mapping.",
+     "evidence": "Tests added: \"pages with cursor\", \"rejects a malformed cursor with 400\", ... no equal saved_at test"
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 39003,
+    "tokOut": 25343,
+    "usd": 0.08101649999999999,
+    "critMs": 50903
+   },
+   "wallMs": 180629
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "other",
+     "severity": "blocker",
+     "claim": "The PR's own decided rollout order requires the index to exist and be valid before cursor code takes traffic, via a separate migration-only PR. But this PR still contains migration 0087 together with the cursor code, and migrations auto-run on merge to main, so both land in one deploy and violate the stated order.",
+     "evidence": "\"The migration goes out first as its own migration-only PR.\" versus the diff adding db/migrations/0087_saved_recipes_keyset_idx.up.sql alongside server/routes/saved.ts; \"Migrations run automatically on deploy after merge to main\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "The migration runner's handling of non-transactional files is unverified. If it wraps files in a transaction, CREATE INDEX CONCURRENTLY fails and the production deploy breaks at 0087. The fallback is not implemented, yet the migration auto-runs on merge.",
+     "evidence": "\"I have not verified this. If it wraps files in a transaction, the deploy fails at 0087... That fallback is not implemented in this PR.\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "The PR declares itself unmergeable with all blocking gates open: the id column type is unverified (tests use only text ids), no EXPLAIN has been run for a 200k+ user against the 300ms p99 budget, and the 140M-row build has not been rehearsed. Crossing the gate would test these in production.",
+     "evidence": "\"Status: do not merge yet.\" \"No measurement has been made yet, so the cost claims below are expectations, not results.\" \"I have no estimate yet.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The migration unconditionally drops any existing index of this name before rebuilding. If a valid index already exists, production loses it for the whole 140M-row rebuild window, causing the slowness the rollout order is meant to avoid. The file does not check for an equivalent index even though its own notes say to drop the file in that case.",
+     "evidence": "\"DROP INDEX CONCURRENTLY IF EXISTS user_recipes_user_saved_idx;\" and \"If an equivalent index already exists, drop this file.\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "Legacy offset clients that worked without a ceiling now get a 400 past offset 10000 and cannot recover the rest of their list. This hits exactly the heaviest users (200k+ saves). The PR admits not having verified which consumers send cursor, so the affected population is unknown.",
+     "evidence": "\"a legacy client scrolling beyond 10000 items... will get an error and cannot recover the rest of its list.\" \"I have not verified every consumer sends `cursor`.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The legacy offset path scans and discards up to 10000 joined rows per request, and the cost is unmeasured against the 300ms p99 budget.",
+     "evidence": "\"Offset queries scan and discard up to 10000 rows, a cost I have not measured.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The (saved_at, id) tie-breaker, the reason keyset pagination needs id, has no test. Fixtures have distinct timestamps, so a bug in the tie comparison at page boundaries would not be caught.",
+     "evidence": "ABSENT: no test sets equal saved_at values across a page boundary; \"pages with cursor\" uses r5..r1 only"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The PR title still says it renames the notes column, but the rename was removed from this PR.",
+     "evidence": "\"TITLE: Rename notes column and cursor-paginate saved recipes\" vs \"The `notes` → `private_notes` rename is removed from this PR\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "Repeated or array-valued offset/limit parameters are silently coerced by Number() to defaults, inconsistent with the strict rejection of a repeated cursor. Also, legacy offset ordering gained an id tie-breaker, which may shift tied-timestamp page boundaries for old clients.",
+     "evidence": "\"legacyOffset = Math.max(Number(req.query.offset) || 0, 0);\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "statement_timeout=0 is only reset after the DO block. If the build or validity check raises, the setting may persist on a pooled session.",
+     "evidence": "\"SET statement_timeout = 0; ... RESET statement_timeout;\""
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 43816,
+    "tokOut": 21975,
+    "usd": 0.08521229999999999,
+    "critMs": 44104
+   },
+   "wallMs": 103236
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "An empty `cursor=` parameter is treated as absent and returns page one. This sits slightly at odds with the stated rule that a malformed cursor never silently restarts at page one.",
+     "evidence": "if (typeof rawCursor === \"string\" && rawCursor !== \"\") { cursor = decodeCursor(rawCursor); ... }"
+    },
+    {
+     "lens": "observability",
+     "severity": "minor",
+     "claim": "The `saved_legacy_offset` log line carries no user or client identifier, so it may not be enough to find affected clients before offset support is removed. It also fires only when offset > 0.",
+     "evidence": "console.info(JSON.stringify({ event: \"saved_legacy_offset\", offset: legacyOffset, rejected: legacyOffset > MAX_LEGACY_OFFSET }))"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "A repeated `offset` parameter becomes NaN and then 0, which silently returns page one. This is inconsistent with the repeated-`cursor` rejection.",
+     "evidence": "legacyOffset = Math.max(Number(req.query.offset) || 0, 0);"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The tie-break test mutates shared fixture timestamps. The diff does not show a try/finally or afterEach that guarantees they are restored if an assertion fails.",
+     "evidence": "setSavedAt restores the original fixture timestamps after the test."
+    }
+   ],
+   "usage": {
+    "calls": 6,
+    "tokIn": 52335,
+    "tokOut": 22628,
+    "usd": 0.08147247999999999,
+    "critMs": 62567
+   },
+   "wallMs": 122850
+  }
+ ],
+ "artifact": "PR #1907: Cursor pagination for saved recipes (column rename split out)\n\n**Status: do not merge yet.** The blocking checks below are unmet. These gates are what the do-not-merge status and the rollout order enforce: this PR does not merge until they are met, so none of them gets tested in production by crossing the gate. I can't complete them from this branch, so they remain open.\n\nThis PR now contains only the pagination code change. Two things are split out:\n- The `notes` → `private_notes` rename is removed and will be done separately (see item 2).\n- Migration 0087 (the index) is removed from this PR and ships as its own migration-only PR, so the index lands in a deploy before this code does (see Rollout order).\n\n**Before merge (blocking, not yet done):**\n- Migration-only PR (gate on that PR, since migrations auto-run on merge to main): confirm the migration runner supports non-transactional files. I have not verified this. If it wraps files in a transaction, the deploy fails on `CREATE INDEX CONCURRENTLY`. In that case the index must be created out-of-band first (`CREATE INDEX CONCURRENTLY` by hand, then check `indisvalid`) and the migration dropped or converted to a verify-only check. That fallback is not implemented yet. If the runner turns out to wrap files in a transaction, I will implement it in the migration-only PR before that PR merges.\n- Migration-only PR: the index drop is no longer unconditional. Before building, check `pg_index` for an existing `user_recipes_user_saved_idx` or an equivalent index. If a valid one exists, skip the migration, so a working index is never dropped and rebuilt over the 140M-row window. Only an existing INVALID index of that name may be dropped before a rebuild.\n- Confirm the type of `user_recipes.id`. I have not verified it. The tests use text ids like `\"r5\"`, so they cannot catch a type mismatch. The cursor stringifies `id` on encode, so integer and uuid ids should round-trip, but this is untested against a non-text column.\n- Run `EXPLAIN (ANALYZE, BUFFERS)` for a 200k+ saved-recipe user, with the index present, on three queries: the cursor query, the first-page query, and the legacy path at `offset=10000`. Compare each to the 300ms p99 budget. No measurement has been made yet, so the cost claims below are expectations, not results. If the `offset=10000` query is over budget, lower `MAX_LEGACY_OFFSET` before merge.\n- Check existing request logs for `offset` traffic above 10000 and for which clients never send `cursor`, to size the population affected by the offset cap below.\n- Rehearse the index build on a snapshot or staging copy of the ~140M-row table to get a real build duration. I have no estimate yet.\n\n**Rollout order (decided):** the index must exist and be valid before the cursor code takes traffic. We will not accept the temporary slowness for large users. The migration goes out first as its own migration-only PR. After it deploys, confirm `indisvalid` in production, then merge this code PR. This PR will be rebased onto that once it lands.\n\n1. `GET /api/recipes/saved` moves from offset to keyset (cursor) pagination, because offsets drifted when users saved recipes while scrolling.\n   - Pagination happens in SQL: `WHERE (saved_at, id) < (cursor)` with `LIMIT n+1`. With the new index in place, I expect cost per page to depend on the page size, not the user's total saved count. This is unmeasured (see the blocking list). The cursor query and the first-page query are separate statements, so the keyset predicate is a plain row comparison with no `$n IS NULL OR ...` construct that could keep the planner off the index.\n   - Results stay correct without the index but can be slow for large users, which is why the rollout order above puts the index first.\n   - The cursor is an opaque token encoding `(saved_at, id)`, with `id` always serialized as a string. A cursor for a recipe that was since unsaved still works, because it is a position rather than a row lookup.\n   - A malformed cursor returns 400 instead of silently restarting at page one. That includes a well-formed token whose `t` is not a valid timestamp: `t` is checked against a timestamp pattern when decoding, and any Postgres data-exception error (SQLSTATE class 22) from a bad cursor value is also mapped to 400, so a bad cursor does not produce a 500. A repeated `cursor` parameter (array or object in `req.query`) is also rejected with 400 rather than being treated as absent.\n   - The `id` cursor parameter is left uncast, so Postgres infers its type from `user_recipes.id` and uses the column's native ordering. Text, uuid and integer ids are expected to compare correctly this way, since the cursor carries the id as a string and Postgres parses it to the column type. A value that does not fit the column type is rejected with 400 via the error mapping above. The column's actual type is still to be confirmed (see the blocking list).\n   - Legacy `offset` is still honored when no `cursor` is sent, so existing clients keep working up to the cap below. It is deprecated. `nextCursor` is returned in that case too, so clients can migrate. I have not verified every consumer sends `cursor`. Offset support stays until logs show no `offset` traffic. Each legacy-offset request (and each rejection) emits a structured `saved_legacy_offset` log line so we can see when it has drained.\n   - **Offset cap consequence:** `offset` above 10000 now returns 400 with a message pointing at `cursor`. It is no longer silently clamped, which would have made a legacy client paging past that point see repeated pages. Legacy clients ignore `nextCursor`, so a legacy client scrolling beyond 10000 items, which is possible for users with 200k+ saves, will get an error and cannot recover the rest of its list. So \"keep working\" holds only up to 10000 items. This is a deliberate trade-off for the deprecated path: the cap bounds the scan cost per request, and an uncapped offset would put the heaviest users over the latency budget. The population affected is sized by the log check in the blocking list before merge, and the rejection log line lets us find affected clients before removal. Offset queries scan and discard up to 10000 rows, a cost I have not measured; the `offset=10000` EXPLAIN in the blocking list covers it.\n   - The response shape is unchanged: the field is still `notes`.\n   - The supporting index on `(user_id, saved_at DESC, id DESC)`, built `CONCURRENTLY` as migration 0087, is no longer part of this PR. It ships in the migration-only PR described above, which keeps the non-transactional file, the `statement_timeout = 0` and `lock_timeout = '5s'` settings, and the final `indisvalid` check that fails the deploy loudly if the build leaves an invalid index. It no longer drops a valid existing index.\n\n2. Deferred: the `private_notes` rename. The earlier version added a new column and dropped `notes` with no copy, which would have destroyed user notes, and its down migration would have lost them again. It also dropped the column the previous release still selects, which breaks a rolling deploy. The follow-up will be staged:\n   - Ship code that reads and writes either column name.\n   - Run a single `ALTER TABLE ... RENAME COLUMN` (metadata-only, data preserved) in its own PR, with a verified backup or snapshot first and a manual approval gate rather than auto-run on merge.\n   - Switch the API field name to `private_notes` only with a coordinated client change.\n\ndiff --git a/server/routes/saved.ts b/server/routes/saved.ts\nindex 2c9f1ab..e7a50d3 100644\n--- a/server/routes/saved.ts\n+++ b/server/routes/saved.ts\n@@ -1,36 +1,110 @@\n import { Router } from \"express\";\n import { db } from \"../db\";\n import { requireUser } from \"../auth\";\n\n export const saved = Router();\n\n+type SavedRow = {\n+  id: string | number;\n+  recipe_id: string;\n+  title: string;\n+  saved_at: Date;\n+  saved_at_text: string;\n+  notes: string | null;\n+};\n+\n+// Postgres timestamptz text output, e.g. \"2026-10-27 12:00:00.123456+00\".\n+const TS_RE =\n+  /^\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}(:?\\d{2})?)?$/;\n+const MAX_LEGACY_OFFSET = 10000;\n+\n+function encodeCursor(row: SavedRow): string {\n+  // Always serialize id as a string: node-pg returns integer ids as numbers,\n+  // and decodeCursor only accepts strings. Postgres parses it back to the column type.\n+  return Buffer.from(\n+    JSON.stringify({ t: row.saved_at_text, id: String(row.id) }),\n+  ).toString(\"base64url\");\n+}\n+\n+function decodeCursor(raw: string): { t: string; id: string } | null {\n+  try {\n+    const v = JSON.parse(Buffer.from(raw, \"base64url\").toString(\"utf8\"));\n+    if (\n+      typeof v?.t === \"string\" &&\n+      TS_RE.test(v.t) &&\n+      typeof v?.id === \"string\" &&\n+      v.id.length > 0 &&\n+      v.id.length <= 128\n+    ) {\n+      return { t: v.t, id: v.id };\n+    }\n+  } catch {\n+    // fall through\n+  }\n+  return null;\n+}\n+\n+const SELECT_BASE = `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at,\n+            ur.saved_at::text AS saved_at_text, ur.notes\n+       FROM user_recipes ur JOIN recipes r ON r.id = ur.recipe_id\n+      WHERE ur.user_id = $1`;\n+\n saved.get(\"/api/recipes/saved\", requireUser, async (req, res) => {\n   const userId = req.user!.id;\n-  const limit = Math.min(Number(req.query.limit) || 50, 100);\n-  const offset = Math.max(Number(req.query.offset) || 0, 0);\n-  const { rows } = await db.query(\n-    `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.notes\n-       FROM user_recipes ur JOIN recipes r ON r.id = ur.recipe_id\n-      WHERE ur.user_id = $1\n-      ORDER BY ur.saved_at DESC\n-      LIMIT $2 OFFSET $3`,\n-    [userId, limit, offset],\n-  );\n-  res.json({ items: rows });\n+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);\n+\n+  // A non-string cursor (e.g. repeated ?cursor=a&cursor=b) is rejected, never\n+  // treated as absent, so it cannot silently fall through to page one.\n+  const rawCursor = req.query.cursor;\n+  if (rawCursor !== undefined && typeof rawCursor !== \"string\") {\n+    res.status(400).json({ error: \"invalid cursor\" });\n+    return;\n+  }\n+\n+  let cursor: { t: string; id: string } | null = null;\n+  if (typeof rawCursor === \"string\" && rawCursor !== \"\") {\n+    cursor = decodeCursor(rawCursor);\n+    if (!cursor) {\n+      res.status(400).json({ error: \"invalid cursor\" });\n+      return;\n+    }\n+  }\n+\n+  // Deprecated: legacy offset, honored only when no cursor is supplied.\n+  // Over the cap is rejected loudly rather than clamped, so clients never\n+  // silently receive the wrong page.\n+  let legacyOffset = 0;\n+  if (!cursor) {\n+    legacyOffset = Math.max(Number(req.query.offset) || 0, 0);\n+    if (legacyOffset > 0) {\n+      // Usage signal: remove offset support once this stops appearing.\n+      console.info(\n+        JSON.stringify({\n+          event: \"saved_legacy_offset\",\n+          offset: legacyOffset,\n+          rejected: legacyOffset > MAX_LEGACY_OFFSET,\n+        }),\n+      );\n+    }\n+    if (legacyOffset > MAX_LEGACY_OFFSET) {\n+      res.status(400).json({\n+        error: `offset above ${MAX_LEGACY_OFFSET} is not supported; use cursor`,\n+      });\n+      return;\n+    }\n+  }\n+\n+  let rows: SavedRow[];\n+  try {\n+    const result = cursor\n+      ? await db.query<SavedRow>(\n+          `${SELECT_BASE}\n+            AND (ur.saved_at, ur.id) < ($2::timestamptz, $3)\n+          ORDER BY ur.saved_at DESC, ur.id DESC\n+          LIMIT $4`,\n+          [userId, cursor.t, cursor.id, limit + 1],\n+        )\n+      : await db.query<SavedRow>(\n+          `${SELECT_BASE}\n+          ORDER BY ur.saved_at DESC, ur.id DESC\n+          LIMIT $2 OFFSET $3`,\n+          [userId, limit + 1, legacyOffset],\n+        );\n+    rows = result.rows;\n+  } catch (err: any) {\n+    // SQLSTATE class 22 = data exception (e.g. invalid timestamp/uuid/integer text).\n+    if (cursor && typeof err?.code === \"string\" && err.code.startsWith(\"22\")) {\n+      res.status(400).json({ error: \"invalid cursor\" });\n+      return;\n+    }\n+    throw err;\n+  }\n+\n+  const hasMore = rows.length > limit;\n+  const page = hasMore ? rows.slice(0, limit) : rows;\n+  const nextCursor = hasMore ? encodeCursor(page[page.length - 1]) : null;\n+\n+  res.json({\n+    items: page.map(({ saved_at_text, ...item }) => item),\n+    nextCursor,\n+  });\n });\ndiff --git a/server/routes/saved.test.ts b/server/routes/saved.test.ts\nindex 91d0c3e..4b7f2a1 100644\n--- a/server/routes/saved.test.ts\n+++ b/server/routes/saved.test.ts\n@@ -12,9 +12,64 @@ describe(\"GET /api/recipes/saved\", () => {\n-  it(\"pages with offset\", async () => {\n-    const a = await get(\"/api/recipes/saved?limit=2&offset=0\");\n-    const b = await get(\"/api/recipes/saved?limit=2&offset=2\");\n-    expect(a.items.map((i) => i.id)).toEqual([\"r5\", \"r4\"]);\n-    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n+  it(\"pages with cursor\", async () => {\n+    const a = await get(\"/api/recipes/saved?limit=2\");\n+    expect(a.items.map((i) => i.id)).toEqual([\"r5\", \"r4\"]);\n+    const b = await get(`/api/recipes/saved?limit=2&cursor=${a.nextCursor}`);\n+    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n+    const c = await get(`/api/recipes/saved?limit=2&cursor=${b.nextCursor}`);\n+    expect(c.items.map((i) => i.id)).toEqual([\"r1\"]);\n+    expect(c.nextCursor).toBeNull();\n+  });\n+\n+  it(\"breaks saved_at ties by id across a page boundary without skips or repeats\", async () => {\n+    // r3, r2 and r1 share one saved_at; r5 and r4 are newer. With limit=3 the\n+    // page boundary falls inside the tied group, so only the id comparison in\n+    // (saved_at, id) < (cursor) separates the pages. setSavedAt restores the\n+    // original fixture timestamps after the test.\n+    await setSavedAt([\"r3\", \"r2\", \"r1\"], \"2026-01-01T00:00:00.000Z\");\n+    const a = await get(\"/api/recipes/saved?limit=2\");\n+    expect(a.items.map((i) => i.id)).toEqual([\"r5\", \"r4\"]);\n+    const b = await get(`/api/recipes/saved?limit=2&cursor=${a.nextCursor}`);\n+    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n+    const c = await get(`/api/recipes/saved?limit=2&cursor=${b.nextCursor}`);\n+    expect(c.items.map((i) => i.id)).toEqual([\"r1\"]);\n+    expect(c.nextCursor).toBeNull();\n+\n+    const x = await get(\"/api/recipes/saved?limit=3\");\n+    expect(x.items.map((i) => i.id)).toEqual([\"r5\", \"r4\", \"r3\"]);\n+    const y = await get(`/api/recipes/saved?limit=3&cursor=${x.nextCursor}`);\n+    expect(y.items.map((i) => i.id)).toEqual([\"r2\", \"r1\"]);\n+    expect(y.nextCursor).toBeNull();\n+  });\n+\n+  it(\"still returns notes under the existing key\", async () => {\n+    const a = await get(\"/api/recipes/saved?limit=1\");\n+    expect(a.items[0]).toHaveProperty(\"notes\");\n+    expect(a.items[0]).not.toHaveProperty(\"saved_at_text\");\n+  });\n+\n+  it(\"rejects a malformed cursor with 400\", async () => {\n+    const res = await getRaw(\"/api/recipes/saved?cursor=not-a-cursor\");\n+    expect(res.status).toBe(400);\n+  });\n+\n+  it(\"rejects a repeated cursor parameter with 400 instead of restarting\", async () => {\n+    const a = await get(\"/api/recipes/saved?limit=2\");\n+    const res = await getRaw(\n+      `/api/recipes/saved?limit=2&cursor=${a.nextCursor}&cursor=${a.nextCursor}`,\n+    );\n+    expect(res.status).toBe(400);\n+  });\n+\n+  it(\"rejects a well-formed cursor with a non-timestamp t with 400\", async () => {\n+    const bad = Buffer.from(JSON.stringify({ t: \"garbage\", id: \"r1\" })).toString(\"base64url\");\n+    const res = await getRaw(`/api/recipes/saved?cursor=${bad}`);\n+    expect(res.status).toBe(400);\n+  });\n+\n+  it(\"survives the cursor row being unsaved between pages\", async () => {\n+    const a = await get(\"/api/recipes/saved?limit=2\");\n+    await unsave(\"r4\");\n+    const b = await get(`/api/recipes/saved?limit=2&cursor=${a.nextCursor}`);\n+    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n+  });\n+\n+  it(\"honors legacy offset when no cursor is sent\", async () => {\n+    const b = await get(\"/api/recipes/saved?limit=2&offset=2\");\n+    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n+  });\n+\n+  it(\"rejects legacy offset above the cap with 400 instead of clamping\", async () => {\n+    const res = await getRaw(\"/api/recipes/saved?limit=2&offset=10001\");\n+    expect(res.status).toBe(400);\n   });\n });",
+ "fixerUsage": {
+  "calls": 4,
+  "tokIn": 24714,
+  "tokOut": 29485,
+  "usd": 0.39369000000000004,
+  "critMs": 179729
+ },
+ "status": "cleared"
+}

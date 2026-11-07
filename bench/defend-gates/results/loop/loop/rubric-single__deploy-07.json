@@ -1,0 +1,995 @@
+{
+ "approach": "rubric-single",
+ "case": "deploy-07",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "Auto-discovery loads and executes any package in node_modules that declares the `tasq-plugin` keyword, with no allowlist, consent step, or version pin. Any transitive dependency, including one pulled in by a compromised upstream, becomes code running inside every `tasq run`, `tasq lint-staged` and CI invocation. The removed `plugins` array was the explicit consent point.",
+     "evidence": "\"Any installed package with the `tasq-plugin` keyword is picked up automatically. No more `plugins: [...]` array\" and \"loads the ones whose `keywords` include `tasq-plugin`\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Plugin discovery runs on every invocation, including git pre-commit hooks and CI, which the docs recommend. A checked-out repo or workspace with a planted node_modules package carrying the keyword gets executed before argument parsing, so the attack surface extends to any clone-and-run workflow.",
+     "evidence": "\"Discovery runs before argument parsing so that plugins can register subcommands.\" and \"`tasq lint-staged`\" listed among discovery triggers"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The discovery glob `**/node_modules/**/package.json` walks every nested node_modules tree on every invocation. Measured cost is 17x for `--version` and 6x for `lint-staged` on a 2,430-package repo, so 10x-100x larger monorepos will be far slower with no caching or memoization of discovery.",
+     "evidence": "\"`tasq --version` | 0.11 s | 1.94 s\" and \"`tasq lint-staged` (3 staged files) | 0.38 s | 2.31 s\" with \"2,430 installed packages\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The artifact contradicts itself on performance. It says discovery becomes negligible relative to build work, yet the cache-hit row, where build work is by definition skipped, goes from 0.21 s to 2.02 s. The headline claim of under 50 ms for cache hits is not supported by any row in the table.",
+     "evidence": "\"Discovery is a fixed per-invocation cost and becomes negligible relative to real build work\" vs \"`tasq run build` (cache hit) | 0.21 s | 2.02 s\" and \"completes in under 50 ms of task time\""
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "CI minutes and pre-commit latency rise roughly 6x-10x per invocation for the documented hook and CI commands. No cost or CI-minute analysis is provided, and `tasq watch` restarts repeat the full discovery.",
+     "evidence": "ABSENT: any CI or developer-time cost estimate; \"`tasq watch` restarts\" listed as discovery triggers"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "major",
+     "claim": "Every git commit now waits about 2.3 s for lint-staged on a large repo, versus 0.38 s previously. This friction lands on every developer on every commit and is not addressed by the plan.",
+     "evidence": "\"`tasq lint-staged` (3 staged files) | 0.38 s | 2.31 s\" and \"Discovery is a fixed per-invocation cost\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The sample discovery code is inconsistent. It reads `join(root, pkgJson)` but stores `dir: dirname(pkgJson)` relative to root, so consumers get a path that is not usable on its own. `JSON.parse` has no try/catch, so one malformed package.json in node_modules crashes every invocation. The glob also uses a library call not matching the stated `fast-glob` dependency.",
+     "evidence": "\"const pkg = JSON.parse(await readFile(join(root, pkgJson), \"utf8\"));\" and \"found.push({ name: pkg.name, dir: dirname(pkgJson) });\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "A single malformed or unreadable package.json, or any plugin that throws on load, can break every tasq command, including `--version` and CI runs. The artifact specifies no error isolation, timeout, or fallback for discovery or plugin loading.",
+     "evidence": "ABSENT: error handling, timeouts, or per-plugin isolation in discover.ts; \"Discovery runs before argument parsing\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Yarn PnP and other non-node_modules layouts are not handled by a discovery routine that walks node_modules. The migration note says two Yarn PnP projects need manual edits, but the plugin discovery design gives no mechanism for them, so plugins may silently fail to load there.",
+     "evidence": "\"2 needed manual edits (documented)\" and \"Yarn PnP projects\" vs \"the CLI walks `node_modules`\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Plugins that lack the keyword are silently dropped. `tasq-migrate` deletes the `plugins` array and installs nothing, so users lose functionality without any error or warning, and that loss is not reversible by reinstalling the old config.",
+     "evidence": "\"`plugins` array in config ignored | Auto-discovery replaces it; `tasq-migrate` removes the array and installs nothing new\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The blog post, changelog, and Discord announcement go live at publish, while `latest` is only promoted after 7 days. Users who follow the announcement and install will get 2.9.4, while the announced 3.0.0 is still on `next`. The public announcement is also irreversible and runs before the soak gate that is supposed to catch P1s.",
+     "evidence": "\"Blog post and changelog go live at publish; Discord announcement links the migration guide\" vs \"promote to `latest` after 7 days with no P1 issues\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback path is a dist-tag repoint, which does not stop users who pinned or range-resolved to 3.x, does not revoke an already-executed malicious or buggy plugin path, and does not cover the case where 3.0.0 is the only version that resolves a security issue. The plan has no deprecation or advisory step.",
+     "evidence": "\"re-point `latest` to `2.9.4` (`npm dist-tag add tasq@2.9.4 latest`) and publish a fix as 3.0.1\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The task graph cache is keyed only on input file hashes. Environment variables, tool versions, config changes, and plugin code changes are not part of the key, so a cache hit can report success with stale outputs.",
+     "evidence": "\"Task graph caching keyed on input file hashes\" and ABSENT: cache key covering env, config, or plugin version"
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The pretty reporter output for `tasq lint-staged` changes format. Any human-facing tooling or docs that rely on the old output may break, and the artifact does not show a before/after sample.",
+     "evidence": "\"`tasq lint-staged` output format | JSON reporter unchanged; pretty reporter shows grouped output\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "Performance numbers come from one M2 MacBook Air with warm disk cache, not Linux or Windows, and not cold-disk runs. The QA results cover cross-platform tests but the performance claims do not, and the glob behavior on Windows is untested.",
+     "evidence": "\"M2 MacBook Air, warm disk cache\" vs \"pass on Linux/macOS/Windows\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3016,
+    "tokOut": 5079,
+    "usd": 0.0029730200000000003,
+    "critMs": 22567
+   },
+   "wallMs": 40027
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Discovery resolves each dependency via `${name}/package.json`. Packages whose `exports` map does not expose `./package.json` will throw under Node resolution, so those plugins are silently skipped with a warning, even though they are direct dependencies with the keyword.",
+     "evidence": "req.resolve(`${name}/package.json`); // absolute; PnP-aware"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The spec says discovery covers the root package.json and the current workspace package. The code reads only the root manifest, so workspace-package plugins are never found. This is a spec/implementation mismatch.",
+     "evidence": "Only packages named in `dependencies` and `devDependencies` of the root `package.json` and of the current workspace package are considered. ... const rootPkg = JSON.parse(await readFile(join(root, \"package.json\"), \"utf8\"));"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The trust gate is central to the security story, but the shown discovery function performs no lock lookup and no integrity check. It returns every keyword match. How integrity is computed and compared is not specified. The security tests that would verify this are listed as not yet done.",
+     "evidence": "return { found, warnings }; ... ABSENT: lock matching and integrity verification in the discovery path; 'Security tests: an untrusted keyword package and a transitive keyword package are not loaded; a lock integrity mismatch is rejected.' (not yet done)"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The discovery cache lives in node_modules/.cache and is keyed on root package.json, the lockfile and tasq-plugins.lock. It is not keyed on the explicit plugins array in tasq.config.ts. A changed config may therefore reuse a stale approval set, and the artifact does not state that a cache hit re-runs the trust check.",
+     "evidence": "The discovery result is cached in `node_modules/.cache/tasq/plugins.json`, keyed on the hash of the root `package.json`, the lockfile and `tasq-plugins.lock`."
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The performance gates assume built-in commands skip discovery. But once a repo has a committed tasq-plugins.lock, which is the normal state after adopting the trust model, built-ins wait on discovery. The measured gates therefore may not reflect the path users actually run.",
+     "evidence": "Built-in commands (`--version`, `--help`, `run`, `lint-staged`, `list`, `watch`) are parsed first and do not wait on discovery unless the config or lock references plugins."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "All performance gates for 3.0.0 are unmeasured on rc.3. The cache-hit target of 0.30 s includes input hashing and plugin integrity checks that have no prototype or measurement in the artifact. The publish date is fixed while the gate evidence is pending.",
+     "evidence": "Target: a cache-hit `tasq run build` completes in ≤ 0.30 s ... rc.3 numbers will be added to #1840 and this table before publish. ABSENT: any rc.3 or prototype measurement of the cache-hit path with integrity checks."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The Highlights call discovery 'Zero-config', but the breaking-changes table and the trust section require a manual `tasq plugins trust` step before plugins load. The release headline 'plugins for everyone' inherits the same overclaim. The contradiction is internal to the artifact.",
+     "evidence": "**Zero-config plugin discovery with a trust lock.** ... Run `tasq plugins trust` once; approvals are recorded in a committed `tasq-plugins.lock`"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "In non-TTY contexts (pre-commit hooks, CI), unapproved plugins are skipped with only a warning, and the command still exits successfully unless --strict is passed. Upgraded projects can therefore pass lint-staged or run while silently missing plugin checks, and the default offers no failure signal.",
+     "evidence": "Unapproved plugins are skipped with a warning ... In non-TTY contexts (CI, hooks) it never prompts, and `--strict` turns skipped plugins into a failure."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback plan re-points latest to 2.9.4, but it does not address projects already migrated by tasq-migrate or repos that committed tasq-plugins.lock. No tested downgrade path restores 2.x-compatible config or CommonJS require calls.",
+     "evidence": "`npx tasq-migrate` rewrites config files and `require` calls ... ABSENT: a tested downgrade procedure for migrated repos or lock files after rolling back to 2.9.4."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Promotion of an ESM-only, breaking release to latest is gated on 'no P1 issues', which is undefined. The migration tool was tested on 40 repos, and the package has about 180k weekly downloads, so unpinned installs will receive breaking changes with no defined severity threshold or canary.",
+     "evidence": "Promote to `latest` after 7 days with no P1 issues (earliest 2026-11-19)."
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 'top 15 community plugins load' result was obtained before the trust requirement existed. It is presented under QA results and does not validate the shipped trust model.",
+     "evidence": "Smoke test of top 15 community plugins under discovery: all load and register subcommands (on rc.2, before the trust requirement; to be re-run on rc.3 with trust entries)."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The root package.json is parsed outside any try block, so a malformed root manifest crashes discovery. This is inconsistent with the stated fault-isolation behaviour.",
+     "evidence": "const rootPkg = JSON.parse(await readFile(join(root, \"package.json\"), \"utf8\")); (outside the try/catch)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The regression multiplier is understated. 1.94/0.11 is about 17.6x, not 17x, so the range is slightly misreported.",
+     "evidence": "rc.2 is a regression of 6x–17x on every short command."
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The CI-minute cost of the shipped gates is not computed. The only cost figures come from rc.2 numbers, and the artifact defers the calculation.",
+     "evidence": "The CI minute estimate will be re-computed from rc.3 numbers and posted in #1840."
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Scaling is tested on a single 61-workspace, 2,430-package monorepo. Behaviour at 10x to 100x workspaces or installed packages, including input-hashing cost on the cache-hit path, is unmeasured.",
+     "evidence": "reference monorepo: 61 workspaces, 2,430 installed packages, M2 MacBook Air, warm disk cache"
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "Publishing and provenance depend on GitHub Actions and the npm registry. The artifact states no exit path or fallback for publishing if either vendor is unavailable.",
+     "evidence": "Published from GitHub Actions with npm provenance (`--provenance`)"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "Every version bump of a trusted plugin changes its integrity and causes it to be skipped until re-approved. The artifact does not describe an update-and-retrust flow, so routine dependency updates cause silent plugin loss.",
+     "evidence": "A discovered plugin loads only if ... has a matching entry in `tasq-plugins.lock` (version and integrity must match). ABSENT: documented re-approval step after an update."
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The pretty reporter and the trust-approval prompt are described only in prose. There is no sample output, so the displayed text cannot be reviewed before release.",
+     "evidence": "pretty reporter shows grouped output ... ABSENT: sample pretty-reporter output and trust-prompt text."
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "No accessibility considerations are stated for the new grouped pretty-reporter output or the interactive trust prompt, such as screen-reader-friendly plain-text mode or non-colour grouping.",
+     "evidence": "ABSENT: any accessibility note for the pretty reporter or the TTY approval prompt."
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The license scan result is asserted without a report or tool version, so the 'no copyleft' claim cannot be verified from the artifact.",
+     "evidence": "License scan: no copyleft dependencies. ABSENT: scan report or tool and version."
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Trust is granted by committing tasq-plugins.lock. A malicious PR can add a keyword dependency and a matching lock entry together. The artifact gives no reviewer guidance for checking lock diffs.",
+     "evidence": "approvals are recorded in a committed `tasq-plugins.lock` (name, version, integrity). ABSENT: reviewer guidance for lock-file changes in PRs."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The cache-key test list mixes task-cache keys (env vars, Node version) with the discovery cache, whose documented key does not include them. The two cache designs are inconsistent and the tests may not match the implementation.",
+     "evidence": "Cache-key tests: changing an env var, the config, the Node version or a plugin version produces a cache miss. vs. discovery cache 'keyed on the hash of the root package.json, the lockfile and tasq-plugins.lock'."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Discovery is cached for `tasq watch` sessions at startup. Plugins installed or trusted during a watch session are not picked up until restart, and the artifact does not mention this.",
+     "evidence": "`tasq watch` restarts reuse the cache."
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "No personal data collection or telemetry is described. The artifact reads only package.json metadata. Nothing gate-blocking was found.",
+     "evidence": "n/a: discovery reads package.json name, version, keywords and dependency names only"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The rc.3 gate and the fixed 2026-11-12 publish date create schedule pressure. There is no stated decision rule for a partial miss, such as one performance gate failing by a small margin.",
+     "evidence": "If any gate is missed, 3.0.0 does not ship. ... Publish: Thu 2026-11-12 (`next` dist-tag)"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5184,
+    "tokOut": 13331,
+    "usd": 0.00753262,
+    "critMs": 62282
+   },
+   "wallMs": 121220
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The artifact states that required QA is not done and that rc.2 misses the performance gates. npm versions are immutable once published, so publishing 3.0.0 before these pass is a one-way action. The stated publish date also conflicts with the rule that the date does not override the gates.",
+     "evidence": "\"**Required before publish (not yet done):**\" and \"rc.3 numbers ... none exist yet\" and \"The 2026-11-12 date moves if the gates are not met\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The trust step is said to check integrity, but discovery never reads or returns an integrity value, and the artifact does not say where the installed package's integrity comes from. A package on disk with a matching name and version but different contents would pass the check, so the integrity gate does not verify what executes.",
+     "evidence": "candidates.push({ name: pkg.name, version: pkg.version, dir: dirname(pkgPath) }) with no integrity field, alongside \"version and integrity must both match the lock entry\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The fault-handling claim is contradicted by the code. The manifest read for root and workspace sits outside any try/catch, so a malformed root or workspace package.json throws out of discoverPlugins and can break run and lint-staged, which the artifact says must not happen.",
+     "evidence": "for (const dir of new Set([rootDir, workspaceDir])) { const m = JSON.parse(await readFile(join(dir, \"package.json\"), \"utf8\")); ... } versus \"A malformed package.json ... does not break --version, run or lint-staged\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "A 5 s timeout cannot interrupt a synchronous hang in the same JS thread, so the 'hanging plugin' isolation claim does not hold for CPU-bound plugins. Even when it works, each hanging plugin adds up to 5 s to every hook or CI invocation.",
+     "evidence": "\"Each plugin loads in its own try/catch with a 5 s timeout. A malformed package.json or a plugin that throws or hangs is reported as a failed plugin\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Every upgraded repo with an unapproved keyword plugin will exit non-zero in CI and git hooks by default, and the artifact does not say whether tasq-migrate or the upgrade runs trust for them. This is a silent-to-loud default change affecting existing users of the 180k-weekly package.",
+     "evidence": "\"in non-TTY contexts (CI, hooks) the command exits non-zero by default\" with no statement that migration performs approval"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "major",
+     "claim": "Upgrading requires a manual approval step per keyword plugin, committed to git, before commit hooks and CI pass again. The artifact does not describe a path that avoids a red build for existing users.",
+     "evidence": "\"Run `tasq plugins trust` once; approvals are recorded in a committed `tasq-plugins.lock`\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The plugin smoke test was run on rc.2, before the trust requirement and before the discovery rewrite, so it does not validate the 3.0.0 design. The claim that all plugins load is not supported for the shipped path.",
+     "evidence": "\"all load and register subcommands (on rc.2, before the trust requirement; to be re-run on rc.3 with trust entries)\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The two migration repos needing manual edits are dismissed as config-only, but both are Yarn PnP projects, and the PnP discovery fixture is listed as not done. The dismissal is unsupported and may hide a plugin-loading failure.",
+     "evidence": "\"2 manual (Yarn PnP projects, documented). These two cases concern config rewriting, not plugin loading.\" versus \"Yarn PnP and pnpm fixtures: a plugin is discovered, trusted and loaded\" (not yet done)"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback path depends on an untested downgrade. It assumes 2.x ignores tasq-plugins.lock and that a backup exists, and repos without a backup fall back to manual steps. None of this is verified.",
+     "evidence": "\"Downgrade test: a repo migrated with tasq-migrate ... installs and runs on 2.9.4\" (not yet done) and \"Repos without a backup follow the manual steps in the guide\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The control flow is inconsistent. Discovery is said to be skipped for list, so plugin-registered tasks may be missing from list output, and the wording about when discovery runs before parsing conflicts with the statement that run and lint-staged wait on discovery.",
+     "evidence": "\"Discovery is consulted before parsing only when the first argument is not a built-in subcommand\" versus \"Discovery and the trust check are skipped for --version, --help and list\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "CI cost impact is deferred. The per-invocation CI cost is estimated but the minute budget is not computed, and the figure will only be posted after rc.3.",
+     "evidence": "\"The CI minute estimate will be re-computed from rc.3 numbers and posted in #1840.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The license claim has no supporting scan output or dependency list in the artifact.",
+     "evidence": "\"License scan: no copyleft dependencies.\" with no scan report referenced"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "Node 20 is end-of-life as of April 2026, yet the artifact sets engines >=20 and tests on Node 20. This is inconsistent with the Node 18 EOL rationale used to drop 18.",
+     "evidence": "\"Node 18 is EOL since April 2025; `engines` field enforces `>=20`\" and \"Node 20 and 22\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The artifact does not state the user problem that keyword discovery plus approval solves, so the value of adding approval friction to every keyword plugin is not argued.",
+     "evidence": "ABSENT: a stated user problem or user research motivating keyword-based discovery"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "A single major release bundles ESM-only, a Node floor change, a discovery rewrite, a new trust lock, and task caching. This increases breakage surface and the backport burden on 2.x.",
+     "evidence": "\"ESM-only, Node 20+\" alongside the discovery, trust, and caching sections and \"Any security fix shipped in 3.x is also backported to 2.x\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "No material issue found. The lock and cache hold package names, versions and local paths only.",
+     "evidence": "ABSENT: no personal data collection or telemetry described"
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "No material issue found beyond npm registry and GitHub Actions dependence for publishing, which is common for npm packages.",
+     "evidence": "\"Published from GitHub Actions with npm provenance\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "No material issue found. The artifact does not describe accessibility of the pretty reporter output, and this is not a gate blocker.",
+     "evidence": "ABSENT: no accessibility statement for \"pretty reporter shows grouped output\""
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "No material issue found. The new grouped pretty-reporter output is not shown in a sample, so rendering cannot be checked from the artifact.",
+     "evidence": "\"pretty reporter shows grouped output\" with no sample"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "No material issue found. Discovery is scoped to direct dependencies and cached, but the artifact does not bound the number of keyword plugins loaded per run.",
+     "evidence": "ABSENT: a bound on the number of discovered or loaded plugins"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The 10-developer-day cost figure is arithmetically consistent, but it is labelled illustrative and not tied to measured team data.",
+     "evidence": "\"Illustratively, a 50-developer team making 10 commits a day would wait about 16 extra minutes per day\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 6948,
+    "tokOut": 12613,
+    "usd": 0.007526419999999999,
+    "critMs": 57290
+   },
+   "wallMs": 78312
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The proposal asks to cross into an irreversible npm publish while every rc.3 performance gate and every required QA item is still unmet. No rc.3 build or measurement exists yet.",
+     "evidence": "rc.3 numbers will be added to #1840 and this table before publish; none exist yet, including for the cache-hit path with input hashing and integrity checks"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Any version bump of an already-approved plugin changes its version, so the candidate no longer matches its tasq-plugins.lock entry. In a repo with a lock this becomes a non-zero exit in non-TTY runs (CI, hooks) until someone re-runs trust. Dependabot-style updates would turn CI red with no mitigation described.",
+     "evidence": "Version and integrity must both match the tasq-plugins.lock entry, and a mismatch is rejected ... it exits non-zero by default when a discovered plugin is unapproved or fails to load"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Candidates with no registry integrity, such as workspace-protocol, file:, link: or git dependencies, can never match a lock entry. In a repo that has a lock they cause permanent non-zero exits, and the artifact gives no path to approve them. The workspace fixture only tests discovery, not trust or loading.",
+     "evidence": "A candidate for which no lockfile integrity can be found cannot be matched against the lock and is not loaded ... Workspace fixture: a plugin declared only in the workspace package's manifest is discovered."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The upgrade claim that upgrading alone cannot turn CI or hooks red is contradicted by the rule that explicitly listed plugins that fail to load always exit non-zero, with no lock required. That behaviour change is not in the upgrade test.",
+     "evidence": "upgrading alone cannot turn an existing repo's CI or hooks red ... Plugins explicitly listed in the plugins array that fail to load also exit non-zero"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The 'trust lock' headline overstates what is verified. Integrity comes from the same repo's package-lock, the lock file is committed and can be changed in the same PR that adds the dependency, and on-disk files are not re-hashed. A modified approved plugin still loads. The blog title promises a trust lock without this caveat.",
+     "evidence": "tasq does not re-hash package files on disk ... Modified files under an unchanged name and version are therefore out of scope for this check ... Blog: 'tasq 3: plugins with a trust lock'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The JSON reporter is claimed unchanged, but in repos without a lock the new unapproved-plugin warnings are emitted with no stated stream. If they go to stdout they corrupt JSON consumers in CI and hooks.",
+     "evidence": "JSON reporter unchanged ... In a repo with no tasq-plugins.lock yet, unapproved keyword plugins only produce a warning and exit code 0"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The downgrade path, which is the only rollback for migrated repos, rests on unverified assumptions about 2.x: that it reads the plugins array unchanged, ignores the lock, and that --revert works. The no-backup case is manual and untested.",
+     "evidence": "provisional until the downgrade test above passes ... The procedure's assumptions (2.x reads the plugins array unchanged, ignores tasq-plugins.lock without breaking, and --revert restores from the backup) are unverified"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 1,912-test figure is not tied to the rc build that contains the new discovery and trust code. The plugin smoke test is admitted to be historical, so the QA summary overstates current coverage.",
+     "evidence": "Unit + integration: 1,912 tests pass on Linux/macOS/Windows, Node 20 and 22."
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "All performance evidence comes from one 61-workspace, 2,430-package repo. The cache-hit path hashes every root and workspace package.json and the full lockfile on every run, and no larger fixture is measured.",
+     "evidence": "reference monorepo: 61 workspaces, 2,430 installed packages, M2 MacBook Air, warm disk cache"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A plugin that blocks synchronously, for example an infinite loop at import time, has no timeout. A pre-commit hook or CI job can hang until an external kill.",
+     "evidence": "an in-process timer cannot interrupt a plugin that blocks the JavaScript thread synchronously"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "CI-minute cost of the release is unquantified in the proposal. The per-invocation plugin timeout can add up to 5 s, and no budget figure is given.",
+     "evidence": "The CI minute estimate will be re-computed from rc.3 numbers and posted in #1840."
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "The upgrade requires a multi-step manual sequence. Approval is interactive only, and non-TTY CI cannot approve, so a lock must be created locally first.",
+     "evidence": "upgrade, run tasq-migrate, review the listed candidates, run tasq plugins trust --all, commit the lock"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "tasq plugins trust --all approves every discovered candidate in one pass, which encourages blind approval. The artifact does not say how this behaves in non-TTY mode.",
+     "evidence": "tasq plugins trust --all to review and approve every discovered candidate in one interactive pass"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The trust step matches only name, version and integrity, but the loaded directory is carried in the discovery cache and not re-checked.",
+     "evidence": "allow if listed in config plugins, or if tasq-plugins.lock has an entry with the same name, version and integrity"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Trust logic is only a comment and readLockfileIntegrity is only a declaration, so the design is not yet implementable or testable as written.",
+     "evidence": "// src/plugins/trust.ts ... Everything else is returned as skipped. and declare function readLockfileIntegrity"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The license scan and no-postinstall claims have no tool, date or evidence attached.",
+     "evidence": "License scan: no copyleft dependencies. and No postinstall scripts in tasq or its dependencies."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Whether .tasq-migrate-backup/ is committed or gitignored is unspecified. If it is absent or ignored, --revert cannot restore the pre-migration state.",
+     "evidence": "which restores the pre-migration config and require calls from the backup (.tasq-migrate-backup/) that tasq-migrate writes on every run"
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "Distribution depends on the single npm registry and GitHub Actions with npm provenance, with no documented fallback or mirror path. Exit cost is not discussed.",
+     "evidence": "Published from GitHub Actions with npm provenance (--provenance)"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The headline promises automatic discovery, but a mandatory approval step is required. The marketing framing may mislead users about what they must do.",
+     "evidence": "Automatic plugin discovery with a trust lock (one-time approval)"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "No gate-worthy privacy issue found. Discovery is local-only and performs no data egress.",
+     "evidence": "Discovery reads local package.json manifests only; no network or telemetry is described."
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "No gate-worthy UI issue shown, but the pretty reporter and trust prompt have no sample output to review.",
+     "evidence": "pretty reporter shows grouped output"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "Accessibility of the new interactive trust prompt and the grouped pretty output (colour, NO_COLOR, screen readers) is not addressed.",
+     "evidence": "In an interactive TTY, tasq prints how to approve it."
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "No other gate-worthy issue beyond the above.",
+     "evidence": "ABSENT: no further gate-worthy issue identified in the artifact text."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 9022,
+    "tokOut": 16004,
+    "usd": 0.009636720000000001,
+    "critMs": 72086
+   },
+   "wallMs": 103731
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The central redesign (scoped discovery plus caching) is asserted to fix the rc.2 regression, but no rc.3 or prototype measurement exists, so the causal claim is unprototyped.",
+     "evidence": "\"rc.2 discovery cost grew with installed package count, which is why discovery is now scoped to direct dependencies and cached.\" and \"rc.3 numbers will be added to #1840 and this table before publish; none exist yet\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The rollback/downgrade path is documented as implemented and tested on rc.3, but rc.3 has not been built or tested, so this is a present-tense claim about a future result.",
+     "evidence": "\"`npx tasq-migrate --revert` ... (implemented and tested on rc.3)\" versus \"Downgrade test ... The procedure's assumptions ... are unverified until this test passes.\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The cache stores a candidate's `dir`, and the trust step checks only name, version and integrity. A poisoned or stale cache entry can point a lock-matching name and version at a planted directory, which contradicts the claim that a planted package does not execute.",
+     "evidence": "\"The cache stores only discovery candidates, not approvals\" with code \"dir: dirname(pkgPath),\" and \"A planted package in `node_modules` that is not in the committed lock does not execute.\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "For workspace, file and link plugins, approval covers identity only and the files stay mutable. Once approved, edited plugin code runs in non-TTY runs with no new review, which conflicts with the stated purpose of the lock as a review gate.",
+     "evidence": "\"For `workspace`, `file` and `link` sources the files are mutable by nature, so the approval covers identity only, and the docs say so.\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Plugins listed in the `plugins` array bypass version and integrity checks entirely, so a version bump of a listed plugin runs new code without review. This contradicts the rule that a version bump is \"exactly the moment to review new plugin code\".",
+     "evidence": "\"`plugins` array in config | **Still honored** as explicit consent.\" versus \"a version bump is exactly the moment to review new plugin code\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The task cache key uses plugin name, version and integrity, but for workspace, file and link plugins the version does not change when code changes and no integrity exists. This can produce a stale or wrong cache hit, which the proposal itself defines as P1.",
+     "evidence": "\"the name, version and integrity of every loaded plugin\"; P1 includes \"data loss or a wrong cache hit\"; ABSENT: whether source-kind plugins contribute content hashes to the task cache key."
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The performance baseline is not like-for-like: 2.9.4 has no trust step, while the rc.3 gates are measured with a committed lock and a trusted plugin, so the comparison is skewed.",
+     "evidence": "\"gated with a committed `tasq-plugins.lock` and at least one trusted plugin\" versus the 2.9.4 column with no trust step."
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Performance is measured on one reference monorepo on one laptop with a warm disk cache. The CI cost claims rely on that setup, and no CI-runner or cold-cache measurement is given.",
+     "evidence": "\"(reference monorepo: 61 workspaces, 2,430 installed packages, M2 MacBook Air, warm disk cache)\" and \"The CI minute estimate will be re-computed from rc.3 numbers\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A synchronously blocking plugin has no timeout and can hang editor integrations and hooks indefinitely. The limitation is documented but not tested.",
+     "evidence": "\"Such a plugin blocks the command, as a hanging plugin would in 2.x; tasq does not claim to isolate it\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Every approved-plugin version bump fails CI in non-TTY mode, and the fix (`trust --update`) requires interactive per-package confirmation that bots cannot give. Each bump therefore needs manual maintainer action.",
+     "evidence": "\"`tasq plugins trust --update` ... after explicit confirmation per package, rewrites those lock entries\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Publishing an irreversible npm version is gated by one maintainer comment, with no enforced second reviewer or protected environment.",
+     "evidence": "\"Publishing requires a maintainer sign-off comment in #1840\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The rollback path (re-point latest to 2.9.4) assumes 2.9.4 tolerates a `tasq-plugins.lock` written by 3.x, which is unverified. Users who already committed the lock could be broken by the rollback.",
+     "evidence": "\"delete or ignore `tasq-plugins.lock`, which 2.x is expected not to read or break on\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The discovery cache key covers root and workspace package.json hashes but not which workspace is current, so a shared cache file could return the wrong candidate set when run from different workspaces.",
+     "evidence": "\"keyed on the hash of the root and workspace `package.json` files, the lockfile, `tasq-plugins.lock`, and the resolved `plugins` array\"; ABSENT: workspace identity in the cache key."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Discovery reads only dependencies and devDependencies, so a plugin declared under peerDependencies or optionalDependencies is silently never discovered, and this scope is not in the breaking-changes table.",
+     "evidence": "\"Only packages named in `dependencies` and `devDependencies` of the root `package.json`\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "Supply-chain and licence claims are asserted without any scan output or verification artifact.",
+     "evidence": "\"No `postinstall` scripts in tasq or its dependencies.\" and \"License scan: no copyleft dependencies.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 1,912-test pass claim does not state which build it applies to and does not show coverage of the new discovery and trust code, which is the changed surface.",
+     "evidence": "\"Unit + integration: 1,912 tests pass on Linux/macOS/Windows, Node 20 and 22.\"; ABSENT: rc identifier and coverage of discover.ts or trust.ts."
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "`readLockfileRef` is called once per keyword candidate and its implementation is unspecified, so the lockfile may be re-parsed per candidate in a 2,430-package tree.",
+     "evidence": "\"declare function readLockfileRef(\" and \"const ref = await readLockfileRef(rootDir, pkg.name, pkg.version);\" inside the loop"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Integrity lookup must handle three lockfile formats, but only a type declaration is given. Without the implementation spec, the logic is untestable as written.",
+     "evidence": "\"declare function readLockfileRef(\" with the comment covering \"package-lock.json, yarn.lock, pnpm-lock.yaml\""
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "Upgrading requires a five-step sequence, and the recommended bulk `trust --all` approves every candidate in one pass, which encourages approval fatigue.",
+     "evidence": "\"upgrade, run `tasq-migrate`, review the listed candidates, run `tasq plugins trust --all`, commit the lock.\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "Distribution depends on the npm registry and GitHub Actions with provenance, and the lock format ties users to npm, yarn and pnpm. The artifact does not address exit cost or alternative registries.",
+     "evidence": "\"Published from GitHub Actions with npm provenance (`--provenance`)\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "No gate-relevant issue: discovery reads only local manifests and makes no network calls.",
+     "evidence": "\"Discovery only produces candidates.\""
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "No gate-relevant issue found in the artifact text. Stderr routing of warnings is specified.",
+     "evidence": "\"All discovery, trust and plugin-load warnings and errors are written to stderr.\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "No gate-relevant issue found. The grouped pretty reporter is not specified in enough detail to assess, but that is not a gate blocker.",
+     "evidence": "\"pretty reporter shows grouped output\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "No gate-relevant issue beyond the unscanned licence claim already noted under evidence.",
+     "evidence": "\"Runtime deps: `fast-glob` (MIT), `semver` (ISC).\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The CI cost estimate is deferred to later and is not yet computed, so the cost of red CI runs from version bumps is unquantified.",
+     "evidence": "\"The CI minute estimate will be re-computed from rc.3 numbers and posted in #1840.\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "No additional gate-worthy issue beyond the attacks above. The publish gate correctly blocks until the required items are met.",
+     "evidence": "\"Approving this proposal approves the plan and the gates only; it does not authorize a publish.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 10887,
+    "tokOut": 16800,
+    "usd": 0.01040772,
+    "critMs": 74897
+   },
+   "wallMs": 96880
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The cache-hit performance gate is not yet met and has no measurement. rc.2 measured 2.02 s against a ≤0.30 s gate, and the redesign is a hypothesis with no prototype or rc.3 numbers. The release gate depends on these numbers, so the gate cannot be satisfied by the artifact as written.",
+     "evidence": "\"no rc.3 or prototype measurement exists yet, and the target includes input hashing, plugin content hashing and plugin integrity checks\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "The central performance claim is unvalidated. The artifact says rc.2 regression cause is a hypothesis that discovery cost dominates, with no profiling. If discovery is not the dominant cost, the redesign will not meet the gates and the plan has no fallback beyond delaying the date.",
+     "evidence": "\"This is a hypothesis, not a measured result: no rc.3 or prototype measurement exists, and rc.2 was not profiled to confirm that discovery is the dominant cost.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "Publishing to npm is irreversible, and the downgrade path that the release plan relies on is unbuilt and untested. The backup and revert mechanism does not exist, and 2.x's handling of the lock file and plugins array is assumed rather than verified. The artifact itself marks the downgrade procedure as provisional.",
+     "evidence": "\"**not yet implemented or tested; to be built and tested on rc.3 as part of the downgrade test above**\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Listed plugins in the `plugins` array bypass version and integrity checks entirely. A version bump of a listed plugin runs new code with no tasq-level review, and the trust boundary the lock is meant to provide does not cover this path.",
+     "evidence": "\"they bypass the version and integrity match, so a version bump of a listed plugin is not stopped by tasq\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Non-registry plugins (workspace, file, link) are approved by identity only, so later edits to their files execute with no re-review. The lock approval gives a false sense of coverage for these sources.",
+     "evidence": "\"for `workspace`, `file` and `link` plugins the lock approves identity (name, version, source) only; the plugin's files are mutable and later edits to them are not re-reviewed by the lock\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The lock is not tamper protection. A PR that changes both the dependency and the lock file can introduce an approved plugin, and the lock's integrity values come from the same project's package-manager lockfile. The plan's only control is an unenforced recommendation to use CODEOWNERS.",
+     "evidence": "\"the lock is committed and can be changed in the same PR that adds a dependency, and its integrity values come from the project's own package-manager lockfile\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "tasq does not verify files on disk against the recorded integrity. Installed package files under an unchanged name and version are trusted, so a tampered node_modules is not caught by tasq's check.",
+     "evidence": "\"Modified files under an unchanged name and version are therefore out of scope for this check\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Synchronous plugin hangs and CPU-bound import-time code block the command with no isolation and no timeout. A single malicious or buggy plugin can hang CI, hooks and editor integrations indefinitely.",
+     "evidence": "\"an in-process timer cannot interrupt a plugin that blocks the JavaScript thread synchronously\""
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The CI minute and developer-time cost estimate depends on rc.3 numbers that do not exist. The 16 minute/day and 1.8 s per CI call figures are based on rc.2 measurements that the plan itself says are invalid for the shipped design.",
+     "evidence": "\"The CI minute estimate will be re-computed from rc.3 numbers and posted in #1840.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The 2.x security-fix support window is a commitment made before the 2.x backport process and capacity are shown. No owner or ongoing support plan is stated.",
+     "evidence": "\"receives security fixes until 2027-11-12\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The design has an ambiguous ordering: the discovery cache keys on the resolved plugins array and lock, yet the trust check re-runs on every invocation, which is a large and untested surface for the cache-key tests to cover.",
+     "evidence": "\"every run, including cache hits, re-runs the trust check against the current config and lock\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 12246,
+    "tokOut": 1629,
+    "usd": 0.0030940200000000003,
+    "critMs": 7257
+   },
+   "wallMs": 23435
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "The performance gates are unmet on rc.2 and the cause is an unprofiled hypothesis; the redesign that the release depends on has no measurement, so the plan to publish on rc.3 rests on an unvalidated premise.",
+     "evidence": "\"no rc.3 or prototype measurement exists yet\" and \"rc.2 was not profiled to confirm that discovery is the dominant cost\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "Publishing 3.0.0 is irreversible (npm versions are immutable), yet the downgrade path that users would depend on is unbuilt and unverified, and the rollback relies on deprecation, which does not reach pinned or range-resolved 3.x users.",
+     "evidence": "\"a published 3.0.0 can be deprecated but not unpublished or replaced\"; \"not yet implemented or tested; to be built and tested on rc.3\"; \"A dist-tag repoint does not affect users who pinned or range-resolved to 3.x\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Plugins listed in the `plugins` array bypass version and integrity checks, so a version bump of a listed plugin, including one compromised upstream, executes new code with no tasq-level review; the committed config is only reviewed if the maintainers catch the bump.",
+     "evidence": "\"Plugins listed in the `plugins` array are approved by name as explicit consent and are not version- or integrity-checked, so bumping a listed plugin runs the new code without a tasq-level review step\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The lock protects only identity for workspace, file and link plugins; their files are mutable and edits after approval run without re-review, and the lock can be changed in the same PR as a new dependency, so the stated 'review gate' is weaker than the headline suggests.",
+     "evidence": "\"the lock approves identity (name, version, source) only; the plugin's files are mutable and later edits to them are not re-reviewed by the lock\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Trust check does not re-hash plugin files on disk, so a modified file under an unchanged name and version executes, and the integrity value is sourced from the project's own lockfile which the same PR can alter.",
+     "evidence": "\"tasq does not re-hash package files on disk\"; \"its integrity values come from the project's own package-manager lockfile\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Strict non-zero exit on unapproved or failing plugins in CI and hooks can turn existing builds red, and the 5 s timeout does not cover synchronous hangs, so CI jobs can block indefinitely unless the adopter adds their own timeouts.",
+     "evidence": "\"an in-process timer cannot interrupt a plugin that blocks the JavaScript thread synchronously\"; \"a plugin already listed in the `plugins` array that fails to load now exits non-zero in non-TTY runs even with no lock\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Breaking change to a widely used package (about 180k weekly downloads) is pushed to unpinned installs via latest after only a 7-day soak and an opt-in count of external reports, with no required guarantee that existing repos stay green; this is a user-facing breaking change shipped under a major version bump without semver-safe default.",
+     "evidence": "\"Because `latest` moves a breaking, ESM-only major to unpinned installs\"; \"at least 10 external projects ... have reported a successful upgrade\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The cost and benefit claims rest on rc.2 numbers and an illustrative team model; the 3.0.0 cost and the ≤0.30 s target are not measured, and the cache-hit target includes new hashing work that has never been timed.",
+     "evidence": "\"no cost claim for 3.0.0 is made before then\"; \"none exist yet, including for the cache-hit path with input hashing, plugin content hashing and integrity checks\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Discovery reads and records package names, versions and commit hashes from the dependency tree into a node_modules cache and committed lock; no privacy impact is evident beyond committing dependency metadata, which is public for registry packages but may expose private git sources or workspace names.",
+     "evidence": "\"tasq-plugins.lock\" records \"name, version, and integrity, or source for non-registry packages\" and \"git also contributes the resolved commit\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "Distribution and provenance depend on npm and GitHub Actions; no self-hosted or alternate-registry path is described for the release or the downgrade procedure.",
+     "evidence": "\"Published from GitHub Actions with npm provenance (`--provenance`)\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "The approval flow is an interactive TTY prompt with per-package confirmation; no accessibility considerations for screen readers or non-visual confirmation are stated.",
+     "evidence": "\"with an explicit confirmation; only confirmed packages are written\""
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "Operator-facing messages (mismatch reports, trust warnings) are specified only in summary form; their exact copy is not given, so the 'message names the plugin, approved version and installed version' requirement cannot be checked.",
+     "evidence": "\"The failure message names the plugin, the approved version and the installed version, and prints the fix\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "The gate depends on a sign-off comment in a GitHub issue, which is a manual, non-enforced control; nothing in the artifact ties publish to CI, so a maintainer can publish without the rc.3 results being checked.",
+     "evidence": "\"Publishing requires a maintainer sign-off comment in #1840 that links the passing rc.3 results\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 12785,
+    "tokOut": 2022,
+    "usd": 0.0033983200000000002,
+    "critMs": 8807
+   },
+   "wallMs": 71677
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "The artifact is at the deploy gate, but the performance gates it depends on have no passing measurement. rc.2 regresses 6x to 17x on short commands, and the rc.3 fix is a hypothesis that has not been profiled or prototyped.",
+     "evidence": "\"no rc.3 or prototype measurement exists yet\" and \"rc.2 was not profiled to confirm that discovery is the dominant cost\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "Every required pre-publish QA item is listed as not done: the plugin smoke test, the PnP/pnpm, resolution, workspace and non-registry fixtures, the security, output-stream, fault, upgrade, cache-key and version-update tests, and the rc.3 CI artifacts the gate-check job needs. Publish cannot be cleared on this evidence.",
+     "evidence": "\"**Required before publish (not yet done):**\" followed by the full item list"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "npm publish is irreversible, and the only safe rollback path for migrated repos depends on tooling that does not exist. `tasq-migrate --revert` and the `.tasq-migrate-backup/` directory are unbuilt, and the 2.9.4 compatibility assumptions behind the downgrade procedure are unverified.",
+     "evidence": "\"**not yet implemented or tested; to be built and tested on rc.3**\" and \"the procedure's assumptions ... are unverified until this test passes\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Listing a plugin in the `plugins` array removes version and integrity checks for it. A keyword plugin that fails a version-bump review can be turned green by adding its name to the array in the same PR, which permanently bypasses the review the lock was meant to enforce. Precedence between the array and the lock is not specified.",
+     "evidence": "\"Plugins listed in the `plugins` array are approved by name as explicit consent and are not version- or integrity-checked\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The strict-exit guarantee does not match the shown code. A keyword package whose manifest cannot be located is only pushed to `warnings`, so it never becomes a candidate or a failure. In a repo with a lock, CI can therefore exit 0 with an unapproved or unreadable plugin, which the artifact says cannot happen.",
+     "evidence": "\"A package whose manifest still cannot be located is skipped with a warning, which is a failure under the strict behavior below\" versus the code path `catch (err) { warnings.push(`skipped ${name}: ...`) }`"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The task cache key hashes the package files of every workspace, file and link plugin on every run, including cache hits, and the cost is not bounded by plugin size. A large in-repo plugin directory could push the cache-hit path past the 0.30 s gate, and the hashing cost is unmeasured.",
+     "evidence": "\"a content hash of its package files\" and \"none exist yet, including for the cache-hit path with input hashing, plugin content hashing and integrity checks\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The upgrade path turns currently passing 2.x CI red for any repo whose array-listed plugin fails to load. This is a deliberate breaking change, and the test that would show existing repos stay green has not been run.",
+     "evidence": "\"**Behavior change:** now exit non-zero in non-TTY runs (no lock required)\""
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "Every Dependabot or Renovate bump of a lock-approved keyword plugin fails CI until a maintainer runs `tasq plugins trust --update` and commits the lock. This adds a manual step to routine dependency updates.",
+     "evidence": "\"the run in that PR fails non-zero in non-TTY mode\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The release drops Node 18 as end-of-life but sets the minimum to Node 20 and tests on Node 20. As of 2026-10-27, Node 20 is past its end-of-life, so the support rationale is inconsistent.",
+     "evidence": "\"Node 18 is EOL since April 2025; `engines` field enforces `>=20`\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The supply-chain claims (no copyleft dependencies, no postinstall scripts) are stated without a linked scan or CI artifact, so they cannot be checked before publish.",
+     "evidence": "ABSENT: \"License scan: no copyleft dependencies\" and \"No `postinstall` scripts in tasq or its dependencies\" have no referenced results"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Publishing uses an npm publish token stored as a long-lived secret. The artifact does not mention OIDC trusted publishing, so token theft or workflow compromise remains a publish path.",
+     "evidence": "\"The npm publish token is available only to that environment\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 2.x behavior the design is matched against is asserted, not shown. The artifact says unapproved keyword plugins were \"never loaded\" in 2.x and that 2.x ignores `tasq-plugins.lock`, but neither is tested against a 2.9.4 build in the artifact.",
+     "evidence": "\"matching 2.x, where they were never loaded\" and \"2.x is expected not to read or break on\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 13734,
+    "tokOut": 13997,
+    "usd": 0.00957562,
+    "critMs": 68595
+   },
+   "wallMs": 144070
+  }
+ ],
+ "artifact": "# Release proposal: tasq 3.0.0 (npm)\n\nMaintainers: core team · Publish: no earlier than Thu 2026-11-12 (`next` dist-tag), **conditional on the release gate below** · Announce: on promotion to `latest`, earliest Thu 2026-11-19 · Tracking: #1840 · Blog: \"tasq 3: plugin discovery with explicit approval\"\n\n**Release gate:** 3.0.0 is not published until the performance targets and the added QA items below pass on 3.0.0-rc.3. rc.2 does not meet them (see Performance). npm versions are immutable, so publishing is a one-way action: a published 3.0.0 can be deprecated but not unpublished or replaced. 2026-11-12 is therefore the earliest possible date, not a commitment. The date moves if the gates are not met, and it never overrides them. Publishing requires a maintainer sign-off comment in #1840 that links the passing rc.3 results for every gate and every required QA item. **The sign-off comment is not the enforcement mechanism, because a comment cannot stop a publish.** Enforcement is in CI: the publish workflow runs only from a protected GitHub Actions environment (`npm-publish`) that requires approval from at least two maintainers. Before the publish step it runs a gate-check job that fails unless the rc.3 performance results and every required QA item are present as passing CI artifacts for the exact commit being published. The npm publish token is available only to that environment, so no maintainer can publish from a laptop. The sign-off comment links those artifacts for human review. **Approving this proposal approves the plan and the gates only; it does not authorize a publish.** The missing rc.3 results are the reason the gate exists, not a reason to skip it, and no publish happens until the gate-check job passes and the sign-off comment exists. That the performance gates are unmet and unmeasured today is expected at proposal stage and is not a defect in the plan: the gates are preconditions to publishing, and the downgrade test is one of them, so the unbuilt revert mechanism also blocks publish. The performance redesign is a hypothesis today, and the plan does not publish on that premise: profiling and a prototype measurement come first (see Performance), and without passing results nothing ships.\n\n## Highlights\n\n- **Automatic plugin discovery with explicit approval (one-time approval).** Direct dependencies of your project that carry the `tasq-plugin` keyword are detected automatically. They load only after you approve them once with `tasq plugins trust`. The existing `plugins: [...]` array in `tasq.config.ts` keeps working as an explicit list. This is not zero-config: approval is a required step. **What the lock is and is not:** it is a review gate that stops unreviewed packages (for example a planted or transitive keyword package) from executing. It is not tamper protection against someone who can edit the repo: the lock is committed and can be changed in the same PR that adds a dependency, and its integrity values come from the project's own package-manager lockfile. Treat changes to `tasq-plugins.lock` like changes to CI config and review them (for example with CODEOWNERS). tasq cannot enforce review rules; that is a repository-hosting control, and the docs and blog say so. **Two further limits, stated plainly:** (1) for `workspace`, `file` and `link` plugins the lock approves identity (name, version, source) only; the plugin's files are mutable and later edits to them are not re-reviewed by the lock, so they are covered only by your normal code review of those in-repo files. `tasq plugins trust` prints this warning when recording such an entry. (2) Plugins listed in the `plugins` array are approved by name as explicit consent and are not version- or integrity-checked, so bumping a listed plugin runs the new code without a tasq-level review step. This matches 2.x, where the array was always consent by name, and the array is part of the committed config and reviewed like any other config change. The version-bump review described below applies only to plugins approved through the lock. **These are accepted, documented limits, not oversights:** the lock is deliberately a gate against unreviewed packages rather than a defense against a malicious commit or a compromised upstream release of an already-approved name, and the headline, docs and blog describe it that way. Version-gated review is available to anyone who wants it by approving a plugin through the lock instead of listing it in the array.\n- **Task graph caching.** The cache key covers input file hashes, the task command and resolved config, declared env vars, Node and tasq versions, and, for every loaded plugin, its name and version plus either its registry integrity or, when it has no registry integrity (`workspace`, `file`, `link`, git, or an array-listed plugin with no lockfile integrity), a content hash of its package files (git also contributes the resolved commit), so editing a plugin's code without changing its version cannot produce a stale cache hit. Target: a cache-hit `tasq run build` completes in ≤ 0.30 s wall clock on the reference monorepo (not yet met by rc.2; no rc.3 or prototype measurement exists yet, and the target includes input hashing, plugin content hashing and plugin integrity checks). The earlier \"under 50 ms\" figure referred to task time only and excluded process startup, so it is withdrawn.\n- **ESM-only**, Node 20+.\n\n## Breaking changes\n\n| Change | Migration |\n|---|---|\n| Node 18 support dropped | Node 18 is EOL since April 2025; `engines` field enforces `>=20` |\n| CommonJS `require('tasq')` removed | `npx tasq-migrate` rewrites config files and `require` calls; tested on 40 public repos, 38 fully automatic, 2 needed manual edits (documented) |\n| Keyword-discovered plugins require approval | Run `tasq plugins trust` once (or `tasq plugins trust --all` to review and approve every discovered candidate in one interactive pass); approvals are recorded in a committed `tasq-plugins.lock` (name, version, and integrity, or source for non-registry packages). Unapproved plugins are never loaded. In a repo that has a `tasq-plugins.lock`, an unapproved or failing discovered plugin makes non-TTY runs (CI, hooks) **exit non-zero by default**. In a repo with no `tasq-plugins.lock` yet, unapproved keyword plugins only produce a warning (written to stderr) and exit code 0, matching 2.x, where they were never loaded. See trust model and upgrade path |\n| Plugins listed in the `plugins` array that fail to load | **Behavior change:** now exit non-zero in non-TTY runs (no lock required). `--no-strict` restores a warning. See upgrade path |\n| `plugins` array in config | **Still honored** as explicit consent by name (no version or integrity check; see Highlights). `tasq-migrate` preserves it unchanged and additionally warns about any listed plugin that lacks the `tasq-plugin` keyword, so nothing is silently dropped |\n| `tasq lint-staged` output format | JSON reporter unchanged; pretty reporter shows grouped output. All new plugin warnings go to stderr, never stdout, so JSON on stdout is unaffected |\n\n### Upgrade path (avoiding a red build)\n\n- `tasq-migrate` never approves plugins on its own, because auto-approval would defeat the trust lock. It does list every keyword-bearing direct dependency that is not in the `plugins` array, with name and version. In an interactive terminal it then offers to run the trust step, per package, with an explicit confirmation; only confirmed packages are written to `tasq-plugins.lock`. Non-interactively it writes nothing and prints the exact `tasq plugins trust` command to run.\n- Because strict non-zero exit for *unapproved keyword plugins* applies only once `tasq-plugins.lock` exists, upgrading alone cannot turn an existing repo's CI or hooks red because of newly discovered keyword plugins. The lock is created by an explicit maintainer action (`tasq plugins trust`), and that same action approves the plugins, so a repo does not end up with a lock and unapproved plugins unless someone adds a plugin later. **One exception, stated plainly:** a plugin already listed in the `plugins` array that fails to load now exits non-zero in non-TTY runs even with no lock. If 2.x tolerated such a failure, upgrading can surface it as a red build. This is called out in the breaking-changes table and migration guide, and `tasq-migrate` runs a load check on listed plugins and reports failures before the user commits. The `--no-strict` flag remains available. The behavior is deliberate: a plugin the user explicitly asked for that silently fails to load means checks were skipped without anyone noticing, and failing loudly is the safer default.\n- The migration guide leads with this sequence: upgrade, run `tasq-migrate`, review the listed candidates, run `tasq plugins trust --all`, commit the lock.\n- Required before publish: an upgrade test confirming that a 2.x repo with an unapproved keyword dependency and no lock passes CI and hooks after upgrade and `tasq-migrate` (warning only), that it turns strict after the lock is committed, and that a repo with a failing plugin in its `plugins` array exits non-zero after upgrade and passes with `--no-strict`.\n\n## How plugin discovery works\n\nDiscovery no longer walks the whole `node_modules` tree.\n\n- **Scope.** Only packages named in `dependencies` and `devDependencies` of the root `package.json` and of the current workspace package are considered (both manifests are read and merged). Transitive dependencies are never loaded as plugins, even if they carry the keyword.\n- **Resolution.** Packages are resolved with Node's module resolution (`createRequire(...).resolve`), so Yarn PnP and other non-`node_modules` layouts work. Because some packages' `exports` maps do not expose `./package.json`, resolution first tries `${name}/package.json`; on failure it resolves the package's main entry and walks up to the nearest `package.json` whose `name` matches. A package whose manifest still cannot be located is skipped with a warning, which is a failure under the strict behavior below.\n- **Trust.** Discovery only produces candidates. A separate trust step then checks each candidate: it loads only if it is listed in the `plugins` array or has a matching entry in `tasq-plugins.lock`. For registry packages, the integrity value comes from the project's own package-manager lockfile (`package-lock.json`, `yarn.lock` checksum, or `pnpm-lock.yaml`): discovery reads the `integrity` recorded there for the candidate's name and installed version and attaches it to the candidate. Version and integrity must both match the `tasq-plugins.lock` entry, and a mismatch is rejected. **Non-registry packages** (`workspace:`, `file:`, `link:` and git dependencies) have no registry integrity. For these, discovery attaches a `source` kind (`workspace`, `file`, `link`, `git`) and, for git, the resolved commit from the lockfile. `tasq plugins trust` records `source` (and commit) in `tasq-plugins.lock` instead of integrity, and a match requires name, version and source (and commit for git). For `workspace`, `file` and `link` sources the files are mutable by nature, so the approval covers identity only: edits to those files after approval are not re-reviewed by the lock. The docs say so, and `tasq plugins trust` prints the warning when it records such an entry. (These files do contribute a content hash to the task cache key, so edits cannot cause stale cache hits; see Task graph caching.) A candidate with neither a lockfile integrity nor a recognized source cannot be matched against the lock and is not loaded (unless listed in `plugins`); the message tells the user to list it in `plugins`. **Plugins listed in `plugins`:** these are consent by name only. They bypass the version and integrity match, so a version bump of a listed plugin is not stopped by tasq; the review-on-bump rule below applies only to lock-approved plugins. Users who want version-gated review for a keyword-bearing plugin can remove it from the array and approve it through the lock instead. **Cached directory is never trusted:** the candidate's `dir` is not persisted in the discovery cache. On every run, including cache hits, the trust step re-resolves each approved plugin's directory with Node resolution, re-reads that directory's `package.json`, and requires its `name` and `version` to equal the candidate and lock entry before anything is loaded, so a poisoned or stale cache entry cannot redirect an approved name and version to a planted directory. **Limit of this check:** tasq does not re-hash package files on disk. It verifies that the installed name and version are the ones the package manager recorded and that the recorded integrity is the one a maintainer approved; verifying that the files on disk match that integrity is the package manager's job at install time (for example `npm ci`). Modified files under an unchanged name and version are therefore out of scope for this check (an attacker who can write to `node_modules` can already alter any code the project runs, not only plugins), and the docs say so. Likewise, because integrity values come from the project's own lockfile, a PR that changes both the dependency and the lock is outside what the lock can detect; that is a code-review control, as stated in Highlights. Otherwise the plugin is skipped. In an interactive TTY, tasq prints how to approve it. In non-TTY contexts (CI, hooks) it never prompts. In a repo with a `tasq-plugins.lock`, it **exits non-zero by default when a discovered plugin is unapproved or fails to load**, so upgraded projects that adopted the lock cannot silently pass without their plugin checks. Plugins explicitly listed in the `plugins` array that fail to load also exit non-zero. `--no-strict` downgrades this to a warning for users who want the old lenient behavior. A planted package in `node_modules` that is not in the committed lock does not execute. An untrusted repo that ships its own lock remains as trusted as its `npm run` scripts, which is the same trust boundary as before.\n- **Version updates.** Bumping a lock-approved plugin (for example in a Dependabot or Renovate PR) changes its version and integrity, so it no longer matches its lock entry and the run in that PR fails non-zero in non-TTY mode. This is intentional, because a version bump is exactly the moment to review new plugin code, but it must not be a dead end. The failure message names the plugin, the approved version and the installed version, and prints the fix: `tasq plugins trust --update`, which lists every already-approved plugin whose version or integrity changed and, after explicit confirmation per package, rewrites those lock entries. It never adds new plugins and never runs without confirmation. For bot-driven updates, the migration guide documents running `tasq plugins trust --update` in the update PR (a maintainer commits the lock change), and `tasq plugins check` is available as a read-only command that prints the same mismatch report and exits non-zero, so CI can show it clearly. There is no auto-approval. This does not apply to plugins listed in the `plugins` array (see above).\n- **Warning output.** All discovery, trust and plugin-load warnings and errors are written to stderr. Stdout carries only command output (including the `lint-staged` and `run` JSON reporter), so JSON consumers are unaffected in repos with or without a lock.\n- **When it runs.** Built-in commands (`--version`, `--help`, `run`, `lint-staged`, `list`, `watch`) are parsed first. Discovery and the trust check are skipped for `--version`, `--help` and `list`. `run`, `lint-staged` and `watch` need plugins only when the config or lock references plugins, which is the normal state once a repo has adopted the trust lock; in that case they wait on the cached discovery result, and the performance gates below are measured in that state (with a committed `tasq-plugins.lock`). Discovery is consulted before parsing only when the first argument is not a built-in subcommand, so plugins can still register subcommands.\n- **Caching.** The discovery result is cached in `node_modules/.cache/tasq/plugins.json`, keyed on the hash of the root and workspace `package.json` files, the lockfile, `tasq-plugins.lock`, and the resolved `plugins` array from `tasq.config.ts`. The cache stores only discovery candidates (name, version, integrity, source, commit), not approvals and not directories: **every run, including cache hits, re-runs the trust check** against the current config and lock and re-resolves and re-verifies each plugin's directory as described under Trust. `tasq watch` restarts reuse the cache.\n- **Isolation.** Reading each manifest, including the root and workspace `package.json`, is wrapped in try/catch: a malformed manifest is reported as a warning for that package (or for that root/workspace manifest, whose dependencies are then skipped) and discovery continues. Each plugin loads in its own try/catch with a 5 s timeout, and plugins are loaded concurrently, so asynchronous hangs add at most 5 s in total per invocation, not 5 s per plugin. A plugin that throws or hangs asynchronously is reported as a failed plugin and the other plugins and the command continue. **Limit:** an in-process timer cannot interrupt a plugin that blocks the JavaScript thread synchronously (for example a CPU-bound loop at import time). Such a plugin blocks the command, as a hanging plugin would in 2.x; tasq does not claim to isolate it, and the docs say so. This is not a regression from 2.x, and the only code affected is code a maintainer has approved. Only plugins a maintainer has approved (lock or `plugins` array) are ever loaded, so this affects approved code only. CI jobs, hooks and editor integrations should keep their own job or process timeouts as the backstop, and the docs recommend this. The exit code follows the strictness rules above.\n\n```ts\n// src/plugins/discover.ts\nimport { readFile } from \"node:fs/promises\";\nimport { createRequire } from \"node:module\";\nimport { dirname, join } from \"node:path\";\n\nasync function readManifest(req: NodeRequire, name: string) {\n  try {\n    const pkgPath = req.resolve(`${name}/package.json`); // absolute; PnP-aware\n    return { pkgPath, pkg: JSON.parse(await readFile(pkgPath, \"utf8\")) };\n  } catch {\n    // `exports` map may hide ./package.json: resolve the entry, walk up to matching name\n    let dir = dirname(req.resolve(name));\n    for (;;) {\n      try {\n        const pkgPath = join(dir, \"package.json\");\n        const pkg = JSON.parse(await readFile(pkgPath, \"utf8\"));\n        if (pkg.name === name) return { pkgPath, pkg };\n      } catch {}\n      const parent = dirname(dir);\n      if (parent === dir) throw new Error(\"package.json not found\");\n      dir = parent;\n    }\n  }\n}\n\n// Reads what the project's package-manager lockfile (package-lock.json, yarn.lock,\n// pnpm-lock.yaml) records for name@version: the registry `integrity`, or, for\n// non-registry packages (workspace:, file:, link:, git), a `source` kind and, for git,\n// the resolved `commit`. Returns undefined if nothing is recorded.\ndeclare function readLockfileRef(\n  rootDir: string,\n  name: string,\n  version: string,\n): Promise<\n  | { integrity?: string; source?: \"workspace\" | \"file\" | \"link\" | \"git\"; commit?: string }\n  | undefined\n>;\n\nexport async function discoverPlugins(\n  rootDir: string,\n  workspaceDir: string = rootDir,\n): Promise<DiscoveryResult> {\n  const candidates: PluginRef[] = []; // untrusted; passed to the trust step\n  const warnings: string[] = []; // reported on stderr, never stdout\n  const names = new Set<string>();\n  for (const dir of new Set([rootDir, workspaceDir])) {\n    try {\n      const m = JSON.parse(await readFile(join(dir, \"package.json\"), \"utf8\"));\n      for (const n of Object.keys({ ...m.dependencies, ...m.devDependencies })) names.add(n);\n    } catch (err) {\n      // malformed or unreadable root/workspace manifest: warn and continue\n      warnings.push(`skipped manifest in ${dir}: ${(err as Error).message}`);\n    }\n  }\n  const req = createRequire(join(workspaceDir, \"package.json\"));\n  for (const name of names) {\n    try {\n      const { pkg } = await readManifest(req, name);\n      if (pkg.keywords?.includes(\"tasq-plugin\")) {\n        const ref = await readLockfileRef(rootDir, pkg.name, pkg.version);\n        candidates.push({\n          name: pkg.name,\n          version: pkg.version,\n          integrity: ref?.integrity, // registry packages\n          source: ref?.source, // non-registry packages\n          commit: ref?.commit, // git only\n          // neither integrity nor source => cannot match tasq-plugins.lock => not loaded\n          // NOTE: no `dir` here. Directories are never cached; the trust step re-resolves\n          // them on every run and re-verifies name and version before loading.\n        });\n      }\n    } catch (err) {\n      warnings.push(`skipped ${name}: ${(err as Error).message}`);\n    }\n  }\n  return { candidates, warnings };\n}\n\n// src/plugins/trust.ts (separate step, runs on every invocation, including cache hits)\n// For each candidate: allow if listed in config `plugins`, or if tasq-plugins.lock has an\n// entry with the same name and version and either the same integrity (registry) or the\n// same source (and commit, for git). A candidate with neither integrity nor source is\n// never matched. Everything else is returned as `skipped`.\n// For each allowed candidate, re-resolve its directory with Node resolution, re-read that\n// directory's package.json, and require name and version to equal the candidate's before\n// loading; on mismatch the plugin is skipped as failed.\n```\n\n`fast-glob` remains a dependency for task input globbing only; discovery no longer uses it.\n\n## Performance (reference monorepo: 61 workspaces, 2,430 installed packages, M2 MacBook Air, warm disk cache)\n\nMeasured on rc.2, which still used the full `node_modules` walk that the design above replaces:\n\n| Command | 2.9.4 | 3.0.0-rc.2 | Gate for 3.0.0 (rc.3) |\n|---|---|---|---|\n| `tasq --version` | 0.11 s | 1.94 s | ≤ 0.15 s |\n| `tasq lint-staged` (3 staged files) | 0.38 s | 2.31 s | ≤ 0.50 s |\n| `tasq run build` (cache hit) | 0.21 s | 2.02 s | ≤ 0.30 s |\n| `tasq run build` (cold, full build) | 48.7 s | 46.1 s | ≤ 48.7 s |\n\nrc.2 is a regression of 6x–17x on every short command. The working hypothesis is that rc.2 discovery cost grew with installed package count, and the redesign (discovery scoped to direct dependencies, plus caching) is intended to remove that cost. **This is a hypothesis, not a measured result:** no rc.3 or prototype measurement exists, and rc.2 was not profiled to confirm that discovery is the dominant cost. **Order of work and fallback:** profiling rc.2 (discovery time as a share of each command, plus startup, config load and input hashing) happens first, before further rc.3 implementation, and is posted in #1840. If discovery is not the dominant cost, the rc.3 plan is revised to target the costs the profile actually shows, and a prototype measurement against the gates is posted before the remaining rc.3 work continues. If the redesign still does not meet the gates, the cause is re-investigated and 3.0.0 does not ship; the plan does not fall back to relaxing the gates, and the option of shipping the non-performance changes later is decided in #1840. The `lint-staged`, `run` cache-hit and cold rows are gated with a committed `tasq-plugins.lock` and at least one trusted plugin, so discovery and the trust check are on the measured path. rc.3 numbers will be added to #1840 and this table before publish; none exist yet, including for the cache-hit path with input hashing, plugin content hashing and integrity checks. The ≤ 0.30 s cache-hit gate is a target that has to be demonstrated on rc.3, not a claim; if the new hashing work cannot meet it, the design is changed rather than the gate. If any gate is missed, 3.0.0 does not ship and the publish date moves. The cold-build improvement is within noise of one run and is not claimed as a benefit.\n\n## Cost of the rc.2 regression (why the gates exist)\n\nThis section describes rc.2 only, using rc.2 measurements; it is the motivation for the gates and is not a cost estimate for the shipped 3.0.0. At rc.2 numbers, each `lint-staged` run adds about 1.9 s. Illustratively, a 50-developer team making 10 commits a day would wait about 16 extra minutes per day, and every CI job that calls `tasq run` pays about 1.8 s–2.0 s per invocation. If the gates are met, the added cost per invocation is at most about 0.12 s for `lint-staged` and 0.09 s for cache hits; these are ceilings set by the gates, not measurements. The cost estimate for 3.0.0 (developer time and CI minutes) will be re-computed from rc.3 numbers and posted in #1840, and no cost claim for 3.0.0 is made before then. The team model above is illustrative only and is not used as evidence for any release decision.\n\n## Supply chain and licensing\n\n- Published from GitHub Actions with npm provenance (`--provenance`); 2FA required for all maintainers.\n- No `postinstall` scripts in tasq or its dependencies.\n- Runtime deps: `fast-glob` (MIT), `semver` (ISC). License scan: no copyleft dependencies.\n- Plugin execution requires explicit approval (`plugins` array or `tasq-plugins.lock` with integrity or source), so a compromised transitive dependency cannot become code running in `tasq run` merely by adding a keyword. The integrity check ties approval to the name, version and lockfile integrity the package manager recorded; it does not re-hash files on disk, it does not re-review edits to `workspace`, `file` or `link` plugins, it does not version-check plugins listed in the `plugins` array, and it does not protect against a PR that changes both the dependency and the lock (see Trust and the lock caveats in Highlights).\n\n## QA summary\n\n- Unit + integration: 1,912 tests pass on Linux/macOS/Windows, Node 20 and 22.\n- `tasq-migrate` on 40 public repos (list in #1840): 38 automatic, 2 manual (both Yarn PnP projects, documented). These runs covered config rewriting only; plugin discovery and loading on those repos has not been validated. Both PnP repos are re-run on rc.3 with discovery, trust and loading as part of the PnP fixture item below, and the result is posted in #1840.\n- Plugin smoke test (top 15 community plugins): the rc.2 run predates both the trust requirement and the discovery rewrite, so it is historical and is **not** evidence that plugins load under 3.0.0. It must be re-run on rc.3, with trust entries, as a required item below.\n- **Required before publish (not yet done):**\n  - Plugin smoke test on rc.3: the top 15 community plugins are discovered, trusted via `tasq plugins trust --all`, loaded, and register their subcommands.\n  - Yarn PnP and pnpm fixtures: a plugin is discovered, trusted and loaded. Include the two PnP repos from the migration set.\n  - Resolution fixture: a plugin whose `exports` map does not expose `./package.json` is discovered.\n  - Workspace fixture: a plugin declared only in the workspace package's manifest is discovered.\n  - Non-registry fixtures: plugins installed via `workspace:`, `file:`, `link:` and a git dependency are discovered, approved with `tasq plugins trust` (which prints the mutable-files warning for `workspace`, `file` and `link`), recorded in the lock with `source` (and commit for git), and loaded; in a repo with a lock they do not cause a permanent non-zero exit once approved; a changed git commit is rejected; a candidate with no integrity and no source is not loaded and the message points to the `plugins` array.\n  - Version-update tests: bumping an approved plugin produces a non-zero exit in non-TTY mode with a message naming approved and installed versions; `tasq plugins check` reports it read-only; `tasq plugins trust --update` rewrites only changed entries after confirmation, adds no new plugins, and the next run passes. A version bump of a plugin listed in the `plugins` array is documented as not checked, and a test pins that behavior.\n  - Security tests: an untrusted keyword package and a transitive keyword package are not loaded; a lock integrity mismatch is rejected; a registry candidate with no lockfile integrity is not loaded; the trust check runs on a discovery cache hit; editing the `plugins` array or the lock invalidates or overrides the cached result; a hand-edited or stale discovery cache cannot cause a plugin to load from a directory other than the one freshly resolved (a planted directory with a matching name and version in a different location is not loaded, and a directory whose `package.json` name or version differs from the approved entry is rejected).\n  - Output-stream test: in repos with and without a lock, with unapproved, failing and malformed plugins present, the `lint-staged` and `run` JSON reporter output on stdout parses as valid JSON, and all plugin warnings appear only on stderr.\n  - Fault tests: a malformed plugin `package.json`, a malformed root or workspace `package.json`, a throwing plugin and an asynchronously hanging plugin do not break `--version`, `run` or `lint-staged`; in a repo with a `tasq-plugins.lock` they produce a non-zero exit in non-TTY mode by default. The synchronous-hang limitation is documented and not tested as isolated.\n  - Upgrade test: a 2.x repo with an unapproved keyword dependency and no lock passes CI and hooks after upgrade and `tasq-migrate` (warning only), `tasq-migrate` writes no approvals without confirmation, and the repo becomes strict once the lock is committed. Also: a repo with a failing plugin in its `plugins` array exits non-zero after upgrade (the documented behavior change) and passes with `--no-strict`.\n  - Cache-key tests: changing an env var, the config, the Node version or a plugin version produces a cache miss. Editing a file inside a `workspace`, `file` or `link` plugin without changing its version, and changing a git plugin's commit, also produce a cache miss (no stale cache hit).\n  - Downgrade test: a repo migrated with `tasq-migrate` and carrying `tasq-plugins.lock` installs and runs on 2.9.4 following the downgrade procedure below, including the case where the `.tasq-migrate-backup/` directory is absent (manual steps). The procedure's assumptions (2.x reads the `plugins` array unchanged, ignores `tasq-plugins.lock` without breaking, and `--revert` restores from the backup) are unverified until this test passes. This test is part of the release gate, so it blocks publish: the assumptions are verified before any user can depend on the procedure.\n  - Performance gates in the table above, on rc.3, with a committed lock.\n  - All items above are recorded as passing CI artifacts for the exact commit to be published, so the publish workflow's gate-check job (see Release gate) can verify them mechanically.\n\n## Release and support plan\n\n1. Publish `3.0.0` under the `next` dist-tag no earlier than 2026-11-12, only after the release gate has passed (including the CI gate-check and protected-environment approval) and the sign-off in #1840 is posted (publishing is irreversible). Between publish and promotion, announce only in #1840 and as a call for testing (`npm i tasq@next`). The blog post, changelog headline and Discord announcement are held.\n2. Promote to `latest` only when all of the following hold (earliest 2026-11-19): at least 7 days on `next`; no open P1 issue; and at least 10 external projects (outside the 40 migration-test repos) have reported a successful upgrade in #1840. **P1** means any of: a crash or wrong exit code in `run` or `lint-staged` on a supported Node version/OS; a plugin that should load under the trust lock but does not; a plugin that loads without approval; data loss or a wrong cache hit; a failed `tasq-migrate` rewrite with no documented manual fix. Promotion is staged: `npm dist-tag add tasq@3.0.0 latest` is run only after the above, and the blog post, changelog and Discord announcement (linking the migration guide) go live at promotion, so anyone following the announcement installs 3.0.0. Because `latest` moves a breaking, ESM-only major to unpinned installs, the README and `2.x` docs carry a pin notice (`tasq@^2`) from the day of `next` publish. Semver-wise this is a major version: projects with `^2` or `~2` ranges, or lockfiles, do not move to 3.0.0 automatically, and only unpinned `npm i tasq` and `npx tasq` pick it up. The \"existing repos stay green\" guarantee is the required upgrade test in the release gate (a 2.x repo passes after upgrade and `tasq-migrate`, with the one documented exception and its `--no-strict` escape), and the external-report count above is an additional soak signal, not a substitute for it. The blog post describes the lock as a review gate and includes the caveats from Highlights (not tamper protection; identity-only approval for `workspace`, `file` and `link` plugins; `plugins` array entries are not version-checked); it does not describe it as tamper protection.\n3. `2.x` moves to `latest-2` dist-tag and receives security fixes until 2027-11-12. Announced in the README and blog post. Any security fix shipped in 3.x is also backported to 2.x, so 3.0.0 is never the only remedy.\n4. Rollback: if a P1 is found after promotion, re-point `latest` to `2.9.4` (`npm dist-tag add tasq@2.9.4 latest`), run `npm deprecate tasq@3.0.0 \"<reason; upgrade to 3.0.1 or pin 2.9.4>\"`, publish a fix as 3.0.1, and for security issues publish a GitHub security advisory. A dist-tag repoint does not affect users who pinned or range-resolved to 3.x, so the deprecation message and advisory are the way to reach them. That limit is inherent to npm and cannot be removed by this plan; it is why the mitigation is placed before publish (the gates, the downgrade test, and the `next`-tag soak, during which only opt-in testers can install 3.0.0) rather than after. For plugin-related issues, the advisory also tells users how to review `tasq-plugins.lock`.\n5. Downgrade procedure for repos already migrated (documented in the migration guide; **provisional until the downgrade test above passes**, and revised before publish if it fails; because that test is a release gate, publish does not happen while the procedure is unbuilt or unverified): install `tasq@2.9.4`; run `npx tasq-migrate --revert`, which is planned to restore the pre-migration config and `require` calls from the backup (`.tasq-migrate-backup/`) that `tasq-migrate` is planned to write on every run (**not yet implemented or tested; to be built and tested on rc.3 as part of the downgrade test above**); keep the `plugins` array, which 2.x is expected to read unchanged; and delete or ignore `tasq-plugins.lock`, which 2.x is expected not to read or break on. Repos without a backup follow the manual steps in the guide, which are also exercised by the downgrade test.",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 64442,
+  "tokOut": 69886,
+  "usd": 0.9566,
+  "critMs": 382896
+ },
+ "status": "cap"
+}

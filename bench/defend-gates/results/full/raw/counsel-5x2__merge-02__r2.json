@@ -1,0 +1,83 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-02",
+ "rep": 2,
+ "wallMs": 269457,
+ "verdict": "ATTACKS",
+ "confidence": 0.92,
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "blocker",
+   "claim": "The duplicate-ballot log line writes the voter's email together with the attempted choice. Logs ship to a third-party host readable by the whole support team, so a resident's choice becomes linkable to their identity outside the tally, breaking the stated anonymity promise. Logging the rejected choice adds linkage risk even without the email, since it records a choice that never counted. Dropping these fields before merge avoids the exposure, because shipped copies cannot be recalled by a rollback.",
+   "evidence": "\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value"
+  },
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "GET /measures/{id}/results.csv has no authentication or role dependency, so any caller can download tallies for any measure. The PR describes the route as admin-only, and sibling admin routes use Depends(require_role(\"admin\")).",
+   "evidence": "async def export_results(\n    measure_id: int,\n    db: Session = Depends(get_db),\n):"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The export does not check whether the measure is closed, though the PR says it exists to give a tally once a measure closes. Anyone with access can read a running tally during voting, which risks strategic voting and contradicts the stated purpose.",
+   "evidence": "\"Clerks have asked for a downloadable tally once a measure closes\" vs. measure = db.get(Measure, measure_id)\n    if measure is None:\n        raise HTTPException(404)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The PR description says the export is for admins, but the code enforces neither admin-only access nor the closed-measure rule. This is the same root cause as the two blockers, so it is noted here for the description to be corrected.",
+   "evidence": "\"Adds GET /measures/{id}/results.csv for admins\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "counts is keyed by the raw Ballot.choice column values but is read with Choice enum members. The Choice definition is not in the diff, so whether these match is unverified. A test should confirm the counts are not silently zero in the council packet.",
+   "evidence": "counts = dict(db.query(Ballot.choice, func.count(Ballot.id))...); counts.get(choice, 0)"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Linking voter identity to ballot choice may raise secret-ballot or election-records questions for municipal measures. The artifact names no jurisdiction or statute, so this is a request for counsel or election-official review, not a demonstrated violation.",
+   "evidence": "ABSENT: legal or election-official review of logging voter identity alongside choice"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The support problem is asserted but not analysed. No evidence shows that the email or choice fields are needed. A non-identifying event (measure id, outcome, timestamp) would likely address the tickets without linkage.",
+   "evidence": "\"since support keeps getting 'it says I already voted' tickets\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Small-cell suppression is absent. A measure with one or two ballots exports exact per-choice counts, which can reveal individual votes. This should be a documented decision.",
+   "evidence": "ABSENT: minimum-count threshold or suppression in export_results"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "measure.slug is interpolated unvalidated into the Content-Disposition header and CSV cells. Slug validation is not shown, so header injection and spreadsheet formula injection are unverified.",
+   "evidence": "headers={\"Content-Disposition\": f'attachment; filename=\"{measure.slug}-results.csv\"'} and writer.writerow([measure.slug, ...])"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "export_results is declared async but calls the synchronous SQLAlchemy session, which can block the event loop during a slow aggregate.",
+   "evidence": "async def export_results(...): ... db.query(...).all()"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The diff includes no tests for the export's auth, the closed-measure gate, the 404 path, count correctness, or the duplicate-ballot log path, so these regressions would not be caught.",
+   "evidence": "ABSENT: test changes in the diff"
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 89376,
+  "tokOut": 30503,
+  "usd": 0.029502340000000002,
+  "critMs": 58101
+ }
+}

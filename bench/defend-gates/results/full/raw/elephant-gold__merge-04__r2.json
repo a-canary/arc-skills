@@ -1,0 +1,107 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-04",
+ "rep": 2,
+ "wallMs": 187707,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "blocker",
+   "claim": "The up migration destroys every existing user note. It adds an empty private_notes column and drops notes without copying data. Notes are irreplaceable user free text, and migrations run automatically on merge, so the loss happens on deploy.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text; ALTER TABLE user_recipes DROP COLUMN notes;"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The down migration cannot undo the up migration. It recreates an empty notes column and drops private_notes, so notes lost on deploy stay lost, and notes written between deploy and rollback are destroyed. The PR's 'down migration restores the old name' describes only the column name, not the data.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN notes text; ALTER TABLE user_recipes DROP COLUMN private_notes;"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "blocker",
+   "claim": "The PR is described as a pure rename with no data change, but the migration is ADD plus DROP. The stated design intent contradicts the code, so reviewers are misled about what is destroyed.",
+   "evidence": "\"Pure rename, no data change; the down migration restores the old name.\" vs ALTER TABLE user_recipes ADD COLUMN private_notes text; DROP COLUMN notes;"
+  },
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "The cursor handler loads every saved row for the user with no LIMIT and slices in JavaScript. For users with over 200k saved recipes, each page request reads and transfers the full joined set, which very likely exceeds the 300ms p99 budget and risks Node memory exhaustion. No timing or EXPLAIN evidence is given.",
+   "evidence": "WHERE ur.user_id = $1 ORDER BY ur.saved_at DESC, ur.id DESC`, [userId] (no LIMIT); const page = rows.slice(start, start + limit);"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Deploy ordering is unsafe. Migrations run automatically on merge and drop notes, but old application instances still select ur.notes. During the rolling deploy, or after a code rollback, those requests fail with a missing-column error. No expand/contract sequencing is provided.",
+   "evidence": "ALTER TABLE user_recipes DROP COLUMN notes; (applied on merge) alongside the old SELECT ... ur.notes"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The ALTER TABLE statements take ACCESS EXCLUSIVE locks on a roughly 140M-row table with no lock_timeout. If a long-running query holds a conflicting lock, the migration queues and blocks all reads and writes on user_recipes behind it during the automatic deploy.",
+   "evidence": "BEGIN; ALTER TABLE user_recipes ADD COLUMN private_notes text; ALTER TABLE user_recipes DROP COLUMN notes; COMMIT; (no SET lock_timeout)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "An unknown or stale cursor makes findIndex return -1, so start becomes 0 and the endpoint silently returns page one again. A client following nextCursor can loop on the same page or receive duplicates, and no error is returned. This is the drift problem the change was meant to fix, and no test covers it.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A negative limit passes Math.min unchanged, so page is empty. The nextCursor expression then reads page[-1].id, which throws a TypeError and returns a 500 instead of a validated 400 or a clamped limit.",
+   "evidence": "const limit = Math.min(Number(req.query.limit) || 50, 100); ... start + limit < rows.length ? page[page.length - 1].id : null;"
+  },
+  {
+   "lens": "other",
+   "severity": "major",
+   "claim": "The response key changes from notes to private_notes with no alias, so existing API clients reading notes break silently. The PR does not mention this breaking change.",
+   "evidence": "SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.private_notes"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "Removing offset is a breaking API change with no versioning, deprecation, or error. Callers still sending offset silently receive page one on every request. The client change that would make this safe is not in the artifact.",
+   "evidence": "\"The client already sends `cursor` from the previous page's `nextCursor`.\" ABSENT: client change or handling for requests that still send offset"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR asserts that no other code depends on notes, but the artifact shows only one reference. Any remaining reader or writer breaks when the column is dropped, and no repo-wide search is provided.",
+   "evidence": "ABSENT: grep or search results for notes across the repo, ORM models, and other queries"
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "No evidence shows that irreversible deletion of user-authored notes was reviewed against the privacy policy, retention rules, or data-subject obligations, or that users were notified.",
+   "evidence": "ABSENT: data-preservation step, backup or retention sign-off, user notice, or privacy/legal review"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Cursor lookup scans the whole result set in Node, so each request is O(N) in saved count on top of the unbounded fetch. The ORDER BY also lacks an index on (user_id, saved_at, id), so each request sorts the user's full set.",
+   "evidence": "ABSENT: index on user_recipes(user_id, saved_at, id); const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Two unrelated changes, a schema rename and a pagination contract change, are bundled. Each cannot be reverted independently, and the rename has no user-visible effect on its own.",
+   "evidence": "\"Two small changes bundled because they touch the same table.\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The test covers only the happy path. It does not cover an unknown cursor, a deleted cursor row, an empty result, a legacy offset request, or the notes-to-private_notes key change.",
+   "evidence": "it(\"pages with cursor\", async () => { ... single seeded sequence, no other cases"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 60484,
+  "tokOut": 27866,
+  "usd": 0.01709868,
+  "critMs": 24069
+ }
+}

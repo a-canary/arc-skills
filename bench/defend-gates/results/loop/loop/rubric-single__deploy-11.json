@@ -1,0 +1,650 @@
+{
+ "approach": "rubric-single",
+ "case": "deploy-11",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The expiry check trusts device time, online as well as offline. The only guard is a device clock earlier than the stored download time, so a clock rolled back to just after download (or an online device with a badly wrong clock) shows a forecast past valid_until as current. This breaks the agreed 'never present stale safety information as current' rule.",
+     "evidence": "\"The expiry rule above applies on-device using device time... if the device clock reads earlier than that, the stored forecast is treated as expired.\" ABSENT: server-time reconciliation for online use, and any guard for clocks set between download time and real valid_until."
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The claim that the server expires forecasts on time is unsupported. The CDN TTL for zone responses is not given, so a cached response can outlive valid_until on the server. The client check reduces the impact but does not remove it.",
+     "evidence": "\"our API keeps serving forecasts still inside valid_until and expires them on time\" ABSENT: CDN TTL for /avy/v1/zones and a cache-purge rule at valid_until."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The core safety invariant (no stale rating shown as current) has no monitor. Alerts cover poll success, center freshness at 26 h, and 5xx rate, but nothing detects responses served past valid_until or client-side expiry failures. The 26 h threshold can also be longer than the forecast validity window.",
+     "evidence": "\"Pages Maps on-call: no successful poll for 30 min, any center not updated for 26 h during its season, endpoint 5xx > 1% for 10 min.\" ABSENT: alert or dashboard on served-past-valid_until or on share of zones shown as expired."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Removing a center does not remove its ratings from phones. Offline copies keep showing the center's ratings until valid_until, even when the center has asked us to stop. That conflicts with the data agreement and the stated rollback guarantee.",
+     "evidence": "\"any offline copies expire at their valid_until.\" and \"(e.g. if a center asks us to stop)\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The 92% CDN hit rate assumes requests coalesce, but the endpoint takes an arbitrary bbox. Each distinct viewport produces a distinct cache key, so the hit rate and the cost math fall apart. The bbox size is also uncapped, so a huge bbox could force a full-dataset query at origin.",
+     "evidence": "\"GET /avy/v1/zones?bbox=…\" and \"Projected 1.8M zone requests/day at 92% CDN hit rate\" ABSENT: bbox normalization or tile snapping, bbox size cap, and cache-key design."
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "No load test is evidenced for the launch spike, which the blog post will drive. Origin autoscaling is capped at 6 instances with no degradation plan. The 120 req/min per-IP limit can throttle many users behind shared NAT, such as ski groups or venues, and the artifact does not say what those users see.",
+     "evidence": "\"origin autoscaling capped at 6 instances\" and \"rate limited at origin to 120 req/min per IP\" ABSENT: load test at 10-100x, degradation behavior at cap, and NAT-aware rate limiting."
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The cost control is an alert, not a cap. The $400/month CDN alert does not stop spend, and the 1.8M/day projection has no stated basis or sensitivity to the bbox fragmentation above.",
+     "evidence": "\"CDN budget alert at $400/month\" ABSENT: CDN hard cap, projection derivation, and cost at 10x usage."
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The 'no location' assurance is overstated. The bbox of the visible map, sent with the client IP to the endpoint and analytics, reveals where a user is looking, which for backcountry users can reveal travel plans. The artifact also gives no log retention for the endpoint.",
+     "evidence": "\"device location is not sent\" and \"Network capture: no location in avalanche requests or analytics\" ABSENT: treatment of bbox as location data, IP log retention, and whether analytics events are linkable to a device or account identifier."
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The unauthenticated endpoint is acceptable for public data, but input validation for the bbox parameter is not specified. Malformed or extreme values could reach the query layer.",
+     "evidence": "\"GET /avy/v1/zones?bbox=…\" ABSENT: bbox parsing, bounds, and validation rules."
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Nothing further beyond the bbox and analytics concerns above.",
+     "evidence": "Analytics events carry zone id only per the artifact; retention is not stated."
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "Single-source dependency on WADE and an unnamed CDN vendor, with no documented exit path or data-residency statement for the cache and logs.",
+     "evidence": "\"using forecasts published by the regional avalanche centers in the Western Avalanche Data Exchange (WADE)\" ABSENT: exit plan, CDN vendor, and residency for logs and cached forecasts."
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Storing WADE forecasts on-device for offline use is not shown to be permitted. The agreement is summarized as permitting display, and legal review (LGL-902) covers card text and terms, not offline caching or retention of ratings.",
+     "evidence": "\"display in our app is permitted for free and paid users\" and \"the current forecast for those zones is stored with it.\" ABSENT: C-2209 clause covering offline storage, retention period, and legal sign-off on caching."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The rollout sequencing puts the verification check after the layer is live for everyone. The flag goes to 100% at 08:00, but the 'check that all 19 centers render' happens before the 10:00 card and blog post, so a rendering failure is already visible to all users.",
+     "evidence": "\"Nov 23 08:00: flag on for 100%. Blog post and in-app card go live at 10:00 after a check that all 19 centers render.\""
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "Error and rate-limited states are not defined. A failed fetch or 429 could render as 'No current forecast' or keep previously colored zones, and the QA list does not test these states.",
+     "evidence": "ABSENT: rendering rule for network errors, 429, and timeouts, and QA for those states. The defined gray state is only 'out of season' or 'none issued today'."
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "Nothing gate-worthy under this lens.",
+     "evidence": "Layer is free, opt-in via toggle, and scoped to 19 centers."
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "Nothing gate-worthy beyond discoverability. The layer sits under Map layers and needs a card tap to reach the forecast link.",
+     "evidence": "\"Layer toggle: Map layers > Avalanche forecast.\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "Label legibility at low zoom, where many zones may collide, is not evidenced. The color-vision test covers colors, not label collisions on the map.",
+     "evidence": "\"labels legible\" tested on small screens; ABSENT: label behavior at zoomed-out levels with many zones."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Purge timing is inconsistent. Rollback takes effect on next foreground, but QA says offline data is purged on next launch. Phones that are not reopened keep stored ratings.",
+     "evidence": "\"takes effect on next app foreground\" versus \"purged on next launch\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 3-day all-19-centers match is not clearly scoped. Centers out of season cannot match, and the QA date and seasonal state are not given.",
+     "evidence": "\"All 19 centers: all three band ratings... match... for 3 consecutive days | Pass, 0 mismatches\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The center list is duplicated in the config file and the blog post, so the two can drift.",
+     "evidence": "\"list in config/avy_centers.json, same list in the blog post\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "Nothing further gate-worthy.",
+     "evidence": "App Review notes and flag-gated release are described consistently."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3815,
+    "tokOut": 10878,
+    "usd": 0.00603232,
+    "critMs": 56871
+   },
+   "wallMs": 131071
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The 'Read the full forecast' link and the center name/logo come from API data, but the artifact does not say link targets are restricted to the issuing center's domain. Tile-key query parameters also have no stated validation beyond the 12-tile cap.",
+     "evidence": "ABSENT: URL allowlist or validation for the center link. 'The card shows the center's name and logo ... and \"Read the full forecast\" linking to the center's page.'"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The artifact says tile keys are location data, but origin and CDN request logs are retained for 14 days and the stated mitigation covers only client IP truncation. Retention of tile keys in those logs is not addressed, and the retention values are still awaiting privacy sign-off.",
+     "evidence": "'Origin and CDN request logs: client IP is truncated ... logs are retained 14 days' with no mention of tile keys in logs. 'These values are proposed and need privacy-team sign-off before launch.'"
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "All data depends on one upstream source (WADE) and an unnamed CDN vendor. Exit cost and fallback are not discussed.",
+     "evidence": "'Our backend polls WADE every 10 min and serves zone geometry + ratings from our CDN.' ABSENT: CDN vendor identity and exit plan."
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The origin rate limit is keyed per IP, but origin may see CDN edge IPs rather than client IPs. If so, cache misses from one edge could hit 600 req/min and return 429s that CDN-fetched requests cannot back off from. Capacity is also unsupported: there is no per-instance throughput figure behind the 6-instance cap.",
+     "evidence": "'Rate limit at origin: 600 req/min per IP (CDN-cached responses are not counted).' 'origin autoscaling capped at 6 instances.'"
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The spend projection has no response size or egress price, so the ~$140/month figure cannot be checked. It also rests on the 92% hit rate the artifact itself calls an assumption, and the CDN control is an alert, not a spending cap.",
+     "evidence": "'Projected 1.8M zone requests/day at a 92% CDN hit rate; origin cost ~$140/month. The hit rate is an assumption...' 'CDN budget alert at $400/month'."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The offline high-water mark records device time as well as server-corrected time. A forward clock error recorded while online or offline could permanently push the mark ahead, causing all offline forecasts to show as expired until reinstall.",
+     "evidence": "'keeps a high-water mark of the latest time it has observed (device time or server-corrected time).'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The origin-side monitor cannot see responses served from CDN stale-while-revalidate, so the 'served past valid_until' alert would miss the exact failure it is meant to catch. The monitoring plan does not address this.",
+     "evidence": "'count of responses served past valid_until' and 'any API response served with valid_until in the past as current (threshold: 1)' versus 'the CDN serves cached responses with stale-while-revalidate'."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Cached API responses carry the server_time from when they were cached. The client's server offset is therefore computed against a stale server time, so valid_until is checked against a clock that lags by up to the CDN cache age. The artifact does not account for this.",
+     "evidence": "'every API response includes server_time. The client computes the offset between server time and device time' combined with 'CDN serves cached responses with stale-while-revalidate'."
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The agreed invariant is that stale safety information must never appear as current. The offline residual risk admits a path that violates it: after a reboot with no network and a clock set back before the app last ran, the 48-hour cap is measured against the same untrusted device clock, and no client telemetry can report it.",
+     "evidence": "'it cannot cover a clock set back before the app last ran on the device' and 'offline forecasts are treated as expired 48 h after the stored server time regardless of valid_until' (measured on device time)."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The monitoring relies on an invariant-violation event that the analytics section does not define. The analytics section lists only two events, and the QA rows covering clock behavior, the expiry-share alert, and the tile-key cap are all still Pending.",
+     "evidence": "'Analytics adds two events (layer toggled, card opened)' versus 'any client report of the invariant-violation event expired_forecast_rendered_in_color'. 'Alerts for served-past-valid_until and expired-zone share fire in staging | Pending'."
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "Expired forecasts and zones with no forecast both render as gray hatched fills. They are distinguishable only by label text, which may be easy to miss at map zoom.",
+     "evidence": "'Zones with no current forecast ... show a gray hatched fill and \"No current forecast\"' and 'the zone turns gray hatched with \"Forecast expired [time]\"'."
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "No gate-blocking value problem found. The layer addresses the stated user need, with the caveat that offline availability depends on the open legal item.",
+     "evidence": "'Layer toggle: Map layers > Avalanche forecast. Free for all users, no account needed.'"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "No gate-blocking friction problem found. Offline and expired states are explicitly labeled rather than silent.",
+     "evidence": "'gray \"Forecast unavailable offline\"' and 'gray \"Forecast temporarily unavailable\"'."
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "No gate-blocking accessibility problem found. VoiceOver, color-vision, and text-scaling checks are recorded as passing.",
+     "evidence": "'VoiceOver / TalkBack: ... 200% text | Pass'."
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The license requires attribution, but attribution is specified only for the card. Attribution on the map layer or legend is not described, and this should be confirmed with legal.",
+     "evidence": "'we must attribute and link to the issuing center' versus the card-only description: 'The card shows the center's name and logo'."
+    },
+    {
+     "lens": "compliance",
+     "severity": "blocker",
+     "claim": "Rollout step 2 turns the flag on for 40 external beta testers from Nov 19 to Nov 22. The artifact says the legal confirmation, privacy sign-off, and load test must all pass before the flag goes on for anyone beyond staff, and none of them is complete.",
+     "evidence": "'Before the flag is turned on for anyone outside staff, legal must confirm in writing ...' and 'Nov 19-22: flag on for staff and 40 ski-patrol beta testers.'"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Rollback does not reach offline phones. Setting the flag to false takes effect only on the next foreground with network, so an offline phone keeps coloring cached forecasts for up to 48 hours after a defect is found. The purge timing is also described inconsistently.",
+     "evidence": "'takes effect on next app foreground with network' and 'offline forecast data purged on next launch' (QA table)."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Center removal depends on two sources of truth: the config file and the remote-config list. Keeping them in sync is manual and creates a risk of drift.",
+     "evidence": "'adding it to avy_disabled_centers in remote config and editing config/avy_centers.json'."
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "The artifact says the Pending QA rows must pass before the flag goes on, but the flag goes on for staff and beta testers on Nov 19 while many of those rows are still Pending.",
+     "evidence": "'must pass before the flag goes on' and rows such as 'Offline: clock rolled back ... | Pending' alongside 'flag on for staff and 40 ski-patrol beta testers' on Nov 19-22."
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The Nov 23 public launch is a fixed date with no slack for App Store review delays or a failed gate. A 6.12 release slip would compress the load test and legal gates.",
+     "evidence": "'App store release: Thu 2026-11-19' and 'Remote flag on + blog post + in-app card: Mon 2026-11-23'."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5944,
+    "tokOut": 12736,
+    "usd": 0.0073871200000000005,
+    "critMs": 58816
+   },
+   "wallMs": 65483
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The online claim that a badly wrong device clock cannot change the result is not supported. The offset is refreshed only every 15 min while visible, and the artifact does not say the corrected time is anchored to a monotonic clock. A backward device-clock jump between refreshes can show a forecast past valid_until in color for up to 15 min.",
+     "evidence": "'A badly wrong device clock does not change the result while the device is online.' / 'The offset is refreshed on each foreground and at least every 15 min while the layer is visible.'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The offline reference is 'monotonic uptime', which on iOS and Android typically excludes time the device is asleep. Trusted time then lags real time after any sleep. The raw-device fail-safe (device more than 5 min ahead of trusted time means expired) would then mark valid offline forecasts expired after routine sleep. The artifact does not state which clock is used or test it.",
+     "evidence": "'the client stores the server time at download ... together with a monotonic uptime reference' / 'if the device clock reads later than that trusted value by more than 5 min, the forecast is treated as expired'"
+    },
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "The offline residual-risk exception lets a user-altered clock show expired avalanche ratings in color for up to 48 h. This directly breaks the agreed rule that the app must never present stale safety information as current. Only the Maps team has accepted it so far, and product and legal sign-off is still pending. Until that sign-off exists, the offline color path must not ship.",
+     "evidence": "'it is accepted by the Maps team and is flagged for sign-off by product and legal as an exception to the \"never stale as current\" rule before the flag goes on beyond staff.'"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "For a defect in ratings or rendering, offline phones keep showing wrong colored forecasts for up to 48 h. The remote kill switch does not reach them, the data_version kill condition needs a reconnect, and the fallback is an app update that still leaves existing stored data in place. There is no immediate offline-capable kill path.",
+     "evidence": "'The rollback does not reach phones that stay offline: they keep showing stored forecasts, still subject to valid_until and the 48 h offline cap' / 'offline phones are still covered only after they reconnect.'"
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The offline storage path depends on C-2209 terms that are unconfirmed: whether on-device storage is permitted, the retention limit, and the takedown window. The removal rollback claims compliance with a takedown time that nobody has confirmed. The plan has no recorded decision on whether the offline path ships.",
+     "evidence": "'legal must confirm in writing the C-2209 clause that permits on-device storage ... and the takedown window' / 'This window must be within the takedown time confirmed with legal for C-2209.'"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Zone ids are sent in analytics on every layer toggle and card open, with timing. Zone ids are coarse location, so this contradicts the artifact's own rule that tile keys are location data and are not written to analytics. The claim that events 'cannot be linked to a user or device' is asserted without any analytics-SDK or identifier analysis.",
+     "evidence": "'carrying the zone id only. They carry no location, account id, device id, or session id and cannot be linked to a user or device.'"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Tile-key log handling is undecided ('stripped or replaced'), and it is not stated for CDN-vendor-side logs, which the artifact says are kept. Per-request location data could persist on third-party systems. Privacy sign-off is still pending.",
+     "evidence": "'The `tiles` query parameter is stripped or replaced with a coarse region/zone bucket before logs are written' / 'These values ... are proposed and need privacy-team sign-off before launch.'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The endpoint rejects requests over 12 tiles with a 400, but the artifact never says how the client handles a viewport that snaps to more than 12 tiles, which is common at lower zoom. The layer may silently fail or show gray at normal zoom levels.",
+     "evidence": "'Max 12 tiles per request. Larger requests get a 400.' (no client behaviour for oversize viewports stated)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The load-test gate has no pass criteria. 'Within targets' refers to p95, error-rate, and hit-rate targets that are never defined, so the gate cannot be evaluated. The 6-instance cap is also unverified.",
+     "evidence": "'load test results within targets' / 'the per-instance throughput that justifies the cap is to be measured in the load test.'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The invariant-violation event is described as detection that the client is 'about to render' an expired forecast in color. The artifact never says the render is blocked when the check fires, so the safety guard may only report the violation after it has happened.",
+     "evidence": "'The invariant-violation event is sent when a client detects that it is about to render a forecast in color whose valid_until is past' / 'it is queued and sent on next network contact.'"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The $140/month origin figure is admitted to be unverified, the CDN egress price is missing, and the $400 CDN budget is an alert with no spending cap. A 100x traffic spike has no automatic limit on spend.",
+     "evidence": "'This figure is not yet verified' / 'CDN budget alert at $400/month, which is an alert and not a spending cap'"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The 600 req/min per-IP limit is described only as 'set high'. Carrier-NAT and venue sharing could push many legitimate in-season users into 429 and gray 'temporarily unavailable' states, and no shared-IP capacity figure is given.",
+     "evidence": "'Because many users share one IP (ski groups, venues, carrier NAT), the limit is set high'"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The zone color is a derived rollup (highest of three bands) rather than the issued rating, which sits uneasily with 'may not alter ratings' and may misrepresent a multi-band forecast on the map.",
+     "evidence": "'The zone color uses the highest of the three; the card lists all three bands with their ratings.'"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "Expired and no-current-forecast zones share the same gray hatched fill and differ only by label text, which reduces visual distinction for low-vision users.",
+     "evidence": "'Zones with no current forecast ... show a gray hatched fill' / 'Forecast expired [time]' (both gray hatched)"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Removing a center requires coordinated edits to config/avy_centers.json and remote config avy_disabled_centers. The two can drift, and the artifact gives no check that they agree.",
+     "evidence": "'by adding it to avy_disabled_centers in remote config and editing config/avy_centers.json'"
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "CDN-side logs and caching sit with a third-party vendor that the artifact never names. Retention and residency for that vendor are not stated, and there is no exit plan for the CDN dependency.",
+     "evidence": "'Origin and CDN request logs' (vendor and CDN-side retention not specified)"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 7981,
+    "tokOut": 12871,
+    "usd": 0.00786202,
+    "critMs": 59831
+   },
+   "wallMs": 91909
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The spec names CLOCK_MONOTONIC_RAW as a sleep-inclusive clock on iOS. On Darwin that clock is generally backed by mach_absolute_time, which pauses during sleep. The spec's own exclusion rule bans that class of clock, so the iOS trusted-time path could lag real time after sleep and keep expired forecasts in color.",
+     "evidence": "iOS `mach_continuous_time` / `CLOCK_MONOTONIC_RAW`; Clocks that pause during sleep (e.g. `mach_absolute_time`, `CLOCK_UPTIME_RAW`...) are not used"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "QA rows marked Pass for expiry and early-clock behavior describe offline-map and offline-download behavior, which is disabled in 6.12 (offline storage false, offline cells show 'Forecast unavailable offline'). These rows are not tagged offline or Pending, so they read as passing for the shipping state. They also predate the redesign.",
+     "evidence": "Expiry: device clock set past `valid_until`, online and in airplane mode with an offline map | Pass, gray 'Forecast expired'; Device clock moved earlier than offline download time | Pass, treated as expired"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "During a WADE outage the system keeps serving forecasts in color until valid_until, with no mechanism to detect a superseded forecast. A center that raises danger mid-day can be missed for hours while the zone stays colored as current, which conflicts with the agreed rule against presenting stale safety information as current. Only a 30-min alert covers this.",
+     "evidence": "If WADE is unreachable, our API keeps serving forecasts still inside `valid_until` and expires them on time; nothing is extended. Alert to Maps on-call after 30 min without a successful poll."
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The unauthenticated tile endpoint canonicalizes query parameters but does not strip unknown ones or validate that tile keys fall within the valid grid. An attacker can vary junk parameters or out-of-range keys to force cache misses and origin load, and the origin limit is per IP.",
+     "evidence": "Query parameters are canonicalized (sorted, deduplicated) before the cache key is built. ... Max 12 tiles per request. Larger requests get a 400. (No validation of tile range or unknown parameters is stated.)"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The origin limit of 600 req/min per IP is not sized against a shared-NAT venue or ski group, where many devices pan and zoom behind one address. Throttled clients fall to gray 'temporarily unavailable' on peak days, the users who rely on the layer most. No measured per-user request rate supports the number.",
+     "evidence": "Rate limit at origin: 600 req/min per client IP ... the limit is set high and clients back off on 429 using `Retry-After`."
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Hourly per-tile request counts are retained, but no minimum count threshold is defined. In remote backcountry tiles a count of 1 for an hour reveals one person's presence, so the aggregate can still be location-linked, which contradicts the stated treatment of tile keys as location data.",
+     "evidence": "Only aggregate per-tile request counts (no IP, no timestamp finer than 1 h) are kept for capacity planning."
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The 6.12 binary ships on Nov 19 with the tile-key requests and analytics code. The privacy policy update is asserted but not evidenced, and the analytics SDK configuration and log retention are still proposals awaiting sign-off. The store release is not gated on those.",
+     "evidence": "The privacy policy text is updated to say that viewed map areas are processed to serve forecasts. ... These values ... are proposed and need privacy-team sign-off before launch."
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The cost projection uses a request count in zone units while the endpoint is per tile, so the budget math cannot be reproduced. It also omits CDN egress, which is the main variable cost, and the $400 alert is not a cap. CDN cache hits are excluded from the origin rate limit, so cache-served scraping spends egress without bound.",
+     "evidence": "Projected 1.8M zone requests/day at a 92% CDN hit rate; origin cost ~$140/month. This figure is not yet verified ... CDN-cached responses are not counted. ... CDN budget alert at $400/month, which is an alert and not a spending cap"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Enabling offline storage, which the artifact says breaks the agreed never-stale rule for an unaccepted residual risk, is governed only by procedural gates. No technical precondition in the flag system blocks a remote flip. The dormant offline code ships in a store binary that cannot be recalled.",
+     "evidence": "`avalanche_offline_storage`, which is false at launch and stays false until the gates under 'Open item' are met."
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "Using the highest of three bands as the zone color is a derived display. The WADE agreement forbids altering ratings, and legal's review cited only card text and terms, not this derivation.",
+     "evidence": "The zone color uses the highest of the three; WADE ... may not alter ratings or forecast text."
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "Screen-reader behavior is specified only for danger-rated zones. Gray states (No current forecast, expired, temporarily unavailable) and the Zoom-in hint have no announcement specified.",
+     "evidence": "VoiceOver / TalkBack: zone announced as '[zone], danger 3 Considerable, issued [time]'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Client behavior when the network drops while the layer is visible is unspecified. The time reference ages silently, and it is not stated whether the displayed state changes.",
+     "evidence": "The reference is refreshed on each foreground and at least every 15 min while the layer is visible"
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "The data depends on a single source (WADE) under one contract, and the CDN vendor is unnamed. Exit cost and portability for either are not stated.",
+     "evidence": "the CDN vendor cannot enforce the field allow-list, IP truncation, and 14-day retention, launch is blocked"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Dormant offline design code and its state machine ship in 6.12 while disabled, adding untested complexity and hidden coupling to the release.",
+     "evidence": "Offline (design for when `avalanche_offline_storage` is enabled; not active in 6.12)"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "Schedule risk: the Nov 19-22 window must complete about 20 Pending QA rows, a 100x load test, privacy sign-off, and a log-retention check with the CDN vendor. Nov 23 may slip, which the plan partly covers.",
+     "evidence": "if they are not complete by Nov 22, the beta is skipped or moved, and the Nov 23 rollout is re-evaluated."
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "No gate-worthy issue found under this lens; the Pass results cover small screens and dark style.",
+     "evidence": "Small screens (iPhone SE, 360 dp Android) and dark map style: labels legible, card scrolls | Pass"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "No gate-worthy issue found under this lens.",
+     "evidence": "Free for all users, no account needed."
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "No gate-worthy issue found under this lens; the zoomed-out hint hides the layer rather than adding a step.",
+     "evidence": "the layer shows the hint 'Zoom in to see avalanche forecasts' instead of zone colors"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 10208,
+    "tokOut": 15958,
+    "usd": 0.00985092,
+    "critMs": 74178
+   },
+   "wallMs": 100144
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The 6.12 store binary is irreversible once submitted, but the privacy and flag-off checks that govern its network and analytics behaviour are still Pending. The submission is scheduled for Nov 19 and treated as a go regardless.",
+     "evidence": "'because a store binary cannot be recalled'; 'the QA check that no avalanche network traffic or events occur with the flag false must pass' (QA row: 'With avalanche_layer=false: no avalanche network requests... Pending'); analytics SDK sign-off and privacy policy/store disclosure updates have no evidence of completion."
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Tile keys and IP-linked request data reach CDN and origin logs during the Nov 19-22 staff-only flag-on period, before the log allow-list, IP truncation, 14-day retention and count threshold are signed off. The controls are described as proposed.",
+     "evidence": "'These values (tile-key handling, count threshold, IP truncation, retention) are proposed and need privacy-team sign-off before the flag is turned on beyond staff'; step 2: '`avalanche_layer` on for staff only, to complete the Pending QA rows'."
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The CDN cache key is the whole canonicalized tile set, so hit rate depends on how viewports combine tiles rather than on tile popularity. The 92% hit-rate assumption that drives the $400 budget is therefore weakly supported.",
+     "evidence": "'Query parameters are canonicalized (sorted, deduplicated) before the cache key is built.' and 'The 92% hit rate is an assumption that depends on tile snapping and must be re-estimated before launch.'"
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "Spend is controlled only by alerts, with no hard cap or automatic action. The flag goes to 100% without evidence that the budget owner accepted this gap, and the autoscaling cap of 6 is unmeasured.",
+     "evidence": "'These are alerts, not a spending cap.' ... 'If the CDN vendor supports a hard spend cap... Otherwise the alert plus the cached-request edge limit above is the control, and that gap is stated to the budget owner.' (no sign-off recorded); 'Origin autoscaling is capped at 6 instances, and the per-instance throughput that justifies the cap is to be measured'."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The rollout schedule conflicts with its own gates. 10% goes live with load tests, render-guard and verification-window checks still Pending, 100% follows 90 minutes later on undefined 'clean' dashboards, and the blog post drives traffic at 10:00 against a cold cache.",
+     "evidence": "'Nov 23 08:00: flag on for 10% of users'; 'if the check passes and dashboards are clean, flag on for 100%'; 'Nov 23 10:00: blog post and in-app card go live'; 'Rows marked Pending must pass before the flag goes on for anyone outside staff'."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The server-anchored time reference is required for all freshness decisions, but it comes from an uncached origin endpoint. At origin saturation, clients that should keep showing valid cached forecasts instead go gray, which contradicts the stated behaviour at the cap.",
+     "evidence": "'`GET /avy/v1/time`, `Cache-Control: no-store`, bypasses the CDN cache'; 'If the client has no server-anchored reference... it shows gray \"Forecast temporarily unavailable\" and no color'; 'Behavior at the autoscaling cap... clients show the last good forecast if still valid, otherwise gray'."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "CDN TTL is capped at valid_until, not at last_verified_at plus the 60-minute verification window. The CDN will therefore serve colored zones past the window by design, and the paging rule 'any response served in color past that window' will fire on normal behaviour.",
+     "evidence": "'the CDN `max-age` and stale-while-revalidate window for each object are capped so the object is never served past its own `valid_until`'; alert: 'any response served in color past that window (threshold: 1)'."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The claim that nothing is stored on device is load-bearing for the 6.12 rollback story and the offline gray state, but it is unverified. OS and map-SDK HTTP or tile caches are not addressed, and the sandbox inspection is Pending.",
+     "evidence": "'With no offline storage in 6.12, nothing is stored on phones, so this fully removes the layer and no stale ratings remain'; QA row: '6.12 binary: no forecast written to device storage after layer use (sandbox inspection)... Pending'."
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Trusted time for safety expiry comes from an unauthenticated endpoint. The artifact does not state TLS enforcement or certificate pinning, so a network attacker could hold a colored forecast past valid_until.",
+     "evidence": "'stores that value together with the sleep-inclusive monotonic reading'; 'GET /avy/v1/time' (unauthenticated); no statement on pinning or time-response integrity."
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "Privacy-critical log handling and edge rate limiting depend on one CDN vendor, and the artifact does not describe an exit path if that vendor cannot meet the controls.",
+     "evidence": "'If the CDN vendor cannot enforce the field allow-list, IP truncation, and 14-day retention, launch is blocked until it can.'"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The new gray-state safety copy may not be covered by legal review. LGL-902 is cited for card text and terms only.",
+     "evidence": "'Card text and terms-of-use update were reviewed by legal (LGL-902).' vs 'Forecast not verified since [time]. Check the center's site.'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The zone color and label use the highest of three band ratings, which is a derived value. C-2209 says ratings may not be altered, so this should be confirmed as presentation rather than alteration.",
+     "evidence": "'The zone color uses the highest of the three'; 'may not alter ratings or forecast text'."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Rollback timing is described inconsistently. It takes effect only on the next foreground with network, yet is also described as not depending on connectivity.",
+     "evidence": "'takes effect on next app foreground with network'; 'rollback does not depend on connectivity beyond the next foreground'."
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The time endpoint is not explicitly rate-limited and always hits origin, so it is an easy origin-load vector that bypasses the CDN.",
+     "evidence": "'GET /avy/v1/time, Cache-Control: no-store, bypasses the CDN cache'; rate limits are stated only for tile requests."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Freshness logic (server time, monotonic reference, verification window, high-water mark, render guard) is duplicated between server and client with many gray states, which is hard to test and invites divergence.",
+     "evidence": "'The server applies this rule when building responses. The client applies it again against trusted time'; six distinct gray-state messages."
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "No defect found in the UI-rendering lens. Gray and color states are labeled in text, and small-screen and dark-style checks pass.",
+     "evidence": "QA: 'Small screens (iPhone SE, 360 dp Android) and dark map style: labels legible, card scrolls | Pass'."
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "No defect found in the user-value lens. The layer is free, uses official ratings, and includes attribution and an expiry disclaimer.",
+     "evidence": "'Free for all users, no account needed.'; 'Read the full forecast and make your own assessment before entering avalanche terrain.'"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "No defect found in the efficiency lens. Viewports are batched to 12 tiles and at most 4 requests, with a zoom-in hint instead of errors.",
+     "evidence": "'the client splits the tiles into batches of at most 12 and issues at most 4 requests per viewport'."
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "No defect found in the accessibility lens. Color-vision, VoiceOver/TalkBack and 200% text checks pass, and levels are distinguishable by label text.",
+     "evidence": "'Color vision simulation (deuteranopia, protanopia, tritanopia): levels distinguishable via label text | Pass'."
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "No additional gate-worthy issue found beyond the lenses above.",
+     "evidence": "ABSENT: no further defect identified in the artifact text."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 12529,
+    "tokOut": 16308,
+    "usd": 0.010490120000000002,
+    "critMs": 71196
+   },
+   "wallMs": 133765
+  }
+ ],
+ "artifact": "# Release proposal: Avalanche forecast layer in Ridgeline Maps 6.12\n\nOwner: Maps team · App store release: iOS + Android 6.12, Thu 2026-11-19 · Remote flag on + blog post + in-app card: Mon 2026-11-23 · Change: RM-6120\n\n## What ships\n\nA map layer that colors backcountry forecast zones by today's avalanche danger rating, using forecasts published by the regional avalanche centers in the Western Avalanche Data Exchange (WADE). Tapping a zone opens a summary card and a link to the center's full forecast.\n\n- Coverage at launch: the 19 WADE member centers in the US and Canada (list in `config/avy_centers.json`, same list in the blog post).\n- Layer toggle: Map layers > Avalanche forecast. Free for all users, no account needed.\n- **Decision for 6.12: forecasts are not stored on device, and the 6.12 binary contains no offline forecast storage code.** The storage path is not shipped dormant behind a flag, because a store binary cannot be recalled and a remote flip would then be the only barrier. Offline storage will ship, if at all, in a later app release that includes the code, only after the gates under \"Open item\" are met. That release will also introduce the `avalanche_offline_storage` remote flag, which will be false at launch. Until then, offline map areas show gray \"Forecast unavailable offline\" for the layer. The offline sections below describe the design for that later release. They are not part of 6.12.\n- **No client-side persistence in 6.12 (including OS and SDK caches):** forecast requests use an ephemeral HTTP configuration with no disk cache (iOS: ephemeral `URLSession` configuration with no `URLCache` on disk; Android: OkHttp client with no `Cache`). Forecast data is held in memory only and drawn by the app's own layer renderer. It is not passed through the map SDK's tile or resource cache. The sandbox inspection in QA covers the HTTP cache directories and the map SDK cache as well as app storage.\n\n## Data source and license\n\n- WADE data agreement signed 2026-09-30 (contract C-2209): display in our app is permitted for free and paid users as long as the layer is not behind a paywall; we must attribute and link to the issuing center and may not alter ratings or forecast text.\n- **Open item (blocks any build containing offline forecast storage from shipping, and blocks `avalanche_offline_storage` from being turned on for anyone, including staff):** the summary above covers display only. Before offline storage is built into a release, legal must confirm in writing the C-2209 clause that permits on-device storage of forecasts for offline maps, any retention limit, and the takedown window if a center asks us to stop. LGL-902 covers only card text and terms of use. Until that confirmation exists, the decision stands: we ship without offline storage, nothing is stored on device, and offline map areas show gray \"Forecast unavailable offline\". The offline expiry and rollback provisions below then do not apply, and expiry and rollback concern online use only.\n- The card shows the center's name and logo (permitted in the agreement), the issue time, the valid-until time, and \"Read the full forecast\" linking to the center's page.\n- We show the rating exactly as issued (1-5 plus name). We never interpolate, smooth, or forecast ratings ourselves.\n\n## Danger display\n\n- Forecasts rate three elevation bands. The zone color uses the highest of the three; the card lists all three bands with their ratings.\n- Zones use the standard North American danger scale colors, each zone label also shows the number and name (e.g. \"3 Considerable\"), and the legend lists all five levels with names.\n- Zones with no current forecast (out of season, or none issued today) show a gray hatched fill and \"No current forecast\" — never a color.\n- Card text: \"Avalanche forecasts are issued by [center]. Conditions change. Read the full forecast and make your own assessment before entering avalanche terrain.\" Card text and the terms-of-use update were reviewed by legal (LGL-902).\n\n## Freshness and offline\n\n- Our backend polls WADE every 10 min and serves zone geometry + ratings from our CDN.\n- Each forecast carries `valid_until`. After it passes, the zone turns gray hatched with \"Forecast expired [time]\"; the app never shows an expired rating in color.\n- **Verification window (guards against a superseded forecast):** `valid_until` alone cannot reveal that a center has issued an update we have not fetched, for example when WADE is unreachable and a center raises the danger mid-day. Each center's zones therefore carry `last_verified_at`, the time of the last successful WADE poll that confirmed that center's forecast. If trusted now minus `last_verified_at` exceeds 60 min (proposed; product confirms before launch), the zone is drawn gray hatched with \"Forecast not verified since [time]. Check the center's site.\" and never in color. The server applies this rule when building responses. The client applies it again against trusted time, so CDN-cached objects cannot keep a zone colored past the window. In a WADE outage the layer therefore goes gray after at most about 60 min instead of staying colored until `valid_until`. This trades availability for not showing a possibly superseded rating as current.\n- **Render guard:** the expiry and verification checks run in the render path, immediately before a zone is drawn. If the check finds a forecast expired or unverified, the zone is drawn gray and not in color, and the `expired_forecast_blocked_at_render` event is queued. The event reports that an expired forecast got past the upstream filters. It never stands in for the block.\n- **Clock used for all trusted-time logic:** a monotonic clock that keeps counting while the device sleeps (Android `SystemClock.elapsedRealtime()` / `CLOCK_BOOTTIME`; iOS `mach_continuous_time` only). `CLOCK_MONOTONIC_RAW` is not used on iOS, because its sleep behavior varies by platform and OS version and is not guaranteed here. Clocks that pause during sleep (e.g. `mach_absolute_time`, `CLOCK_UPTIME_RAW`, Android `uptimeMillis`) are not used, because trusted time would lag real time after every sleep. The sleep QA row below verifies this on real devices.\n- **Online:** every API response includes `server_time`, the time the origin generated the response, plus a `generated_at` for the cached object. Because CDN-cached responses carry the `server_time` from when they were cached, the client does not use `server_time` from a cached response as \"now\". It reads current server time from a small uncached time endpoint (`GET /avy/v1/time`, `Cache-Control: no-store`, bypasses the CDN cache) and stores that value together with the sleep-inclusive monotonic reading at that moment. Current time is then the stored server time plus monotonic elapsed time. `valid_until` is evaluated against that value. Device wall-clock time is not an input to this evaluation, so changing the device clock, forward or backward, at any moment (including between refreshes) does not change the result. The reference is refreshed on each foreground and at least every 15 min while the layer is visible, which bounds monotonic drift.\n  - **The time endpoint does not depend on zone-origin capacity.** It is a static-logic handler with no data-store access, deployed as a separate small service (or edge function) with its own capacity and autoscaling, so saturation of the zone origin does not affect it. It is exempt from the zone-endpoint per-IP limits and has its own generous limit sized in the load test, and the 100x run includes it.\n  - **A failed refresh does not discard the anchor.** If a refresh fails (network error, 429/503), the client keeps using the last good anchor plus sleep-inclusive monotonic elapsed time, for at most 6 h since the anchor was taken. The 60 min verification window and `valid_until` still apply on top of it, so a stale anchor cannot make a forecast look fresher than the window allows. Past 6 h without a successful refresh, or if the monotonic reference is lost (reboot), the layer shows gray.\n  - If the client has no server-anchored reference (first launch without a successful time call, or after a reboot before the first one), it shows gray \"Forecast temporarily unavailable\" and no color. This is the only case in which the time dependency causes gray while the zone origin is saturated, and the separate time service keeps it narrow.\n  - The server also never returns a forecast whose `valid_until` has passed as current. The CDN `max-age` and stale-while-revalidate window for each object are capped so the object is never served past the earlier of its own `valid_until` and `last_verified_at` + the 60 min verification window. The CDN therefore does not serve a colored object past either bound, and the client check is a second layer, not the only one.\n- **Offline (design for the later release that includes offline storage and enables `avalanche_offline_storage`; not in 6.12):** the client stores the server time at download (and at each later sync, taken from the uncached time endpoint) together with the sleep-inclusive monotonic reference, and keeps a high-water mark of the latest trusted time it has observed. The high-water mark is advanced only by server-corrected time (from the uncached time endpoint) and by last server time plus monotonic elapsed time. It is never advanced by raw device time alone, so a forward device-clock error cannot push it ahead of real time. Current time offline is the greatest of the high-water mark and last server time plus monotonic elapsed time. A forecast is treated as expired if that value is past `valid_until`. Raw device time offline is used only to fail safe: if the device clock reads later than that trusted value by more than 5 min, the forecast is treated as expired, and if it reads earlier than the high-water mark or the stored server time, the forecast is treated as expired. A forward clock error therefore only shows forecasts as gray expired until the next online sync restores the trusted time, and does not corrupt stored state; it does not require reinstall. Rolling the clock back after download cannot revive an expired forecast while the device has not rebooted.\n- **Residual risk (applies only if offline storage is built and enabled):** after a reboot with no network and a clock manually set back, the monotonic reference resets and the trusted-time reference is lost. Without a trusted time source the app cannot verify the clock, so it fails closed rather than relying on the device clock: after a reboot while offline, forecasts stored before the reboot are shown in color only if the device time is not earlier than the persisted high-water mark and the stored server time, and the 48 h offline cap is measured against the persisted high-water mark and device time together (greatest of the two), never device time alone. A clock set back to before the persisted high-water mark therefore shows gray expired. The one case this cannot detect is a clock set back to a time still later than the persisted high-water mark, which can occur only if the app has not run since the forecast was stored. In that case an expired forecast could be shown in color for up to 48 h from the stored server time, only for a user who deliberately changes their clock; the card and zone label still show the issue time and valid-until time in plain text. **This breaks the agreed \"never stale as current\" rule, and no one has accepted it.** The Maps team does not treat it as accepted. Offline color rendering stays off until product and legal give written sign-off on this exception (or the design is changed to close it, for example by never showing stored forecasts in color after a reboot without a fresh sync). Because this path has no network, it cannot report to client telemetry; it is covered by the QA rows below instead of monitoring.\n- If WADE is unreachable, our API keeps serving forecasts still inside `valid_until` and still inside the 60 min verification window, and expires them on time; nothing is extended. After the verification window, zones are served as unverified (gray). Alert to Maps on-call after 30 min without a successful poll.\n\n## Privacy and security\n\n- The app requests forecasts for the visible map by snapped tile keys (see Endpoint design); device GPS location is not sent. The tile keys and client IP do reveal the coarse area a user is viewing, and for backcountry users that can indicate travel plans. We therefore treat tile keys as location data: they are not joined with account or device identifiers, and they are not written to analytics.\n- **6.12 binary and the store release:** with `avalanche_layer=false`, the 6.12 binary sends no avalanche requests and emits no avalanche analytics events. Because the code ships in the store binary on Nov 19, the 6.12 store submission is gated on three items. The privacy team must sign off on the analytics SDK configuration. The updated privacy policy text must be published, and the App Store and Google Play privacy disclosures updated to cover viewed map areas processed to serve forecasts. And the QA check that no avalanche network traffic or events occur with the flag false must pass on the exact release candidate being submitted. Completion of each item is recorded in RM-6120 with evidence before submission. If any of these is not complete by the submission date, 6.12 is submitted without the avalanche code, or the release moves. The submission is not made on the assumption that the items will complete later.\n- Origin and CDN request logs, including logs held by the CDN vendor: the `tiles` query parameter is removed from every log, not replaced with a bucket. For the CDN this is done by configuring the vendor's log fields to an allow-list that excludes the query string, and by logging only the path, status, cache status, and the `valid_until` and `generated_at` response headers. Logs therefore hold no per-request tile keys at origin, CDN edge, or the vendor. Only aggregate per-tile request counts (no IP, no timestamp finer than 1 h) are kept for capacity planning, and a per-tile hourly count below 20 is never stored. Counts are tallied in memory, and any tile-hour under the threshold is folded into a coarser regional total before anything is written. The threshold of 20 is proposed and needs privacy-team sign-off, so that a count in a remote tile cannot reveal one person's presence. Client IP is truncated (last octet for IPv4, last 80 bits for IPv6) before storage, at origin and in the vendor's logs, and logs are retained 14 days, then deleted. If the CDN vendor cannot enforce the field allow-list, IP truncation, and 14-day retention, launch is blocked until it can.\n  - **These log controls are in place and verified before the flag is turned on for anyone, including staff.** The staff-only period does not run with looser logging. The privacy-team sign-off on the proposed values (tile-key handling, count threshold, IP truncation, retention) is required before the flag is turned on beyond staff. If sign-off changes a value, the stricter value applies and is reapplied to existing logs.\n- Analytics adds three events: layer toggled, card opened, and `expired_forecast_blocked_at_render`. **None of them carries a zone id, center id, tile key, or any other location.** They carry only the event name, app version, platform, and for the render-guard event a reason code. Zone ids are coarse location and are treated like tile keys. The events also carry no account id, device id, or session id. The claim that they cannot be linked to a user or device is not accepted until the privacy team has reviewed the analytics SDK configuration (advertising/vendor identifiers disabled, no persistent install id, IP not stored or truncated at ingestion) and the network capture in QA confirms it. The render-guard event is queued and sent on next network contact. To find the affected zone, the team relies on the server-side probe and edge-log checks, not on the client event.\n- Endpoint design: `GET /avy/v1/zones?tiles=z/x/y,…` is read-only, unauthenticated, and serves only WADE public data.\n  - Tile keys use a fixed grid at fixed zoom levels. The client snaps the viewport to the grid, so equal viewports produce equal cache keys.\n  - **Validation before the cache key is built:** the only accepted query parameter is `tiles`. Any other parameter gets a 400 and is never part of a cache key. The CDN cache key is configured as an allow-list of `tiles` only, so junk parameters cannot create distinct cache entries. Each tile key must use an allowed zoom level, have x and y inside that level's grid, and fall within the coverage area of the 19 centers. Malformed, out-of-range, or out-of-coverage keys get a 400. Errors are not cached at the CDN, or are cached for at most a few seconds, and the origin handles them without querying the data store.\n  - Max 12 tiles per request. Larger requests get a 400. There is no arbitrary-bbox query and no full-dataset query path at origin.\n  - **Client behavior for large viewports:** the client picks the finest fixed grid level at which the viewport snaps to at most 12 tiles, so a normal request never exceeds the cap. Where that is not possible even at the coarsest level, the client splits the tiles into batches of at most 12 and issues at most 4 requests per viewport. Beyond that (zoomed out further), the layer shows the hint \"Zoom in to see avalanche forecasts\" instead of zone colors, and does not show gray or an error. The client never sends a request over 12 tiles, and a 400 is treated as a client bug, logged without tile keys, and shown as gray \"Forecast temporarily unavailable\".\n  - Query parameters are canonicalized (sorted, deduplicated) before the cache key is built. The cache key is the whole canonical tile set, so hit rate depends on how often different viewports snap to the same combination of tiles, not only on how popular each tile is. See the cost section for how this is measured and the fallback if it is poor.\n  - **Rate limits.** Origin limit: a provisional 600 req/min per client IP. The number is not yet supported by a measured per-user request rate and is not final. Before launch, the load test and the staff beta measure requests per active device per minute (pan and zoom, including cold-cache starts). The limit is then set to at least 100 concurrent devices behind one IP at the measured p95 per-device rate, so that a ski group, venue, or carrier NAT is not throttled on peak days. Origin sits behind the CDN, so the limit is keyed on the real client IP forwarded by the CDN (trusted header, accepted only from CDN egress ranges), not the CDN edge IP; CDN-cached responses are not counted at origin. A second, higher limit per CDN edge/origin-shield is set so that one edge cannot exhaust capacity, and the CDN uses origin shielding and request collapsing so misses are coalesced. Because cache hits are not counted at origin, the CDN also applies an edge rate limit per client IP that counts cached responses, sized with the same measurement. This bounds egress spend from cache-served scraping. Clients back off on 429 using `Retry-After`. A throttled client keeps showing its last good forecast while it is still inside `valid_until` and the verification window; otherwise it shows gray \"Forecast temporarily unavailable\", never a color. The edge-level limit returns 503 with `Retry-After` rather than 429, and the CDN is configured not to cache these errors.\n\n## Cost and capacity\n\n- **Cost model, stated in tile requests (the endpoint's unit):** monthly cost = origin cost + CDN egress. Origin cost = tile requests/day × (1 − CDN hit rate) × 30 over measured per-instance throughput and instance price. Egress = tile requests/day × 30 × measured average response size × CDN price per GB. The earlier figure, 1.8M zone requests/day with ~$140/month origin cost, was in zone units and excluded egress. It is withdrawn as a budget number and kept only as a rough origin-only estimate. Tile requests/day, average response size, CDN egress price per GB, and hit rate are all recorded from the load test and the staff beta, and the projection is recomputed from them.\n  - **The 92% hit rate is withdrawn as a budget input.** It was an assumption, and the cache key is the whole canonical tile set, so it depends on how real viewports combine tiles, not on tile popularity. The hit rate is measured by replaying realistic pan and zoom sequences (phone and tablet, portrait and landscape, cold and warm cache) through the real snapping logic, and by the staff beta. The budget projection uses the measured value only. If the measured hit rate is below 85%, the endpoint is changed before launch so the cacheable unit is a single tile (fixed-aligned tile requests multiplexed over HTTP/2) instead of a tile set, and the load test is repeated.\n  - The CDN budget alerts are at 50%, 80%, and 100% of $400/month. These are alerts, not a spending cap. The on-call response at 80% is to lower the flag percentage, raise cache TTLs (never beyond the caps in the Freshness section), or tighten the edge per-IP limit. If the CDN vendor supports a hard spend cap or an automatic edge-limit action, it is enabled before the flag goes on for everyone. Otherwise the alert plus the cached-request edge limit above is the control, and the budget owner must accept that in writing before the flag goes beyond staff (see Rollout gates). Without that acceptance or a vendor hard cap, the flag does not go beyond staff.\n  - Origin autoscaling is capped at 6 instances. The cap is a provisional value: it is confirmed or raised only from the measured per-instance throughput in the load test (see the autoscaling criterion below), and the rollout does not proceed on an unmeasured cap.\n- **Load test (gate before Nov 23):** test at 10x and 100x the projected peak request rate, using realistic tile distributions and viewport-combination replays, and cold and warm CDN caches. Record the measured response size, CDN egress cost per GB, CDN hit rate, per-instance throughput at target p95, origin p95, error rate, per-device request rate, and the cost projection. These pass criteria are proposed by the Maps team and are confirmed before the test is run:\n  - 10x peak, warm cache: origin p95 ≤ 300 ms, 5xx rate ≤ 0.1%, CDN hit rate ≥ 85% measured with the viewport-combination replay (the earlier 92% projection is the assumption being tested), projected monthly CDN + origin cost ≤ $400.\n  - 10x peak, cold cache: origin p95 ≤ 800 ms and 5xx rate ≤ 1% during warm-up, with no origin saturation.\n  - Autoscaling cap: 6 instances × measured per-instance throughput at p95 ≤ 300 ms must be at least the origin request rate at 10x peak with the measured hit rate. If not, the cap is raised and the test repeated.\n  - Cache-busting: requests with junk parameters or out-of-range tile keys must produce 400s without creating cache entries or reaching the data store, and must not raise origin load beyond the per-IP limit.\n  - Time endpoint: during the 100x run and while the zone origin is saturated, `GET /avy/v1/time` keeps p95 ≤ 300 ms and returns no 429/503.\n  - 100x peak: no pass/fail on latency; required behavior is graceful degradation. Origin and edge return 503/429 with `Retry-After`, clients show last good forecast inside `valid_until` and the verification window or gray \"Forecast temporarily unavailable\", and there are zero responses served past `valid_until`.\n  - All runs: zero responses served past `valid_until` or past the verification cap as current, measured at the CDN edge and origin.\n- **Behavior at the autoscaling cap:** the CDN serves cached responses with stale-while-revalidate, but never past the caps in the Freshness section. Origin returns 503 with `Retry-After` when saturated, and clients show the last good forecast if still valid, otherwise gray \"Forecast temporarily unavailable\". Clients with an existing time anchor keep evaluating freshness without the zone origin, because the time endpoint is separate. The flag can be lowered to a smaller percentage to shed load.\n\n## Monitoring\n\n- Dashboard: WADE poll success, last update per center, endpoint 5xx and p95, CDN hit rate, crash-free sessions on 6.12, share of zones served as expired, unverified, or unavailable, and count of responses served past `valid_until` or past the verification cap, measured at the CDN edge (from CDN logs of the `valid_until` and `generated_at` of each served object, including stale-while-revalidate hits) as well as at origin, since origin alone cannot see cache-served responses. A synthetic probe also fetches a sample of tiles through the CDN every 5 min and checks `valid_until` and `last_verified_at` against server time.\n- Pages Maps on-call:\n  - no successful poll for 30 min\n  - any in-season center whose forecast has been expired for more than 2 h with no replacement (measured against that center's own `valid_until`, not a fixed 26 h window)\n  - any in-season center whose `last_verified_at` is older than the 60 min verification window\n  - any object served by the CDN or origin after its verification cap (`last_verified_at` + 60 min) has passed, measured from edge logs and the synthetic probe (threshold: 1). The client would still draw such a zone gray, so this signals a failure of the server-side TTL cap, not a display failure.\n  - any API response served with `valid_until` in the past as current, whether from origin, CDN edge logs, or the synthetic probe (threshold: 1)\n  - share of in-season zones shown expired, unverified, or unavailable above 10% for 30 min\n  - any client report of the render-guard event `expired_forecast_blocked_at_render` (threshold: 1; no location or identifiers). The client has already drawn the zone gray. The page means an upstream filter failed and needs investigation.\n  - endpoint 5xx > 1% for 10 min\n  - time endpoint 5xx or p95 > 300 ms for 5 min\n\n## QA summary\n\nQA ran on release candidates 6.12.0 (iOS build 6120.4, Android 612004) with `avalanche_layer=true` and the production `config/avy_centers.json`, against the production WADE feed. Those builds predate the redesign in this revision (verification window, sleep-inclusive clock, request validation, removal of the offline code path). Every row that touches those areas is Pending and is re-run on the next release candidate. Rows marked Pending must pass before the flag goes on for anyone outside staff; staff-only use before then is for completing these checks. The two rows covering the flag-false behavior and the no-device-storage check must pass on the release candidate that is submitted to the stores. Rows marked \"offline\" apply to the later release that includes offline storage and its flag `avalanche_offline_storage`; they must pass, and the sign-offs in the Open item must exist, before that code ships or that flag is turned on.\n\n| Check | Result |\n|---|---|\n| All 19 centers: all three band ratings, issue time, valid-until and link match the center's own site for 3 consecutive days | Pass, 0 mismatches |\n| Online expiry: device clock set past `valid_until` with network available; zone stays per server time | Pending (re-run on new RC; earlier Pass was for offline-map behavior and is not carried over) |\n| Expiry in airplane mode with an offline map: 6.12 shows gray \"Forecast unavailable offline\" | Pending |\n| Offline: device clock moved earlier than offline download time | Pending (offline; earlier run was on a build with offline storage and predates the redesign; expected: treated as expired) |\n| Offline: expiry with device clock set past `valid_until` in airplane mode with an offline map | Pending (offline; earlier run predates the redesign; expected: gray \"Forecast expired\") |\n| Online: device clock set wrong in either direction, including a backward jump mid-session between time-endpoint refreshes; expiry follows server time + sleep-inclusive monotonic elapsed, including when zone responses are CDN-cached | Pending |\n| Online: no server reference yet (time endpoint blocked) or after reboot before first sync: gray \"Forecast temporarily unavailable\", no color | Pending |\n| Online: time-endpoint refresh fails (blocked, 503) after a good anchor: forecasts inside `valid_until` and the verification window stay colored for up to 6 h of anchor age, then go gray; zone-origin saturation alone does not turn valid zones gray | Pending |\n| Trusted clock keeps counting across device sleep on iOS (`mach_continuous_time`) and Android (sleep ≥ 1 h, real devices): valid forecasts stay colored, expired ones stay gray, no false expiry from the 5 min fail-safe | Pending |\n| Verification window: WADE poll blocked in staging; zones turn gray \"Forecast not verified\" after 60 min, including when served from CDN cache, and on-call is paged | Pending |\n| CDN TTL cap: objects are not served by the CDN past `last_verified_at` + 60 min or `valid_until` (including stale-while-revalidate hits); edge-log alert does not fire in normal operation and does fire when the cap is deliberately misconfigured in staging | Pending |\n| Render guard: a forecast injected past `valid_until` (or past the verification window) into the render path is drawn gray and emits the event | Pending |\n| Offline: clock rolled back to just after download, app reopened, forecast past `valid_until` | Pending (offline; expected: treated as expired via high-water mark) |\n| Offline: device clock set far forward, then network restored | Pending (offline; expected: gray expired while offline, high-water mark not advanced by device time, recovers after sync without reinstall) |\n| Offline: reboot with no network and clock set back, before and after app has run | Pending (offline; expected: expired when earlier than persisted high-water mark; otherwise bounded by 48 h cap, which requires the sign-off above) |\n| Offline forecast older than 48 h from stored server time | Pending (offline; expected: treated as expired) |\n| 6.12 binary: after layer use, no forecast data is present in app storage, the OS HTTP/URL cache directories, or the map SDK tile/resource cache (sandbox inspection on iOS and Android, including after force-quit and reboot), and no offline storage code path is present; offline map areas show gray \"Forecast unavailable offline\" | Pending |\n| With `avalanche_layer=false`: no avalanche network requests and no avalanche analytics events are sent (on the RC submitted to the stores) | Pending |\n| Out-of-season center (no forecast) | Pass, gray hatched \"No current forecast\" |\n| WADE poll blocked 2 h in staging | Pass on earlier build (valid forecasts served, expired ones gray, alert at 30 min); re-run with the verification window is the row above |\n| Alerts for served-past-`valid_until` (origin, CDN edge logs, synthetic probe), unverified-center, and expired-zone share fire in staging | Pending |\n| `expired_forecast_blocked_at_render` event is emitted by a test build and pages on-call | Pending |\n| Tile-key endpoint: cap of 12 tiles enforced, equal viewports share a cache key | Pending |\n| Tile-key endpoint: unknown parameters, out-of-grid, wrong-zoom, and out-of-coverage keys return 400, create no cache entries, and do not reach the data store | Pending |\n| Viewports needing more than 12 tiles (zoomed out, tablet, landscape): client batches or shows \"Zoom in\" hint, never sends over 12, never shows an error or gray | Pending |\n| Request logs (origin, CDN edge, CDN vendor-side) contain no per-request tile keys; IP truncation and 14-day retention verified (before any staff flag-on); per-tile hourly counts below 20 are not stored | Pending |\n| Origin rate limit keys on forwarded client IP, not CDN edge IP; edge per-IP limit counts cached responses; limits sized from measured per-device rate with ≥100 devices behind one IP not throttled | Pending |\n| Load test at 10x and 100x against the pass criteria above (including the viewport-combination hit-rate replay and the time endpoint), behavior at autoscaling cap and under 429/503, and recomputed cost projection in tile requests including egress | Pending |\n| Center removal propagates to offline copies on next foreground with network | Pending (offline) |\n| Color vision simulation (deuteranopia, protanopia, tritanopia): levels distinguishable via label text | Pass |\n| VoiceOver / TalkBack: zone announced as \"[zone], danger 3 Considerable, issued [time]\"; card fully readable; 200% text | Pass |\n| Small screens (iPhone SE, 360 dp Android) and dark map style: labels legible, card scrolls | Pass |\n| Network capture: no GPS location in avalanche requests or analytics; requests contain only snapped tile keys; analytics payloads carry no zone id, center id, or persistent identifiers | Pass for GPS; tile-key and analytics re-capture Pending |\n| `avalanche_layer=false`: layer hidden; no stored forecast data exists to purge in 6.12 | Pending (earlier Pass covered offline-data purge, which applies only to the later offline release) |\n\n## Rollout\n\nGates before the 6.12 store submission: privacy-team sign-off on the analytics SDK configuration; the updated privacy policy published and the store privacy disclosures updated; and the check that no avalanche traffic or events occur with the flag false, passing on the submitted release candidate. Evidence for each is recorded in RM-6120 before submission. If any gate is incomplete on the submission date, 6.12 is submitted without the avalanche code or the release moves; it is not submitted on the expectation that the gate completes later.\n\nGates before the flag `avalanche_layer` is turned on for anyone, including staff: log controls (query string excluded from CDN and origin logs, IP truncation, 14-day retention) configured and verified at origin, CDN edge, and the CDN vendor.\n\nGates before the flag `avalanche_layer` is turned on beyond staff (this includes the ski-patrol beta testers): privacy-team sign-off on log retention, the tile-count threshold, and tile-key handling (including CDN vendor logs); load test results meeting the pass criteria above (including the measured hit rate and the measured per-instance throughput that confirms or replaces the autoscaling cap of 6), with the rate limits sized from the measured per-device rate; written acceptance by the budget owner of the cost controls (a vendor hard cap or automatic edge-limit action, or else alerts plus the cached-request edge limit with the no-hard-cap gap stated); the verification-window threshold confirmed by product; and the Pending QA rows above (other than the offline rows) passing.\n\nGates before offline forecast storage ships in any build or `avalanche_offline_storage` is turned on for anyone (not part of the Nov 23 rollout, and requires a new app release): legal confirmation of offline storage under C-2209 (storage permitted, retention limit, takedown window); product and legal sign-off on the offline residual risk; an offline kill path for the exposure window described under Rollback that product and legal accept; and the offline QA rows passing.\n\n1. Nov 19: 6.12 released with `avalanche_layer=false` for everyone and no offline storage code in the binary, only if the store-submission gates above were met at submission (otherwise the release ships without the avalanche code or moves). Public store notes do not mention the layer yet. App Review notes for 6.12 describe the layer and the remote flag, and the review build had the layer enabled.\n2. Nov 19-22: `avalanche_layer` on for staff only, once the log controls above are verified, to complete the Pending QA rows. The 40 ski-patrol beta testers are added only after all gates above are complete; if they are not complete by Nov 22, the beta is skipped or moved, and the Nov 23 rollout is re-evaluated.\n3. Nov 23 08:00: only if every gate above for going beyond staff is complete and recorded in RM-6120, and the CDN cache has been warmed for the 19 centers' coverage tiles using the synthetic probe: flag on for 10% of users. Maps team runs the production check that all 19 centers render, with correct ratings, expiry, and gray states. No-go on any failure, and the flag is set back to false. If any gate is incomplete, the rollout moves and this step does not start.\n4. Nov 23 09:30: if the check passes, flag on for 100%. \"Dashboards are clean\" means all of the following over the 10% period: no page from the Monitoring list fired; endpoint 5xx ≤ 0.1% and origin p95 ≤ 300 ms; CDN hit rate at or above the measured value used in the budget; projected daily spend at or below the daily share of the $400 budget; zero responses served past `valid_until` or the verification cap; and crash-free sessions on 6.12 no lower than on 6.11. Otherwise the flag stays at 10% or is lowered.\n5. Nov 23 12:00 or later: blog post and in-app card go live, only after the 100% stage has run at least 2 h with the criteria in step 4 still met and the cache warm, so the post's traffic does not arrive against a cold cache. If the criteria are not met, the post and card wait. Blog post: \"Avalanche forecasts from 19 avalanche centers across the US and Canada, now in Ridgeline Maps. Free for everyone.\" The blog post and card do not promise offline forecasts.\n6. Store notes for 6.13 mention the layer once it is live for everyone.\n\n## Rollback\n\n- Set `avalanche_layer=false` (remote config, takes effect on next app foreground with network). The layer and card disappear. In 6.12 forecast data is held in memory only, with the in-app HTTP cache disabled and the map SDK cache not used for forecasts, so nothing is stored on phones and this fully removes the layer with no stale ratings remaining. This claim depends on the no-device-storage QA row (app storage, HTTP cache directories, and map SDK cache) passing; it does not go beyond staff until that row passes. Rollback does not depend on connectivity beyond the next foreground.\n- **If offline storage is later built and enabled:** on-device forecast data stored with offline maps is deleted on that same foreground, so no stale ratings remain on phones that come online. Rollback does not reach phones that stay offline. They keep showing stored forecasts, still subject to `valid_until` and the 48 h offline cap, so exposure is at most 48 h from the stored server time. A server-published minimum `data_version` invalidates older stored copies on the next sync, but offline phones are covered only after they reconnect. No immediate offline-capable kill path exists, and that is why offline storage is not in 6.12 at all, rather than shipped behind a flag that could be flipped remotely. Before shipping it, product and legal must accept this exposure window or approve a shorter cap, and the cap is set to the shortest window they accept. If the window is not acceptable for a given defect, the response is to ship an app update that disables offline storage and purges existing stored data on first launch, and to set `avalanche_offline_storage=false`.\n- A single center can be removed by adding it to `avy_disabled_centers` in remote config and editing `config/avy_centers.json` (e.g. if a center asks us to stop). Its zones disappear from the API within 10 min. In 6.12, nothing else needs purging. If offline storage is later enabled, clients purge that center's stored forecasts, including offline copies, on next foreground with network. A phone that stays offline keeps showing the center's offline copy until it reconnects or the forecast expires at its `valid_until` (at most 48 h), whichever comes first. That window must be within the takedown time legal confirms for C-2209, which is not yet confirmed. Offline storage does not ship until it is. If the window is not within the confirmed takedown time, offline storage stays out.\n- The endpoint is additive; disabling it affects nothing else.",
+ "fixerUsage": {
+  "calls": 5,
+  "tokIn": 44507,
+  "tokOut": 54713,
+  "usd": 0.725138,
+  "critMs": 340474
+ },
+ "status": "running"
+}

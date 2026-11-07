@@ -1,0 +1,59 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "plan-09",
+ "rep": 2,
+ "wallMs": 415318,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "`fct_page_events_v2` holds a full copy of personal event data from backfill through the swap, but the retention and erasure jobs do not cover it. An erasure that lands between v2's last build and the 12:00 swap deletes the user from raw and `fct_page_events` only. The `bq cp -f` then publishes v2 and restores the erased rows. The swap steps are also manual and take no `analytics_write` lock.",
+   "evidence": "\"privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`\" / \"the retention and erasure jobs include `fct_page_events_legacy` in their table lists\" (no mention of `fct_page_events_v2`) / `bq cp -f fct_page_events_v2 fct_page_events`"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The cross-partition dedup safety check is vacuous. It was run over the 4.2B rows of `fct_page_events`, which is already globally deduplicated, so each `event_id` appears once there. A zero count cannot show that raw duplicates never map to two `event_date`s. The clamp to [`ingested_at` − 30 d, `ingested_at`] depends on `ingested_at`, so a retry ingested later could clamp to a different date. Both copies would then survive and double count. The only detector is a weekly test.",
+   "evidence": "\"Checked over all 4.2B rows: 0 such `event_id`s (query linked in DATA-412).\" / \"`unique_event_id` runs weekly\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The old full refresh rebuilt everything from raw nightly, so a failed second-step erasure was healed on the next run. With the incremental design, rows left in `fct_page_events` after a failed erasure sit in partitions outside the ~31-day rebuild window and are never removed. The plan has no retry, reconciliation or alert for privacy-svc.",
+   "evidence": "\"privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`. Rebuilds read only `raw.events`\" / \"at most ~31 days\""
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The cost table omits the parity test's scans. It fingerprints every column of both full tables each night, which is roughly 3.8 TiB or about $24 per night. That runs for 7 nights before the swap and 30 nights afterward against legacy. The 30 nights alone add about $700, so the claim that month 1 is still below today's spend is not supported.",
+   "evidence": "\"~$76\" for backfill + 7 parity nights / \"The nightly parity test keeps running (new vs legacy)\" / \"Month 1 is ~$1,960, still below today.\""
+  },
+  {
+   "lens": "rollback-correctness",
+   "severity": "minor",
+   "claim": "\"No gap, no lost events\" is overstated. Restoring the legacy table gives its last nightly state. The `bq cp` and the PR revert are also separate steps, so a scheduled incremental run between them would hit an unpartitioned table.",
+   "evidence": "\"Rollback: `bq cp -f fct_page_events_legacy fct_page_events`, then revert the PR ... No gap, no lost events.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The Looker savings compare the full-September baseline of 61.2 TiB with dry runs of only the top 20 queries. The 3 unfiltered dashboards will still scan the full table, so the ~$54 estimate is not established.",
+   "evidence": "\"dry runs of September's top 20 queries by bytes against v2: 61.2 → 8.7 TiB\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The high-water mark is read from `max(ingested_at)` in the table, but the plan never states that `ingested_at` is an output column. It also does not say whether table-level IAM grants survive the `bq cp -f` replacement.",
+   "evidence": "\"max `ingested_at` already in the table − 2 h\" / \"Columns, types, grain and dedup logic ... are unchanged\""
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 71401,
+  "tokOut": 63771,
+  "usd": 0.13709402,
+  "critMs": 82439
+ }
+}

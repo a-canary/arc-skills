@@ -1,0 +1,131 @@
+{
+ "approach": "rubric-single",
+ "case": "deploy-03",
+ "rep": 1,
+ "wallMs": 120847,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Remote-config step 1 (1% of 3.2 users) is not gated on backfill completion, so users can see streaks computed from a partially backfilled streak_events table, which undercounts their streaks.",
+   "evidence": "Backfill job starts after full deploy. Remote config streak_sync_v2: 1% → 10% → 50% → 100% ... 24h between steps. Gates list has no backfill-complete or zero-mismatch condition."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Rollback to 2.14 leaves streak_events out of sync with streak_count: 2.14 does not write events, and during the 1h canary (and any rollback) 2.14 pods write streak_count without events. The dual-write derivation is never specified, so 3.1 clients reading streak_count can show values that disagree with 3.2 event-derived streaks.",
+   "evidence": "2.14 runs against the migrated database unchanged (verified in staging). streak_count remains authoritative-compatible. streak_count is kept and dual-written by 2.15 ... canary 10% of pods for 1h, then full."
+  },
+  {
+   "lens": "ux-value",
+   "severity": "major",
+   "claim": "When the flag is reverted, 3.2 clients fall back to local-only streaks. A phone that did not record watch or tablet completions will show a lower streak, so users can lose a visible streak on rollback.",
+   "evidence": "set streak_sync_v2 to 0%; 3.2 clients revert to local-only streaks within one config fetch (≤ 15 min). QA: 3.2 client against 2.14 API ... Pass (sync silently disabled, local streak shown)."
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The backfill of 18.4M rows was only dry-run on a snapshot with no live traffic. Its behaviour against production write load, lock contention with dual-writes, and impact on the p95 < 250ms gate is unmeasured.",
+   "evidence": "dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches vs streak_count. Batches of 5k, checkpointed. No rate limit or load test is described."
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "streak_events grows with every completion on every device, and no retention, partitioning, index sizing, or growth projection is given for 400k MAU.",
+   "evidence": "ABSENT: retention or archival policy, partitioning or index plan, and storage growth estimate for new table streak_events (user_id, habit_id, day, source_device, created_at)."
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "No storage, write-amplification, or push-notification cost estimate is given for the new event table and reminder volume.",
+   "evidence": "ABSENT: cost estimate for streak_events storage and writes, and for reminder notifications."
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The release adds event-level history with timestamps and a persistent per-install source_device linked to user_id, which is new data. The claim that the privacy label and Play data-safety form are unchanged is asserted without the diff, and there is no retention or account-deletion path for streak_events.",
+   "evidence": "Privacy nutrition label and Play data-safety form unchanged (verified against the updated data inventory). source_device stores a per-install random ID. ABSENT: retention and deletion of streak_events on account deletion."
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The new write paths (event sync and streak-saver repair, which takes a client-supplied day) do not state authorization that habit_id belongs to the caller, validation of backdated day within the allowed window, or validation of source_device. These are untrusted inputs reaching writes.",
+   "evidence": "ABSENT: authz and input validation for event writes and the saver endpoint. Streak saver: limit 1 per 30 days enforced server-side (only the limit is tested)."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The idempotency key (user_id, habit_id, day) does not define which timezone 'day' is computed in, so a traveller or a device with a different local date can produce duplicate or missing days. The QA timezone case passed, but the rule is not stated.",
+   "evidence": "idempotent on (user_id, habit_id, day). Timezone change mid-streak (UTC−8 → UTC+9), DST boundary | staging | Pass."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The streak_mismatch_total gate allows up to 0.1% of synced users (up to ~400 users at 400k MAU) to have wrong streaks before stopping. That tolerance is not justified for a data-correctness gate, and the 0-mismatch result is from a snapshot dry-run only.",
+   "evidence": "streak_mismatch_total (server vs client recompute) < 0.1% of synced users. 0 mismatches vs streak_count (snapshot dry-run)."
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The crash-free 99.87% figure comes from a 1,900-user, 6-day beta. It is not stated that this build has streak_sync_v2 enabled, and its size is far below the gate's population.",
+   "evidence": "Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The reminder delivery mechanism (server push or local scheduling), its timezone and DST handling, and its failure alerting are not described.",
+   "evidence": "Optional streak reminder notification at the user's chosen time. ABSENT: scheduling mechanism, delivery failure handling, and alerts."
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "The saver button says 'Repair yesterday', but the feature says any one missed day in 30 can be repaired. A missed day that is not yesterday would be labelled incorrectly.",
+   "evidence": "Repair yesterday ... one missed day per 30 days can be repaired from the streak screen."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Keeping streak_count and streak_events as two dual-written sources of truth creates hidden coupling and drift risk until STR-1244 removes streak_count.",
+   "evidence": "habits.streak_count is kept and dual-written by 2.15 ... Dropping streak_count is not part of this release (scheduled for 3.4)."
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "No finding on vendor lock-in beyond the existing Go backend. Data residency for streak_events is not stated.",
+   "evidence": "ABSENT: data residency and region for streak_events."
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "No attack: VoiceOver/TalkBack and Dynamic Type/200% font scale were tested, with no truncation.",
+   "evidence": "VoiceOver / TalkBack on streak screen and pre-prompt | device lab | Pass. Dynamic Type XXL / Android font scale 200% | device lab | Pass, no truncation."
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "No attack: notification permission is deferred behind a pre-prompt, with provisional authorization on iOS and POST_NOTIFICATIONS requested only after the user opts in on Android 13+.",
+   "evidence": "We do not request OS notification permission on launch or on upgrade. Android 13+: POST_NOTIFICATIONS is requested only after 'Remind me'."
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "No attack: the pre-prompt is capped to once per 30 days after 'Not now', and the flow has no extra steps beyond the permission request.",
+   "evidence": "only once per 30 days if they choose 'Not now'."
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The backfill covers only the current streak, not history. Any longest-streak or historical metric would have no event backing.",
+   "evidence": "one streak_events row per day of each habit's current streak. ABSENT: any historical or longest-streak requirement."
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3336,
+  "tokOut": 10205,
+  "usd": 0.00560002,
+  "critMs": 47452
+ }
+}

@@ -1,0 +1,77 @@
+{
+ "approach": "clustered-panel",
+ "case": "merge-01",
+ "rep": 1,
+ "wallMs": 175228,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "idempotency",
+   "severity": "blocker",
+   "claim": "client_order_id is regenerated on every loop iteration, so a retry after a timeout or 502/503/504 submits under a new ID. The broker cannot dedupe across IDs, so an order accepted on attempt 1 can be filled again on attempt 2. This breaks the agreed safe-to-retry constraint and the PR's stated justification.",
+   "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { const clientOrderId = randomUUID(); try { ... client_order_id: clientOrderId ... } ... \"the broker dedupes on it, so a retry after a timeout cannot double-fill\""
+  },
+  {
+   "lens": "risk-limits",
+   "severity": "blocker",
+   "claim": "Switching from floor to ceil lets the buy quantity exceed the per-symbol maxNotional cap that sizing must never exceed. Example: maxNotional 10050, price 100, lotSize 1 gives 101 shares = 10100 USD. Other examples: maxNotional 10000, price 300, lotSize 10 gives 12000 USD. The added tests use only exact multiples and do not catch this.",
+   "evidence": "const lots = headroom / price / lotSize;\n  return Math.ceil(lots) * lotSize;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The PR says sizing rounds to lot size before submit, but intent.qty is passed to the broker unchanged, and the diff only alters sizeBuy. Lot rounding on the submit path is not established by the diff.",
+   "evidence": "qty: intent.qty,  (unchanged in submit.ts)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The 4000ms timeout depends on BrokerClient.post accepting a third options argument, and the retry depends on it throwing an error named \"TimeoutError\". Neither is shown in the diff. If either assumption fails, hung requests are either unbounded or never retried.",
+   "evidence": "{ timeoutMs: 4000 } and (err as Error).name === \"TimeoutError\"; ABSENT: BrokerClient.post signature and timeout error contract"
+  },
+  {
+   "lens": "testing",
+   "severity": "major",
+   "claim": "No test covers the retry path (stable clientOrderId across attempts, 4xx not retried, timeout retried) or the notional-cap invariant for non-multiple headroom.",
+   "evidence": "ABSENT: submitOrder retry tests and a sizing test asserting notional <= maxNotional; added tests only use exact multiples"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Retry adds no overall deadline. Worst case is about 3×4s timeouts plus backoff (~13s) per order. Concurrent orders retrying together during the open can create a retry storm on an already-failing broker, and the limit price may be stale by the time a late fill lands.",
+   "evidence": "const MAX_ATTEMPTS = 3; ... { timeoutMs: 4000 } ... await sleep(250 * 2 ** (attempt - 1));"
+  },
+  {
+   "lens": "risk-limits",
+   "severity": "major",
+   "claim": "Headroom ignores in-flight and pending orders. Combined with retries that may create additional live orders, the cap can be exceeded by orders submitted but not yet reflected in currentQty.",
+   "evidence": "const headroom = maxNotional - currentQty * price;"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The change merges and deploys before market open with no feature flag, kill switch, or rollback plan. A retry or sizing bug on live money cannot be disabled without a redeploy.",
+   "evidence": "ABSENT: feature flag, kill switch, or rollback procedure"
+  },
+  {
+   "lens": "observability",
+   "severity": "minor",
+   "claim": "The retry log omits clientOrderId and error status, so operators cannot tell whether a retry duplicated or dropped an order.",
+   "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, attempt });"
+  },
+  {
+   "lens": "dependencies",
+   "severity": "minor",
+   "claim": "The sleep helper is imported from a module not included in the diff, so its existence and behavior are unverified.",
+   "evidence": "import { sleep } from \"../util/sleep\";  (file not shown)"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 19177,
+  "tokOut": 10948,
+  "usd": 0.0093084,
+  "critMs": 22200
+ }
+}

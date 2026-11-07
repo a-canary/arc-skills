@@ -1,0 +1,202 @@
+{
+ "approach": "self-consistency-3",
+ "case": "merge-04",
+ "rep": 1,
+ "wallMs": 78595,
+ "verdict": "ATTACKS",
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The up migration adds private_notes and then DROP COLUMN notes, destroying every existing note. The down migration re-adds an empty notes column and cannot restore the data. Notes are user-written and unrecoverable elsewhere, and migrations run automatically on deploy after merge, so this is irreversible production data loss with no human gate.",
+   "evidence": "0087_private_notes.up.sql: \"ALTER TABLE user_recipes ADD COLUMN private_notes text;\" \"ALTER TABLE user_recipes DROP COLUMN notes;\"; down.sql: \"ALTER TABLE user_recipes ADD COLUMN notes text;\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR describes the migration as a pure rename with no data change, but the SQL copies nothing and drops the original column. The claim is contradicted by the artifact's own migration.",
+   "evidence": "\"Pure rename, no data change; the down migration restores the old name.\" versus \"ALTER TABLE user_recipes DROP COLUMN notes;\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "A rename should be ALTER TABLE ... RENAME COLUMN. ADD and DROP on a ~140M-row table take ACCESS EXCLUSIVE locks and can queue behind long transactions, stalling reads and writes. Because the migration runs on deploy, old app instances still selecting ur.notes will error once the column is dropped during a rolling deploy.",
+   "evidence": "\"ALTER TABLE user_recipes DROP COLUMN notes;\" with \"user_recipes has ~140M rows\" and \"Migrations run automatically on deploy after merge to main.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The query has no LIMIT and loads every saved row for the user plus the recipe join on each page request, then slices in memory. Users with more than 200k saved recipes pay for the full set on every page, which is unlikely to fit the 300ms p99 budget and wastes DB and memory.",
+   "evidence": "\"WHERE ur.user_id = $1 ORDER BY ur.saved_at DESC, ur.id DESC\", [userId] with no LIMIT, then \"const page = rows.slice(start, start + limit);\". Context: \"heaviest users have more than 200k saved recipes\" and \"API p99 budget is 300ms.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "If the cursor row was unsaved between pages, which is the scenario the change is meant to handle, findIndex returns -1 and start becomes 0. The client silently receives the first page again, causing duplicates or looping instead of an error or a keyset fallback.",
+   "evidence": "\"const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Removing offset and changing the response shape is a breaking API change with no versioning. The PR asserts that the client already sends cursor, but the diff contains no client change and the old endpoint never returned nextCursor. Any client still sending offset will get page one on every request.",
+   "evidence": "\"The client already sends `cursor` from the previous page's `nextCursor`.\" Diff removes \"const offset = Math.max(Number(req.query.offset) || 0, 0);\" and no client files are changed."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A negative limit with an empty result set makes page[page.length - 1] read index -1 and throw a TypeError, so the request returns a 500. limit is not clamped to a positive value.",
+   "evidence": "\"const limit = Math.min(Number(req.query.limit) || 50, 100);\" and \"start + limit < rows.length ? page[page.length-1].id : null\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The test only covers the happy path. It does not test a cursor that no longer exists, nor inserts or deletes between pages, which is the drift problem the PR claims to fix.",
+   "evidence": "\"it(\\\"pages with cursor\\\"\" with only sequential GET calls and no mutation between them"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Renaming to private_notes is only a naming convention. Nothing in the diff, such as a type, select allowlist, or test, prevents a future shared view from selecting it, so the stated protection is not enforced.",
+   "evidence": "\"so it is obvious in queries which field must never be exposed on shared views\" with no guard added in the diff"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The up migration is not a rename. It adds an empty private_notes column and drops notes, so every existing user-written note is destroyed. The artifact says users cannot recover these notes elsewhere, and the migration runs automatically on merge to main.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text; ALTER TABLE user_recipes DROP COLUMN notes;"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The down migration cannot undo the data loss. It re-creates notes as an empty column, so rolling back leaves all users with blank notes. The one-way door is armed by an automatic deploy.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN notes text; ALTER TABLE user_recipes DROP COLUMN private_notes;"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR description contradicts the SQL. It claims a pure rename with no data change, but the migration adds a new column and drops the old one.",
+   "evidence": "\"Pure rename, no data change; the down migration restores the old name.\" vs \"ALTER TABLE user_recipes DROP COLUMN notes;\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "A rename (ALTER TABLE ... RENAME COLUMN notes TO private_notes) is the correct change here. It keeps the data and needs no copy step.",
+   "evidence": "ABSENT: no RENAME COLUMN statement anywhere in the migration."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The schema change and the code change ship together with no expand/contract sequence. During a rolling deploy, old app instances still select ur.notes and fail once the column is gone, and new instances fail if the migration has not yet run.",
+   "evidence": "ABSENT: no deploy ordering or compatibility plan. The migration drops notes while saved.ts switches to ur.private_notes in the same PR."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "ALTER TABLE on a ~140M-row table takes an ACCESS EXCLUSIVE lock. Queued behind any long-running query, it blocks all reads and writes to user_recipes, which stalls the API well beyond the 300ms p99 budget.",
+   "evidence": "ALTER TABLE user_recipes DROP COLUMN notes;  (inside BEGIN/COMMIT)"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Every request loads the user's entire saved set (200k+ rows for heavy users) and slices it in JavaScript. Work and memory grow with total saves, not page size, which breaks the 300ms p99 budget. The query also has no LIMIT and no supporting index on (user_id, saved_at, id).",
+   "evidence": "WHERE ur.user_id = $1 ORDER BY ur.saved_at DESC, ur.id DESC`,\n    [userId],  ...  const page = rows.slice(start, start + limit);"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "If the cursor refers to a recipe that was unsaved or deleted between pages (the very drift case this change is meant to fix), findIndex returns -1, start becomes 0, and the client receives page one again. Infinite scroll then loops or duplicates items.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The client compatibility claim is unverified, and the offset parameter is removed with no fallback. Any client still sending offset (older app versions, other consumers) silently gets the first page on every request.",
+   "evidence": "\"The client already sends `cursor` from the previous page's `nextCursor`.\" vs the diff removing req.query.offset entirely"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "No evidence that other code paths reference user_recipes.notes (ORM models, jobs, other queries, shared-collection code). Any such reference breaks as soon as the migration runs.",
+   "evidence": "ABSENT: no grep or search results for 'notes' across the repo."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A negative limit passes the Math.min guard unchanged. The slice then returns an empty page, and page[page.length - 1] is undefined, which throws and returns a 500.",
+   "evidence": "const limit = Math.min(Number(req.query.limit) || 50, 100);  ...  page[page.length - 1].id"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The test covers only the happy path. It has no case for an unknown or deleted cursor, no case for a negative limit, and no migration test for the notes-to-private_notes data path.",
+   "evidence": "it(\"pages with cursor\", ...) with no other test cases in the diff"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The up migration adds an empty private_notes column and then drops notes. No data is copied, so every existing user note on ~140M rows is destroyed. The notes are free text that users cannot recover elsewhere. Migrations run automatically on merge to main, so this executes on deploy.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The down migration cannot restore lost data. It recreates an empty notes column and drops private_notes, so rollback after deploy permanently loses the notes written during the window the new code was live.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN notes text;\nALTER TABLE user_recipes DROP COLUMN private_notes;"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR description says the change is a pure rename with no data change, but the migration adds and drops columns instead of renaming. The claim is contradicted by the artifact itself.",
+   "evidence": "\"Pure rename, no data change; the down migration restores the old name.\" vs \"ALTER TABLE user_recipes DROP COLUMN notes;\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The migration and the new code ship together with no expand/contract sequence. During a rolling deploy, old app instances still select ur.notes, which the migration has already dropped, so they will error.",
+   "evidence": "ur.saved_at, ur.notes\n       FROM user_recipes ur ... (old query) vs ur.private_notes (new query), with migration 0087 dropping notes"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The query has no LIMIT, so every page request loads the user's entire saved list (over 200k rows for heavy users, including note text) and then slices in Node. This repeats on every page and breaks the 300ms p99 budget for the heaviest users.",
+   "evidence": "WHERE ur.user_id = $1\n      ORDER BY ur.saved_at DESC, ur.id DESC`,\n    [userId],"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "If the cursor's recipe was unsaved between page loads, findIndex returns -1, so start becomes 0 and the response restarts from the first page. A client following nextCursor can loop or show duplicates. The code has no handling for a missing cursor.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The offset parameter is removed with no compatibility path. Any existing client still sending offset is silently ignored, so it receives the first page on every request and may loop forever.",
+   "evidence": "-  const offset = Math.max(Number(req.query.offset) || 0, 0);\n+  const cursor = typeof req.query.cursor === \"string\" ? req.query.cursor : null;"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The claim that the client already sends cursor from nextCursor is unsupported. The server never returned nextCursor before this diff, and the PR does not show any client change or proof that the deployed client sends cursor.",
+   "evidence": "\"The client already sends `cursor` from the previous page's `nextCursor`.\" (no client diff or reference in artifact)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A negative limit can crash the handler. With one saved recipe and limit=-1, slice returns an empty page and page[page.length-1] is undefined, which throws a TypeError and returns a 500.",
+   "evidence": "const limit = Math.min(Number(req.query.limit) || 50, 100);\n  ...\n    start + limit < rows.length ? page[page.length - 1].id : null;"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The test only covers the happy path. It has no tests for a stale or unknown cursor, a request sending the removed offset, a negative limit, or the column rename and its rollback.",
+   "evidence": "it(\"pages with cursor\", ...) is the only test added; no stale-cursor or migration test in the diff"
+  }
+ ],
+ "usage": {
+  "calls": 3,
+  "tokIn": 10359,
+  "tokOut": 14985,
+  "usd": 0.00759663,
+  "critMs": 25264
+ }
+}

@@ -1,0 +1,76 @@
+{
+ "approach": "cascade",
+ "case": "plan-10",
+ "rounds": [
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The plan does not say where the pending processor deletions and their retry state live once the user row has been deleted in the transaction. A crash or deploy between commit and the external calls could silently lose an erasure obligation. It also does not say where processor-side IDs (such as the Stripe customer ID) are kept. The design should write a durable per-processor task inside the same transaction.",
+     "evidence": "'After the DB transaction commits: Amplitude... Zendesk... Stripe...' | ABSENT: durable outbox or per-processor state"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Invoice rows are 'kept', but the registry only offers delete or nullify, and the purge runs across all 23 referencing tables. The plan does not say how the invoice table and its foreign key to users are handled.",
+     "evidence": "'its action (delete, or nullify for rows owned by someone else)' vs 'Kept: invoice records'"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The abuse defence relies on the notice email reaching the real owner. The plan does not say whether an email change is blocked or notified to the old address during the grace period or before confirmation.",
+     "evidence": "'The confirmation email gives the real owner 14 days to cancel even if their password was used.'"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "Screen 1 specifies a notice only for store subscriptions. Web Stripe users are not told that their subscription is cancelled at the end of the period or what happens to paid time, even though the account is deactivated at confirm.",
+     "evidence": "'Subscription notice, only when relevant (§3)' with §3 specifying copy only for App Store and Google Play"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The purge job ignores the feature flag, and only the first batch has a dry-run. The plan names no pause switch for the irreversible nightly purge if a later bug appears.",
+     "evidence": "'the purge job ignores the flag'"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The claim that nothing else is kept is loose. deleted_accounts has no stated retention limit, and Sentry, email delivery and push tokens are not in the purge list. Logs and backups are disclosed with retention periods.",
+     "evidence": "'Nothing else is kept.' and 'keeps only purged user IDs and dates (no PII)'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Alerting on purge lag or job failure is not defined. A ticket opens only after 7 days of retries, and the 21-day success target leaves almost no margin once nightly batching is added.",
+     "evidence": "'100% of purges complete within 21 days of confirmation (dashboard)'"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The plan does not say whether parlo.app/account/delete stays live when the flag is turned off. The Play data-safety form depends on that page.",
+     "evidence": "'flag off hides the entry points only'"
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 10809,
+    "tokOut": 18708,
+    "usd": 0.05914462,
+    "critMs": 101517
+   },
+   "wallMs": 224959
+  }
+ ],
+ "artifact": "# Plan: self-serve account deletion\n\nOwners: 2 engineers (1 backend, 1 web/mobile) · 3 weeks · Epic PAR-2207\n\n## 1. Why\n- iOS build 4.18 was rejected under App Store guideline 5.1.1(v) (apps with account creation must offer in-app account deletion). All iOS releases are blocked until this ships.\n- Support handled 1,140 deletion requests/month (Aug–Sep average, Zendesk tag `delete-account`). Median time to completion is 6 days; each takes ~9 min of agent time and a manual Rails console script.\n- Google Play's data-safety form requires a web link where users can request deletion; today we list a support email address.\n\n## 2. User flow (web, iOS, Android)\n- Entry: Settings → Account → \"Delete account\" on all three clients, plus the web page parlo.app/account/delete, linked from the Play listing and the help centre.\n- Screen 1, \"What happens when you delete your account\":\n  - Progress, streaks, courses, club messages and leaderboard history are permanently deleted 14 days after you confirm.\n  - \"Download my data first\" links to the existing data export (emailed ZIP). An export requested here is still delivered after you confirm deletion.\n  - Billing records we must keep by law are kept (§4).\n  - Subscription notice, only when relevant (§3).\n  - No retention offer, discount or survey. One button: \"Continue\".\n- Screen 2: re-authenticate. Password users enter their password; Apple/Google sign-in users re-authenticate with that provider. Re-auth is valid for 10 minutes; if it expires the user re-auths and returns to the same step without losing anything.\n- Screen 3: \"Delete my account\" (destructive style) and \"Cancel\". On confirm:\n  - All sessions and refresh tokens are revoked.\n  - The account is deactivated: hidden from leaderboards, friends and clubs (club messages included); push and marketing email are paused.\n  - Email to the account address: \"Your Parlo account will be deleted on {date}. Changed your mind? Log in before then, or use this link.\" The link is single-use, signed, valid until the purge.\n- Users who cannot log in use parlo.app/account/delete: we email a confirmation link to the account address, and clicking it counts as re-auth. The page never reveals whether an address has an account (\"If an account exists, we've sent a link\").\n- Logging in during the 14 days shows \"Your account is scheduled for deletion on {date}\" with \"Keep my account\", which restores the account exactly as it was, including notification and marketing preferences.\n- Accessibility: native components only; the destructive button has a full-text label; flow tested with VoiceOver, TalkBack, keyboard-only web and Dynamic Type XXL / 200% font scale.\n\n## 3. Subscriptions\n- Web (Stripe): at confirm, the subscription is set to `cancel_at_period_end`, so it never renews during the grace period. \"Keep my account\" unsets it. At purge, any still-active subscription is cancelled. Refunds follow the existing refund policy, linked from screen 1; nothing changes there.\n- App Store / Google Play: we cannot cancel these. If the user has an active store subscription, screen 1 says \"Deleting your account does not cancel your App Store subscription\" (or Google Play) with a \"Manage subscription\" button deep-linking to the platform page, before \"Continue\".\n\n## 4. Purge (day 14)\n- Nightly `AccountPurgeJob` processes accounts whose grace period has ended; each account is one DB transaction across `users` and the 23 tables that reference it.\n- Purge registry: `config/purge_registry.yml` lists every table with a `user_id` or `*_user_id` column and its action (delete, or nullify for rows owned by someone else). A CI test fails if any such column in `db/schema.rb` is missing from the registry, so new tables cannot be forgotten.\n- Kept: invoice records (amount, date, VAT, billing name and country) for the statutory retention period under §147 AO, then removed by the existing invoice retention job; disclosed in privacy policy §7. Nothing else is kept.\n- No other system holds user-level data beyond the processors below (data inventory DPI-2026, reviewed Sep 2026). After the DB transaction commits:\n  - Amplitude: user deletion API.\n  - Customer.io: `DELETE /customers/{id}`.\n  - Zendesk: end-user permanent deletion.\n  - Stripe: detach payment methods and redact customer metadata; invoices stay as required.\n  - Sign in with Apple users: `POST /auth/revoke` for their refresh token.\n- Each call retries with exponential backoff for up to 7 days; anything still failing opens a `purge-failed` ticket for the privacy lead. Worst case (14 + 7 days) stays inside the one-month Art. 17 deadline. A dashboard shows pending, completed and failed per processor.\n- Backups: Postgres snapshots roll off after 35 days and are not edited. Table `deleted_accounts` keeps only purged user IDs and dates (no PII); the restore runbook re-applies purges from it after any restore, so a restore cannot resurrect a deleted account.\n- Application logs and Sentry error reports have 30-day retention (privacy policy §7).\n- After purge the email address can be used to register a new, empty account.\n\n## 5. Abuse\n- A stolen session alone cannot delete an account: re-auth is required.\n- The confirmation email gives the real owner 14 days to cancel even if their password was used.\n- Web requests are rate-limited to 5/hour per IP and 3/day per email address.\n\n## 6. Rollout and rollback\n- Feature flag `account_deletion` per client. Week 3: staff accounts (60) first, then 100%, then App Store resubmission the same week.\n- The first real purge batch (14 days after launch) runs in dry-run mode first; the privacy lead checks the account list and per-table row counts before it runs live.\n- Rollback: flag off hides the entry points only. Requests already confirmed are still purged on schedule (the purge job ignores the flag), \"Keep my account\" and the email cancel link keep working, and new requests go back to the current manual support process. No confirmed request is lost.\n- Tests: request spec per registry table; staging run with 500 synthetic accounts across password / Apple / Google sign-in and Stripe test-mode subscriptions; Apple sandbox revoke; restore-runbook drill on a staging snapshot.\n\n## 7. Success measures\n- Deletion support tickets < 100/month by end of December (from 1,140).\n- 100% of purges complete within 21 days of confirmation (dashboard).\n- \"Keep my account\" rate tracked, no target.",
+ "fixerUsage": {
+  "calls": 0,
+  "tokIn": 0,
+  "tokOut": 0,
+  "usd": 0,
+  "critMs": 0
+ },
+ "status": "cleared"
+}

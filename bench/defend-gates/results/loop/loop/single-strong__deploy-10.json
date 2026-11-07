@@ -1,0 +1,34 @@
+{
+ "approach": "single-strong",
+ "case": "deploy-10",
+ "rounds": [
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Stage advance criteria say \"not above baseline\" with no tolerance or minimum sample. Stage 1 is about 6,100 units, with installs only in a 02:00-05:00 window and a 14-day postpone option. Few units may update in 3 days, so the gate could be noisy.",
+     "evidence": "HVAC fault telemetry not above 4.7 baseline, support contacts per 1k units not above baseline"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3801,
+    "tokOut": 844,
+    "usd": 0.020161199999999997,
+    "critMs": 7343
+   },
+   "wallMs": 18674
+  }
+ ],
+ "artifact": "# Release proposal: Hearthline T2 thermostat firmware 4.8\n\nOwner: Device Firmware · OTA start: Tue 2026-11-10 · Release notes + app 9.3 store listing: same day · Change: FW-4801\n\n## What ships\n\n- **8-period schedules**: up to 8 setpoint changes per day (was 4). Edited in app 9.3+.\n- **Away Assist** (optional, off by default): the thermostat's built-in motion sensor sets Away mode after 2 h with no motion during scheduled \"home\" periods, and returns to schedule on the first motion. Away uses the user's existing Away setpoints.\n- Fixes: humidity reading drift on rev B boards; Wi-Fi reconnect after router reboot now < 60 s.\n\nFleet: 612,400 T2 units, US and Canada. Hardware: rev B 22%, rev C 51%, rev D 27%.\n\n## Schedule format and downgrade\n\n- 4.8 stores schedules as v2 (8 periods). It also writes a v1 schedule (4 periods) on every edit, keeping the 4 periods closest to the user's wake / leave / return / sleep anchors; the cloud stores both.\n- 4.7 reads only v1, so a unit downgraded from 4.8 keeps a valid schedule. The app shows \"Some schedule changes were simplified\" if v2 had more than 4 periods.\n- 4.8 does not increment the secure-boot anti-rollback counter (no security fixes in this release), so 4.7 remains installable.\n- When a unit on 4.7 edits its schedule, the cloud discards the stale v2 copy, so a later re-upgrade starts from the current v1 schedule.\n- App 9.2 and older can view but not edit 8-period schedules; they show \"Update the app to edit this schedule\" instead of the editor.\n\n## Away Assist and privacy\n\n- Motion is processed on the device. Only the resulting Home/Away state is sent to the cloud (needed to show it in the app); it is kept 7 days and then deleted. No raw motion data leaves the thermostat.\n- Turning it on: Settings > Away Assist shows what it does and what is stored, with a toggle. Turning it off deletes stored Home/Away history.\n- Privacy notice section 3 updated (legal review LGL-4471). Away Assist does not change existing data sharing; nothing is shared with utilities or third parties, and Home/Away state is not exposed through the partner integrations API.\n\n## Energy claim\n\nRelease notes and listing say: \"In our 2025-26 field trial of 412 homes, Away Assist cut heating runtime by a median of 6%. Your results will vary with home, climate and schedule.\" Methodology and trial data are linked at hearthline.com/away-assist-trial (reviewed by legal for substantiation, LGL-4472). No \"up to\" figures are used anywhere.\n\n## Update safety\n\n- Images are signed (Ed25519); the bootloader verifies before swap and keeps the previous image in slot B. If 4.8 fails to boot or fails its post-boot self-test 3 times, the unit reverts to 4.7 automatically.\n- Install window 02:00-05:00 local; the unit waits until no HVAC call is active. During the ~90 s install, relays are held open (off).\n- Install is deferred if indoor temperature is below 7 °C or above 32 °C, so freeze/heat protection is never interrupted.\n- Users can postpone an update up to 14 days from the app.\n\n## QA summary\n\nAll tests used the production-signed 4.8 image delivered through the production OTA service on the `qa-fleet` channel, with the same release config as the public rollout.\n\n| Check | Result |\n|---|---|\n| HIL bench: conventional 1H/1C, 2-stage, heat pump + aux, no C-wire power stealing; rev B/C/D | Pass, 0 relay faults over 72 h |\n| v1/v2 schedule: edit on 4.8, downgrade to 4.7 via OTA, schedule present and correct | Pass (rev B/C/D) |\n| Failed-boot injection → auto revert to 4.7 | Pass |\n| Temperature deferral at 5 °C chamber test | Pass, install deferred |\n| App 9.3 schedule editor and Away Assist screens with VoiceOver, TalkBack, 200% text | Pass |\n| App 9.2 viewing an 8-period schedule shows update prompt, no edit | Pass |\n| Away Assist: off after upgrade by default; on → Away after 2 h no motion, back on motion; off → history deleted | Pass |\n| Humidity drift fix (rev B, 48 h chamber); reconnect after router reboot | Pass, drift < 1% RH; reconnect p99 41 s over 500 reboots |\n| App 9.3 new strings in English and French (Canada) | Pass |\n| Employee beta: 1,140 homes for 3 weeks | Crash-free 99.97%, no increase in support contacts |\n\n## Rollout\n\n| Stage | Units | Duration | Advance only if |\n|---|---|---|---|\n| 1 | 1% (~6,100) | 3 days | boot-revert rate < 0.05%, HVAC fault telemetry not above 4.7 baseline, support contacts per 1k units not above baseline |\n| 2 | 10% | 4 days | same |\n| 3 | 50% | 4 days | same |\n| 4 | 100% | — | — |\n\nEach stage is a random sample stratified by hardware rev and HVAC type. Release notes (English and French) are published at stage 1 and say: \"Rolling out over the next two weeks.\" Away Assist is off for every user until they turn it on.\n\n## Monitoring\n\n- Fleet dashboard by version, rev and HVAC type: boot reverts, self-test failures, offline rate, HVAC fault codes, schedule-sync errors.\n- Pages firmware on-call if boot reverts exceed 0.1% of updated units in any 6 h window or offline rate rises 0.5 points over baseline.\n\n## Rollback\n\n- Halt: pause the OTA campaign (one switch); units not yet updated stay on 4.7.\n- Revert: push 4.7 to updated units through the same OTA path; schedules fall back to their v1 copy and Away Assist turns off (Home/Away history is deleted). Tested on 300 `qa-fleet` units.\n- App 9.3 works with both 4.7 and 4.8 units; no app rollback needed.\n\n## Cost\n\n- OTA egress: 2.4 MB image × 612k units ≈ 1.5 TB via existing CDN contract, within the monthly commit.\n- Home/Away state adds ~1 small event per state change; projected +0.4% on telemetry ingest.",
+ "fixerUsage": {
+  "calls": 0,
+  "tokIn": 0,
+  "tokOut": 0,
+  "usd": 0,
+  "critMs": 0
+ },
+ "status": "cleared"
+}

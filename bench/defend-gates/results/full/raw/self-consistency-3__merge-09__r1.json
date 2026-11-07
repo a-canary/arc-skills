@@ -1,0 +1,166 @@
+{
+ "approach": "self-consistency-3",
+ "case": "merge-09",
+ "rep": 1,
+ "wallMs": 194820,
+ "verdict": "ATTACKS",
+ "attacks": [
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PlugCloud signing scheme (header names, 'v1=' prefix, hex HMAC-SHA256 over '<timestamp>.<raw body>') is asserted but never grounded in vendor documentation or a vendor-produced test vector. The tests only round-trip the implementation's own sign() helper, so they cannot show compatibility. A mismatch would surface only as every delivery returning 401 after deploy.",
+   "evidence": "ABSENT: no vendor doc link, captured real delivery, or known-good fixture. \"PlugCloud signs every delivery with X-PC-Timestamp and X-PC-Signature: v1=<hex HMAC-SHA256 of \\\"<timestamp>.<raw body>\\\">\" is stated as fact; test_signing.py's sign() reuses the same formula as the production code."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Rejected deliveries are logged only at warning level with no metric or alert. A wrong or rotated secret would silently drop all readings until someone notices gaps in the data. There is also no documented key-rotation path (no dual-secret acceptance window).",
+   "evidence": "log.warning(\"plugcloud webhook rejected: %s\", exc)  ... raise HTTPException(status_code=401, detail=\"invalid signature\")"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Enforcement is switched on unconditionally, with no shadow or log-only mode. A misconfigured secret makes the endpoint reject everything, and the vendor's retry behaviour during that window is not described.",
+   "evidence": "ABSENT: no feature flag, log-only mode, or retry/backfill note. The route now raises 401 before any ingest for every unsigned or mismatched request."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The PR description says the endpoint returns a bare 401, but the code returns a JSON detail body. This is a spec mismatch, though not a security leak since the detail string is fixed.",
+   "evidence": "\"returns a bare 401 on any failure\" vs \"raise HTTPException(status_code=401, detail=\\\"invalid signature\\\") from None\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The signature comparison is case-sensitive and assumes lowercase hex. If the vendor emits uppercase hex, or any other encoding variant, valid deliveries are rejected. The verifier also accepts a signature without the 'v1=' prefix and does not reject unknown versions.",
+   "evidence": "expected = hmac.new(...).hexdigest() ... signature.removeprefix(\"v1=\").encode()"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "There is no nonce or delivery-ID dedup, so a captured valid delivery can be replayed for 5 minutes. The upsert is idempotent for identical data, but a replay can revert a reading that was later corrected for the same (device_id, measured_at).",
+   "evidence": "ABSENT: replay protection. Tolerance check only: if abs(current - int(timestamp)) > TOLERANCE_SECONDS: raise SignatureError(...)"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The secret validator checks only length. Low-entropy values such as 32 repeated characters pass startup.",
+   "evidence": "if len(v.get_secret_value()) < 32: raise ValueError(\"must be at least 32 characters\")"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The body is read fully into memory with no cap in the application. Safety relies entirely on an external reverse-proxy limit that is not enforced or tested in this repo. Before this change the body was also read in full, so this is not a regression, but it is an unverified dependency.",
+   "evidence": "body = await request.body()  (context only: \"the reverse proxy caps request bodies at 1 MB\")"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Existing tests that POST unsigned payloads to /webhooks/plugcloud would now fail with 401, and the PR does not show them being updated. Docs, .env.example, and compose files are also not updated for the new required VOLTLOG_PLUGCLOUD_SECRET.",
+   "evidence": "ABSENT: changes to existing webhook route tests, .env.example, or docker-compose. Diff only touches tests/conftest.py and adds tests/webhooks/test_signing.py."
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The secret check only enforces length, so a 32-character low-entropy value passes startup. The reverse proxy is the only bound on body size, because the handler reads the full body before any check.",
+   "evidence": "if len(v.get_secret_value()) < 32: raise ValueError(\"must be at least 32 characters\")"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "No attack. The change adds no new personal data collection, retention, or exposure. The warning log records only the exception text, not the body or secret.",
+   "evidence": "log.warning(\"plugcloud webhook rejected: %s\", exc)"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "No attack. The change is self-contained, adds no vendor dependency beyond the existing PlugCloud webhook, and keeps the instance self-hostable.",
+   "evidence": "signing.py uses only hashlib, hmac, re, and time from the standard library"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The get_db dependency is resolved before signature verification, so unauthenticated requests still open database resources. Each rejected request also writes a log line, which allows log flooding.",
+   "evidence": "async def plugcloud_webhook(request: Request, db: Database = Depends(get_db), settings: Settings = Depends(get_settings))"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "No attack. The change adds no paid API or token spend. Compute per request is one HMAC over at most the proxy-capped body.",
+   "evidence": "hmac.new(secret, timestamp.encode() + b\".\" + body, hashlib.sha256)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "A legitimate delivery retried more than 5 minutes after its original timestamp gets a permanent 401. If PlugCloud retries with the original timestamp during an outage, those readings are rejected and may be lost. The artifact does not establish the vendor's retry or re-stamping behavior.",
+   "evidence": "rejects deliveries more than 5 minutes old or in the future, and returns a bare 401 on any failure"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Deploying this makes a new secret mandatory and changes the endpoint from open to authenticated. Vendor and operator must coordinate the secret. The design has no rotation path, since only one secret is accepted.",
+   "evidence": "plugcloud_secret: SecretStr (required, no rotation or secondary-key field)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The 422 response changes the error body format from FastAPI's default. Signature hex is compared case-sensitively, and multi-signature headers are not handled. Both may fail for valid vendor deliveries if the vendor sends them.",
+   "evidence": "raise HTTPException(status_code=422, detail=\"invalid payload\") from None"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The claim that startup fails when the secret is missing or short is untested and unverified. get_settings is not shown and may be evaluated lazily on the first request. The PlugCloud retry behavior assumed by the 5-minute window is not cited.",
+   "evidence": "ABSENT: no startup test and no get_settings implementation; the test suite constructs Settings directly"
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "No attack. The change has no rendered UI surface.",
+   "evidence": "ABSENT: no UI files in the diff"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "No attack. The change solves the stated spoofing problem, which is real, for the owner of the instance.",
+   "evidence": "anyone who found the URL could inject fake readings"
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "No attack. Verification adds no user-facing steps beyond the operator setting one env var.",
+   "evidence": "New required env vars are announced in release notes and set by the operator in the compose .env file"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "No attack. The change has no interface that affects accessibility.",
+   "evidence": "ABSENT: no UI or copy changes in the diff"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "No attack. The change adds no regulated data processing or licensing issue.",
+   "evidence": "ABSENT: no compliance-relevant content in the artifact"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The conftest change requires every test that builds Settings to pass a secret, which is hidden coupling. Other Settings constructions outside the shown diff may fail.",
+   "evidence": "return Settings(database_url=TEST_DB_URL, plugcloud_secret=\"t\" * 32)"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Within the 5-minute window a captured valid delivery can be replayed. The upsert keyed on (device_id, measured_at) makes this idempotent, so it is not gate-worthy, but replay protection is not claimed.",
+   "evidence": "abs(current - int(timestamp)) > TOLERANCE_SECONDS, with no nonce or seen-set"
+  }
+ ],
+ "usage": {
+  "calls": 3,
+  "tokIn": 13230,
+  "tokOut": 16475,
+  "usd": 0.00837034,
+  "critMs": 28746
+ }
+}

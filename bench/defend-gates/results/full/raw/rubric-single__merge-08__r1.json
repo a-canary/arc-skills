@@ -1,0 +1,137 @@
+{
+ "approach": "rubric-single",
+ "case": "merge-08",
+ "rep": 1,
+ "wallMs": 124543,
+ "verdict": "ATTACKS",
+ "confidence": 0.93,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "printPlan does not mirror computeBatches, so the dry-run plan differs from what a real rollout will do. It uses floor (int) instead of ceil for batch size, and it iterates over all hosts including the canary, so the canary appears in batch 0 and again in a later batch. For 10 hosts at 0.25 the real rollout uses batches of 3 and the plan prints batches of 2.",
+   "evidence": "printPlan: \"per := int(float64(len(hosts)) * o.MaxSurge)\" vs computeBatches: \"size := int(math.Ceil(float64(len(rest)) * o.MaxSurge))\"; printPlan loops \"for i := 0; i < len(hosts)\" without removing o.CanaryHost"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "Batch-splitting logic is duplicated in printPlan rather than shared. That duplication is the direct cause of the divergence, and any future change to computeBatches will silently desync the plan on-call is told to trust.",
+   "evidence": "New printPlan re-implements the split loop instead of calling computeBatches(hosts, o) and printing its result"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR adds no tests for the dry-run path. A single test asserting printPlan output equals computeBatches output would have caught the canary and rounding mismatch.",
+   "evidence": "ABSENT: no *_test.go changes in the diff for internal/rollout or cmd/rollout.go"
+  },
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "The go.mod replace points at a local filesystem path. A clean CI checkout will not contain ../zap, so the build breaks or the binary is built from unreviewed local code. The binary is distributed to on-call laptops, so this is a supply-chain and reproducibility hole. The replace also overrides the pinned pseudo-version, so the pin no longer controls what is compiled.",
+   "evidence": "\"+replace go.uber.org/zap => ../zap\" alongside \"go.uber.org/zap v1.27.1-0.20260914181502-9d3e1c0f7a2b\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "Because of the local replace, a build from main in CI is not reproducible, so the release artifact may not be what was reviewed. Failure to build is also silent until CI runs, which blocks merge and any on-call binary refresh.",
+   "evidence": "CI \"builds a static binary from main in a clean checkout\"; \"replace go.uber.org/zap => ../zap\" exists only locally"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The zap bump is justified as picking up the upstream JSON encoder fix, but the replace directive means the version line has no effect on what compiles. Nothing in the artifact shows the fix is present in ../zap.",
+   "evidence": "\"bumps zap to pick up the JSON encoder fix we upstreamed\" vs \"replace go.uber.org/zap => ../zap\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The description says dry-run exits without touching the orchestrator API, but Run calls api.Hosts before checking DryRun. That is an orchestrator call, and a Hosts failure now fails a dry-run.",
+   "evidence": "\"hosts, err := api.Hosts(ctx, o.Service)\" precedes \"if o.DryRun {\"; description: \"exits without touching the orchestrator API\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "printPlan uses io, strings and fmt. The diff does not show the import block, so compilation cannot be confirmed from the artifact. Run already uses io and fmt, but strings is not visible.",
+   "evidence": "ABSENT: import changes for strings in internal/rollout/rollout.go (hunk starts at line 18)"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "No new untrusted input reaches writes or exec. The dry-run path only reads host lists and prints them, so the only security concern is the replace directive above.",
+   "evidence": "printPlan only calls fmt.Fprintf to w"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "No personal data is newly collected, stored or exposed. Host names are internal infrastructure identifiers printed to the operator's terminal.",
+   "evidence": "fmt.Fprintf(w, \"  batch %d: %s\\n\", n, strings.Join(hosts[i:end], \", \"))"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "The replace makes the build depend on a developer's local checkout layout rather than a self-hostable module source, which reduces exit and rebuild portability.",
+   "evidence": "\"replace go.uber.org/zap => ../zap\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The plan prints one line per batch and all host names, which is linear and fine for 60+ hosts. Nothing unbounded or N+1 is introduced.",
+   "evidence": "for i := 0; i < len(hosts); i += per"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "No money, compute or token spend is introduced. The dry-run adds one list call only.",
+   "evidence": "hosts, err := api.Hosts(ctx, o.Service)"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The dry-run path has no destructive side effects, so it is safe to revert. The replace line is also trivially reverted, though the build break would persist until then.",
+   "evidence": "if o.DryRun { printPlan(w, hosts, o); return nil }"
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "Plain-text output with batch labels. The canary label is clear, but the duplicated canary entry in the plan is misleading, as described in the correctness attack.",
+   "evidence": "fmt.Fprintf(w, \"  batch %d (canary): %s\\n\", n, o.CanaryHost)"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "The feature addresses on-call's stated need to see batch membership before a rollout, but it is only valuable if the plan matches the real run, which it currently does not.",
+   "evidence": "\"On-call wants to see exactly which hosts go in which batch\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "The flag is a single, discoverable option with no extra steps, so no friction is added.",
+   "evidence": "cmd.Flags().BoolVar(&o.DryRun, \"dry-run\", false, \"print the batch plan and exit\")"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "Text-only CLI output with no motion, colour or layout dependence. Nothing to flag.",
+   "evidence": "fmt.Fprintf(w, \"rollout plan: %s -> %s (%d hosts)\\n\", ...)"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "No licence, regulatory or platform ToS change is visible. The zap replace is a dependency-sourcing concern handled under security.",
+   "evidence": "ABSENT: any licence or policy-relevant change in the diff"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The PR title and description are accurate about the flag but misdescribe the plan's correctness and the API-touch behaviour. The merge gate should wait for the batch-math fix, the replace removal, and tests.",
+   "evidence": "PR #219 title: \"deployctl rollout --dry-run\""
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3141,
+  "tokOut": 5647,
+  "usd": 0.00328202,
+  "critMs": 25120
+ }
+}

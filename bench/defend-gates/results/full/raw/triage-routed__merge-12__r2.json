@@ -1,0 +1,53 @@
+{
+ "approach": "triage-routed",
+ "case": "merge-12",
+ "rep": 2,
+ "wallMs": 473726,
+ "verdict": "ATTACKS",
+ "confidence": 0.7,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Each booking holds a pool connection for the whole transaction, including while it waits on the class row lock. During an opening rush on one class, waiters can occupy all pool connections and stall bookings for other classes and unrelated endpoints. This contradicts the PR's claim that the change does not affect other classes. The PR sets no pool size or connection-acquisition timeout and has no contention test.",
+   "evidence": "'serializes bookings per class without affecting other classes' vs. 'const client = await db.connect();' followed by 'SELECT ... FOR UPDATE' held across the transaction; ABSENT: pool max, connectionTimeoutMillis, or contention test"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Lock waits count toward the 5s statement_timeout. A request that waits too long on the FOR UPDATE lock fails with a generic error that goes to next(err), so a legitimately full class can return 500 instead of 409. No lock_timeout is set and no test covers this path. The risk is probably limited by the pool size, so this is not a blocker.",
+   "evidence": "'The pg pool sets statement_timeout=5s.' and 'SELECT capacity, ... FOR UPDATE' with catch block 'next(err);' and no mapping for query-canceled errors"
+  },
+  {
+   "lens": "data-integrity",
+   "severity": "minor",
+   "claim": "Oversell and duplicate protection depends only on application-level locking. Nothing in the database prevents duplicate active bookings or over-capacity inserts from a code path that skips the class row lock. A partial unique index on (class_id, member_id) WHERE cancelled_at IS NULL would backstop duplicates. The artifact does not show any other insert path, so this is a hardening gap rather than a demonstrated defect.",
+   "evidence": "'No schema change.' and the only duplicate guard is 'SELECT id FROM bookings WHERE class_id = $1 AND member_id = $2 AND cancelled_at IS NULL'"
+  },
+  {
+   "lens": "api-contract",
+   "severity": "minor",
+   "claim": "Repeat bookings now return 200 instead of 201, and a new 409 'class_closed' response is added. The 200 change is documented in the PR body, but the 409 class_closed HTTP mapping has no route-level test. Clients that treat any 2xx as a new creation may be affected.",
+   "evidence": "'case 'closed': return res.status(409).json({ error: 'class_closed' });' with no route test for it; 'res.status(result.created ? 201 : 200)'"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Tests cover only a small happy-path concurrency burst. They do not exercise the new failure modes: ROLLBACK failure with a destroyed client, lock-wait timeouts, or pool exhaustion.",
+   "evidence": "'it('never oversells when members book concurrently'' with 12 members on capacity 3; no test for the 'broken' client path or lock-wait timeout"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "No logging, metrics, or timing exists for lock waits, rollbacks, destroyed connections, or 409 rejections. Operators cannot tell whether the new serialization causes latency or pool starvation in production.",
+   "evidence": "ABSENT: metrics or timing around bookClass; the only added log is 'class booked' on success"
+  }
+ ],
+ "usage": {
+  "calls": 6,
+  "tokIn": 28640,
+  "tokOut": 11893,
+  "usd": 0.0075408,
+  "critMs": 33975
+ }
+}

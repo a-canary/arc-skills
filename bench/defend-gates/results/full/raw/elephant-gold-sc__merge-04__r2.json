@@ -1,0 +1,71 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "merge-04",
+ "rep": 2,
+ "wallMs": 225671,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The up migration adds an empty `private_notes` column and drops `notes` without copying data, permanently destroying all users' free-text notes on an automatic deploy. The PR's 'pure rename, no data change' is false. The down migration only re-adds an empty `notes` column, so it cannot restore anything, and no backup or checkpoint precedes the DROP.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes; / \"Pure rename, no data change; the down migration restores the old name.\" / ABSENT: any UPDATE copying notes, RENAME COLUMN, or backup step"
+  },
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "The handler removed LIMIT and any keyset predicate. It loads every saved row (200k+ for heavy users, including notes text) on each page request and paginates in JS with findIndex/slice. Per-request work is O(N), a full scroll is quadratic, and the 300ms p99 budget is very likely breached with memory pressure on the API process. No index or query plan is provided.",
+   "evidence": "WHERE ur.user_id = $1\n      ORDER BY ur.saved_at DESC, ur.id DESC`,\n    [userId],\n  ); ... const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The migration drops `notes` in the same change that switches code to `private_notes`, and migrations run automatically on deploy. Old pods still selecting `ur.notes` will 500 during the rolling deploy. There is no expand/contract sequencing.",
+   "evidence": "Old query: \"ur.saved_at, ur.notes\"; migration \"DROP COLUMN notes\"; ABSENT: expand/contract or two-step deploy plan"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "ALTER TABLE on a ~140M-row hot table takes an ACCESS EXCLUSIVE lock with no lock_timeout, run automatically on deploy. If it queues behind long-running reads, it blocks all traffic on user_recipes.",
+   "evidence": "BEGIN;\nALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;\nCOMMIT; (no SET lock_timeout)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "A stale or unknown cursor (e.g. the recipe was unsaved between pages) makes findIndex return -1, so start becomes 0 and the response silently restarts from page 1. This reproduces the duplicate and loop problem the PR claims to fix.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "limit is not clamped to a positive minimum. A negative limit yields an empty page, and `page[page.length - 1].id` can then throw, returning a 500.",
+   "evidence": "const limit = Math.min(Number(req.query.limit) || 50, 100); ... page[page.length - 1].id"
+  },
+  {
+   "lens": "ui",
+   "severity": "major",
+   "claim": "The response field is renamed from `notes` to `private_notes` with no shim and no client changes in the diff. Clients reading `notes` will silently show blank notes. The claim that the client already sends `nextCursor` cursors is unsupported, since the old endpoint returned no `nextCursor`.",
+   "evidence": "SELECT ... ur.private_notes ... res.json({ items: page, nextCursor }); ABSENT: any client change; old: res.json({ items: rows });"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Offset support is removed silently. Old clients sending `offset` get page 1 every time instead of an error or deprecation path.",
+   "evidence": "const cursor = typeof req.query.cursor === \"string\" ? req.query.cursor : null; (offset no longer read)"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The schema change and API pagination change are bundled, so a problem in either forces rollback of both. Tests cover only a 5-row happy path, with no stale-cursor, limit-edge, or large-dataset cases.",
+   "evidence": "\"Two small changes bundled because they touch the same table.\"; test only covers valid cursors on r1–r5"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 62612,
+  "tokOut": 29388,
+  "usd": 0.09238908,
+  "critMs": 26451
+ }
+}

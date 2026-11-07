@@ -1,0 +1,125 @@
+{
+ "approach": "counsel-5x2",
+ "case": "plan-09",
+ "rep": 2,
+ "wallMs": 657137,
+ "verdict": "ATTACKS",
+ "confidence": 0.9,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The 2h overlap window is sized to a measured p99.9 visibility lag of 4 min, so rows that become visible after the window are never reselected unless their event_date later receives new rows. This creates a silent, permanent gap against the 'never see gaps' constraint, with no reconciliation to catch it.",
+   "evidence": "The 2 h overlap covers streaming-insert visibility delay (p99.9 measured at 4 min in September)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "After the parity test is retired at DATA-431, nothing compares the fact table against raw, so missing events are undetectable. The only ongoing check is a weekly uniqueness test, which cannot detect gaps.",
+   "evidence": "After 30 clean parity nights: drop the legacy model and table (DATA-431). ... New dbt test `unique_event_id` runs weekly on the full table"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The rollback copies the nightly-refreshed legacy table over the live table, so events ingested since the last legacy build are absent. The 'no gap, no lost events' claim is false for that window and the plan does not demonstrate otherwise.",
+   "evidence": "Rollback: `bq cp -f fct_page_events_legacy fct_page_events`, then revert the PR; ... No gap, no lost events."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Per-partition dedup equals global dedup only if no event_id maps to two event_dates. The 0-count result is a one-time historical check that cannot observe future late replays, and the weekly alert allows up to 7 days of visible double counts.",
+   "evidence": "Checked over all 4.2B rows: 0 such `event_id`s (query linked in DATA-412). SDK retries happen within minutes of the original send. ... runs weekly on the full table"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The cross-date dedup check runs over fct_page_events, which is already globally deduplicated, so it cannot observe a duplicated event_id spanning two event_dates in raw. The 0-count does not test the condition it is cited for.",
+   "evidence": "Checked over all 4.2B rows: 0 such `event_id`s"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The high-water mark is defined as max(ingested_at) in the table, but the plan never states that ingested_at is stored in fct_page_events, and 'columns unchanged' implies it is not. The watermark's storage, update rule and failed-run behaviour are therefore unspecified, so the selection logic cannot be implemented as written.",
+   "evidence": "every `event_date` that appears in raw rows with `ingested_at` > (max `ingested_at` already in the table − 2 h) ... Columns, types, grain and dedup logic ... are unchanged."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The three cutover steps (bq cp legacy, bq cp -f v2 over prod, PR merge) are not atomic. A 02:20 run or manual invocation between steps could run the old full-refresh SQL over the partitioned table, leaving table, partition spec and SQL mismatched with no alert.",
+   "evidence": "so all three steps land with no build in between"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "BIT_XOR over per-row fingerprints cancels identical row pairs, so two identical wrong rows pass the checksum. Combined with count and count(distinct event_id), a double-count bug can pass parity despite the 'must match exactly' wording.",
+   "evidence": "BIT_XOR(FARM_FINGERPRINT(TO_JSON_STRING(t))) over all columns ... All must match exactly on all 7 nights before step 3."
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The parity and legacy costs are understated. The v1 full refresh (~$59 per read of raw) runs nightly during parity, the fingerprint test reads both 1.9 TiB tables, and the 30-day legacy rebuild and nightly parity run are not in the month-1 figure. The 'month 1 still below today' conclusion is not supported by the table's own numbers.",
+   "evidence": "One-time backfill + 7 parity nights | — | ~$76 ... Month 1 is ~$1,960, still below today."
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Erasure deletes from raw first and from the fact table second, with no retry, completion check or alert on the fact step. A failed fact delete leaves erased rows, and rebuilds touch only partitions that receive new raw rows, so there is no guaranteed self-heal.",
+   "evidence": "privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`."
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The retention and erasure lists name fct_page_events_legacy but not fct_page_events_v2, which holds personal event data from backfill and parity onward, so erased users' rows may persist there.",
+   "evidence": "For those 30 days the retention and erasure jobs include `fct_page_events_legacy` in their table lists."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "A failed insert_overwrite run across many partitions is not described as atomic per run. The plan does not state whether a mid-run failure leaves some partitions rebuilt and others stale, which is the gap-or-double-count risk the constraints forbid, and dashboards can read mid-run.",
+   "evidence": "A failed run writes nothing and does not move the high-water mark, so the next run rebuilds the same partitions."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Alerting covers only dbt job failure. There is no freshness alert on max ingested_at lag and no alert on the 05:00 SLA, which was missed 9 times in September. A silent legacy or parity job failure would leave rollback pointing at stale data.",
+   "evidence": "Failure alerting is the existing dbt Cloud job alert to #data-oncall."
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "require_partition_filter is false and the cost bound depends on Looker always_filter in 38 of 41 dashboards. Nothing enforces filtering in the warehouse, so the customer export or any new consumer can scan the full 1.9 TiB table with no guard.",
+   "evidence": "require_partition_filter = false: 38 of 41 dashboards already filter on event_date (LookML always_filter)"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Catch-up after a multi-day outage widens the selected window with no cap, so the ~$2.40/run bound does not hold for recovery runs.",
+   "evidence": "We therefore budget for the worst case every night: ~390 GiB ≈ $2.40/run."
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The Looker $54 projection compares a top-20 dry-run subset against the full-month baseline. The 3 all-time dashboards and the export are unmeasured, so the comparison is not like-for-like.",
+   "evidence": "dry runs of September's top 20 queries by bytes against v2: 61.2 → 8.7 TiB"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "The design depends on BigQuery-specific mechanisms (insert_overwrite, bq cp -f, FARM_FINGERPRINT, BIT_XOR), raising exit cost and making the parity test non-portable.",
+   "evidence": "A same-region copy job is free and replaces the table atomically for readers."
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The 2-week window must cover build, backfill, seven parity nights and the swap, and the plan does not show this fits. The 12:00 UTC 'lowest Looker traffic' claim is not measured in the artifact.",
+   "evidence": "Swap at 12:00 UTC (lowest Looker traffic; ... ABSENT: traffic measurement for the 2-week window."
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 122449,
+  "tokOut": 71730,
+  "usd": 0.05570063999999998,
+  "critMs": 107828
+ }
+}

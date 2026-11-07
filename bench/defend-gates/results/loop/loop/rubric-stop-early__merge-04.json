@@ -1,0 +1,167 @@
+{
+ "approach": "rubric-stop-early",
+ "case": "merge-04",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The migration is not a rename. It adds a new empty `private_notes` column and then drops `notes`, so every existing user note on the ~140M-row table is destroyed on deploy. The PR says there is no data change, but the SQL discards the data, and the down migration only recreates an empty column. Users cannot recover these notes elsewhere, and migrations run automatically after merge.",
+     "evidence": "0087_private_notes.up.sql: \"ALTER TABLE user_recipes ADD COLUMN private_notes text;\" \"ALTER TABLE user_recipes DROP COLUMN notes;\"; PR text: \"Pure rename, no data change; the down migration restores the old name.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3466,
+    "tokOut": 975,
+    "usd": 0.00100855,
+    "critMs": 5118
+   },
+   "wallMs": 53134
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The migration runs automatically on deploy and renames `notes` to `private_notes` before the new code is live. Any instance still running the old code, including all pods during a rolling deploy, queries `ur.notes` and will fail. Rolling back the code also does not run the down migration, so the old code stays broken against the renamed column until someone manually reverts the schema.",
+     "evidence": "\"Migrations run automatically on deploy after merge to main.\" / old query: \"SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.notes\" / \"The down migration renames the column back.\" ABSENT: any expand/contract sequencing, a compatibility view or alias for `notes`, or a rollback runbook that pairs code rollback with the down migration."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3477,
+    "tokOut": 1239,
+    "usd": 0.00114275,
+    "critMs": 12618
+   },
+   "wallMs": 51685
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The cursor is resolved by position in the full result list. If the cursor row is no longer in the list (the user unsaves that recipe between page requests), findIndex returns -1, so start becomes 0 and the handler silently returns the first page again. A client following nextCursor then loops over the same items. This is the same concurrent-save/unsave drift scenario the PR is meant to fix.",
+     "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3543,
+    "tokOut": 874,
+    "usd": 0.00097345,
+    "critMs": 4352
+   },
+   "wallMs": 30899
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "decodeCursor only checks that `ts` and `id` are strings. It does not check that `ts` parses as a timestamp or that `id` has the column's type. A crafted cursor such as base64url of `{\"ts\":\"abc\",\"id\":\"x\"}` passes decoding and reaches the `$2::timestamptz` cast, which throws in Postgres. The handler has no try/catch, so the request fails with a 500 or an unhandled rejection rather than the documented 400. Untrusted input reaches the database without type validation.",
+     "evidence": "if (typeof v?.ts === \"string\" && typeof v?.id === \"string\") { return { ts: v.ts, id: v.id }; } ... const { rows } = await db.query<SavedRow & { cursor_ts: string }>( ... OR (ur.saved_at, ur.id) < ($2::timestamptz, $3))"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4529,
+    "tokOut": 1500,
+    "usd": 0.00148365,
+    "critMs": 7319
+   },
+   "wallMs": 39346
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The query aliases `ur.notes AS private_notes`, so the public JSON field changes from `notes` to `private_notes`. Existing clients and in-flight old bundles that read `notes` will see undefined during the rollout. If an old client then saves an edit, it can write blank notes over user-written text that the PR itself says cannot be recovered. The PR does not mention this response-shape change or any client update for it.",
+     "evidence": "Original: \"SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.notes\" → New: \"ur.notes AS private_notes\" with SavedRow.private_notes. The artifact says \"the API and types already use the new name\" but does not show that the consuming client reads `private_notes`, and there is no test asserting the field name."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5409,
+    "tokOut": 1388,
+    "usd": 0.0016036499999999999,
+    "critMs": 7120
+   },
+   "wallMs": 32064
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR justifies the change partly by saying the new query fetches one page 'instead of loading all of a user's saved recipes', but the old query already used LIMIT/OFFSET. The stated efficiency gain is contradicted by the diff, and the PR gives no EXPLAIN plan or index evidence for the 300ms p99 budget on users with 200k+ saved recipes.",
+     "evidence": "\"The query also fetches only one page (plus one row to detect more) instead of loading all of a user's saved recipes.\" vs. old code: \"LIMIT $2 OFFSET $3\". ABSENT: any composite index on user_recipes(user_id, saved_at, id) or query plan showing the keyset query avoids a full per-user sort."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5606,
+    "tokOut": 2780,
+    "usd": 0.00233905,
+    "critMs": 14307
+   },
+   "wallMs": 70902
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The central performance claim, that keyset pagination keeps page cost flat for users with 200k+ saved recipes against the 300ms p99 budget, depends on a composite index that the author has not confirmed exists, and no query plan is attached. The PR says it should not merge until that evidence is provided.",
+     "evidence": "ABSENT: \"This PR does not include an `EXPLAIN (ANALYZE, BUFFERS)` plan, and I have not confirmed that such an index exists.\" Also: \"Please treat this PR as not ready to merge until that evidence is attached.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 6080,
+    "tokOut": 1477,
+    "usd": 0.0017823499999999998,
+    "critMs": 7177
+   },
+   "wallMs": 21316
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR's central performance claim, that a deep-cursor page costs the same as the first page, is unverified. The author says the required index on (user_id, saved_at, id) is unconfirmed and no EXPLAIN plans are attached, and the merge-gate checklist is entirely unchecked. For a user with 200k+ saved recipes against a 300ms p99 budget, the query could sort every row per page.",
+     "evidence": "\"Performance and index requirement (NOT YET VERIFIED, merge-blocking)\" ... \"Evidence: _not yet attached._ Please treat this PR as not ready to merge until it is.\" The checklist items (\"Confirm whether the index exists\", \"Attach EXPLAIN (ANALYZE, BUFFERS) plans\") are all unchecked."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 6331,
+    "tokOut": 1448,
+    "usd": 0.0018180500000000003,
+    "critMs": 7009
+   },
+   "wallMs": 42842
+  }
+ ],
+ "artifact": "PR #1907: Cursor pagination for saved recipes (column rename deferred to a staged rollout)\n\nThis PR was originally two changes. The column rename is removed from it, because it can't be done safely as a single auto-run migration.\n\n1. **Rename `user_recipes.notes` to `private_notes`: removed from this PR.** `RENAME COLUMN` is catalog-only, but migrations run automatically on deploy, before the new code is live. During a rolling deploy, pods still running the old code query `ur.notes` and fail. A code rollback doesn't run the down migration either, so the old code would stay broken until someone reverts the schema by hand. The rename will ship as an expand/contract sequence in follow-up PRs. Notes are user-written and unrecoverable, so none of these steps may drop or overwrite data until the final one:\n   - **Expand:** add a nullable `private_notes` column (catalog-only) with a trigger that mirrors writes from `notes`. Backfill existing rows in small batches, which is necessary at ~140M rows. Old code keeps working throughout.\n   - **Switch:** deploy code that reads and writes `private_notes`. Any change to the public API field name belongs here, not in this PR. During the transition the response should carry both `notes` and `private_notes` until no deployed client bundle reads `notes`, so an old client can never see a blank note and save it over real text. Rolling back the code is safe at this point because `notes` is still in sync.\n   - **Contract:** once no deployed version references `notes` and the backfill is verified, drop the trigger and the old column in a separate migration.\n\n   In the meantime, this PR does not change the response shape: the query still selects `ur.notes` and the API still returns the field as `notes`, exactly as before. A test now asserts the field name so it can't change unnoticed.\n2. `GET /api/recipes/saved` moves from offset to keyset cursor pagination. Offsets were drifting when users saved recipes while scrolling. The cursor is an opaque token (base64url of the last item's `saved_at` and `id`), and the query filters with `(saved_at, id) < (cursor)` and `LIMIT`, so it does not depend on the cursor row still existing. If the user unsaves the cursor row between page requests, the next page still continues from the right position instead of restarting at the first page. The old query was already bounded by `LIMIT`, so this is not a change from loading everything. The query fetches one page plus one extra row to detect whether more exist (replacing the offset). The client already sends `cursor` from the previous page's `nextCursor` and treats it as opaque.\n\n   **Performance and index requirement (NOT YET VERIFIED, merge-blocking):** the intended benefit over offset is that the cost of a page no longer grows with how deep the user has scrolled. `OFFSET n` has to walk past n rows, while the keyset predicate can seek straight to the cursor position. That only holds if an index on `user_recipes (user_id, saved_at DESC, id DESC)` (or an equivalent that can be scanned backward in that order) exists. Without one, Postgres has to find and sort all of a user's rows for every page, which matters for users with 200k+ saved recipes against the 300ms p99 budget. The flat-cost claim above is therefore a hypothesis, not a measured result. This PR does not include an `EXPLAIN (ANALYZE, BUFFERS)` plan, and I have not confirmed that such an index exists.\n\n   **Merge gate (all must be done before this PR merges):**\n   - [ ] Confirm whether the index exists (e.g. `\\d user_recipes` / `pg_indexes`) and record the result here.\n   - [ ] Attach `EXPLAIN (ANALYZE, BUFFERS)` plans for (a) a first-page request and (b) a deep-cursor request, both for a 200k+ saved-recipe user on a production-sized dataset.\n   - [ ] Acceptance criteria: both plans use an index scan on `(user_id, saved_at, id)` with no top-level Sort node, and the deep-cursor plan reads roughly the same number of buffers and takes a similar time as the first page, well under the 300ms p99 budget.\n   - [ ] If the index is missing or the plans fail these criteria, it ships first as a separate change using `CREATE INDEX CONCURRENTLY` (it cannot run inside the auto-run transactional migration, and a plain build would block writes on a ~140M-row table). This PR merges only after that index is in place and the plans are re-run.\n\n   Evidence: _not yet attached._ Please treat this PR as not ready to merge until it is.\n\n   **Cursor validation:** the cursor is untrusted input. `decodeCursor` checks that `ts` matches a Postgres timestamptz text format (and is a bounded length) and that `id` is a non-empty string of at most 64 characters. As a backstop for values that match the format but are out of range (e.g. month 13), the handler catches Postgres invalid-input errors (SQLSTATE class 22) and returns 400. Any other database error is passed to `next(err)` as before. A malformed cursor therefore always returns 400, never 500.\n\nThere are no migrations in this PR, so rollback is just a code revert. (If the index change above is needed, it is a separate, independently revertible change.)\n\n```diff\ndiff --git a/server/routes/saved.ts b/server/routes/saved.ts\nindex 2c9f1ab..e7a50d3 100644\n--- a/server/routes/saved.ts\n+++ b/server/routes/saved.ts\n@@ -1,36 +1,92 @@\n import { Router } from \"express\";\n import { db } from \"../db\";\n import { requireUser } from \"../auth\";\n\n export const saved = Router();\n\n+type SavedRow = {\n+  id: string;\n+  recipe_id: string;\n+  title: string;\n+  saved_at: Date;\n+  notes: string | null;\n+};\n+\n+type Cursor = { ts: string; id: string };\n+\n+// Matches Postgres timestamptz text output, e.g. \"2026-10-27 12:34:56.123456+00\".\n+const TS_RE =\n+  /^\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}(:?\\d{2})?)$/;\n+const MAX_ID_LEN = 64;\n+\n+function encodeCursor(c: Cursor): string {\n+  return Buffer.from(JSON.stringify(c), \"utf8\").toString(\"base64url\");\n+}\n+\n+function decodeCursor(raw: string): Cursor | null {\n+  try {\n+    const v = JSON.parse(Buffer.from(raw, \"base64url\").toString(\"utf8\"));\n+    if (\n+      typeof v?.ts === \"string\" &&\n+      v.ts.length <= 40 &&\n+      TS_RE.test(v.ts) &&\n+      typeof v?.id === \"string\" &&\n+      v.id.length > 0 &&\n+      v.id.length <= MAX_ID_LEN\n+    ) {\n+      return { ts: v.ts, id: v.id };\n+    }\n+  } catch {\n+    // fall through\n+  }\n+  return null;\n+}\n+\n-saved.get(\"/api/recipes/saved\", requireUser, async (req, res) => {\n+saved.get(\"/api/recipes/saved\", requireUser, async (req, res, next) => {\n   const userId = req.user!.id;\n-  const limit = Math.min(Number(req.query.limit) || 50, 100);\n-  const offset = Math.max(Number(req.query.offset) || 0, 0);\n-  const { rows } = await db.query(\n-    `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.notes\n-       FROM user_recipes ur JOIN recipes r ON r.id = ur.recipe_id\n-      WHERE ur.user_id = $1\n-      ORDER BY ur.saved_at DESC\n-      LIMIT $2 OFFSET $3`,\n-    [userId, limit, offset],\n-  );\n-  res.json({ items: rows });\n+  const limit = Math.min(Number(req.query.limit) || 50, 100);\n+  const rawCursor =\n+    typeof req.query.cursor === \"string\" ? req.query.cursor : null;\n+  const cursor = rawCursor ? decodeCursor(rawCursor) : null;\n+  if (rawCursor && !cursor) {\n+    return res.status(400).json({ error: \"invalid cursor\" });\n+  }\n+\n+  let rows: (SavedRow & { cursor_ts: string })[];\n+  try {\n+    // saved_at::text keeps full microsecond precision for the cursor;\n+    // a JS Date would truncate to milliseconds and skip/repeat rows.\n+    ({ rows } = await db.query<SavedRow & { cursor_ts: string }>(\n+      `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at,\n+              ur.notes, ur.saved_at::text AS cursor_ts\n+         FROM user_recipes ur JOIN recipes r ON r.id = ur.recipe_id\n+        WHERE ur.user_id = $1\n+          AND ($2::timestamptz IS NULL\n+               OR (ur.saved_at, ur.id) < ($2::timestamptz, $3))\n+        ORDER BY ur.saved_at DESC, ur.id DESC\n+        LIMIT $4`,\n+      [userId, cursor?.ts ?? null, cursor?.id ?? null, limit + 1],\n+    ));\n+  } catch (err: any) {\n+    // SQLSTATE class 22 = data exception (invalid timestamp/text\n+    // representation, out-of-range values) caused by a crafted cursor.\n+    if (cursor && typeof err?.code === \"string\" && err.code.startsWith(\"22\")) {\n+      return res.status(400).json({ error: \"invalid cursor\" });\n+    }\n+    return next(err);\n+  }\n+\n+  const hasMore = rows.length > limit;\n+  const pageRows = rows.slice(0, limit);\n+  const last = pageRows[pageRows.length - 1];\n+  const nextCursor =\n+    hasMore && last ? encodeCursor({ ts: last.cursor_ts, id: last.id }) : null;\n+  const items: SavedRow[] = pageRows.map(({ cursor_ts, ...item }) => item);\n+\n+  res.json({ items, nextCursor });\n });\ndiff --git a/server/routes/saved.test.ts b/server/routes/saved.test.ts\nindex 91d0c3e..4b7f2a1 100644\n--- a/server/routes/saved.test.ts\n+++ b/server/routes/saved.test.ts\n@@ -12,9 +12,46 @@ describe(\"GET /api/recipes/saved\", () => {\n-  it(\"pages with offset\", async () => {\n-    const a = await get(\"/api/recipes/saved?limit=2&offset=0\");\n-    const b = await get(\"/api/recipes/saved?limit=2&offset=2\");\n-    expect(a.items.map((i) => i.id)).toEqual([\"r5\", \"r4\"]);\n-    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n+  it(\"pages with cursor\", async () => {\n+    const a = await get(\"/api/recipes/saved?limit=2\");\n+    expect(a.items.map((i) => i.id)).toEqual([\"r5\", \"r4\"]);\n+    const b = await get(`/api/recipes/saved?limit=2&cursor=${a.nextCursor}`);\n+    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n+    const c = await get(`/api/recipes/saved?limit=2&cursor=${b.nextCursor}`);\n+    expect(c.items.map((i) => i.id)).toEqual([\"r1\"]);\n+    expect(c.nextCursor).toBeNull();\n+  });\n+\n+  it(\"keeps the notes field name unchanged in the response\", async () => {\n+    const a = await get(\"/api/recipes/saved?limit=1\");\n+    expect(a.items[0]).toHaveProperty(\"notes\");\n+    expect(a.items[0]).not.toHaveProperty(\"private_notes\");\n+  });\n+\n+  it(\"continues correctly when the cursor row is unsaved between pages\", async () => {\n+    const a = await get(\"/api/recipes/saved?limit=2\");\n+    expect(a.items.map((i) => i.id)).toEqual([\"r5\", \"r4\"]);\n+    await db.query(\"DELETE FROM user_recipes WHERE id = $1\", [\"r4\"]);\n+    const b = await get(`/api/recipes/saved?limit=2&cursor=${a.nextCursor}`);\n+    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n+  });\n+\n+  it(\"rejects a malformed cursor\", async () => {\n+    const res = await getRaw(\"/api/recipes/saved?cursor=not-a-cursor\");\n+    expect(res.status).toBe(400);\n+  });\n+\n+  it(\"rejects a well-formed cursor with a non-timestamp ts\", async () => {\n+    const bad = Buffer.from(JSON.stringify({ ts: \"abc\", id: \"x\" })).toString(\"base64url\");\n+    const res = await getRaw(`/api/recipes/saved?cursor=${bad}`);\n+    expect(res.status).toBe(400);\n+  });\n+\n+  it(\"rejects a cursor with an out-of-range timestamp\", async () => {\n+    const bad = Buffer.from(\n+      JSON.stringify({ ts: \"2026-13-45 00:00:00+00\", id: \"r1\" }),\n+    ).toString(\"base64url\");\n+    const res = await getRaw(`/api/recipes/saved?cursor=${bad}`);\n+    expect(res.status).toBe(400);\n   });\n });\n```\n\nThe migration files `0087_private_notes.up.sql` and `0087_private_notes.down.sql` are no longer part of this PR.",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 28205,
+  "tokOut": 28272,
+  "usd": 0.395512,
+  "critMs": 159864
+ },
+ "status": "cap"
+}

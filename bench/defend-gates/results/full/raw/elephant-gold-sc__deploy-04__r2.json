@@ -1,0 +1,71 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "deploy-04",
+ "rep": 2,
+ "wallMs": 304933,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "Share links embed the owner's raw project API key in the URL query param `k`, and the share page returns it to any anonymous viewer as `replayKey`. Anyone with the link, including via HN/X/Slack posts, unfurl crawlers, browser history, or Referer headers, gets a working credential for the owner's project. Deleting the share (404) does not revoke the key, and no rotation step exists.",
+   "evidence": "url.searchParams.set(\"k\", project.apiKey); ... return { messages: share.messages, model: share.model, replayKey: url.searchParams.get(\"k\") };"
+  },
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "Anonymous viewers re-run conversations against the owner's project quota. Pro projects are billed per token with daily_tokens: null, so a link that spreads on HN/X lets unauthenticated third parties generate unbounded, unconsented charges on the owner's account. There is no per-viewer identity or limit.",
+   "evidence": "// Viewers without an account replay against the owner's project quota. ... pro: daily_tokens: null"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The advertised 100k tokens/day free cap is not enforced by the shipped config: the free tier block has no daily_tokens field. The per-user cost bound the budget relies on does not exist in the deployed config and no QA tests it.",
+   "evidence": "free: models: [...] rate_limit: {...} max_tokens_per_request: 4096 pool: free-8b (no daily_tokens); changelog: \"100k tokens per day\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The prod rate limit is `per: second` with burst 40, but the changelog promises 20 requests per minute, so the shipped limit is roughly 60x looser than advertised. The staging QA used `per: minute`, so the shipped config was never tested.",
+   "evidence": "rate_limit: { requests: 20, per: second, burst: 40 } vs \"20 requests per minute\"; \"(staging config used `per: minute`)\""
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The free pool can autoscale to 24 H100s (~$43k/month at $2.49/h), about 10x the $4k hard budget. The cost claim covers only the 2-replica minimum, which already uses ~$3.6k of the $4k, and no spend cap or budget-linked cutoff exists. The only alert (replicas > 6) is not a spend guard.",
+   "evidence": "min_replicas: 2, max_replicas: 24, scale_on: queue_depth > 8 for 60s; \"~$3.6k/month, within the $4k/month free-tier budget\"; \"free pool replicas > 6 pages on-call\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Free signup is email-only with no card, and no signup rate limit or global free-tier token ceiling is stated. Aggregate free load and spend scale with account count rather than the 3,000 DAU projection, and the launch is an HN/X push. The capacity claim also has no load test, and the 60s scale trigger from a 2-replica floor may queue requests during the spike.",
+   "evidence": "Sign up with email, no card required; ABSENT: signup rate limit, global free-tier ceiling, or load test; \"scale_on: queue_depth > 8 for 60s\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Rollback only closes new signups. Existing free keys keep working, and the share feature (which leaks keys) is not behind any flag. It goes live at the 16:00 deploy with no kill switch, and published links cannot be recalled in bulk.",
+   "evidence": "Rollback: `free_signup_open` off stops new signups; existing free keys keep working.; \"Deploy gateway config and playground at 16:00 UTC, flag `free_signup_open` on at 16:45 UTC.\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Shares publish full conversation content to anyone with the link, with OG unfurls, and the artifact states no expiry, retention policy, consent or notice. Removal depends on the owner manually deleting the share. The artifact also states no privacy or ToS notice for free email signup.",
+   "evidence": "messages: session.messages ... \"Anyone with the link can view the conversation\"; ABSENT: share expiry/retention, privacy notice"
+  },
+  {
+   "lens": "secrets",
+   "severity": "major",
+   "claim": "Logging redaction covers only the Authorization header. The share URL puts the API key in the query string, so Playground, CDN or proxy access logs for `/s/<id>?k=` would likely record the raw key.",
+   "evidence": "Gateway access logs redact the `Authorization` header and drop request bodies; ABSENT: query-string redaction for /s/ routes"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 60682,
+  "tokOut": 26598,
+  "usd": 0.11192266000000001,
+  "critMs": 33486
+ }
+}

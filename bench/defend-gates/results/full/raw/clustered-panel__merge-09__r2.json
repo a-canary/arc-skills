@@ -1,0 +1,101 @@
+{
+ "approach": "clustered-panel",
+ "case": "merge-09",
+ "rep": 2,
+ "wallMs": 247771,
+ "verdict": "ATTACKS",
+ "confidence": 0.6,
+ "attacks": [
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR promises that startup fails when VOLTLOG_PLUGCLOUD_SECRET is missing or short, but the diff has no startup hook or eager Settings construction. get_settings appears only as a Depends, so a bad value may surface as a 500 on the first webhook request. Nothing tests the validator or the missing-secret path.",
+   "evidence": "\"startup fails if it is missing or short\" / ABSENT: any call site that constructs Settings at application startup, and any test of the field_validator or of Settings without plugcloud_secret"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "If the operator's secret doesn't match the vendor's, every delivery gets a 401 and readings are silently dropped. The only signal is a per-request warning, with no metric or alert.",
+   "evidence": "log.warning(\"plugcloud webhook rejected: %s\", exc) / ABSENT: any counter, metric, or alert for rejected deliveries"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The 5-minute window uses the server's wall clock. Drift beyond 300s, such as after a boot without NTP, rejects all valid deliveries, and the PR gives no detection or guidance for this.",
+   "evidence": "if abs(current - int(timestamp)) > TOLERANCE_SECONDS: raise SignatureError(\"timestamp outside tolerance\")"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "There is no overlap for rotation. verify accepts one secret, so rotating requires simultaneous vendor and .env changes, and a mismatch causes the same silent ingest loss.",
+   "evidence": "ABSENT: a secondary or previous secret setting; def verify(secret: bytes, body: bytes, ...) takes a single secret"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Upgrading without setting the new required variable fails startup, which takes down the whole service rather than only the webhook. Deliveries during that window are lost unless the vendor retries, and the PR does not say whether it does.",
+   "evidence": "plugcloud_secret: SecretStr (no default); \"startup fails if it is missing or short\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "There is no nonce or seen-set, so a captured valid delivery can be replayed anywhere in the 5-minute window. Because upserts are keyed on (device_id, measured_at), a replay of an older batch could overwrite a corrected value. The PR does not record this as an accepted risk.",
+   "evidence": "if abs(current - int(timestamp)) > TOLERANCE_SECONDS: / ABSENT: replay protection or dedupe of accepted signatures"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The app reads the entire body into memory before any check and sets no size limit of its own. The 1 MB cap exists only at the reverse proxy, so a direct connection to the app port or a proxy misconfiguration leaves unauthenticated clients able to force unbounded reads.",
+   "evidence": "body = await request.body() / ABSENT: an in-app maximum body size (the 1 MB cap appears only in CONTEXT as a proxy setting)"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "Dependencies such as get_db resolve before the signature check, so unauthenticated requests still acquire a database session and can consume DB resources.",
+   "evidence": "async def plugcloud_webhook(request: Request, db: Database = Depends(get_db), settings: Settings = Depends(get_settings)):"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The validator checks only length, not entropy. The test fixture \"t\" * 32 passes, and so would any repeated-character secret, which weakens the HMAC.",
+   "evidence": "if len(v.get_secret_value()) < 32: raise ValueError(...) / conftest: plugcloud_secret=\"t\" * 32"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The PR description says the endpoint returns a bare 401 on any failure, but the code returns HTTPException with detail=\"invalid signature\". The description and code disagree.",
+   "evidence": "\"returns a bare 401 on any failure\" vs. raise HTTPException(status_code=401, detail=\"invalid signature\")"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "plugcloud_secret is required on the shared Settings model, so any other entry point that builds Settings (CLI, migrations, other services) may now fail even when the webhook is unused. The blast radius is unverified.",
+   "evidence": "ABSENT: evidence that other Settings(...) constructors were checked; \"plugcloud_secret: SecretStr\" has no default"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Existing tests that post unsigned bodies to /webhooks/plugcloud will now get 401 and fail. The diff does not show them being updated.",
+   "evidence": "ABSENT: updates to pre-existing /webhooks/plugcloud tests; only tests/webhooks/test_signing.py and the conftest fixture are changed"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Tests cover the 401 and happy paths but not the 422 branch for a validly signed but malformed body.",
+   "evidence": "def test_route_rejects_unsigned_and_accepts_signed(...) has no signed-malformed-body case; ABSENT: a test of the 422 branch"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The test file reimplements the HMAC expression instead of using an independent known-answer vector, so a mistake in the same formula in both copies would go undetected.",
+   "evidence": "tests/webhooks/test_signing.py: def sign(...) recomputes hmac.new(secret, ts.encode() + b\".\" + body, hashlib.sha256), the same expression as in signing.verify"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 23862,
+  "tokOut": 17133,
+  "usd": 0.01029486,
+  "critMs": 37051
+ }
+}

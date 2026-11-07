@@ -1,0 +1,161 @@
+{
+ "approach": "clustered-panel",
+ "case": "deploy-06",
+ "rep": 1,
+ "wallMs": 248316,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Launch-day v1 deprecation signals (headers) and key-holder emails go out before the 48 h canary and gate checks. Rolling back the v2 gateway route does not undo them, so v1 would stay publicly deprecated with v2 withdrawn.",
+   "evidence": "\"From launch day, v1 responses carry `Deprecation: @1794787200` and `Sunset: ...` headers\" and \"Email to all 1,412 registered key holders on launch day\" vs \"Rollback: gateway route weight for `/v2/*` back to 0 ... v1 unaffected.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The schedule contradicts itself. The blog post and public launch are set for the same day, but the rollout publishes the blog post only after the 48 h canary and gate checks.",
+   "evidence": "\"Developer blog post: same day 15:00 local\" vs \"2. Canary: ... for 48 h\" followed by \"3. Publish docs and blog post; open v2 to all.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Degraded mode has no maximum staleness cutoff. Arrivals can be served indefinitely from the last-good snapshot, and clients that ignore `meta.degraded` or `feed_age_seconds` will present stale times to riders as live predictions.",
+   "evidence": "\"responses keep serving the last good snapshot with `feed_age_seconds` set and `meta.degraded: true`; on-call is paged at 120 s.\" ABSENT: any cutoff after which responses stop serving data or return an error."
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The free key tier describes no issuance verification and no per-owner or per-IP cap. One operator can mint many keys, each with 1,000 req/min, which bypasses the 60 req/min anonymous limit that protects capacity.",
+   "evidence": "\"Optional free key (header `X-Api-Key`) raises the limit to 1,000 requests/min\" ABSENT: key issuance checks, per-owner or per-IP caps on keyed traffic."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The canary is described two incompatible ways: 5% of all `/v2/*` traffic, or only internal apps and three opted-in pilot partners. The document gives no selection mechanism for the partners, so the gate's exposure and pass/fail signal cannot be determined, and a percentage weight could send anonymous public traffic to the unvetted canary.",
+   "evidence": "\"Canary: 5% of `/v2/*` traffic for 48 h to new instances (traffic only from internal apps and the 3 pilot partners who opted in).\" ABSENT: the allowlist, key scope or source criterion that selects those clients."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "v1 and v2 share the AVL ingestion pipeline, so a pipeline fault takes down both. The claim that a v2 fault cannot take down v1 covers only the serving tier. There is no v1 SLO gate in the advance criteria and no failure-mode analysis for shared ingestion.",
+   "evidence": "\"v2 shares the ingestion pipeline with v1 but runs as a separate deployment and autoscaling group, so a v2 fault cannot take down v1.\" ABSENT: failure-mode analysis, v1 alerting for shared-pipeline faults, or a v1 SLO gate (advance gates list only v2 5xx, p95 and parity)."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Rollback routes `/v2/*` to 503 with no fallback to v1. Apps that migrated on launch day, or removed v1 code and `eta_text` handling, become a rider-facing outage with no automated path back once the blog post is out.",
+   "evidence": "\"Rollback: gateway route weight for `/v2/*` back to 0 (returns 503 with a link to status page); v1 unaffected.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The load test runs v2 alone at 3× v1 peak. In production, v1 (4,100 req/s peak, with its full base) and v2 run concurrently on the same ingestion pipeline for 12 months, and that combined load is never tested.",
+   "evidence": "\"Load test on the production-sized staging cluster: 3× current peak (v1 peak 4,100 req/s → 12,300 req/s on v2) for 30 min\" ABSENT: a concurrent v1+v2 load test or combined-capacity budget."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The endpoint mapping has no v2 equivalent for route-scoped and unscoped v1 queries. v2 `/arrivals` takes only `stop_id`, so `/v1/routes/{id}/stops/{id}` and `/v1/predictions` cannot be migrated as described.",
+   "evidence": "`GET /v2/arrivals?stop_id=…` | `/v1/stops/{id}/predictions`, `/v1/predictions`, `/v1/routes/{id}/stops/{id}`"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "major",
+   "claim": "`wheelchair_accessible` is a plain bool with no unknown state, while `crowding` has an explicit `unknown`. When feed data is missing, the field reads as `false`, which tells wheelchair users a vehicle is not usable when the true state is unknown.",
+   "evidence": "\"New: `crowding` (`low` / `medium` / `high` / `unknown`), `wheelchair_accessible` (bool)\""
+  },
+  {
+   "lens": "qa-coverage",
+   "severity": "major",
+   "claim": "The headline rider-facing signals (crowding, wheelchair access, bike racks) have no accuracy validation. QA checks parity only for `arrival_time`, so these features could mislead riders at launch.",
+   "evidence": "\"Parity: v2 `arrival_time` vs v1 predictions for 2,000 sampled stop/time pairs | 100% match\"; no check exists for `crowding`, `wheelchair_accessible` or `bike_rack_slots`."
+  },
+  {
+   "lens": "compatibility",
+   "severity": "major",
+   "claim": "Sunset notices reach only registered key holders and the top 20 consumers. Anonymous v1 clients get only response headers and the blog post, and the share of anonymous traffic is never quantified, so they may break silently on 2027-11-16.",
+   "evidence": "\"Email to all 1,412 registered key holders on launch day\"; \"Top 20 consumers by volume (≈ 81% of v1 traffic) get direct outreach\"; \"Reads are anonymous: no key required up to 60 requests/min per IP\" ABSENT: anonymous traffic share and how anonymous clients are notified."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Anonymous rate limiting is per IP, but the CDN sits in front of `/v2/arrivals`, and the artifact never says where the limit is enforced or which client IP is used. If the origin sees edge IPs, one limit could throttle many riders at once or not limit at all, and the 429 test does not cover this path.",
+   "evidence": "\"no key required up to 60 requests/min per IP\" / \"CDN caches `/v2/arrivals` per `stop_id` for 10 s\" ABSENT: client IP source behind the CDN (e.g. X-Forwarded-For handling)."
+  },
+  {
+   "lens": "licensing",
+   "severity": "minor",
+   "claim": "The blog asks apps to credit only \"Metro Transit\", but the agreed attribution text is \"Contains data from Metro Transit, CC BY 4.0\". The public instruction does not match the licensing terms.",
+   "evidence": "\"Please credit \"Metro Transit\" in your app.\" vs \"Contains data from Metro Transit, CC BY 4.0\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "The blog excerpt lists only new features and does not mention the removal of `vehicle_label` and `eta_text`. The migration guide covers this, but breaking removals are not surfaced in the announcement.",
+   "evidence": "Blog excerpt: \"New: crowding levels, wheelchair accessibility per vehicle, and bike rack availability.\" vs \"Removed vs v1: `vehicle_label` ... and the deprecated `eta_text` string.\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "The 60 req/min per-IP anonymous limit is low for browser apps that poll several stops. Users behind shared NAT will hit 429s, which the artifact does not address.",
+   "evidence": "\"no key required up to 60 requests/min per IP\"; \"browser apps can call it directly\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The `Deprecation` timestamp is 00:00 UTC on launch day, before the 15:00 local blog announcement, so clients can see a deprecation signal before any public notice.",
+   "evidence": "\"Deprecation: @1794787200\" (2026-11-16T00:00Z) vs \"Developer blog post: same day 15:00 local\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Keyed browser calls send the custom `X-Api-Key` header, which triggers a CORS preflight. The CORS section does not specify `Access-Control-Allow-Headers`, so those calls may fail.",
+   "evidence": "\"Optional free key (header `X-Api-Key`) ... Responses send `Access-Control-Allow-Origin: *`\" ABSENT: Access-Control-Allow-Headers and preflight handling."
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "The claim that no operator or driver identifiers exist has no field-level audit or QA check, even though `/v2/vehicles` returns live vehicle positions that could be linked to individuals.",
+   "evidence": "\"No operator/driver identifiers are present in v1 or v2.\" The QA table has no check for this."
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Request logs link IP addresses and API keys to queried stops and times, and key-holder contact details are stored. No retention period or access policy is given.",
+   "evidence": "\"keys identify apps for rate limiting and contact\" ABSENT: log retention, contact-data retention, or access controls."
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "The public API has no terms of use, acceptable-use policy, or accuracy disclaimer. This matters most for `wheelchair_accessible`, which riders may rely on for travel planning.",
+   "evidence": "ABSENT: terms of use, acceptable-use policy, or disclaimer in the API docs or responses."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Degraded-mode behaviour is specified only for v2. v1's behaviour during the same feed stall is unspecified, so the two versions can diverge during one outage despite the \"unchanged\" v1 promise.",
+   "evidence": "\"If the AVL feed stalls > 90 s, responses keep serving the last good snapshot ... on-call is paged at 120 s.\" ABSENT: v1 stall behaviour."
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Separate deployments and autoscaling groups for v1 and v2 over 12 months roughly double serving compute during the sunset window. No cost estimate or budget approval is given.",
+   "evidence": "\"runs as a separate deployment and autoscaling group\" and \"until its announced sunset\" (2027-11-16). ABSENT: compute cost estimate or budget approval."
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "The CDN vendor and hosting platform are not named, and there is no portability or exit plan, even though the CDN is central to the caching and reliability design.",
+   "evidence": "\"CDN caches `/v2/arrivals` per `stop_id` for 10 s\" ABSENT: CDN vendor, hosting platform, or portability plan."
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 21716,
+  "tokOut": 29516,
+  "usd": 0.019100199999999998,
+  "critMs": 54325
+ }
+}

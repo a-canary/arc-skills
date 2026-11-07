@@ -1,0 +1,89 @@
+{
+ "approach": "triage-routed",
+ "case": "merge-06",
+ "rep": 1,
+ "wallMs": 302982,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The upstream 429 retry issues a second upstream call without taking a tenant token. A throttled tenant can therefore generate two upstream calls per request, and the extra load lands exactly when the upstream is already overloaded. This undercuts the PR's goal of stopping tenants from starving each other.",
+   "evidence": "let res = await upstream.chat(req.body, { signal: req.signal });\n    if (res.status === 429) { ... await new Promise((r) => setTimeout(r, delay));\n      res = await upstream.chat(req.body, { signal: req.signal });"
+  },
+  {
+   "lens": "other",
+   "severity": "major",
+   "claim": "The default of 20 rps / burst 40 is applied to all ~120 tenants on deploy, with no feature flag, staged rollout, or per-tenant override plan. Any tenant with legitimate steady traffic above 20 rps will start receiving 429s, which is a production behavior change.",
+   "evidence": "This adds an in-process token bucket per tenant (limits from tenant config, default 20 rps / burst 40) and returns 429 with Retry-After when a tenant is over."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The new behavior is effectively untested. The only tests cover TenantLimiter.take. Nothing exercises the route's 429 Retry-After response, the upstream-429 retry branch, retryAfterMs parsing, or the 5s cap.",
+   "evidence": "ABSENT: no test for completions.ts or retryAfterMs; bucket.test.ts only tests take() admission/refill and tenant isolation"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A tenant with ratePerSec of 0 makes the wait Infinity, so the response sends the literal header value \"Infinity\". Limits are not validated at config load.",
+   "evidence": "return Math.ceil(((1 - b.tokens) / limits.ratePerSec) * 1000);  /  .header(\"Retry-After\", String(Math.ceil(waitMs / 1000)))"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Date.now is a wall clock and can step backwards. A negative elapsed value drains tokens, which can lock a tenant out for about the size of the step. A monotonic clock should be used.",
+   "evidence": "private now: () => number = Date.now"
+  },
+  {
+   "lens": "secrets",
+   "severity": "minor",
+   "claim": "The log line writes a SHA-256 prefix derived from the tenant API key. This is not the key itself, and a truncated hash of a high-entropy secret is not practically reversible. But the stated invariant is that keys must never appear in logs, and the fingerprint adds nothing beyond tenant.id logged on the same line. It should be dropped or the invariant clarified.",
+   "evidence": "req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, \"tenant rate limited\")"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "retryAfterMs mishandles some header values. An empty string becomes 0 through Number(\"\"), which causes an immediate retry. An HTTP-date value silently falls back to 1s.",
+   "evidence": "const secs = Number(header);\n  if (!Number.isFinite(secs) || secs < 0) return 1_000;"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Capping the upstream Retry-After at 5s means that when upstream asks for a longer wait, the retry fires before the window reopens and will likely 429 again. This wastes an upstream call and adds up to 5s of latency, and the PR does not say how this case is handled.",
+   "evidence": "const MAX_UPSTREAM_RETRY_MS = 5_000;  ...  return Math.min(secs * 1000, MAX_UPSTREAM_RETRY_MS);"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The first 429 response body is never consumed or cancelled before the retry. Depending on the upstream client, the connection may stay held under sustained 429s. This cannot be confirmed from the diff.",
+   "evidence": "ABSENT: any drain, cancel, or close of the first upstream response body before `res = await upstream.chat(...)` is called again"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "During the retry sleep the handler does not check for client disconnect. It still waits and then makes a second upstream call for a request nobody is waiting on.",
+   "evidence": "await new Promise((r) => setTimeout(r, delay));\n      res = await upstream.chat(req.body, { signal: req.signal });"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "There are no metrics or alerts for rate-limit rejections or upstream retries. The only signal is per-request logs, which will be high volume during the very bursts this is meant to handle.",
+   "evidence": "req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, \"tenant rate limited\"); ... req.log.warn({ tenant: tenant.id, delay }, \"upstream 429, retrying once\");"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Limits are enforced per process and per region, and bucket state resets on restart. A tenant's effective global rate is N× the configured limit across N regions, so the 'per tenant' guarantee is not accurate as described.",
+   "evidence": "Runs as a single process per region (no horizontal scaling yet), so in-process state is authoritative."
+  }
+ ],
+ "usage": {
+  "calls": 6,
+  "tokIn": 23317,
+  "tokOut": 14566,
+  "usd": 0.011835950000000001,
+  "critMs": 30419
+ }
+}

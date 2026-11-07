@@ -1,0 +1,89 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-09",
+ "rep": 2,
+ "wallMs": 438882,
+ "verdict": "ATTACKS",
+ "confidence": 0.72,
+ "attacks": [
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PlugCloud signing contract (header names, v1= prefix, lowercase hex, timestamp in seconds) is asserted but not checked against vendor documentation or a real delivery. Every test signs with the PR's own sign() helper, so a format mismatch would reject all real deliveries while the suite stays green.",
+   "evidence": "ABSENT: vendor documentation link or captured real PlugCloud delivery; tests use TS = \"1700000000\" and a local sign() helper"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Any delivery older than 300 seconds is rejected, so vendor redelivery of backlog after an outage longer than five minutes is dropped. This conflicts with the context's premise that redelivery is harmless, which only covers idempotency, not the age window. The vendor's retry behaviour on 401 is not stated.",
+   "evidence": "\"rejects deliveries more than 5 minutes old or in the future\"; TOLERANCE_SECONDS = 300; context: \"a redelivered batch is harmless\"; ABSENT: handling or vendor retry policy for late backlog"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Rejections are logged only as warnings with no counter or alert. A wrong or rotated secret or clock skew could drop readings unnoticed, though the failure is at least logged.",
+   "evidence": "log.warning(\"plugcloud webhook rejected: %s\", exc); ABSENT: metric or alert on 401 rate"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The required secret has no default, so an upgrade without VOLTLOG_PLUGCLOUD_SECRET fails at startup. This is fail-fast by design, and the context says new required variables are announced in release notes and set in the compose .env. The remaining gap is that the diff adds no .env.example entry or clearer startup message.",
+   "evidence": "plugcloud_secret: SecretStr (no default); \"New required env vars are announced in release notes and set by the operator in the compose .env file\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The PR text promises a bare 401, but the code returns a JSON detail body. The description and implementation disagree.",
+   "evidence": "\"returns a bare 401 on any failure\" vs raise HTTPException(status_code=401, detail=\"invalid signature\")"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Authenticated but malformed payloads now return a custom 422 body instead of FastAPI's standard validation shape, and the typed PlugCloudBatch parameter is removed from the route signature, so the OpenAPI request schema is lost. This is an undocumented contract change.",
+   "evidence": "except ValidationError: raise HTTPException(status_code=422, detail=\"invalid payload\") from None, replacing batch: PlugCloudBatch"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "A captured valid delivery can be replayed within the 300-second window, and an older batch could overwrite a corrected reading through the upsert. The impact is limited, but nothing deduplicates deliveries.",
+   "evidence": "TOLERANCE_SECONDS = 300 with no nonce or seen-signature cache; \"Readings are already upserted by (device_id, measured_at)\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The full body is buffered before authentication with no application-level cap. The 1 MB limit exists only at the reverse proxy, so a direct connection to the app port would allow large unauthenticated reads.",
+   "evidence": "body = await request.body() before signing.verify(...); \"the reverse proxy caps request bodies at 1 MB\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The length validator does not strip whitespace. A trailing newline from the .env file counts toward the 32-character minimum and becomes part of the HMAC key, producing a confusing signature mismatch instead of a clear startup error.",
+   "evidence": "if len(v.get_secret_value()) < 32: raise ValueError(...) with no strip"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "removeprefix(\"v1=\") accepts a bare hex digest with no version prefix and performs no version check. A future v2 scheme would be misparsed rather than rejected. Comparison is also exact against lowercase hex, so an uppercase but valid signature would be rejected.",
+   "evidence": "signature.removeprefix(\"v1=\").encode() compared against hexdigest() output"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "There is a single secret with no key ID or overlap window, so rotation needs a coordinated vendor and operator cutover, and a mismatch causes an ingestion outage.",
+   "evidence": "plugcloud_secret: SecretStr (single value); verify(secret: bytes, ...) accepts one key"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Test gaps: no test for the secret-length validator or startup failure, no route-level test for a validly signed body with invalid JSON, and no route-level tampered-body case.",
+   "evidence": "ABSENT: tests for the plugcloud_secret validator and the 'invalid payload' path; tests/webhooks/test_signing.py covers only verify() unit cases and one route test with unsigned and valid requests"
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 106153,
+  "tokOut": 55825,
+  "usd": 0.04403959,
+  "critMs": 81358
+ }
+}

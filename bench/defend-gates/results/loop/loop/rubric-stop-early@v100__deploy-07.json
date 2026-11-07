@@ -1,0 +1,160 @@
+{
+ "approach": "rubric-stop-early@v100",
+ "case": "deploy-07",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Plugin discovery walks `**/node_modules/**/package.json` on every invocation and loads matching packages, but the discovery function never actually imports/executes the plugin — it only collects `{name, dir}`. The artifact claims \"plugins can register subcommands\" and that the CLI \"loads the ones whose keywords include `tasq-plugin`\", yet the shown implementation only reads package.json metadata. If loading happens elsewhere, it is not documented or shown, creating a spec mismatch between claimed behavior and presented code.",
+     "evidence": "\"the CLI walks node_modules ... reads each package.json, and loads the ones whose keywords include tasq-plugin\" vs. code that only does `found.push({ name: pkg.name, dir: dirname(pkgJson) })` with no `import` or `require` of the plugin entry point."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1688,
+    "tokOut": 199,
+    "usd": 0,
+    "critMs": 31702
+   },
+   "wallMs": 96696
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "ux-efficiency",
+     "severity": "blocker",
+     "claim": "Plugin discovery adds a fixed ~2s overhead to every tasq invocation, including lightweight commands like --version (0.11s→1.94s, 17x slower) and lint-staged (0.38s→2.31s, 6x slower), which the project explicitly recommends running in pre-commit hooks and editor integrations. This will degrade the developer experience for 180k weekly users on every git commit, not just builds.",
+     "evidence": "Performance table shows `tasq --version` 0.11s→1.94s and `tasq lint-staged` (3 staged files) 0.38s→2.31s. Context states docs recommend running `tasq lint-staged` in git pre-commit hooks."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1791,
+    "tokOut": 202,
+    "usd": 0,
+    "critMs": 35081
+   },
+   "wallMs": 123157
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The proposed 'read installed packages from the lockfile or top-level dependency list' fix cannot work: auto-discovery must find plugins anywhere in the dependency tree, including transitive dependencies that never appear in the top-level dependency list.",
+     "evidence": "'Read installed packages from the lockfile or the top-level dependency list rather than globbing the whole tree' — but the feature is 'Any installed package with the tasq-plugin keyword is picked up automatically,' which includes transitive dependencies not in the top-level list. The lockfile would work, but it is not mentioned and lockfile formats vary (npm, yarn, pnpm)."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2295,
+    "tokOut": 159,
+    "usd": 0,
+    "critMs": 45597
+   },
+   "wallMs": 124087
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "rc.3 ships three lockfile parsers (npm, Yarn, pnpm) plus a full-scan fallback, but the QA plan adds no test for lockfile/`node_modules` drift (lockfile updated but install not run), so the release could silently load stale or missing plugins with no error or warning.",
+     "evidence": "\"QA summary ... To add for rc.3: ... lockfile-based discovery tests that find a plugin installed only as a transitive dependency under each of npm, Yarn, and pnpm (plus the fallback paths)\" — no test for mismatched lockfile vs installed packages"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2465,
+    "tokOut": 158,
+    "usd": 0,
+    "critMs": 44010
+   },
+   "wallMs": 81188
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The publish is gated on rc.3 meeting startup budgets, but the rc.3 implementation is not written yet and the required lockfile-based discovery has no test coverage. Publishing a release whose core performance fix is unimplemented and untested means the gate can only fail at publish time, not before.",
+     "evidence": "\"Planned startup fixes (rc.3, required before publish)\" and \"The budget column is a target and release gate, not a measurement. rc.3 results will be posted on #1840 before the publish decision.\" plus \"To add for rc.3: ... lockfile-based discovery tests ... lockfile/node_modules drift tests ... each asserting that the result reflects what is actually installed\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2752,
+    "tokOut": 179,
+    "usd": 0,
+    "critMs": 78733
+   },
+   "wallMs": 106605
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The zero-config plugin discovery turns every `tasq` invocation into a supply-chain attack surface: any malicious npm package — installed transitively by any dependency, not just top-level — that adds the `tasq-plugin` keyword is automatically imported and executed in the user's process on every `tasq run`, `tasq lint-staged`, and `tasq watch` restart, with no user opt-in, no allowlist, and no visibility into which plugins loaded. This is a new, undocumented class of dependency-confusion / arbitrary-code-execution risk introduced by this release.",
+     "evidence": "\"Any installed package with the `tasq-plugin` keyword is picked up automatically.\" ... \"Auto-discovery must find plugins anywhere in the dependency tree, including transitive dependencies\" ... \"The CLI then imports the entry point of each discovered plugin and lets it register its subcommands.\" ... \"Both steps run before argument parsing so that plugins can register subcommands\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2975,
+    "tokOut": 225,
+    "usd": 0,
+    "critMs": 52141
+   },
+   "wallMs": 115878
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "The trust model checks trust at import time but does not prevent an untrusted plugin from being discovered and having its package.json read; more critically, the trust check runs *after* discovery but the artifact states all three steps run before argument parsing — if an untrusted plugin's package.json contains a malicious `bin` field or the trust check itself is bypassed via a race condition between discovery and trust check, code could execute. However, the real blocker is: the artifact admits 'This is not yet implemented in rc.2' and rc.2 'imports every discovered plugin' — publishing rc.2 behavior (even conditionally) would mean any transitive dependency with the `tasq-plugin` keyword executes arbitrary code on every `tasq` invocation, including in pre-commit hooks and CI, which is a supply-chain code-execution vulnerability. The gate conditions it on rc.3, but the publish date is fixed at 2026-11-12 with only a 'slip' contingency, and the artifact is proposing to publish 3.0.0, not rc.3.",
+     "evidence": "rc.2 also has no trust check: it imports every discovered plugin. That is the behavior the trust model below replaces."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3959,
+    "tokOut": 286,
+    "usd": 0,
+    "critMs": 27966
+   },
+   "wallMs": 84723
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4350,
+    "tokOut": 21,
+    "usd": 0,
+    "critMs": 40258
+   },
+   "wallMs": 56984
+  }
+ ],
+ "artifact": "# Release proposal: tasq 3.0.0 (npm)\n\nMaintainers: core team · Publish: Thu 2026-11-12 (**target date only; conditional on the startup-latency gate and the plugin-trust gate below, and it slips if either gate is not met**) · Tracking: #1840 · Blog: \"tasq 3: plugins for everyone\"\n\n## Highlights\n\n- **Automatic plugin discovery with explicit trust.** Any installed package with the `tasq-plugin` keyword is discovered automatically, with no `plugins: [...]` array needed. A discovered plugin is only loaded (its code executed) after it has been trusted, either by a one-time interactive approval or by an entry in a committed trust file. See \"Plugin trust model\" below.\n- **Task graph caching** keyed on input file hashes; repeated `tasq run build` with unchanged inputs completes in under 50 ms of task time (task execution only, excluding CLI startup; see Performance).\n- **ESM-only**, Node 20+.\n\n## Breaking changes\n\n| Change | Migration |\n|---|---|\n| Node 18 support dropped | Node 18 is EOL since April 2025; `engines` field enforces `>=20` |\n| CommonJS `require('tasq')` removed | `npx tasq-migrate` rewrites config files and `require` calls; tested on 40 public repos, 38 fully automatic, 2 needed manual edits (documented) |\n| `plugins` array in config ignored | Auto-discovery replaces it. `tasq-migrate` removes the array and writes each plugin it listed into `tasq.trust.json`, so existing setups keep loading exactly the plugins they already had. It installs nothing new. |\n| Plugins must be trusted before they load | Discovered-but-untrusted plugins are skipped with a warning (never silently executed). Approve with `tasq plugins trust <name>` or on first interactive run. In CI and hooks (non-TTY), commit `tasq.trust.json`. |\n| `tasq lint-staged` output format | JSON reporter unchanged; pretty reporter shows grouped output |\n\n## How plugin discovery works\n\nPlugin startup happens in three steps (`tasq run`, `tasq lint-staged`, `tasq watch` restarts, `tasq list`):\n\n1. **Discovery.** The CLI finds the packages whose `package.json` `keywords` include `tasq-plugin` and returns `{ name, dir }` references. This step only reads and JSON-parses metadata. It does not import or execute any plugin code, and it does not act on any other `package.json` field (for example `bin`, `main` or `scripts` are never read or run by tasq at this stage).\n2. **Trust check.** Each discovered plugin is checked against the trust list (see below). Untrusted plugins are not imported.\n3. **Loading.** The CLI imports the entry point of each *trusted* plugin and lets it register its subcommands. This step is separate from the discovery function shown below, which is the only part of the flow that snippet covers. Loading uses the `{ name, dir }` reference that passed the trust check; it does not re-resolve the plugin by name, so the path that was checked is the path that is imported.\n\nAll three steps run before argument parsing so that plugins can register subcommands, except for commands that need no plugins (see below). Running before argument parsing is safe because only step 3 executes plugin code, and step 3 only ever sees trusted plugins.\n\nThe snippet below is the **3.0.0-rc.2** implementation. It globs every `package.json` under every `node_modules` directory on each invocation, which is the cause of the startup regression measured below. rc.2 also has no trust check: it imports every discovered plugin. That is the behavior the trust model below replaces. **rc.2 must not be published as 3.0.0 or promoted to any dist-tag as a release candidate for it** (see the gate in the Release and support plan).\n\n```ts\n// src/plugins/discover.ts  (rc.2, step 1 only: discovery, no plugin code is imported here)\nexport async function discoverPlugins(root: string): Promise<PluginRef[]> {\n  const found: PluginRef[] = [];\n  for await (const pkgJson of glob(\"**/node_modules/**/package.json\", { cwd: root })) {\n    const pkg = JSON.parse(await readFile(join(root, pkgJson), \"utf8\"));\n    if (pkg.keywords?.includes(\"tasq-plugin\")) found.push({ name: pkg.name, dir: dirname(pkgJson) });\n  }\n  return found;\n}\n```\n\n### Plugin trust model (rc.3, required before publish)\n\nDiscovery must find plugins anywhere in the dependency tree, including transitive dependencies. Without a trust step, any package that adds the `tasq-plugin` keyword, including one pulled in transitively or via a compromised release, would run code in the user's process on every `tasq` invocation, including in pre-commit hooks and CI. That is a supply-chain code-execution risk, so auto-discovery only *finds* plugins; it never executes one on its own authority. This is not yet implemented in rc.2, and **no 3.0.0 build without it will be published under any dist-tag**.\n\n- **Trust list.** `tasq.trust.json` at the project root (committed to the repo, reviewed like a lockfile change) lists trusted plugin package names. Only packages on the list are imported. In workspaces, the root file applies to all workspaces.\n- **Interactive approval.** On a TTY, when an untrusted plugin is discovered, tasq prints its name, version and install path and asks whether to trust it. Answering yes adds it to `tasq.trust.json`; answering no skips it and asks again next time. `tasq plugins trust <name>` and `tasq plugins untrust <name>` do the same non-interactively.\n- **No prompts in CI, hooks or editors.** When stdin is not a TTY (CI, pre-commit hooks, editor integrations), tasq never prompts and never loads untrusted plugins. It skips them and prints a one-line warning naming each skipped plugin and the command to trust it. `--strict-plugins` (or `TASQ_STRICT_PLUGINS=1`) turns the warning into a non-zero exit for teams that want CI to fail.\n- **Visibility.** `tasq plugins list` shows every discovered plugin, its version, install path, and status (trusted/loaded, untrusted/skipped). `tasq run --verbose` logs which plugins were loaded. `TASQ_NO_PLUGINS=1` disables plugin loading entirely.\n- **Cache interaction.** The discovery cache (below) stores only what was discovered. The trust check runs on every invocation against the current `tasq.trust.json`, so a stale cache can never cause an untrusted plugin to load.\n- **Check and import use the same reference.** The trust check and the import operate on the same in-memory `{ name, dir }` reference within one invocation (see step 3), so there is no second lookup that could resolve to a different package between check and use. Changing `node_modules` on disk concurrently with a running `tasq` is outside the threat model, the same as for any Node program that imports its dependencies.\n- **Known limitation, documented.** Trust is keyed on package name. If a trusted plugin later ships a compromised version, the trust file does not catch it; that risk is the same as for any dependency and is addressed by lockfiles, provenance and review of dependency updates. We are not adding version pinning in 3.0.0 because it would require re-approval on every plugin update.\n\n### Planned startup fixes (rc.3, required before publish)\n\nThese fixes are not yet implemented. rc.3 will be published under the `next` dist-tag and evaluated against the gate in the Release and support plan before any 3.0.0 publish decision is made.\n\n- **Skip discovery for plugin-independent invocations.** `--version`, `--help` without a subcommand, and similar do not scan `node_modules`.\n- **Cache discovery results.** Store the plugin list in `node_modules/.cache/tasq/plugins.json`, keyed on the lockfile hash plus the mtimes of the `node_modules` root and workspace `package.json` files. Invalidate and rescan on any change. A warm invocation reads one small file instead of scanning thousands.\n- **Enumerate installed packages from the lockfile, not the top-level dependency list.** Auto-discovery must find plugins anywhere in the dependency tree, including transitive dependencies, so a top-level-only list is not sufficient. The lockfile (`package-lock.json`, `yarn.lock`, or `pnpm-lock.yaml`) lists every installed package, so we parse it to get the full set of candidate names and versions, then read `package.json` only for those candidates, resolved via Node resolution from `node_modules`. Lockfile formats differ, so rc.3 ships a parser per supported package manager (npm, Yarn, pnpm). Projects with no lockfile, an unrecognized format, or a lockfile that does not match `node_modules` (e.g. Yarn PnP) fall back to the full scan, as do cache misses and `tasq --rescan-plugins`.\n- **Detect lockfile/`node_modules` drift instead of trusting the lockfile blindly.** The lockfile can be ahead of the install (lockfile updated, install not run) or behind it. While reading each candidate's `package.json`, we verify that it exists and that its `version` matches the lockfile entry. Any missing candidate or version mismatch counts as drift: discovery abandons the lockfile result, falls back to the full scan (which reflects what is actually installed), skips writing the cache, and prints a one-line warning suggesting an install. Packages present in `node_modules` but absent from the lockfile are not found by the lockfile path, so where the package manager provides an install-state file (npm's `node_modules/.package-lock.json`), we compare it with the lockfile and treat any difference as drift. Where no such file exists, extras are only picked up on a cache miss or `tasq --rescan-plugins`; this limitation is documented.\n- **Load plugins lazily** so that `lint-staged` and `run` import only the trusted plugins their subcommand needs.\n\n## Performance (reference monorepo: 61 workspaces, 2,430 installed packages, M2 MacBook Air, warm disk cache)\n\nMeasured on 3.0.0-rc.2 (without the fixes above):\n\n| Command | 2.9.4 | 3.0.0-rc.2 | rc.3 release budget |\n|---|---|---|---|\n| `tasq --version` | 0.11 s | 1.94 s | ≤ 0.15 s |\n| `tasq lint-staged` (3 staged files) | 0.38 s | 2.31 s | ≤ 0.50 s |\n| `tasq run build` (cache hit) | 0.21 s | 2.02 s | ≤ 0.30 s |\n| `tasq run build` (cold, full build) | 48.7 s | 46.1 s | no regression |\n\nThe rc.2 numbers are a real regression for short commands. `lint-staged` runs in pre-commit hooks and `run` runs in CI and editor integrations, so a fixed ~2 s per-invocation cost would be felt on every commit. The \"under 50 ms\" cache figure above is task time only; end-to-end wall-clock is what the budget column covers. The budget column is a **target and release gate, not a measurement**. rc.3 results will be posted on #1840 before the publish decision, and the gate is evaluated on a published rc.3, so it can fail before 3.0.0 is published. The budgets must be met with the trust check enabled.\n\n## Supply chain and licensing\n\n- Published from GitHub Actions with npm provenance (`--provenance`); 2FA required for all maintainers.\n- No `postinstall` scripts in tasq or its dependencies.\n- New runtime deps: `fast-glob` (MIT), `semver` (ISC). License scan: no copyleft dependencies.\n- Plugin execution is opt-in per plugin (see \"Plugin trust model\"): discovering a package never runs its code, and untrusted plugins are skipped and reported. The security docs and blog post will describe the trust model, `tasq plugins list`, `--strict-plugins` and `TASQ_NO_PLUGINS`, and its limitation (name-based trust).\n\n## QA summary\n\n- Unit + integration: 1,912 tests pass on Linux/macOS/Windows, Node 20 and 22.\n- `tasq-migrate` on 40 public repos (list in #1840): 38 automatic, 2 manual (Yarn PnP projects, documented).\n- Smoke test of top 15 community plugins under auto-discovery: all load and register subcommands. This was run on rc.2, before the trust model existed; it will be re-run on rc.3 with the plugins trusted.\n- To add for rc.3 (all required to pass as part of the gate): cache invalidation tests (install/remove a plugin, lockfile change, workspace change), lockfile-based discovery tests that find a plugin installed only as a transitive dependency under each of npm, Yarn, and pnpm (plus the fallback paths), lockfile/`node_modules` drift tests under each of npm, Yarn, and pnpm (lockfile bumps a plugin version without install; lockfile adds a plugin that is not installed; plugin installed but absent from the lockfile; plugin removed from the lockfile but still installed), each asserting that the result reflects what is actually installed, that the cache is not poisoned, and that the warning appears where specified, **plugin trust tests** (an untrusted plugin, including one installed only transitively, is discovered but its entry point is never imported, verified with a fixture plugin whose top-level code writes a marker file; a fixture plugin with a malicious `bin` or `scripts` entry in its `package.json` triggers nothing during discovery; non-TTY runs never prompt and skip untrusted plugins with a warning; `--strict-plugins` exits non-zero; a stale discovery cache cannot cause an untrusted plugin to load; `tasq-migrate` converts a legacy `plugins` array into `tasq.trust.json`; `tasq plugins list` and `TASQ_NO_PLUGINS` behave as specified), and the startup benchmarks above, run on the reference monorepo and a small single-package repo.\n\n## Release and support plan\n\n0. **Startup-latency and plugin-trust gate.** The gate is checked on a published rc.3, before any 3.0.0 publish. Target: rc.3 is cut and published under the `next` dist-tag by 2026-11-05, leaving a week to measure and fix before the planned publish date. Do not publish 3.0.0 until an rc.3 (or later rc) meets every budget in the Performance table on the reference monorepo **and** the rc.3 tests listed in the QA summary (cache invalidation, lockfile-based discovery, drift, plugin trust) pass on Linux/macOS/Windows. The trust model is not optional: we do not ship the rc.2 behavior of importing every discovered plugin, and the 2026-11-12 date does not override this. A 3.0.0 build that lacks the trust check is not publishable under any dist-tag, including `next`. If either condition is not met by 2026-11-12, the publish date slips. If the lockfile-based discovery or drift handling is not ready, the fallback is to ship only the skip-discovery, caching and lazy-loading fixes if they alone meet the budgets; otherwise the date slips. That fallback does not apply to the trust model. If rc.2 is on the registry, it will be deprecated with a message pointing to rc.3 and explaining that it imports every discovered plugin.\n1. Publish `3.0.0` under `next` dist-tag; promote to `latest` after 7 days with no P1 issues.\n2. `2.x` moves to `latest-2` dist-tag and receives security fixes until 2027-11-12. Announced in the README and blog post.\n3. Rollback: if a P1 is found after promotion, re-point `latest` to `2.9.4` (`npm dist-tag add tasq@2.9.4 latest`) and publish a fix as 3.0.1.\n4. Blog post and changelog go live at publish; Discord announcement links the migration guide.",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 26645,
+  "tokOut": 26772,
+  "usd": 0.374272,
+  "critMs": 155565
+ },
+ "status": "cleared"
+}

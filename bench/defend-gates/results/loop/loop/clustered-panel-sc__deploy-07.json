@@ -1,0 +1,156 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "deploy-07",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Zero-config discovery auto-loads and executes any package in node_modules (including transitive deps) carrying the `tasq-plugin` keyword, with no allowlist, opt-in, signature, or disable switch. This runs on every invocation, including pre-commit hooks and CI, before argument parsing. The supply-chain section only covers postinstall scripts and tasq's own provenance, not the trust model for discovered plugins. A keyword-squatted or compromised transitive dependency gets code execution on developer machines and CI.",
+     "evidence": "\"Any installed package with the `tasq-plugin` keyword is picked up automatically.\" / \"Discovery runs before argument parsing so that plugins can register subcommands.\" / \"No `postinstall` scripts in tasq or its dependencies.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Discovery globs `**/node_modules/**/package.json` and parses every match on every invocation, with no depth bound, ignore set, or caching. In the reference monorepo this regresses `tasq --version` from 0.11 s to 1.94 s, lint-staged from 0.38 s to 2.31 s, and cache-hit runs from 0.21 s to 2.02 s (~10x). The cost lands on pre-commit hooks, editor integrations and CI, and will grow with larger monorepos.",
+     "evidence": "| `tasq lint-staged` (3 staged files) | 0.38 s | 2.31 s |  and  | `tasq run build` (cache hit) | 0.21 s | 2.02 s |"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The performance narrative contradicts the artifact's own measurements. The claim that discovery is negligible and overall build time improves is unsupported: cold build barely changes (48.7→46.1 s), cache-hit gets ~10x slower, and the cost is paid on every command. The \"under 50 ms of task time\" headline hides a ~2 s wall-clock cost and is not reconciled with the table. Measurements come from one warm-cache M2 machine only.",
+     "evidence": "\"Discovery is a fixed per-invocation cost and becomes negligible relative to real build work, so overall build time improves thanks to the new graph cache.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The discovery code has no error handling: one malformed package.json in node_modules makes JSON.parse throw and aborts discovery, which runs before argument parsing and so breaks every command, including `--version`. Plugin load failures are not isolated either. The plugin dir is also returned relative to root rather than absolute.",
+     "evidence": "const pkg = JSON.parse(await readFile(join(root, pkgJson), \"utf8\")); ... found.push({ name: pkg.name, dir: dirname(pkgJson) });"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Yarn PnP projects have no node_modules, so discovery finds nothing there. Combined with the `plugins` array now being ignored, those users silently lose their plugins with no error or fallback. The artifact says only that they need manual edits (documented), not that the failure is loud or that a fallback exists.",
+     "evidence": "\"2 manual (Yarn PnP projects, documented)\" and \"`plugins` array in config ignored | Auto-discovery replaces it\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The behavior change for pre-commit and CI users is not called out in the breaking-changes table: implicit plugin execution on every `tasq lint-staged` and `tasq run`. The migration column says `tasq-migrate` removes the array but not whether the set of plugins that run changes. There is no opt-out and no statement on whether CI parsers of the pretty reporter break.",
+     "evidence": "| `plugins` array in config ignored | Auto-discovery replaces it; `tasq-migrate` removes the array and installs nothing new |"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback only re-points the `latest` dist-tag. It does not address users who already migrated configs to ESM or removed the plugins array, nor anyone who installed 3.0.0 explicitly. It does not say whether 3.0.0 is deprecated, and it does not reconcile with the `latest-2` tag. The 7-day `next` soak has no described mechanism for detecting P1 issues or measuring adoption.",
+     "evidence": "\"Rollback: if a P1 is found after promotion, re-point `latest` to `2.9.4` (`npm dist-tag add tasq@2.9.4 latest`) and publish a fix as 3.0.1.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Cache invalidation, storage location, size bounds and eviction for the new task graph cache are not described, and no observability is planned for post-release plugin or discovery failures.",
+     "evidence": "ABSENT: cache storage location, size limit, eviction policy, invalidation on plugin change"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The blog framing (\"plugins for everyone\") does not mention the measured startup regression, and no accessibility or no-color check is listed for the new grouped pretty reporter.",
+     "evidence": "Blog: \"tasq 3: plugins for everyone\" / \"pretty reporter shows grouped output\""
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 20662,
+    "tokOut": 8873,
+    "usd": 0.06473380000000001,
+    "critMs": 20644
+   },
+   "wallMs": 132345
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The discovery cache is keyed only on the package manager lockfile and the package.json hashes. It omits `tasq.plugins.lock`, the tasq version or cache schema, and the `--no-plugins` state. Revoking or editing trust, or upgrading from a cache written by rc.2 or 2.x, may leave a stale manifest that still registers plugin subcommands. The artifact also does not say trust is re-checked at load time.",
+     "evidence": "\"keyed on the hashes of the lockfile and the root/workspace `package.json` files. It is recomputed only when those change.\" ABSENT: tasq.plugins.lock in the cache key, and a load-time trust re-check."
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The legacy-array fallback runs plugins without a `tasq.plugins.lock` entry. It also triggers whenever discovery finds zero plugins, which can happen after malformed package.json files are skipped. This is a deliberate, time-limited, warned allowlist, but it sits uneasily with the stated rule that only trusted plugins run.",
+     "evidence": "\"tasq uses the array as an explicit allowlist and prints a deprecation warning\" vs \"a discovered plugin runs only if it is listed in `tasq.plugins.lock`\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The migration table says the `engines` field enforces Node >=20. npm only warns on an engines mismatch unless engine-strict is set, so Node 18 users can still install 3.0.0 and hit ESM runtime failures.",
+     "evidence": "\"`engines` field enforces `>=20`\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "`tasq-migrate --revert` is described as restoring the CJS config and the `plugins` array. It does not say what happens to the committed `tasq.plugins.lock` and `.tasq/plugins.json` on downgrade.",
+     "evidence": "\"supports `tasq-migrate --revert` to restore the CJS config and the `plugins` array\""
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 31075,
+    "tokOut": 31568,
+    "usd": 0.0808315,
+    "critMs": 69184
+   },
+   "wallMs": 160030
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The discovery sample resolves every declared dependency from the root directory only, although the prose puts workspace package.json files in scope. A workspace-only dependency that is not hoisted may be skipped with a warning. The listed RC tests should cover this.",
+     "evidence": "for (const name of await declaredDependencies(root)) { // root + workspace package.json only ... resolvePackageJson(name, root)"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The legacy `plugins` array fallback is described as an explicit allowlist, but the artifact does not say whether it goes through the lock-file trust check. This slightly blurs the claim that execution always requires a pinned trust entry. The array is user-authored and was already executed in 2.x.",
+     "evidence": "\"tasq uses the array as an explicit allowlist and prints a deprecation warning\" vs \"execution requires an explicit trust entry pinned in a committed lock file\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "`tasq-migrate --revert` has no QA item. The artifact also does not say whether 2.9.4 tolerates a leftover `tasq.plugins.lock` or `.tasq/plugins.json` after a downgrade.",
+     "evidence": "ABSENT: revert test in QA summary; ABSENT: 2.9.4 behavior with leftover tasq.plugins.lock / .tasq/plugins.json"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The blog post and Discord announcement go live at publish, but 3.0.0 sits on the `next` tag for at least 7 days. Readers who install normally still get 2.x. The 'adoption too low' soak-extension condition has no threshold.",
+     "evidence": "\"Blog post and changelog go live at publish\" vs \"promote to `latest` after 7 days\" and \"If adoption on `next` is too low to be meaningful, the soak is extended\""
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 32957,
+    "tokOut": 16889,
+    "usd": 0.07948859999999999,
+    "critMs": 59960
+   },
+   "wallMs": 121151
+  }
+ ],
+ "artifact": "# Release proposal: tasq 3.0.0 (npm)\n\nMaintainers: core team · Publish: Thu 2026-11-12 · Tracking: #1840 · Blog: \"tasq 3: plugins for everyone\"\n\n**Release gate:** 3.0.0 is not published until the discovery changes below are in a new RC and the performance targets in the Performance section are met on at least two machine classes. Otherwise the publish date slips.\n\n## Highlights\n\n- **Low-config plugins.** Plugin packages that are declared dependencies of your project and carry the `tasq-plugin` keyword are discovered automatically, subject to a trust step (see below). No more `plugins: [...]` array in `tasq.config.ts`.\n- **Task graph caching** keyed on input file hashes; repeated `tasq run build` with unchanged inputs completes in under 50 ms of *task time* (excluding CLI startup; wall-clock numbers are in the Performance section).\n- **ESM-only**, Node 20+.\n\n## Breaking changes\n\n| Change | Migration |\n|---|---|\n| Node 18 support dropped | Node 18 is EOL since April 2025; `engines` field enforces `>=20` |\n| CommonJS `require('tasq')` removed | `npx tasq-migrate` rewrites config files and `require` calls; tested on 40 public repos, 38 fully automatic, 2 needed manual edits (documented) |\n| `plugins` array in config no longer controls which plugins load | Plugins are now discovered from declared dependencies and must be trusted (`tasq plugins trust`, recorded in `tasq.plugins.lock`, committed to the repo). `tasq-migrate` converts each entry of the old array into a trust entry, so the set of plugins that run after migration is the same as before. If the old array names a package that is not a declared dependency, `tasq-migrate` reports it and does not drop it silently. The old array is still read, with a deprecation warning, for one minor version as an explicit allowlist fallback (see Yarn PnP below). |\n| Implicit plugin execution on `tasq lint-staged` and `tasq run` | Untrusted discovered plugins are **not executed**. Interactively, tasq prints the plugin names and how to trust them. In CI (`CI=true`) or non-TTY pre-commit hooks it exits non-zero with the same message instead of running them. Opt-outs: `--no-plugins` and `TASQ_NO_PLUGINS=1`. |\n| `tasq lint-staged` pretty reporter output format | JSON reporter unchanged. The pretty reporter now shows grouped output and is not a stable machine format. CI parsers of the pretty output should switch to `--reporter=json`, or use `--reporter=pretty-legacy`, which keeps the 2.x format throughout 3.x. |\n\n## How plugin discovery works\n\nDiscovery now has a bounded scope, a trust model, and a cache.\n\n- **Scope:** only packages named in `dependencies`/`devDependencies` of the root `package.json` and of each workspace `package.json`, resolved via Node resolution. tasq does not glob all of `node_modules`, so transitive-only packages are never loaded, and there is no depth traversal.\n- **Trust:** a discovered plugin runs only if it is listed in `tasq.plugins.lock` with its name and a version/integrity pin. A new or changed plugin must be re-trusted explicitly (`tasq plugins trust <name>`). `tasq plugins list` shows discovered, trusted and untrusted plugins. Keyword presence alone never causes code execution.\n- **Disable switch:** `--no-plugins` or `TASQ_NO_PLUGINS=1`.\n- **Lazy loading:** `tasq --version`, `--help` and `tasq plugins ...` never load plugin code. Plugin subcommands are registered from a cached manifest, and plugin code loads only when its subcommand or a task needing it is invoked.\n- **Cache:** the discovery result is stored in `.tasq/plugins.json`. The cache key is the hashes of the package manager lockfile, the root/workspace `package.json` files, and `tasq.plugins.lock`, plus the tasq version and a cache schema version. A cache written by a different tasq version or schema (including rc.2 and 2.x) is ignored and recomputed. The cache holds discovery results only and is never treated as a trust decision. With `--no-plugins` / `TASQ_NO_PLUGINS=1`, the cache is not read and no plugin subcommands are registered.\n- **Trust re-check at load time:** before any plugin code is loaded, tasq re-reads `tasq.plugins.lock` and verifies that the plugin is listed and that its name and version/integrity pin match the resolved package. This check runs on every load, regardless of cache state. If trust was revoked or edited, the stale cached manifest is not honored: the plugin is not loaded, its subcommands are removed, and the command fails closed in CI and non-TTY hooks as described above.\n- **Failure isolation:** an unreadable or malformed `package.json`, or a plugin that fails to load, produces a warning naming the package and is skipped. It never aborts the command. A plugin load failure in a command that explicitly depends on that plugin is an error for that command only.\n\n```ts\n// src/plugins/discover.ts\nexport async function discoverPlugins(root: string): Promise<PluginRef[]> {\n  const found: PluginRef[] = [];\n  for (const name of await declaredDependencies(root)) { // root + workspace package.json only\n    try {\n      const pkgPath = resolvePackageJson(name, root);\n      const pkg = JSON.parse(await readFile(pkgPath, \"utf8\"));\n      if (pkg.keywords?.includes(\"tasq-plugin\")) {\n        found.push({ name: pkg.name, dir: resolve(dirname(pkgPath)) }); // absolute path\n      }\n    } catch (err) {\n      warn(`tasq: skipping ${name}: ${(err as Error).message}`);\n    }\n  }\n  return found;\n}\n```\n\n### Yarn PnP and other layouts without `node_modules`\n\nResolution goes through Node/PnP resolution rather than a filesystem glob, so PnP projects are supported by discovery. If a project has no `node_modules` and discovery finds zero plugins while a legacy `plugins` array is present, tasq uses the array as an explicit allowlist and prints a deprecation warning. If a package named in the legacy array cannot be resolved, tasq errors loudly instead of continuing without it. The two PnP repos in the migration test are re-run against this behavior before the gate passes.\n\n## Performance (reference monorepo: 61 workspaces, 2,430 installed packages, M2 MacBook Air, warm disk cache)\n\nMeasured on **3.0.0-rc.2**, which still uses the unbounded glob and has none of the changes above:\n\n| Command | 2.9.4 | 3.0.0-rc.2 |\n|---|---|---|\n| `tasq --version` | 0.11 s | 1.94 s |\n| `tasq lint-staged` (3 staged files) | 0.38 s | 2.31 s |\n| `tasq run build` (cache hit) | 0.21 s | 2.02 s |\n| `tasq run build` (cold, full build) | 48.7 s | 46.1 s |\n\nrc.2 is a clear regression. Unbounded discovery adds a fixed cost of roughly 1.8 s to every invocation, about 10x on short commands such as pre-commit hooks and cache hits. It is not negligible, and the cold-build difference (48.7 → 46.1 s) is within what the cache alone would explain, so the table does not show an overall improvement to short commands. The bounded, cached, lazy design above exists to remove that cost.\n\n**Release-gate targets** (to be measured on the next RC, not yet measured): `tasq --version` and cache-hit runs within 50 ms of 2.9.4 on the reference monorepo, and `tasq lint-staged` within 100 ms. The numbers will be published in #1840 and the blog post. They will be measured on at least two machine classes (the M2 above plus a Linux CI runner), and on both warm and cold disk cache.\n\n## Supply chain and licensing\n\n- Published from GitHub Actions with npm provenance (`--provenance`); 2FA required for all maintainers.\n- No `postinstall` scripts in tasq or its dependencies.\n- **Plugin trust model:** tasq executes third-party plugin code, so the supply-chain risk is not limited to tasq's own publishing. Only declared dependencies are considered, execution requires an explicit trust entry pinned in a committed lock file (re-verified at load time, independent of the discovery cache), untrusted plugins fail closed in CI and hooks, and `--no-plugins` / `TASQ_NO_PLUGINS=1` disable plugin loading entirely. A keyword-squatted or newly compromised package therefore cannot run merely by being installed. A version bump of a trusted plugin requires re-trusting. This is documented in the security section of the docs and the migration guide.\n- New runtime deps: `fast-glob` (MIT), `semver` (ISC). License scan: no copyleft dependencies.\n\n## QA summary\n\n- Unit + integration: 1,912 tests pass on Linux/macOS/Windows, Node 20 and 22 (rc.2). New tests required before the gate: malformed `package.json` in dependencies, plugin load failure isolation, untrusted plugin in CI and non-TTY hooks, `--no-plugins`, a keyword-squatted transitive-only package (must not load), PnP, cache invalidation, stale cache after trust revocation or edit of `tasq.plugins.lock` (plugin must not load and its subcommands must not register), cache written by rc.2/2.x or a different schema version (must be ignored), and `--no-plugins` with a populated cache.\n- `tasq-migrate` on 40 public repos (list in #1840): 38 automatic, 2 manual (Yarn PnP projects, documented); both will be re-run with the PnP/legacy-allowlist fallback.\n- Smoke test of top 15 community plugins under auto-discovery: all load and register subcommands (rc.2); to be re-run under the trust model.\n\n## Release and support plan\n\n1. Publish `3.0.0` under the `next` dist-tag; promote to `latest` after 7 days with no P1 issues. P1 detection during the soak: a `P1` label on GitHub issues with a named maintainer triaging daily, a pinned feedback issue linked from the blog and migration guide, and weekly `next` download counts from npm as an adoption signal (tasq collects no telemetry). If adoption on `next` is too low to be meaningful, the soak is extended rather than promoted.\n2. `2.x` moves to the `latest-2` dist-tag and receives security fixes until 2027-11-12. Announced in the README and blog post.\n3. Rollback: if a P1 is found after promotion, (a) re-point `latest` to `2.9.4` (`npm dist-tag add tasq@2.9.4 latest`); `latest-2` is unchanged and continues to point to the newest 2.x; (b) run `npm deprecate tasq@3.0.0 \"<reason>; use 3.0.1\"`, which covers users who installed 3.0.0 explicitly; (c) publish a fix as 3.0.1. For users who already migrated, `tasq-migrate` writes backups of every file it changes and supports `tasq-migrate --revert` to restore the CJS config and the `plugins` array. The migration guide documents the downgrade steps (pin `tasq@2.9.4`, run `--revert`).\n4. Blog post and changelog go live at publish; Discord announcement links the migration guide. The blog post and changelog describe the trust step and the opt-outs, and the pretty-reporter change.",
+ "fixerUsage": {
+  "calls": 2,
+  "tokIn": 8294,
+  "tokOut": 8457,
+  "usd": 0.11773799999999998,
+  "critMs": 52170
+ },
+ "status": "cleared"
+}

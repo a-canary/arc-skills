@@ -1,0 +1,144 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "deploy-01",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "blocker",
+     "claim": "The public Recent signers panel renders the full name and the postal code, violating the agreed rule that public signer lists show at most first name, last initial and city. It also contradicts the release's own description of the panel, and exposes EU signers' personal data publicly with no lawful basis (GDPR minimisation).",
+     "evidence": "<li>{{ s.full_name }} <span class=\"loc\">{{ s.city }} {{ s.postal_code }}</span></li>"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The QA entry for Recent signers only checks that 20 confirmed signers render, not that the displayed fields meet the agreed privacy restriction, so the pass gives no assurance on the privacy requirement.",
+     "evidence": "| Recent signers renders 20 most recent confirmed | Pass |"
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The organizer-updates consent checkbox is pre-ticked, so it is not an affirmative act. This is invalid consent under GDPR (and ePrivacy) for EU signers' marketing.",
+     "evidence": "<input type=\"checkbox\" id=\"news\" name=\"newsletter_opt_in\" value=\"1\" checked>"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "major",
+     "claim": "Form errors are shown only by a red border and background. The .form-error live region is never populated, and there is no aria-invalid or aria-describedby link. Screen-reader users get no error text, which fails WCAG 2.1 AA error identification (3.3.1), which the team agreed to meet.",
+     "evidence": "form.elements[name].classList.add('is-invalid'); ... <p class=\"form-error\" aria-live=\"polite\"></p>"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "major",
+     "claim": "The only accessibility evidence is an automated axe-core scan of the sign page. There is no manual keyboard or screen-reader verification of the error flow, the Recent signers panel, or live count updates, so the AA requirement is not demonstrated.",
+     "evidence": "| axe-core automated scan on sign page | 0 violations |"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The submit handler handles only 422 and ok responses. A 409 duplicate, a 5xx or a network failure leaves the user with no feedback. The success path also depends on a Location header.",
+     "evidence": "if (res.status === 422) {...} if (res.ok) window.location = res.headers.get('Location'); // no else branch, no catch"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Data residency is routed by postal code, but the form collects no country and postal codes are not unique across countries. EU signers can be stored in us-east-1, undermining the GDPR storage commitment. The mechanism for resolving EU versus non-EU is not described.",
+     "evidence": "Postgres, eu-central-1 for EU-resolved postal codes, us-east-1 otherwise"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "No retention period or erasure path is stated for confirmed signatures (name, email, postal code), and none for organizer-exported data. Only the 7-day purge of unconfirmed signatures is specified, leaving GDPR Art. 17 handling undefined.",
+     "evidence": "ABSENT: retention and erasure policy for confirmed signatures; only unconfirmed purge after 7 days is specified"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback only swaps the form for the 'Follow this petition' button. It does not say what happens to signatures already collected, pending confirmation links, or the public panel and CSV export while the flag is off. Nor does it provide a way to purge any personal data already exposed.",
+     "evidence": "Rollback: flip `petitions_signing` off; sign form is replaced by the existing \"Follow this petition\" button."
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 20754,
+    "tokOut": 10134,
+    "usd": 0.0590329,
+    "critMs": 27635
+   },
+   "wallMs": 80878
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The success fallback builds the redirect from `form.dataset.slug`, but the production form template never sets `data-slug`. If the response has no Location header, a successful signer is sent to `/p/undefined/thanks`. The QA matrix lists 'missing Location' as a case to verify, so this path is expected to run.",
+     "evidence": "window.location = next || `/p/${form.dataset.slug}/thanks`; vs <form class=\"sign-form\" action=\"/p/{{ petition.slug }}/sign\" method=\"post\" novalidate>"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The 422 handler adds the `is-invalid` class, but the reset loop only removes `aria-invalid`. After a failed submit, fields keep the red error styling on later submits even once they are corrected. The 422 handler also assumes every returned field name exists in `form.elements` and that `fields` is non-empty.",
+     "evidence": "el.classList.add('is-invalid'); ... el.removeAttribute('aria-invalid'); form.elements[fields[0]].focus();"
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 28270,
+    "tokOut": 8078,
+    "usd": 0.0654133,
+    "critMs": 18972
+   },
+   "wallMs": 112035
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The submit handler removes `aria-invalid` and clears error text on each submit, but never removes the `is-invalid` class. Fields that were fixed keep the red border and background on resubmit. The submit button is also not disabled while the request is in flight, so a double submit can show a misleading 409 'already signed'.",
+     "evidence": "el.removeAttribute('aria-invalid'); ... el.classList.add('is-invalid'); (no classList.remove anywhere)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The 422 handler indexes `form.elements[name]` and `fields[0]` without a guard. An empty or unknown field list, or a failed `res.json()`, would throw and leave the user with no feedback.",
+     "evidence": "const el = form.elements[name];\n el.classList.add('is-invalid'); ... form.elements[fields[0]].focus();"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The 409 message reveals whether a specific email has signed a specific petition, which allows enumeration of civic participation. The artifact states no rate limit or bot protection on the sign endpoint.",
+     "evidence": "showSummary('This email has already signed this petition.');"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The rollout watches only error and bounce rates. It has no signal for privacy exposure on the public panel and no alert on the 7-day purge job. The 'no schema changes' statement also sits awkwardly with adding a `country` column.",
+     "evidence": "Watch `sign_submit_error_rate` (< 0.5%) and confirmation email bounce rate (< 2%) for 24h."
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 29363,
+    "tokOut": 13161,
+    "usd": 0.0742895,
+    "critMs": 39919
+   },
+   "wallMs": 67933
+  }
+ ],
+ "artifact": "# Release proposal: CivicSign 2.4.0 — Petition signing (public launch)\n\nOwner: web team · Target: Thu 2026-11-05 14:00 UTC · Ticket: CS-812 · Flag: `petitions_signing`\n\n## What ships\n\n- Residents can sign any open petition with full name, email, country and postal code.\n- Signature is confirmed by email (double opt-in): unconfirmed signatures are not counted and are purged after 7 days.\n- Public \"Recent signers\" panel on each petition page showing first name + last initial and city only (no full name, no postal code), so visitors can see momentum without exposing signers.\n- Optional organizer updates: signers can choose to receive campaign news from the petition organizer. The checkbox is unticked by default; consent is recorded only if the signer ticks it.\n- Signature counts update live (polling every 15s, cached at the CDN for 10s). Count changes are announced to assistive technology via a polite live region.\n\n## Sign form (production template, `petitions/templates/sign.html`)\n\n```html\n<form class=\"sign-form\" action=\"/p/{{ petition.slug }}/sign\" method=\"post\" data-slug=\"{{ petition.slug }}\" novalidate>\n  <label for=\"fullname\">Full name</label>\n  <input id=\"fullname\" name=\"full_name\" required autocomplete=\"name\" aria-describedby=\"fullname-error\">\n  <span id=\"fullname-error\" class=\"field-error\"></span>\n  <label for=\"email\">Email</label>\n  <input id=\"email\" name=\"email\" type=\"email\" required autocomplete=\"email\" aria-describedby=\"email-error\">\n  <span id=\"email-error\" class=\"field-error\"></span>\n  <label for=\"country\">Country</label>\n  <select id=\"country\" name=\"country\" required autocomplete=\"country\" aria-describedby=\"country-error\">\n    {% for c in countries %}<option value=\"{{ c.code }}\">{{ c.name }}</option>{% endfor %}\n  </select>\n  <span id=\"country-error\" class=\"field-error\"></span>\n  <label for=\"postal\">Postal code</label>\n  <input id=\"postal\" name=\"postal_code\" required autocomplete=\"postal-code\" aria-describedby=\"postal-error\">\n  <span id=\"postal-error\" class=\"field-error\"></span>\n  <div class=\"consent\">\n    <input type=\"checkbox\" id=\"news\" name=\"newsletter_opt_in\" value=\"1\">\n    <label for=\"news\">Keep me updated about this campaign and others from {{ petition.organizer.name }}</label>\n  </div>\n  <p class=\"form-error\" role=\"alert\" aria-live=\"assertive\"></p>\n  <button type=\"submit\" class=\"btn-sign\">Sign petition</button>\n</form>\n```\n\n## Client validation (`petitions/static/sign.js`)\n\n```js\nconst summary = form.querySelector('.form-error');\n\nfunction showSummary(msg) { summary.textContent = msg; }\n\nform.addEventListener('submit', async (e) => {\n  e.preventDefault();\n  summary.textContent = '';\n  for (const el of form.elements) {\n    el.removeAttribute('aria-invalid');\n    const err = document.getElementById(el.id + '-error');\n    if (err) err.textContent = '';\n  }\n  let res;\n  try {\n    res = await fetch(form.action, { method: 'POST', body: new FormData(form) });\n  } catch (_) {\n    showSummary('Network error. Check your connection and try again.');\n    return;\n  }\n  if (res.status === 422) {\n    const { fields, messages } = await res.json();\n    for (const name of fields) {\n      const el = form.elements[name];\n      el.classList.add('is-invalid');\n      el.setAttribute('aria-invalid', 'true');\n      const err = document.getElementById(el.id + '-error');\n      if (err) err.textContent = messages[name];\n    }\n    showSummary(`Please fix ${fields.length} field(s) below.`);\n    form.elements[fields[0]].focus();\n    return;\n  }\n  if (res.status === 409) {\n    showSummary('This email has already signed this petition.');\n    return;\n  }\n  if (res.ok) {\n    const next = res.headers.get('Location');\n    window.location = next || `/p/${form.dataset.slug}/thanks`;\n    return;\n  }\n  showSummary('Something went wrong on our side. Please try again in a moment.');\n});\n```\n\n```css\n.sign-form input.is-invalid { border: 2px solid #d93025; background: #fdecea; }\n.field-error { display: block; font-size: 0.875rem; color: #a50e0e; }\n.form-error { min-height: 1.2em; font-size: 0.875rem; color: #a50e0e; }\n```\n\nErrors are conveyed by text and `aria-invalid`/`aria-describedby`, not by colour alone (WCAG 3.3.1).\n\nThe form template now sets `data-slug=\"{{ petition.slug }}\"`, so the fallback redirect to `/p/<slug>/thanks` used when the response has no Location header resolves to the correct petition rather than `/p/undefined/thanks`.\n\n## Recent signers panel (`petitions/templates/_recent.html`)\n\n```html\n<section class=\"recent\" aria-labelledby=\"recent-h\">\n  <h2 id=\"recent-h\">Recent signers</h2>\n  <ul class=\"recent-signers\">\n    {% for s in petition.recent_signers(limit=20, confirmed_only=True) %}\n      <li>{{ s.first_name }} {{ s.last_name|first }}. <span class=\"loc\">{{ s.city }}</span></li>\n    {% endfor %}\n  </ul>\n</section>\n```\n\n## Data handling\n\n- Residency is determined by the explicit country field (not by postal code). Signers whose country is an EU/EEA member state are stored in eu-central-1; all others in us-east-1. Postal code is validated against the selected country's format.\n- Signer email and postal code are stored in `signatures` (Postgres) in the region above.\n- Retention: confirmed signatures (name, email, postal code) are retained for the life of the petition plus 12 months after it closes, then deleted or irreversibly anonymised (counts retained). Organizer CSV exports are expected to be deleted by the organizer within 30 days; this is stated in the organizer terms and the export download page, and each export is audit-logged.\n- Erasure (GDPR Art. 17): a signer can request erasure via the link in the confirmation email or by contacting privacy support; the signature is deleted (count decremented) within 30 days, and the organizer is notified to remove it from any exports.\n- Confirmation emails go through Postmark; DPA countersigned 2026-09-14, listed in the public subprocessor page.\n- Organizers can export signers who opted in to updates as CSV; export is rate-limited and audit-logged.\n\n## QA report summary (staging, build 2.4.0-rc3)\n\n| Area | Result |\n|---|---|\n| Sign happy path (Chrome, Safari, Firefox, iOS Safari, Android Chrome) | Pass |\n| Double opt-in: unconfirmed not counted, purge job after 7d | Pass |\n| Duplicate signature (same email) rejected with 409 | Pass |\n| Recent signers renders 20 most recent confirmed | Pass |\n| Recent signers shows only first name, last initial and city (no full name, no postal code), verified in rendered HTML for EU and US petitions | To re-run on rc4 before release |\n| Newsletter checkbox unticked by default; opt-in recorded only when ticked | To re-run on rc4 before release |\n| Country-based residency: EU country → eu-central-1, other → us-east-1, incl. postal codes shared across countries | To re-run on rc4 before release |\n| Error handling: 422, 409, 5xx, network failure and missing Location each show feedback (missing Location must land on `/p/<slug>/thanks`, not `/p/undefined/thanks`) | To re-run on rc4 before release |\n| Organizer CSV export contains only opted-in signers | Pass |\n| Load: 400 signatures/s sustained for 10 min, p95 210ms | Pass |\n| axe-core automated scan on sign page | 0 violations |\n| Manual keyboard-only and screen-reader (NVDA/Firefox, VoiceOver/Safari) pass: form error flow, Recent signers panel, live count updates | To complete before release; release is blocked until it passes |\n\n## Rollout\n\n1. Thu 14:00 UTC: flag `petitions_signing` to 10% of petition pages.\n2. Watch `sign_submit_error_rate` (< 0.5%) and confirmation email bounce rate (< 2%) for 24h.\n3. Fri 14:00 UTC: 100%.\n4. Rollback: flip `petitions_signing` off; sign form is replaced by the existing \"Follow this petition\" button. While the flag is off:\n   - Signatures already collected are retained and still counted; they are not deleted by rollback.\n   - Pending confirmation links stay valid until their 7-day expiry, so signers who already submitted can still confirm.\n   - The Recent signers panel is hidden and the organizer CSV export is disabled.\n   - If personal data was exposed incorrectly, run the purge runbook: remove the affected records, purge the CDN cache for the petition pages, and follow the GDPR breach-assessment process.\n   No schema changes in this release beyond the additive `signatures` table created in 2.3 (the `country` column is additive on that table).",
+ "fixerUsage": {
+  "calls": 2,
+  "tokIn": 7500,
+  "tokOut": 6138,
+  "usd": 0.091372,
+  "critMs": 32304
+ },
+ "status": "cleared"
+}

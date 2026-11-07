@@ -1,0 +1,209 @@
+{
+ "approach": "elephant-gold",
+ "case": "deploy-11",
+ "rep": 2,
+ "wallMs": 335283,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The offline expiry guard only compares device time to the server time stored at download. A device clock set back to any time between download and valid_until, while real time is past valid_until, still shows an expired rating in color, which breaks the agreed never-present-stale-as-current rule. QA tested only a clock earlier than the download time.",
+   "evidence": "\"if the device clock reads earlier than that, the stored forecast is treated as expired.\" QA: \"Device clock moved earlier than offline download time | Pass\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The rollback says the flag takes effect on next foreground, but offline forecast data is purged only on next launch. Backgrounded or never-reopened phones keep stored ratings, so the claim that no stale ratings remain on phones is unverified and overstated.",
+   "evidence": "\"Set `avalanche_layer=false` (remote config, takes effect on next app foreground)... on-device forecast data stored with offline maps is deleted, so no stale ratings remain on phones.\" QA: \"offline forecast data purged on next launch\""
+  },
+  {
+   "lens": "licensing",
+   "severity": "major",
+   "claim": "Removing a center (e.g. at its request) only hides its zones from the live map. Offline copies keep rendering that center's ratings in color until valid_until, which conflicts with the stated purpose of removal and may not satisfy the data agreement's takedown terms.",
+   "evidence": "\"its zones disappear within 10 min and any offline copies expire at their `valid_until`.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Staleness is defined only as passing valid_until. A forecast that is revised or withdrawn within its validity window is not handled, and during a WADE outage the API keeps serving the old forecast, which the app then shows in color as current.",
+   "evidence": "\"If WADE is unreachable, our API keeps serving forecasts still inside `valid_until` and expires them on time; nothing is extended.\" ABSENT: handling of superseded, revised, or withdrawn forecasts."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The artifact does not specify client behavior on 429, 5xx, or timeout responses. If the client falls back to the 'No current forecast' state, a zone with a live forecast is reported as absent.",
+   "evidence": "\"rate limited at origin to 120 req/min per IP\" and \"Zones with no current forecast ... show a gray hatched fill and 'No current forecast' — never a color.\" ABSENT: client handling of error and rate-limited responses."
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The 120 req/min per-IP limit can throttle legitimate users behind shared NAT (lodges, ski areas, carrier NAT), since pan and zoom cache misses count against it. Rejections are not alerted, because only 5xx pages on-call, so affected users fail silently.",
+   "evidence": "\"rate limited at origin to 120 req/min per IP (CDN-cached responses are not counted)\"; \"endpoint 5xx > 1% for 10 min\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The bbox of the visible viewport is sent on every tile load, and the 'no location' check only inspected location fields. The artifact does not state what context the analytics SDK attaches to the two events, and it includes no privacy-policy or store data-safety update for these new flows, so linkability of backcountry zone interest is not ruled out.",
+   "evidence": "\"device location is not sent. Analytics adds two events (layer toggled, card opened) with zone id only\" and \"GET /avy/v1/zones?bbox=…\"; ABSENT: analytics SDK identifiers and privacy-policy/data-safety update"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The 92% CDN hit rate that drives the cost projection is asserted, not measured. A free-form bbox produces a distinct cache key per viewport, so fragmentation would multiply origin load well beyond ~$140/month.",
+   "evidence": "\"Projected 1.8M zone requests/day at 92% CDN hit rate; origin cost ~$140/month.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "Origin capacity is capped at 6 instances with no per-instance throughput figure and no load test. QA covers functional correctness and a 2 h poll block only, so the service's behavior at the cap or under a 10x burst is unknown.",
+   "evidence": "\"origin autoscaling capped at 6 instances\" ABSENT: load test or throughput results for GET /avy/v1/zones"
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "Aggregate origin requests are not bounded. A distributed client sending varied bbox values misses the CDN, is not limited by the per-IP cap, and can drive origin to its ceiling. The $400 CDN alert has no stated action or cap.",
+   "evidence": "\"rate limited at origin to 120 req/min per IP (CDN-cached responses are not counted)\"; \"CDN budget alert at $400/month; origin autoscaling capped at 6 instances.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Rollout jumps from a 40-person beta to 100% at 08:00, then a blog post and in-app card drive traffic at 10:00 against a likely cold cache. There is no staged ramp, no CDN pre-warm, and no launch-spike projection in the cost or capacity figures.",
+   "evidence": "\"Nov 19-22: flag on for staff and 40 ski-patrol beta testers. Nov 23 08:00: flag on for 100%. Blog post and in-app card go live at 10:00\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "CDN TTL and cache-control for zone responses are not stated, so the claim that the API expires forecasts on time is unverified. A CDN-cached response could carry an expired forecast during a WADE outage. The client-side check is a backstop only if the device clock is correct.",
+   "evidence": "\"our API keeps serving forecasts still inside `valid_until` and expires them on time\" ABSENT: CDN TTL / cache-control policy for zone responses"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "major",
+   "claim": "The VoiceOver/TalkBack check covers only the current-forecast announcement. The expired and no-forecast states were checked visually only, and the zone announcement contains no valid-until or expiry text, so a screen reader could announce a danger rating for an expired zone.",
+   "evidence": "\"zone announced as '[zone], danger 3 Considerable, issued [time]'\"; \"Expiry: ... Pass, gray 'Forecast expired'\"; ABSENT: assistive-technology result or label text for expired and no-forecast states"
+  },
+  {
+   "lens": "licensing",
+   "severity": "minor",
+   "claim": "The zone color is the maximum of the three elevation-band ratings, a derived value rather than a single issued rating. The artifact does not confirm that legal review (LGL-902) covered this derivation under C-2209's no-alteration clause.",
+   "evidence": "\"The zone color uses the highest of the three\"; \"Card text and the terms-of-use update were reviewed by legal (LGL-902).\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The valid_until window duration is not stated. If windows are short, offline users who download ahead of a trip will often see 'Forecast expired', so the offline value the release relies on may rarely appear.",
+   "evidence": "ABSENT: typical valid_until duration. \"an offline phone in the field shows 'Forecast expired' once `valid_until` passes.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Poll alerting is ambiguous. The 30-minute alert may be global, and the only per-center alert is 26 h, so one center's silent poll failure can persist for most of a forecast cycle. Expiry limits the harm to missing data rather than wrong data.",
+   "evidence": "\"Pages Maps on-call: no successful poll for 30 min, any center not updated for 26 h during its season\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The bbox parameter has no stated validation or maximum area or zone count. A wide bbox can return an unbounded response and expensive origin queries.",
+   "evidence": "ABSENT: bbox validation and size limits for GET /avy/v1/zones?bbox=…"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "CDN spend has only an alert, with no action and no hard cap. Monitoring has no spend or instance-count signal, and no latency alert exists despite p95 being tracked.",
+   "evidence": "\"CDN budget alert at $400/month\"; \"Pages Maps on-call: ... endpoint 5xx > 1% for 10 min\""
+  },
+  {
+   "lens": "secrets",
+   "severity": "minor",
+   "claim": "WADE poller credential storage and rotation are not described, if any credentials are used.",
+   "evidence": "ABSENT: WADE poller credential storage or rotation"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Analytics consent handling for the two new events, and retention and access for client IP and bbox at origin and CDN, are not stated.",
+   "evidence": "ABSENT: consent gating for new analytics events and log retention for IP and bbox"
+  },
+  {
+   "lens": "exit cost",
+   "severity": "minor",
+   "claim": "There is no termination or non-renewal path for WADE contract C-2209. The layer, cached device data, and endpoint have no stated exit plan if the agreement ends.",
+   "evidence": "ABSENT: termination or non-renewal path for C-2209"
+  },
+  {
+   "lens": "data residency",
+   "severity": "minor",
+   "claim": "Hosting regions for origin, CDN edge, and analytics vendor are not stated, so residency for user requests and analytics cannot be checked.",
+   "evidence": "ABSENT: hosting region for origin, CDN, and analytics vendor"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The blog post and in-app card cannot be retracted by the flag. The post promises 19 centers and free access, and no rollback covers them if centers are removed.",
+   "evidence": "\"Blog post: 'Avalanche forecasts from 19 avalanche centers across the US and Canada, now in Ridgeline Maps. Free for everyone.'\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The shipped 6.12 binary cannot be recalled, so any layer defect remains in installed builds and depends on the remote flag as the only kill switch.",
+   "evidence": "\"Nov 19: 6.12 released with `avalanche_layer=false` for everyone\""
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "The color values for the 'standard North American danger scale' are not specified, and the gray hatched 'No current forecast' and 'Forecast expired' states have no legend entry, so users may misread them as safe.",
+   "evidence": "\"Zones use the standard North American danger scale colors... the legend lists all five levels\"; ABSENT: legend entry for gray hatched state"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Out-of-season centers and zones outside the 19-center coverage both show 'No current forecast' with no explanation of the difference.",
+   "evidence": "\"Zones with no current forecast (out of season, or none issued today) show a gray hatched fill and 'No current forecast'\""
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "Tap-target size, a non-touch activation path, contrast ratios for fills and hatched state against both map styles, and accessibility labels for the link and legend are not specified.",
+   "evidence": "\"Tapping a zone opens a summary card\"; ABSENT: tap-target, keyboard/switch, and contrast specifications"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "All user-facing text, including legally reviewed card text, is English only, and no localization or language-support limit is stated.",
+   "evidence": "ABSENT: localization or language-support statement"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The card shows issue, valid-until, and expiry times with no stated time zone. Centers span US and Canadian zones, so offline users can misread times.",
+   "evidence": "\"Forecast expired [time]\"; ABSENT: time zone for displayed times"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The 'check that all 19 centers render' gate before the 10:00 go-live has no owner, procedure, or recorded result.",
+   "evidence": "\"Blog post and in-app card go live at 10:00 after a check that all 19 centers render.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Client-side failures (fetch errors, offline-download failures, expiry-render errors) are not monitored. The dashboard tracks only crash-free sessions, so silent zone-dropping regressions would be invisible.",
+   "evidence": "\"Dashboard: WADE poll success, last update per center, endpoint 5xx and p95, CDN hit rate, crash-free sessions on 6.12.\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Expiry logic is split between backend serving and device time checks with a server-time-at-download comparison, so two implementations of the same rule can diverge and are hard to test end to end.",
+   "evidence": "\"The expiry rule above applies on-device using device time\" and \"our API keeps serving forecasts still inside `valid_until`\""
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 68967,
+  "tokOut": 41894,
+  "usd": 0.0247088,
+  "critMs": 73924
+ }
+}

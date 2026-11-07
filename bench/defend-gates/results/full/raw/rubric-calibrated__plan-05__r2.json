@@ -1,0 +1,137 @@
+{
+ "approach": "rubric-calibrated",
+ "case": "plan-05",
+ "rep": 2,
+ "wallMs": 90148,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The nightly job scores every recipe (340k) for every user with a pantry in one SQL statement. Staging tested 12,000 users in 41 minutes, but at 30% of 2.1M MAU that is ~630k pantry users, roughly 52x the tested load. Runtime would exceed the 02:00 UTC window by a wide margin and compete with production reads on the primary.",
+   "evidence": "\"Staging run: 12,000 synthetic pantry users completed in 41 minutes.\" / \"Adoption assumption for sizing: 30% of MAU create a pantry within 90 days.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Scoring runs on the primary, and the job joins pantry_items x recipe_ingredients across all users. The read replicas are not used, so the nightly batch can starve the primary serving live traffic. The plan does not mention batching, replica reads, or statement timeouts.",
+   "evidence": "\"score every recipe in the catalog (340k recipes) in a single SQL statement joining pantry_items x recipe_ingredients on the primary\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The match score is weighted by expiry proximity, but items without expiry dates are allowed by the form and the unlock gate counts only items with expiry dates. Unlock is measured on one subset while scoring uses all items, and the plan does not say how missing or already-expired dates affect the score or whether expired items count as present.",
+   "evidence": "\"Score = (pantry ingredients used / recipe ingredients) weighted by expiry proximity\" / \"unlocks once a user has entered at least 15 items with expiry dates\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Staples are always counted as present, but the plan does not say whether they count in the denominator, so a recipe of only staples could score 100%.",
+   "evidence": "\"with pantry staples (salt, oil, water, pepper) always counted as present\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The 30% adoption figure and the 25%-of-MAU unlock target are unvalidated. The 15-item gate is not justified by data, and the plan does not say how many users reach 15 dated items, so the 25% target may be unreachable and the sizing may be wrong.",
+   "evidence": "\"Adoption assumption for sizing: 30% of MAU create a pantry within 90 days.\" / \"25% of MAU unlock Pantry Match within 60 days.\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "major",
+   "claim": "Unlock requires 15 items with expiry dates typed in manually through autocomplete, a high-friction setup step. The problem report cited 'too much setup / typing' as the top churn reason (38%), so this design targets the wrong friction and may increase churn among users who already cite setup effort.",
+   "evidence": "\"Too much setup / typing to get useful suggestions\" — 38% / \"users add items with a form: ingredient ... quantity, unit, expiry date.\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "major",
+   "claim": "The plan targets reason #2 (missing ingredients) but gates the feature behind a 15-item setup. Users with fewer items get no value, and the plan does not show that the carousel solves the 'same recipes keep showing up' problem either.",
+   "evidence": "\"Pantry Match targets reason #2\" / \"Pantry Match unlocks once a user has entered at least 15 items with expiry dates.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The job has no stated failure handling: no retry, no idempotency, no alerting if the run exceeds its window, and no fallback for stale matches. A failed or overrunning nightly run leaves users with stale or empty carousels with no detection path.",
+   "evidence": "\"PantryMatchJob (Sidekiq, nightly 02:00 UTC)\" — no retry, timeout, or alerting described anywhere in the artifact"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Rollback for the new pantry_matches table, the tab, and the notifications is not described. Beta-to-100% in week 6 has no kill switch or stated rollback.",
+   "evidence": "\"Week 6: beta to 5% of users, then 100%.\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Expiry dates and pantry contents are personal data and the plan does not address retention or deletion when a user deletes their account. Pantry data also feeds analytics events without stated privacy review.",
+   "evidence": "ABSENT: retention, deletion, or consent for pantry data; \"analytics events\" in week 5 with no content specified."
+  },
+  {
+   "lens": "notifications",
+   "severity": "minor",
+   "claim": "The push limit and quiet hours are stated, but the plan does not say how local time is determined across time zones or how the 2-day expiry trigger is computed relative to the nightly job, so pushes may fire late or at the wrong time.",
+   "evidence": "\"respects existing quiet hours (21:00-08:00 local)\""
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "The progress bar, carousel, and quantity prompt have no accessibility requirements stated (screen reader labels, keyboard access on web).",
+   "evidence": "\"the tab shows a progress bar (\"7 of 15 items added\")\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Normalization reuses ingredient_aliases, which the plan does not show covers the 9,400-ingredient catalog. Coverage gaps would silently drop matches.",
+   "evidence": "\"Ingredient normalization reuses the existing ingredient_aliases table (e.g. \"scallion\" = \"green onion\").\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Compute cost for the nightly full-catalog scoring at 630k users is unestimated. The plan gives no cost figure or budget.",
+   "evidence": "ABSENT: compute or infrastructure cost estimate for PantryMatchJob."
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "No concerns identified beyond standard single-database dependency; the feature runs entirely on existing infrastructure.",
+   "evidence": "ABSENT: none (no vendor lock-in introduced)."
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "No authn/authz or injection concerns identified in the stated design; user-entered ingredient text feeds the form but the plan does not say whether it is parameterized.",
+   "evidence": "\"ingredient (autocomplete over our 9,400-ingredient catalog)\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "No compliance issues identified beyond push opt-in, which is already stated.",
+   "evidence": "\"Opt-in only (off by default)\""
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "No rendering concerns identified in the artifact text.",
+   "evidence": "ABSENT: none."
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "The 'I made this' quantity prompt adds a recurring post-cooking step that will lower completion rates over time.",
+   "evidence": "\"Users are asked to update quantities after cooking\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Success metric of +3 pts retention vs. a matched control has no stated method for building the control or handling self-selection (users who unlock are more engaged).",
+   "evidence": "\"+3 pts 30-day retention for users who unlock vs. matched control\""
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 2668,
+  "tokOut": 2540,
+  "usd": 0.00129686,
+  "critMs": 10464
+ }
+}

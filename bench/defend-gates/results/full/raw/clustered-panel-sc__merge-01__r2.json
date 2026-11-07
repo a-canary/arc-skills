@@ -1,0 +1,65 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "merge-01",
+ "rep": 2,
+ "wallMs": 206715,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The retry loop generates a fresh randomUUID() on every attempt, so the broker never sees the same client_order_id twice. If an attempt times out or returns 502/503/504 after the broker accepted the order, the retry submits a distinct second order and can double-fill. This breaks the agreed safe-retry constraint and contradicts the PR's own safety claim.",
+   "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {\n    const clientOrderId = randomUUID();\n    try {"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Changing Math.floor to Math.ceil rounds the buy quantity up past the available headroom, so sizeBuy can push a symbol above the maxNotional cap that sizing must never exceed (e.g., maxNotional 10000, price 33, lot 1 gives 304 shares = 10032). It also returns a full lot when headroom is less than one lot.",
+   "evidence": "const lots = headroom / price / lotSize;\n  return Math.ceil(lots) * lotSize;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The new sizing tests use only exact-multiple inputs, so they pass with the ceil cap violation present. No test covers non-integer headroom/price/lotSize, sub-lot headroom, or that a retry reuses the same client_order_id.",
+   "evidence": "expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 })).toBe(100);"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The retry logic in submit.ts has no tests at all (retryable 5xx, 4xx not retried, timeout retry, max attempts), yet it ships to a live-money order path before market open.",
+   "evidence": "ABSENT: no test changes for src/router/submit.ts"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Timeout retry depends on the client throwing an error named exactly \"TimeoutError\" and honoring a new timeoutMs option, but no change to src/broker/client.ts is shown. If either assumption is wrong, timeouts are not retried or the 4000ms limit is not enforced, so the stated fix to the dropped-order problem doesn't work.",
+   "evidence": "(err as Error).name === \"TimeoutError\"  and  { timeoutMs: 4000 }; ABSENT: change to src/broker/client.ts"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "A live sizing behavior change and a retry change are bundled in one merge deploying right before market open, with no flag, staged rollout, or rollback plan, so a regression in either cannot be isolated or disabled quickly.",
+   "evidence": "Also tidies the sizing helper so quantities are rounded to the broker's lot size before submit.  ABSENT: feature flag or rollback plan"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Observability is thin for a failure-prone path: only a warn log per retry, with no clientOrderId, no log/metric on final failure after exhausting retries, so operators cannot see dropped orders or reconcile a possibly-accepted order.",
+   "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, attempt });  ABSENT: metric, alert, or final-failure log"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Worst-case retry window is about 13s with a fixed limit_price and no jitter, so late retries can submit at a stale price and synchronized retries can add load to a degraded broker. Transport errors such as connection resets are not retried.",
+   "evidence": "await sleep(250 * 2 ** (attempt - 1));  limit_price: intent.limitPrice"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 19378,
+  "tokOut": 9407,
+  "usd": 0.04829304,
+  "critMs": 26463
+ }
+}

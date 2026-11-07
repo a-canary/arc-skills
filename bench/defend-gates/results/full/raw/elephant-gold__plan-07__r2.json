@@ -1,0 +1,149 @@
+{
+ "approach": "elephant-gold",
+ "case": "plan-07",
+ "rep": 2,
+ "wallMs": 207298,
+ "verdict": "ATTACKS",
+ "confidence": 0.92,
+ "attacks": [
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "The cost model is off by roughly 30x. 38M lines/day x 60 tokens = 2.28B tokens per DAY, which at $0.50/1M is about $1,140 per day (about $34K/month), not per month. Peak day (61M lines) is about $1,830/day (about $55K/month). The plan's ~$1,150/month claim and its 'within budget' conclusion do not follow from its own inputs against a $1,500/month cap.",
+   "evidence": "Input: 38M lines x 60 tokens = 2.28B tokens -> ~$1,140 ... Estimated total: ~$1,150/month, within the $1,500 budget."
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The output cost is also wrong. 8,640 summaries x 400 tokens = 3.46M tokens/day, about 104M/month, which is roughly $207/month at $2/1M, not ~$7. Per-request prompt/instruction tokens, which are re-billed on every 5-minute window, are not costed at all.",
+   "evidence": "Output: 8,640 x 400 = 3.5M tokens -> ~$7 ... ABSENT: prompt token size and its cost across 8,640 requests/day"
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "No spend ceiling, rate cap, retry bound, or kill switch exists for LLM calls. A log storm or retry loop during an incident could generate unbounded token spend.",
+   "evidence": "ABSENT: any budget cap, per-day token ceiling, retry/backoff bound, or cost alerting in sections 2, 4, or 6."
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Summarizer sends every log line of every service every 5 minutes with no sampling, deduplication, or per-window token cap. Log floods during incidents, when summaries matter most, multiply input tokens and may exceed context limits.",
+   "evidence": "every 5 minutes, sends the last 5 minutes of logs per service to the LLM ... ABSENT: max lines or tokens per window, truncation, or sampling strategy"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "log-tap sits in the live Vector path with no stated queue bounds, drop policy, or isolation. A slow LLM or full queue could apply backpressure to Vector and degrade the logging pipeline that alerting and incident investigation depend on.",
+   "evidence": "forwards every application log line to the summarizer queue. ABSENT: queue bounds, drop policy, or isolation from the Vector path."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "No failure handling for the LLM dependency: no timeout, retry, backoff, circuit breaker, degraded mode, or rate-limit handling. Corvid outages or throttling during incidents would silently remove the feature, and missing or failed summaries carry no indicator.",
+   "evidence": "sends the last 5 minutes of logs per service to the LLM with a fixed prompt ... ABSENT: timeout, retry, backoff, circuit breaker, or degraded-mode behavior"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Summary freshness is not communicated. Summaries refresh every 5 minutes over a trailing window, and the page-time comment has no timestamp or staleness label, so an outdated summary can be read as the current incident state. This also conflicts with the 'within seconds of a page' goal.",
+   "evidence": "Give the on-call engineer ... summary within seconds of a page ... every 5 minutes ... auto-comment with the latest summaries"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "No rollback, feature flag, or kill switch is defined for log-tap or the PagerDuty auto-comment, and the plan rolls out to all 30 services at once. Once post-redaction logs flow to a third party, a privacy or cost problem found after launch cannot be quickly stopped or staged back.",
+   "evidence": "ABSENT: no feature flag, disable procedure, or rollback step in sections 2, 6 or 7; forwards every application log line to the summarizer queue; 30 services x 288 windows/day"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Redaction is the only control between production logs and an external LLM. It covers emails, tokens, card numbers and IPs, but not names, customer IDs, free-text payloads, or connection strings. The Q1 audit is not shown to cover current volume or new fields, and 38M-61M lines/day would leave the boundary unfiltered.",
+   "evidence": "which already masks emails, tokens, card numbers and IPs for our log retention policy (audited in Q1)"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "No retention or TTL is stated for stored summaries, queued raw log windows, or Redis contents. Personal data copied into them may outlive the log retention policy, and no data-subject request handling is described.",
+   "evidence": "stores a structured summary ... Queue + storage: existing Redis and Postgres, negligible. ABSENT: retention/TTL for summaries and queued log data"
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Summaries are posted to PagerDuty and stored in Postgres, which are new destinations. Summaries are LLM-generated text that can echo log content, but the plan does not say they are re-redacted, whether PagerDuty is an approved processor for this data, or who can read them.",
+   "evidence": "the PagerDuty incident gets an auto-comment with the latest summaries ... stores a structured summary. ABSENT: PagerDuty data-processing review, summary redaction, access control"
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "The plan does not show that customer contracts permit a new sub-processor receiving customer-derived log data, that it is disclosed to customers, or where Corvid processes the data. Zero-retention and a DPA address retention and terms, not location or contractual permission.",
+   "evidence": "Corvid account has zero-retention enabled; data processing addendum signed by Legal (ref DPA-0417). ABSENT: processing region, sub-processor disclosure, customer contract review"
+  },
+  {
+   "lens": "authn/authz",
+   "severity": "major",
+   "claim": "Summaries of production logs are stored and posted to PagerDuty with no access control or data scoping. The auto-comment also expands to direct dependencies, exposing content beyond the paging service's own scope.",
+   "evidence": "for the paging service and its direct dependencies (from the service catalog) ... ABSENT: access control, RBAC, or data-scoping for stored summaries"
+  },
+  {
+   "lens": "injection",
+   "severity": "major",
+   "claim": "Log content is attacker-influenceable and is passed directly to the LLM, with its output written into PagerDuty comments and stored summaries. Prompt injection could falsify the suspected deploy or top errors shown to responders, and the plan describes no delimiting or output validation.",
+   "evidence": "sends the last 5 minutes of logs per service to the LLM with a fixed prompt and stores a structured summary ... auto-comment with the latest summaries"
+  },
+  {
+   "lens": "vendor lock-in",
+   "severity": "major",
+   "claim": "The summarizer is hard-wired to one proprietary model with no provider abstraction, fallback, or model-agnostic prompt and eval design. There is also no exit plan, and stored summary portability is not described, so switching providers would mean rewriting the summarizer, prompt, and eval baseline.",
+   "evidence": "Model: Corvid-mini ... ABSENT: any exit or migration plan, model-agnostic prompt/eval design, or statement about portability of stored summaries"
+  },
+  {
+   "lens": "data residency",
+   "severity": "major",
+   "claim": "Every post-redaction application log line goes to a third-party LLM at tens of millions of lines per day, but the plan never states the jurisdiction or region where Corvid processes or stores that data.",
+   "evidence": "ABSENT: processing region, data location, or sub-processor list"
+  },
+  {
+   "lens": "staffing",
+   "severity": "major",
+   "claim": "Both platform engineers are committed full-time for 6 weeks, but the charter says on-call and interrupt work averages 50% of their time. The 12 eng-week estimate has zero slack and no allowance for interrupt load, so it is not credible as scheduled, and the build leaves on-call coverage unaddressed.",
+   "evidence": "Staffing: both platform engineers full-time for 6 weeks (2 x 6 = 12 eng-weeks). vs. on-call/interrupt work averages 50% of their time"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The 47->30 minute MTTR target is a load-bearing goal with no incident timeline breakdown showing grep time is the dominant component. The plan also builds the full feature before any feasibility spike or prototype on Corvid-mini against real logs shows the 70% useful gate is reachable.",
+   "evidence": "instead of spending the first 15-20 minutes grepping logs ... Target: median MTTR 47 min -> 30 min ... ABSENT: incident timeline breakdown, prototype run, or measured summary quality"
+  },
+  {
+   "lens": "logic",
+   "severity": "major",
+   "claim": "Eval design does not verify the page-time path. The replay does not require that only logs available before page time are used, the sample of 40 has no handling for incidents lacking logs, and grading is by a single commander without blinding or live-incident criteria.",
+   "evidence": "for each, generate the summary that would have been attached at page time and have the incident commander grade it"
+  },
+  {
+   "lens": "hidden coupling",
+   "severity": "minor",
+   "claim": "log-tap depends on the Vector redaction stage being placed before it. Reordering or changing that stage would silently change what the LLM receives, with no contract or test asserting the ordering.",
+   "evidence": "subscribes to the existing Vector pipeline after the redaction stage"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "There is no post-launch owner, maintenance allocation, or regression process for the prompt, structured output schema, or model drift. The eval is a one-time replay.",
+   "evidence": "Launch gate: >= 70% useful, <= 5% misleading. ABSENT: post-launch ownership, prompt versioning, regression tests"
+  },
+  {
+   "lens": "secrets",
+   "severity": "minor",
+   "claim": "The plan does not describe how the Corvid API key is stored, scoped, or rotated, nor how the summarizer's outbound third-party call is authenticated.",
+   "evidence": "ABSENT: how the Corvid API key is stored, scoped, rotated, or restricted to the summarizer service"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 49970,
+  "tokOut": 22303,
+  "usd": 0.014886539999999998,
+  "critMs": 34213
+ }
+}

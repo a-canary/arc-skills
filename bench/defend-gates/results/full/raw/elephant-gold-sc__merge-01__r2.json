@@ -1,0 +1,65 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "merge-01",
+ "rep": 2,
+ "wallMs": 199961,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "idempotency",
+   "severity": "blocker",
+   "claim": "randomUUID() is called inside the retry loop, so each attempt sends a different client_order_id. The broker's dedupe only matches a repeated id, so a timed-out or 5xx attempt that was actually accepted can be resubmitted as a second live order and double-fill. This contradicts the PR's safety claim and the agreed retry-safety constraint.",
+   "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { const clientOrderId = randomUUID(); try { const res = await broker.post(... client_order_id: clientOrderId ...)"
+  },
+  {
+   "lens": "risk-invariant",
+   "severity": "blocker",
+   "claim": "Changing Math.floor to Math.ceil lets sizeBuy return a quantity whose notional exceeds the per-symbol maxNotional whenever headroom is not an exact multiple of the lot. This breaks the stated hard constraint that sizing must never exceed the cap, on a live account. For example, maxNotional 10000, price 333, lotSize 1 gives 31 shares = 10323.",
+   "evidence": "const lots = headroom / price / lotSize; return Math.ceil(lots) * lotSize;"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The new sizing tests only use inputs that divide evenly, so they never hit the ceil overshoot. No test asserts that notional stays at or below maxNotional. The tests give false confidence.",
+   "evidence": "expect(sizeBuy({ maxNotional: 10_000, price: 50, currentQty: 0, lotSize: 10 })).toBe(200);"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "No test covers the new retry path (retry on 503/timeout, no retry on 4xx, exhaustion after 3 attempts). The broker dedupe claim is also unverified in the artifact, and the duplicate-id bug would not be caught.",
+   "evidence": "ABSENT: any test for submitOrder retries; no evidence of broker dedupe semantics for client_order_id"
+  },
+  {
+   "lens": "unverified-api",
+   "severity": "major",
+   "claim": "Timeout retry relies on an error named exactly \"TimeoutError\" and on a timeoutMs option to broker.post. Neither is shown in the diff, so the timeout retry path may never fire. Timeouts are the PR's main motivating case.",
+   "evidence": "(err as Error).name === \"TimeoutError\" ... { timeoutMs: 4000 }"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "When attempts are exhausted the error is rethrown with no error-level log or metric. The intermediate warn omits clientOrderId, so operators cannot reconcile a possibly-accepted order. Dropped orders at the open would be hard to see.",
+   "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, attempt }); ... if (!retryable || attempt === MAX_ATTEMPTS) throw err;"
+  },
+  {
+   "lens": "scope-drift",
+   "severity": "major",
+   "claim": "The floor-to-ceil change is a risk-limit behavior change described as a tidy-up. It is bundled with the retry logic, so it cannot be reviewed or reverted on its own.",
+   "evidence": "Also tidies the sizing helper so quantities are rounded to the broker's lot size before submit."
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Backoff is deterministic with no jitter, and there is no overall deadline or concurrency cap. Worst case is about 12.75s per order, and many orders failing together at the open retry in lockstep against a degraded broker.",
+   "evidence": "await sleep(250 * 2 ** (attempt - 1));"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 57408,
+  "tokOut": 22412,
+  "usd": 0.07441702,
+  "critMs": 20897
+ }
+}

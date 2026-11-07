@@ -1,0 +1,94 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "merge-08",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "supply-chain / build-reliability",
+     "severity": "blocker",
+     "claim": "go.mod adds `replace go.uber.org/zap => ../zap`, a local path outside the repo. A clean-checkout CI build fails because ../zap is missing. If a sibling directory does exist, the distributed static binary embeds unreviewed, unpinned code in a privileged deploy tool. The replace also overrides the pseudo-version bump, so the claimed zap fix is not what gets built.",
+     "evidence": "+replace go.uber.org/zap => ../zap"
+    },
+    {
+     "lens": "supply-chain / integrity",
+     "severity": "major",
+     "claim": "The zap requirement moves to an unreleased pseudo-version and the diff shows no go.sum update. The dependency has no visible checksum backing and cannot be verified or reproduced from a clean checkout.",
+     "evidence": "+\tgo.uber.org/zap v1.27.1-0.20260914181502-9d3e1c0f7a2b ... ABSENT: no go.sum hunk"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "printPlan does not remove the canary from the host list before batching, unlike computeBatches (`rest = without(hosts, o.CanaryHost)`). The canary is printed in batch 0 and again in a later batch, so the plan differs from what the real rollout executes.",
+     "evidence": "for i := 0; i < len(hosts); i += per { ... hosts[i:end] } vs computeBatches: rest = without(hosts, o.CanaryHost)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "printPlan sizes batches with a truncating int() on len(hosts), while computeBatches uses ceil on len(rest). For example, 10 hosts at 0.25 gives 2 per batch in the plan but 3 in the real rollout, so the preview on-call is meant to trust shows the wrong batch membership.",
+     "evidence": "per := int(float64(len(hosts)) * o.MaxSurge)  vs  size := int(math.Ceil(float64(len(rest)) * o.MaxSurge))"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR says dry-run exits without touching the orchestrator API, but Run calls api.Hosts before the DryRun check. The claim contradicts the diff, and dry-run fails whenever the orchestrator is unreachable.",
+     "evidence": "hosts, err := api.Hosts(ctx, o.Service) ... if o.DryRun { printPlan(w, hosts, o); return nil }"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "No test compares printPlan output with computeBatches, even though the feature's whole purpose is that on-call can trust the plan. Duplicated batching logic with no check is why the divergence above would ship undetected.",
+     "evidence": "ABSENT: no _test.go changes covering printPlan or Run with DryRun=true"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The zap dependency bump is unrelated to the dry-run feature and is bundled into the same PR. This makes the change harder to review and revert independently.",
+     "evidence": "Also bumps zap to pick up the JSON encoder fix we upstreamed."
+    },
+    {
+     "lens": "injection",
+     "severity": "minor",
+     "claim": "Host names from the orchestrator API are written verbatim to the terminal, so terminal escape sequences in a hostile response could mislead on-call about the plan.",
+     "evidence": "fmt.Fprintf(w, \"  batch %d: %s\\n\", n, strings.Join(hosts[i:end], \", \"))"
+    },
+    {
+     "lens": "ux",
+     "severity": "minor",
+     "claim": "The dry-run output has no explicit marker that it is a simulation, and printPlan ignores write errors, so a truncated plan could look complete.",
+     "evidence": "fmt.Fprintf(w, \"rollout plan: %s -> %s (%d hosts)\\n\", o.Service, o.Version, len(hosts))"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 51939,
+    "tokOut": 21236,
+    "usd": 0.0715709,
+    "critMs": 20211
+   },
+   "wallMs": 82662
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [],
+   "usage": {
+    "calls": 17,
+    "tokIn": 69766,
+    "tokOut": 19441,
+    "usd": 0.0635418,
+    "critMs": 23134
+   },
+   "wallMs": 110617
+  }
+ ],
+ "artifact": "PR #219: deployctl rollout --dry-run\n\nOn-call wants to see exactly which hosts go in which batch before kicking off a rollout, especially for the 60+ host services.\n`deployctl rollout <service> <version> --dry-run` now prints the batch plan and exits without deploying anything. It still makes the read-only `Hosts` call to the orchestrator API to get the host list, so it needs the orchestrator to be reachable. It makes no deploy calls.\n`printPlan` renders the output of `computeBatches` directly, so the plan always matches what the real rollout executes, including canary handling and batch sizing. A test checks this.\n\nThe zap bump from the original version of this PR has been dropped, along with the local `replace`. It will come in a separate PR that uses a tagged release with a matching go.sum.\n\n```diff\ndiff --git a/internal/rollout/rollout.go b/internal/rollout/rollout.go\nindex 6b2e4d1..a9c3f05 100644\n--- a/internal/rollout/rollout.go\n+++ b/internal/rollout/rollout.go\n@@ -18,30 +18,44 @@ type Options struct {\n \tService    string\n \tVersion    string\n \tMaxSurge   float64 // fraction of hosts per batch, e.g. 0.25\n \tCanaryHost string\n+\tDryRun     bool\n }\n\n // computeBatches splits hosts into rollout batches. The canary host (if any)\n // always goes alone in batch 0; the rest are split into batches of\n // ceil(len(rest) * MaxSurge) hosts.\n func computeBatches(hosts []string, o Options) [][]string {\n \tvar batches [][]string\n \trest := hosts\n \tif o.CanaryHost != \"\" {\n \t\tbatches = append(batches, []string{o.CanaryHost})\n \t\trest = without(hosts, o.CanaryHost)\n \t}\n \tsize := int(math.Ceil(float64(len(rest)) * o.MaxSurge))\n \tif size < 1 {\n \t\tsize = 1\n \t}\n \tfor i := 0; i < len(rest); i += size {\n \t\tbatches = append(batches, rest[i:min(i+size, len(rest))])\n \t}\n \treturn batches\n }\n\n+// printPlan renders exactly what computeBatches produces, so the dry-run\n+// preview cannot diverge from the real rollout.\n+func printPlan(w io.Writer, hosts []string, o Options) {\n+\tfmt.Fprintf(w, \"rollout plan: %s -> %s (%d hosts)\\n\", o.Service, o.Version, len(hosts))\n+\tfor i, batch := range computeBatches(hosts, o) {\n+\t\tlabel := \"\"\n+\t\tif i == 0 && o.CanaryHost != \"\" {\n+\t\t\tlabel = \" (canary)\"\n+\t\t}\n+\t\tfmt.Fprintf(w, \"  batch %d%s: %s\\n\", i, label, strings.Join(batch, \", \"))\n+\t}\n+}\n+\n func Run(ctx context.Context, api Orchestrator, w io.Writer, o Options) error {\n \thosts, err := api.Hosts(ctx, o.Service)\n \tif err != nil {\n \t\treturn fmt.Errorf(\"list hosts: %w\", err)\n \t}\n+\tif o.DryRun {\n+\t\tprintPlan(w, hosts, o)\n+\t\treturn nil\n+\t}\n \tfor i, batch := range computeBatches(hosts, o) {\n \t\tif err := deployBatch(ctx, api, o, batch); err != nil {\n \t\t\treturn fmt.Errorf(\"batch %d: %w\", i, err)\n \t\t}\ndiff --git a/internal/rollout/rollout_dryrun_test.go b/internal/rollout/rollout_dryrun_test.go\nnew file mode 100644\nindex 0000000..c41d8e9\n--- /dev/null\n+++ b/internal/rollout/rollout_dryrun_test.go\n@@ -0,0 +1,62 @@\n+package rollout\n+\n+import (\n+\t\"bytes\"\n+\t\"context\"\n+\t\"fmt\"\n+\t\"strings\"\n+\t\"testing\"\n+)\n+\n+func hostList(n int) []string {\n+\ths := make([]string, n)\n+\tfor i := range hs {\n+\t\ths[i] = fmt.Sprintf(\"h%02d\", i)\n+\t}\n+\treturn hs\n+}\n+\n+// The plan must list exactly the batches computeBatches returns.\n+func TestPrintPlanMatchesComputeBatches(t *testing.T) {\n+\tcases := []Options{\n+\t\t{Service: \"svc\", Version: \"v1\", MaxSurge: 0.25},\n+\t\t{Service: \"svc\", Version: \"v1\", MaxSurge: 0.25, CanaryHost: \"h03\"},\n+\t\t{Service: \"svc\", Version: \"v1\", MaxSurge: 0.5, CanaryHost: \"h00\"},\n+\t\t{Service: \"svc\", Version: \"v1\", MaxSurge: 0.01},\n+\t}\n+\tfor _, n := range []int{1, 4, 10, 63} {\n+\t\tfor _, o := range cases {\n+\t\t\thosts := hostList(n)\n+\t\t\tif o.CanaryHost != \"\" && n < 4 {\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t\tvar buf bytes.Buffer\n+\t\t\tprintPlan(&buf, hosts, o)\n+\n+\t\t\tvar want strings.Builder\n+\t\t\tfmt.Fprintf(&want, \"rollout plan: %s -> %s (%d hosts)\\n\", o.Service, o.Version, len(hosts))\n+\t\t\tfor i, b := range computeBatches(hosts, o) {\n+\t\t\t\tlabel := \"\"\n+\t\t\t\tif i == 0 && o.CanaryHost != \"\" {\n+\t\t\t\t\tlabel = \" (canary)\"\n+\t\t\t\t}\n+\t\t\t\tfmt.Fprintf(&want, \"  batch %d%s: %s\\n\", i, label, strings.Join(b, \", \"))\n+\t\t\t}\n+\t\t\tif buf.String() != want.String() {\n+\t\t\t\tt.Errorf(\"n=%d opts=%+v\\ngot:\\n%swant:\\n%s\", n, o, buf.String(), want.String())\n+\t\t\t}\n+\t\t\tif o.CanaryHost != \"\" && strings.Count(buf.String(), o.CanaryHost) != 1 {\n+\t\t\t\tt.Errorf(\"n=%d: canary %s should appear exactly once:\\n%s\", n, o.CanaryHost, buf.String())\n+\t\t\t}\n+\t\t}\n+\t}\n+}\n+\n+// fakeAPI embeds the interface so any call other than Hosts (e.g. a deploy\n+// call) panics on the nil embedded value and fails the test.\n+type fakeAPI struct {\n+\tOrchestrator\n+\thosts []string\n+}\n+\n+func (f fakeAPI) Hosts(context.Context, string) ([]string, error) { return f.hosts, nil }\n+\n+func TestRunDryRunOnlyReadsHosts(t *testing.T) {\n+\tvar buf bytes.Buffer\n+\to := Options{Service: \"svc\", Version: \"v1\", MaxSurge: 0.25, DryRun: true}\n+\tif err := Run(context.Background(), fakeAPI{hosts: hostList(10)}, &buf, o); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\t// 10 hosts at 0.25 -> ceil(2.5) = 3 per batch -> 4 batches.\n+\tif got := strings.Count(buf.String(), \"  batch \"); got != 4 {\n+\t\tt.Errorf(\"want 4 batches, got %d:\\n%s\", got, buf.String())\n+\t}\n+}\ndiff --git a/cmd/rollout.go b/cmd/rollout.go\nindex 0e4d7c2..51b8a90 100644\n--- a/cmd/rollout.go\n+++ b/cmd/rollout.go\n@@ -31,6 +31,7 @@ func newRolloutCmd() *cobra.Command {\n \tcmd.Flags().Float64Var(&o.MaxSurge, \"max-surge\", 0.25, \"fraction of hosts per batch\")\n \tcmd.Flags().StringVar(&o.CanaryHost, \"canary\", \"\", \"host to deploy first, alone\")\n+\tcmd.Flags().BoolVar(&o.DryRun, \"dry-run\", false, \"print the batch plan and exit (reads host list only; no deploy calls)\")\n \treturn cmd\n }\n```",
+ "fixerUsage": {
+  "calls": 1,
+  "tokIn": 3265,
+  "tokOut": 3715,
+  "usd": 0.050206,
+  "critMs": 22920
+ },
+ "status": "cleared"
+}
