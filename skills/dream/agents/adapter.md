@@ -103,6 +103,9 @@ line instead). A 38KB waste JSON read whole and never cited was the single bigge
 - One change only. If several groups are worth fixing, fix the top one and note
   the runners-up in the adaptation block for the next run.
 - Do not auto-edit CLAUDE.md rules or anything outside the chosen surface.
+- Never edit `GLOBAL-RULES.md`, any `CHOICES.md` or `~/vault/missions.md` (constitutional; operator approves first).
+  When the top fix belongs there, post a /decide card with the exact proposed text (`decide.ts ask`) and record the card id in the adaptation block instead.
+  On 2026-11-05 a dream run left an unapproved loop-break rule live in GLOBAL-RULES (repos-jq1k).
 - If the journal is empty or holds nothing actionable, write an adaptation block
   saying so and make no edit.
 - Prefer fixing a root cause (a tool that's awkward to call, a skill step that
