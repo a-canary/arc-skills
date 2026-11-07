@@ -18,7 +18,7 @@ Upgrade path: webui signs card id + script sha256 on accept, and deploy-run.ts v
 ## Usage
 
 1. Write the script with a `# undo: <cmd>` line.
-2. Post the card: `bun skills/human-gate-post-webui/decide.ts ask ... --run ./script.sh` (ask cards only: on task/text cards option A means Done or Answer, so decide.ts refuses `--run` there and deploy-run.ts refuses those cards).
+2. Post the card: `bun skills/human-gate-post-webui/decide.ts ask ... --run ./script.sh` (ask cards only, and the first `--opt` must be titled `Run ...`: accept A runs the script, so A must say so; decide.ts and deploy-run.ts both refuse otherwise).
    The script is copied to `~/vault/director/deploy-queue/<sha8>-<name>` and `Run: <path> sha256: <hex>` is appended after `</decide>`.
 3. After the operator accepts: `bun skills/deploy-agent/deploy-run.ts <card-id> [--repo R]`.
    `--dry` prints the plan without running it.
@@ -27,6 +27,7 @@ Upgrade path: webui signs card id + script sha256 on accept, and deploy-run.ts v
 ## Checks (any failure: one-line reason, exit 3)
 
 - Card is not closed.
+- Option A's title starts with `Run` (allow-list: a card whose A means Done, Answer or Not now never runs).
 - Last DECISION comment is `accept` with option A or none (B+ such as "Skip" never run), authored `operator`.
 - The last `Run:` line after `</decide>` is the pin; its path is under the deploy queue and the sha256 matches the file.
 - Re-pinning a fixed script means a new card (`--replaces`), never `bd update` on the accepted one.

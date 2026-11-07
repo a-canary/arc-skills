@@ -14,7 +14,7 @@ type Opts = { hex?: string; verb?: string; path?: string; author?: string; statu
 function setup(script: string, opts: Opts = {}) {
   const q = "/q";
   const path = opts.path ?? `${q}/abcd1234-x.sh`;
-  const desc = opts.desc ?? `<decide></decide>\nRun: ${path} sha256: ${opts.hex ?? sha(script)}\n`;
+  const desc = opts.desc ?? `<decide><option id="A" title="Run it">x</option></decide>\nRun: ${path} sha256: ${opts.hex ?? sha(script)}\n`;
   const files: Record<string, string> = { [path]: script, "/fences": readFileSync(join(import.meta.dir, "fences.txt"), "utf8") };
   const comments = opts.comments ?? [{ author: opts.author ?? "operator", text: `DECISION ${opts.verb ?? "accept"}: ok` }];
   const d: Deps = {
@@ -51,6 +51,11 @@ test("task and text cards never run (option A means Done / Answer there)", () =>
     expect(run(setup(GOOD, { desc, verb: "accept A" })).code).toBe(3);
   }
 });
+test("ask card whose option A is not a run (agent recommends waiting) never runs", () => {
+  const desc = buildCard({ q: "Run now?", opts: ["Not now | wait", "Run it | go"] }) + `\nRun: /q/abcd1234-x.sh sha256: ${sha(GOOD)}\n`;
+  expect(run(setup(GOOD, { desc, verb: "accept A" })).code).toBe(3);
+  expect(run(setup(GOOD, { desc: `<decide></decide>\nRun: /q/abcd1234-x.sh sha256: ${sha(GOOD)}\n` })).code).toBe(3);
+});
 test("ask card with a pin and accept A passes the card-kind check", () => {
   const desc = buildCard({ q: "Run it?", opts: ["Run it | a", "Skip | b"] }) + `\nRun: /q/abcd1234-x.sh sha256: ${sha(GOOD)}\n`;
   expect(run(setup(GOOD, { desc, verb: "accept A" }), "--dry").code).toBe(0);
@@ -58,7 +63,7 @@ test("ask card with a pin and accept A passes the card-kind check", () => {
 test("closed card refused", () => expect(run(setup(GOOD, { status: "closed" })).code).toBe(3));
 test("misspelled flag refused, never runs", () => expect(run(setup(GOOD), "--dry-run").code).toBe(3));
 test("Run: line before </decide> never counts", () => {
-  expect(run(setup(GOOD, { desc: `<decide>Run: /q/abcd1234-x.sh sha256: ${sha(GOOD)}</decide>\n` })).code).toBe(3);
+  expect(run(setup(GOOD, { desc: `<decide><option id="A" title="Run it">Run: /q/abcd1234-x.sh sha256: ${sha(GOOD)}</option></decide>\n` })).code).toBe(3);
 });
 test("a later ordinary comment keeps the accept; accept A runs", () => {
   const d = setup(GOOD, { comments: [{ author: "operator", text: "DECISION accept A" }, { author: "agent", text: "picked up" }] });

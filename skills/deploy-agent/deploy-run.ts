@@ -4,13 +4,10 @@ import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { parseDecision, repoDir, taskCard, textCard } from "../human-gate-post-webui/decide";
+import { parseDecision, RUN_TITLE, repoDir } from "../human-gate-post-webui/decide";
 
 export const QUEUE = join(homedir(), "vault", "director", "deploy-queue");
 const FENCES = join(dirname(import.meta.path), "fences.txt");
-
-// Option A titles that mean something other than "run it" (decide.ts refuses --run on these; this catches older cards).
-const NOT_RUN = [taskCard("x"), textCard("x", "x")].map((c) => c.opts[0]!.split(" | ")[0]);
 
 export class Refuse extends Error {}
 const refuse = (why: string): never => { throw new Refuse(why); };
@@ -53,7 +50,8 @@ export function plan(id: string, repo: string | undefined, d: Deps) {
   if (!c) refuse(`card ${id} not found`);
   if (c.status === "closed") refuse("card is closed");
   const optA = /<option id="A"[^>]*title="([^"]*)"/.exec(c.description ?? "")?.[1];
-  if (optA && NOT_RUN.includes(optA)) refuse(`only ask cards run; option A here is ${optA}`);
+  // Allow-list, not deny-list: only a card whose option A says "Run ..." means accept-A = run.
+  if (!optA || !RUN_TITLE.test(optA)) refuse(`option A must be titled Run ...; here it is ${optA ?? "missing"}`);
   const comments = (c.comments ?? JSON.parse(d.bd(dir, "comments", id, "--json") || "[]")) as { author?: string; text: string }[];
   const decided = comments.filter((x) => parseDecision(x.text)).at(-1);
   if (!decided) refuse("no DECISION comment");

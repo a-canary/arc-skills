@@ -95,7 +95,8 @@ function bd(dir: string, ...args: string[]): string {
   return r.stdout.toString();
 }
 
-// Option A on task/text cards means "Done" / "Answer in note", never "run it": a pin there would run on a click that meant something else.
+// Accept A runs the pin, so A must say so: a card whose A means Done, Answer or Not now would run on a click that meant something else.
+export const RUN_TITLE = /^Run\b/;
 const noRun = (a: Args) => { if (a.run) throw new Error("--run only on ask cards; option A there is the run"); };
 
 function ask(a: Args, card: { q: string; opts: string[] }) {
@@ -103,6 +104,7 @@ function ask(a: Args, card: { q: string; opts: string[] }) {
   const title = s("title");
   if (!title) throw new Error("--title is required: ≤70 plain chars, '<repo>: <the decision>'");
   const base = buildCard({ ...card, context: s("context"), evidence: s("evidence"), latency: s("latency"), meanwhile: s("meanwhile"), replaces: s("replaces") });
+  if (s("run") && !RUN_TITLE.test(card.opts[0] ?? "")) throw new Error('--run needs the first --opt titled "Run ..." (accept A runs the script)');
   const run = s("run") ? pinRun(s("run")!, undefined, !a.dry) : "";
   const body = run ? `${base}${base.endsWith("\n") ? "" : "\n"}\n${run}\n` : base;
   const err = lintCard(title, body);
