@@ -7,18 +7,19 @@
 const SHA = /\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/;
 const PATH = /(?:^|\s)(?:~|\.{1,2})?\/[\w.-]+\/|\b[\w-]+\.(?:ts|sh|md|json|py)\b/;
 // Bead ids leaked into titles (operator 2026-11-07: "I don't know ids and commit hashes").
-// ponytail: known prefixes only, minus real-word suffixes (arc-webui, trading-bot); extend either list when a title trips it.
-const BEAD = /\b(?:repos|trading|arc|aw3|ndivisible|onenation|webui|rd|slm|workbench)-(?!(?:webui|bot|sim|app|api|cli|ui|db|lab|host|web|gpu|box|agent|proxy|desk|site|data|ops)\b)[a-z0-9]{2,5}(?:\.\d+)*\b/;
+// Id-shaped tokens are only candidates: the caller says which are real ids, so names like arc-webui pass.
+export const ID_SHAPE = /(?<![\w-])[a-z][a-z0-9]*-[a-z0-9]{2,8}(?:\.\d+)*(?![\w-])/g;
 // Operator format 2026-11-07: "[Design|Prototype|Deploy] {Recommendation headline}"; Task = a chore only the operator can do.
 export const KINDS = ["Design", "Prototype", "Deploy", "Task"] as const;
 const HEADLINE = new RegExp(`^\\[(?:${KINDS.join("|")})\\] \\S`);
 
-export function lintCard(title: string, body: string): string[] {
+export function lintCard(title: string, body: string, isBead: (token: string) => boolean = () => false): string[] {
   const err: string[] = [];
   const plain = (where: string, s: string) => {
     if (SHA.test(s)) err.push(`${where}: no commit SHAs`);
     if (PATH.test(s)) err.push(`${where}: no file paths`);
-    if (BEAD.test(s)) err.push(`${where}: no bead ids`);
+    const ids = (s.match(ID_SHAPE) ?? []).filter(isBead);
+    if (ids.length) err.push(`${where}: no bead ids (${ids.join(", ")}); say what the item is in plain words`);
   };
   if (!HEADLINE.test(title)) err.push(`title: start with [${KINDS.join("|")}] then the recommendation headline`);
   if (title.length > 80) err.push(`title: ${title.length} chars, max 80`);

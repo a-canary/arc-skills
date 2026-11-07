@@ -36,9 +36,12 @@ test("two questions in one card are rejected", () =>
 
 test("title needs [Design|Prototype|Deploy|Task] and no bead ids; context (Problem) is required", () => {
   expect(lintCard("trading: deploy fixes", good).join(" ")).toContain("start with [Design|Prototype|Deploy|Task]");
-  expect(lintCard("[Deploy] Run card trading-qch2 now", good)).toContain("title: no bead ids");
+  const real = new Set(["trading-qch2", "repos-vlqa", "repos-sim", "wb-pia", "arc-985.1"]), isBead = (t: string) => real.has(t);
+  expect(lintCard("[Deploy] Run card trading-qch2 now", good, isBead).join(" ")).toContain("title: no bead ids (trading-qch2)");
   expect(lintCard("[Deploy] Read-only access for the bot", good)).toEqual([]);
-  for (const t of ["[Deploy] Restart arc-webui on 8080", "[Deploy] Pause the trading-bot", "[Design] Fix the arc-sim harness"]) expect(lintCard(t, good)).toEqual([]);
-  expect(lintCard("[Deploy] Close repos-vlqa first", good)).toContain("title: no bead ids");
+  for (const t of ["[Deploy] Restart arc-webui on 8080", "[Deploy] Pause the trading-bot", "[Design] Fix the arc-llm-proxy", "[Design] Split webui-specs"])
+    expect(lintCard(t, good, isBead)).toEqual([]);
+  for (const t of ["[Deploy] Close repos-vlqa first", "[Deploy] Drop repos-sim", "[Design] Fix wb-pia", "[Deploy] Finish arc-985.1"])
+    expect(lintCard(t, good, isBead).join(" ")).toContain("no bead ids");
   expect(lintCard("[Design] Keep Qwen", good.replace(/<context>[\s\S]*?<\/context>/, "")).join(" ")).toContain("Problem line");
 });
