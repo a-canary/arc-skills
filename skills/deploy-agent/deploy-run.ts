@@ -1,5 +1,5 @@
 // deploy-run.ts — Deploy Agent: runs an operator-accepted card's pinned script as root.
-//   bun deploy-run.ts <card-id> [--repo R] [--dry]   exit = script's code (0 with --dry), 3 = refused (one-line reason)
+//   bun deploy-run.ts <card-id> [--repo R] [--dry] [--as-user]   exit = script's code (0 with --dry), 3 = refused (one-line reason)
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -17,7 +17,7 @@ export type Deps = {
   readFile: (p: string) => string;
   queueDir: string;
   fencesFile: string;
-  exec: (text: string) => number;
+  exec: (text: string, asUser: boolean) => number;
   logChange: (line: string) => void;
 };
 
@@ -34,7 +34,9 @@ export const realDeps = (): Deps => ({
   fencesFile: FENCES,
   // Runs the hashed bytes as an argument, never the path: the queue dir is agent-writable (no swap after the check).
   // Not via stdin: a command in the script that reads stdin would swallow the remaining lines.
-  exec: (text) => Bun.spawnSync(["sudo", "-n", "bash", "-c", text], { stdin: "ignore", stdout: "inherit", stderr: "inherit" }).exitCode ?? 1,
+  // --as-user: no sudo. For scripts whose every step is `sudo -u <you>`; grants nothing an agent running as you lacks.
+  // ponytail: the caller vouches no step needs root (a root step fails, and `|| echo` would hide it). Upgrade: signed accepts + a root wrapper.
+  exec: (text, asUser) => Bun.spawnSync([...(asUser ? [] : ["sudo", "-n"]), "bash", "-c", text], { stdin: "ignore", stdout: "inherit", stderr: "inherit" }).exitCode ?? 1,
   logChange: (line) => {
     const wk = Bun.spawnSync(["date", "-u", "+%G-W%V"]).stdout.toString().trim();
     const f = join(homedir(), "vault", "director", "changes", `${wk}.md`);
@@ -84,7 +86,7 @@ export function main(argv: string[], d: Deps, out: (s: string) => void = console
   const id = argv.find((a, i) => !a.startsWith("-") && (ri < 0 || i !== ri + 1));
   try {
     // A misspelled --dry must never fall through to a real run.
-    const bad = argv.filter((a) => a.startsWith("-") && a !== "--repo" && a !== "--dry");
+    const bad = argv.filter((a) => a.startsWith("-") && !["--repo", "--dry", "--as-user"].includes(a));
     if (bad.length) refuse(`unknown flag ${bad[0]}`);
     if (!id) refuse("usage: deploy-run.ts <card-id> [--repo R] [--dry]");
     const p = plan(id!, ri >= 0 ? argv[ri + 1] : undefined, d)!;
@@ -93,8 +95,9 @@ export function main(argv: string[], d: Deps, out: (s: string) => void = console
       return 0;
     }
     // Logged before the run, so a run killed partway still leaves its undo in the changes log.
-    d.logChange(`\n## ${new Date().toISOString()}\n- what: running ${p.path} as root\n- card: ${p.id}\n- undo: ${p.undo}\n`);
-    const code = d.exec(p.text);
+    const asUser = argv.includes("--as-user");
+    d.logChange(`\n## ${new Date().toISOString()}\n- what: running ${p.path} as ${asUser ? process.env.USER ?? "invoking user" : "root"}\n- card: ${p.id}\n- undo: ${p.undo}\n`);
+    const code = d.exec(p.text, asUser);
     d.logChange(`- exit: ${code}\n`);
     return code;
   } catch (e) {

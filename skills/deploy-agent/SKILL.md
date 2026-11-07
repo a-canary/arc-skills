@@ -22,6 +22,8 @@ Upgrade path: webui signs card id + script sha256 on accept, and deploy-run.ts v
    The script is copied to `~/vault/director/deploy-queue/<sha8>-<name>` and `Run: <path> sha256: <hex>` is appended after `</decide>`.
 3. After the operator accepts: `bun skills/deploy-agent/deploy-run.ts <card-id> [--repo R]`.
    `--dry` prints the plan without running it.
+   `--as-user` runs it as you, without sudo: use it only when every step in the script is `sudo -u <you>` (no root step; a root step fails and `|| echo` would hide it).
+   Root runs need a sudoers rule that is not installed (sudo -n bash fails); until the operator decides how, root steps are run by hand.
    Before running it appends what will run and its undo to the week's changes log, then the exit code after.
 
 ## Checks (any failure: one-line reason, exit 3)
