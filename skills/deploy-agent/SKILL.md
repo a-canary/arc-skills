@@ -32,6 +32,10 @@ The execute branch (`sudo -n bash <script>`, then a changes-log entry) exists bu
 ## Fence list (`fences.txt`, one regex per line)
 
 ~/.claude hooks and settings, /etc/sudoers and sudoers.d, GLOBAL-RULES.md, skills/deploy-agent/, vault/director/hooks, write-lane, label-gate, `chmod ... /etc`, visudo, disabling cron or systemd for guard services.
+Also eval, base64 decode, pipe-to-shell and curl/wget (no unpinned code).
+
+Fences catch mistakes, not attackers: text regexes are easy to evade.
+The security boundary is the operator proof (repos-vlqa), which must sign card id + script sha256, plus running the hashed bytes via stdin rather than the path.
 
 ## Test
 

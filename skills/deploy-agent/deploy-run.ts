@@ -13,15 +13,16 @@ export class Refuse extends Error {}
 const refuse = (why: string): never => { throw new Refuse(why); };
 
 // STUB: agents can forge `bd comments add --author operator`, so no accept is trusted yet.
-export const verifyOperator = (_card: string): { ok: boolean; why: string } => ({ ok: false, why: "pending repos-vlqa" });
+// The proof must sign card id + script sha256: agents can edit a card's description after an accept.
+export const verifyOperator = (_card: string, _sha256: string): { ok: boolean; why: string } => ({ ok: false, why: "pending repos-vlqa" });
 
 export type Deps = {
   bd: (dir: string, ...args: string[]) => string;
   readFile: (p: string) => string;
   queueDir: string;
   fencesFile: string;
-  verify: (card: string) => { ok: boolean; why: string };
-  exec: (script: string) => number;
+  verify: (card: string, sha256: string) => { ok: boolean; why: string };
+  exec: (text: string) => number;
   logChange: (line: string) => void;
 };
 
@@ -37,7 +38,8 @@ export const realDeps = (): Deps => ({
   queueDir: QUEUE,
   fencesFile: FENCES,
   verify: verifyOperator,
-  exec: (s) => Bun.spawnSync(["sudo", "-n", "bash", s], { stdio: ["inherit", "inherit", "inherit"] }).exitCode ?? 1,
+  // Runs the hashed bytes via stdin, never the path: the queue dir is agent-writable (no swap after the check).
+  exec: (text) => Bun.spawnSync(["sudo", "-n", "bash", "-s"], { stdin: Buffer.from(text), stdout: "inherit", stderr: "inherit" }).exitCode ?? 1,
   logChange: (line) => {
     const wk = Bun.spawnSync(["date", "-u", "+%G-W%V"]).stdout.toString().trim();
     const f = join(homedir(), "vault", "director", "changes", `${wk}.md`);
@@ -67,7 +69,7 @@ export function plan(id: string, repo: string | undefined, d: Deps) {
   for (const line of d.readFile(d.fencesFile).split("\n").filter((l) => l.trim())) {
     if (new RegExp(line).test(text)) refuse(`fenced: matches /${line}/`);
   }
-  return { id, path, undo: undo!, hex };
+  return { id, path, undo: undo!, hex, text };
 }
 
 export function main(argv: string[], d: Deps, out: (s: string) => void = console.log): number {
@@ -76,13 +78,13 @@ export function main(argv: string[], d: Deps, out: (s: string) => void = console
   try {
     if (!id) refuse("usage: deploy-run.ts <card-id> [--repo R]");
     const p = plan(id!, ri >= 0 ? argv[ri + 1] : undefined, d)!;
-    const op = d.verify(id!);
+    const op = d.verify(id!, p.hex);
     if (!op.ok) {
       out(`DRY RUN (${op.why})\nscript: ${p.path}\nhash: ok ${p.hex.slice(0, 12)}\nundo: ${p.undo}\nfence: clear`);
       return 0;
     }
     // Unreachable while verifyOperator() is a stub.
-    const code = d.exec(p.path);
+    const code = d.exec(p.text);
     d.logChange(`\n## ${new Date().toISOString()}\n- what: ran ${p.path} as root\n- card: ${p.id}\n- undo: ${p.undo}\n`);
     return code;
   } catch (e) {
