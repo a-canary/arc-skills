@@ -110,6 +110,11 @@ Spawn a new herdr pane: `pi --system-prompt <skill>/sys_driver.md`
 - Director closes driver pane after reviewing completion report
 - Driver researches implementation details, APIs, and best practices before coding
 
+### Pre-dispatch checks (repos-ssr1)
+- Before dispatching to a repo: `gh repo view <owner/repo> --json isArchived` and check the target's status (retired, deprecated, in-flight branch). An archived or retired target is not dispatched.
+- Relay a number from a subagent or Driver only with a file:line or command-output cite; otherwise tag it UNVERIFIED.
+- Why: on 11-06 a worker was sent to archived arc-agents (push 403), a retired warmpool was deep-reviewed, and an uncited H~86 was relayed twice (truth H=90).
+
 ### Driver mandates
 Drivers are mandated to:
 - **Research** the implementation before writing code
