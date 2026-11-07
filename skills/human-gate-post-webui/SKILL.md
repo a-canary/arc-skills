@@ -74,15 +74,15 @@ Post with `decide.ts`. It builds the card, runs `lint-card.ts`, files the `human
 
 ```
 D=~/repos/arc-skills/skills/human-gate-post-webui/decide.ts
-bun $D ask --repo <repo> --title "<repo>: <the decision in a few words>" \
-  --q "<one question>?" --context "<why now + one example>" \
+bun $D ask --repo <repo> --kind design|prototype|deploy --title "<recommendation headline>" \
+  --q "<one question>?" --context "<Problem: what is wrong, why now, one example>" \
   --opt "<rec title> | <gain>. <cost>." --opt "<title> | <gain>. <cost>." \
   --evidence "<file:line refs>" --latency "<§1 math>" --meanwhile "<what you moved to>" \
   [-p 0-3] [--blocks <your-bead>] [--replaces <old-gate>] [--dry]
-bun $D task --repo <repo> --title "<repo>: <the task>" --do "<do X>" ...   # Will you <do X> today? Done / Not now
+bun $D task --repo <repo> --title "<the task, plain words>" --context "<Problem>" --do "<do X>" ...   # Will you <do X> today? Done / Not now
 ```
 
-bun $D text --repo <repo> --title "<repo>: <what you need>" --q "<question>?" --default "<what you do if skipped>" ...   # typed answer arrives in the reply note
+bun $D text --repo <repo> --kind design --title "<what you need>" --context "<Problem>" --q "<question>?" --default "<what you do if skipped>" ...   # typed answer arrives in the reply note
 ```
 
 The first `--opt` is the recommendation (`rec="1"`). `--dry` prints the card without posting.
@@ -104,9 +104,9 @@ Meanwhile: <the unblocked work you moved to>
 
 Rules. `/decide` renders the card from them and shows `card malformed: <why>` in red when one is broken. `lint-card.ts` enforces the caps; 0 of the 30 cards posted 10-24..10-31 passed it.
 
-- Title: ≤70 chars, plain words. No SHAs, paths or bead ids; the reader is on a phone and has not seen your session.
+- Title (operator format 2026-11-07): `[Design|Prototype|Deploy] <recommendation headline>`, built from `--kind` + `--title`; `task` cards get `[Task]`. ≤80 chars, plain words. No SHAs, paths or bead ids: the operator does not know them. Example: `[Deploy] Ship two trading fixes before the Monday cycle`.
 - `<q>`: exactly one question, ending `?`, ≤140 chars. It is the card's headline.
-- `<context>`: why now, plus one concrete example, ≤400 chars, plain words. It is folded by default.
+- `<context>`: required. It is the Problem line: what is wrong, why now, one concrete example. ≤400 chars, plain words.
 - `<option>`: 2-4, each with a unique `id` A-E and a `title` of ≤5 words. The body is ≤200 chars and names the gain AND the cost. An option with no stated cost is not a trade-off.
 - `rec="1"`: on exactly one option, listed first, the one you would pick. No recommendation means you have not done the thinking yet.
 - Whole `<decide>` block: ≤900 chars. SHAs, paths, ids and the long story go after `</decide>` (Evidence/Latency/Meanwhile), folded behind "details".

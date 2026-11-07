@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { lintCard } from "./lint-card";
+import { KINDS, lintCard } from "./lint-card";
 
 const REPOS = join(homedir(), "repos");
 export const QUEUE_DIR = join(homedir(), "vault", "director", "deploy-queue");
@@ -99,10 +99,13 @@ function bd(dir: string, ...args: string[]): string {
 export const RUN_TITLE = /^Run\b/;
 const noRun = (a: Args) => { if (a.run) throw new Error("--run only on ask cards; option A there is the run"); };
 
-function ask(a: Args, card: { q: string; opts: string[] }) {
+function ask(a: Args, card: { q: string; opts: string[]; kind?: string }) {
   const s = (k: string) => (typeof a[k] === "string" ? (a[k] as string) : undefined);
-  const title = s("title");
-  if (!title) throw new Error("--title is required: ≤70 plain chars, '<repo>: <the decision>'");
+  const head = s("title"), kind = s("kind") ?? card.kind;
+  if (!head) throw new Error("--title is required: the recommendation headline, plain words, no ids or hashes");
+  const K = kind && KINDS.find((k) => k.toLowerCase() === kind.toLowerCase());
+  if (!K) throw new Error(`--kind is required: ${KINDS.join("|").toLowerCase()}`);
+  const title = `[${K}] ${head}`;
   const base = buildCard({ ...card, context: s("context"), evidence: s("evidence"), latency: s("latency"), meanwhile: s("meanwhile"), replaces: s("replaces") });
   if (s("run") && !RUN_TITLE.test(card.opts[0] ?? "")) throw new Error('--run needs the first --opt titled "Run ..." (accept A runs the script)');
   const run = s("run") ? pinRun(s("run")!, undefined, !a.dry) : "";
@@ -139,7 +142,7 @@ if (import.meta.main) {
   try {
     switch (a._[0]) {
       case "ask": ask(a, { q: String(a.q ?? ""), opts: a.opt }); break;
-      case "task": noRun(a); ask(a, taskCard(String(a.do ?? ""))); break;
+      case "task": noRun(a); ask(a, { ...taskCard(String(a.do ?? "")), kind: "Task" }); break;
       case "text": {
         noRun(a);
         if (typeof a.default !== "string") throw new Error('text needs --default "what you do if skipped"');

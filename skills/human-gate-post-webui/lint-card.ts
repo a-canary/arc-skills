@@ -6,15 +6,22 @@
 
 const SHA = /\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/;
 const PATH = /(?:^|\s)(?:~|\.{1,2})?\/[\w.-]+\/|\b[\w-]+\.(?:ts|sh|md|json|py)\b/;
-// ponytail: bead ids (repos-otgb) are not flagged — no prefix list; add one if they keep leaking into titles.
+// Bead ids leaked into titles (operator 2026-11-07: "I don't know ids and commit hashes").
+// ponytail: known prefixes only; add one when a new bead prefix shows up in titles.
+const BEAD = /\b(?:repos|trading|arc|aw3|ndivisible|onenation|webui|rd|slm|workbench)-[a-z0-9]{2,5}(?:\.\d+)*\b/;
+// Operator format 2026-11-07: "[Design|Prototype|Deploy] {Recommendation headline}"; Task = a chore only the operator can do.
+export const KINDS = ["Design", "Prototype", "Deploy", "Task"] as const;
+const HEADLINE = new RegExp(`^\\[(?:${KINDS.join("|")})\\] \\S`);
 
 export function lintCard(title: string, body: string): string[] {
   const err: string[] = [];
   const plain = (where: string, s: string) => {
     if (SHA.test(s)) err.push(`${where}: no commit SHAs`);
     if (PATH.test(s)) err.push(`${where}: no file paths`);
+    if (BEAD.test(s)) err.push(`${where}: no bead ids`);
   };
-  if (title.length > 70) err.push(`title: ${title.length} chars, max 70`);
+  if (!HEADLINE.test(title)) err.push(`title: start with [${KINDS.join("|")}] then the recommendation headline`);
+  if (title.length > 80) err.push(`title: ${title.length} chars, max 80`);
   plain("title", title);
 
   const s = body.indexOf("<decide>"), e = body.indexOf("</decide>");
@@ -32,6 +39,7 @@ export function lintCard(title: string, body: string): string[] {
   plain("<q>", q);
 
   const ctx = /<context>([\s\S]*?)<\/context>/.exec(inner)?.[1]?.trim() ?? "";
+  if (!ctx) err.push("<context> (--context) is required: it is the Problem line, what is wrong and why it matters");
   if (ctx.length > 400) err.push(`<context>: ${ctx.length} chars, max 400`);
 
   const opts = [...inner.matchAll(/<option\b([^>]*)>([\s\S]*?)<\/option>/g)].map((m) => {

@@ -7,13 +7,13 @@ const good = `<decide><q>Which model may the agent-pub container use?</q><contex
 
 Evidence: tick.sh:12 defaults MODEL=claude-opus-5-5 (paths and SHAs are fine down here)`;
 
-test("skill example passes", () => expect(lintCard("agent-pub: which model in the container", good)).toEqual([]));
+test("skill example passes", () => expect(lintCard("[Design] Keep Qwen in the agent-pub container", good)).toEqual([]));
 
 test("FYI with no decision is rejected", () =>
-  expect(lintCard("host power-cycled", "Router rebooted at 10:55, back up.")[0]).toContain("no decision"));
+  expect(lintCard("host power-cycled", "Router rebooted at 10:55, back up.").join(" ")).toContain("no decision"));
 
 test("prose Options: A)… card is rejected", () =>
-  expect(lintCard("DECIDE: merge PR", "Options: A) merge (recommended) | B) revise")[0]).toContain("no <decide>"));
+  expect(lintCard("DECIDE: merge PR", "Options: A) merge (recommended) | B) revise").join(" ")).toContain("no <decide>"));
 
 test("rec must exist and lead", () => {
   expect(lintCard("t", good.replace(' rec="1"', ""))).toContain("0 rec=\"1\", need exactly 1");
@@ -29,7 +29,14 @@ test("SHAs and paths stay out of the headline", () => {
 });
 
 test("slash word lists are not paths", () =>
-  expect(lintCard("workbench: approve/deny/defer the upgrade", good)).toEqual([]));
+  expect(lintCard("[Deploy] Approve/deny/defer the upgrade", good)).toEqual([]));
 
 test("two questions in one card are rejected", () =>
   expect(lintCard("t", good.replace("container use?", "container use? And who pays?"))).toContain("<q>: one question only"));
+
+test("title needs [Design|Prototype|Deploy|Task] and no bead ids; context (Problem) is required", () => {
+  expect(lintCard("trading: deploy fixes", good).join(" ")).toContain("start with [Design|Prototype|Deploy|Task]");
+  expect(lintCard("[Deploy] Run card trading-qch2 now", good)).toContain("title: no bead ids");
+  expect(lintCard("[Deploy] Read-only access for the bot", good)).toEqual([]);
+  expect(lintCard("[Design] Keep Qwen", good.replace(/<context>[\s\S]*?<\/context>/, "")).join(" ")).toContain("Problem line");
+});

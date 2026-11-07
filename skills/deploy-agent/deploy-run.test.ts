@@ -96,7 +96,7 @@ test("decide --run pins the hash and the card still lints", () => {
   const line = pinRun(script, join(dir, "queue"));
   expect(line).toContain(`sha256: ${sha(GOOD)}`);
   expect(line).toContain(`${sha(GOOD).slice(0, 8)}-fix.sh`);
-  const body = buildCard({ q: "Run the fix?", opts: ["Run it | Fixes foo. Runs as root.", "Skip | Nothing changes. Foo stays broken."], evidence: "x.ts:3" }) + `\n${line}\n`;
-  expect(lintCard("arc-skills: run the foo fix", body)).toEqual([]);
+  const body = buildCard({ q: "Run the fix?", opts: ["Run it | Fixes foo. Runs as root.", "Skip | Nothing changes. Foo stays broken."], evidence: "x.ts:3", context: "Foo is down." }) + `\n${line}\n`;
+  expect(lintCard("[Deploy] Run the foo fix", body)).toEqual([]);
   expect(parseArgs(["ask", "--run", script]).run).toBe(script);
 });
