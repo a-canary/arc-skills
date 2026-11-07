@@ -73,6 +73,16 @@ test("a later ordinary comment keeps the accept; accept A runs", () => {
   expect(run(d).code).toBe(0);
   expect(ran).toBe(1);
 });
+test("--as-user runs the same bytes without sudo and logs the user", () => {
+  const d = setup(GOOD);
+  const seen: boolean[] = [], logged: string[] = [];
+  d.exec = (_t, asUser) => { seen.push(asUser); return 0; };
+  d.logChange = (l) => { logged.push(l); };
+  expect(run(d, "--as-user").code).toBe(0);
+  expect(seen).toEqual([true]);
+  expect(logged.join("")).not.toContain("as root");
+  expect(run(setup(GOOD), "--as-users").code).toBe(3);
+});
 test("--dry prints the plan and never executes", () => {
   const r = run(setup(GOOD), "--dry");
   expect(r.code).toBe(0);
