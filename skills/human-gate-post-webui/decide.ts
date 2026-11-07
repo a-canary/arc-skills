@@ -5,13 +5,24 @@
 //   bun decide.ts text --title T --q "Which repo holds the spec?" --default "skip the spec check" [common]  → typed answer in the reply note
 //   bun decide.ts answers [--repo R] [--json]                                              answered cards, one line each
 //   bun decide.ts done <id> --reason "what you did" [--repo R]                            clear `decided`, close the gate
-// common: --context C --evidence E --latency L --meanwhile M --repo R -p 0-3 --blocks <your-bead> --replaces <old-gate> --dry
-import { existsSync, readdirSync, writeFileSync } from "node:fs";
+// common: --context C --evidence E --latency L --meanwhile M --repo R -p 0-3 --blocks <your-bead> --replaces <old-gate> --dry --run <script>   (pin a root script for the Deploy Agent; see skills/deploy-agent)
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { lintCard } from "./lint-card";
 
 const REPOS = join(homedir(), "repos");
+export const QUEUE_DIR = join(homedir(), "vault", "director", "deploy-queue");
+
+// --run <script>: pin the script by sha256 into the deploy queue; deploy-run.ts re-checks the hash before acting.
+export function pinRun(script: string, queueDir = process.env.DEPLOY_QUEUE_DIR ?? QUEUE_DIR, copy = true): string {
+  const buf = readFileSync(script);
+  const hex = createHash("sha256").update(buf).digest("hex");
+  const dest = join(queueDir, `${hex.slice(0, 8)}-${basename(script)}`);
+  if (copy) { mkdirSync(queueDir, { recursive: true }); copyFileSync(script, dest); }
+  return `Run: ${dest} sha256: ${hex}`;
+}
 type Args = { _: string[]; opt: string[]; [k: string]: string | string[] | boolean };
 
 export function parseArgs(argv: string[]): Args {
@@ -88,7 +99,9 @@ function ask(a: Args, card: { q: string; opts: string[] }) {
   const s = (k: string) => (typeof a[k] === "string" ? (a[k] as string) : undefined);
   const title = s("title");
   if (!title) throw new Error("--title is required: ≤70 plain chars, '<repo>: <the decision>'");
-  const body = buildCard({ ...card, context: s("context"), evidence: s("evidence"), latency: s("latency"), meanwhile: s("meanwhile"), replaces: s("replaces") });
+  const base = buildCard({ ...card, context: s("context"), evidence: s("evidence"), latency: s("latency"), meanwhile: s("meanwhile"), replaces: s("replaces") });
+  const run = s("run") ? pinRun(s("run")!, undefined, !a.dry) : "";
+  const body = run ? `${base}${base.endsWith("\n") ? "" : "\n"}\n${run}\n` : base;
   const err = lintCard(title, body);
   if (err.length) throw new Error(err.map((e) => `card: ${e}`).join("\n"));
   if (a.dry) return console.log(`${title}\n${body}`);
