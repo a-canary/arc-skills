@@ -45,7 +45,7 @@ For each herdr pane:
 1. **Nudge** — send enter or wake signal to stalled pane
 2. **Notify** — send text to pane with relevant context
 3. **Report to driver** — create bug ticket in central beads DB (`~/vault/director/.bd/`) with attribution fields (`repo:`, `assigned_to:`)
-4. **Escalate** — create director beads issue for HITL attention if driver doesn't resolve within 2 hours
+4. **Escalate** — post a /decide card (`decide.ts ask`, human-gate-post-webui) in the repo's db if the driver doesn't resolve within 2 hours
 
 The overseer **never mutates task state directly** — it creates bug tickets and lets the driver assign and transition them.
 

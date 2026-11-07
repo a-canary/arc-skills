@@ -18,8 +18,8 @@ the **ledger gate**, **fork-following**, and **abort halts**.
 
 1. **Gate on the ledger first.** Run
    `bash <skill>/scripts/gate.sh <repo>/.wargame`. If it exits non-zero, **STOP**
-   — print the unresolved `(variable)` list and ask the user to resolve them (or
-   explicitly authorise assumed values). Never begin moves with an unresolved
+   — print the unresolved `(variable)` list and post one /decide card (human-gate-post-webui)
+   asking the operator to resolve them (or explicitly authorise assumed values). Never begin moves with an unresolved
    placeholder that a move actually reads. This is a hard gate, not advice.
 
 2. **Load context.** Read `tasks/<mission>.md` (the order + brief),

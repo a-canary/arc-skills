@@ -1,11 +1,12 @@
 ---
 name: human-gate-post-webui
-description: 'Surface a genuine human-gate or taste choice to the developer via webui /decide without blocking on the reply. Rare by design; most uncertainty self-resolves via docs/ke/counsel. Use only when a decision is genuinely the human''s. Triggers: "surface this to the developer", "post a human-gate", "this needs the developer''s call", "flag a taste choice".'
+description: 'The only way any agent asks the operator anything — decisions, approvals, design or grilling questions, tasks only a human can do — as a webui /decide card via decide.ts, never in chat and never blocking on the reply. Most uncertainty self-resolves via docs/ke/counsel first. Triggers: about to ask the user a question, "surface this to the developer", "post a human-gate", "this needs the developer''s call", "interview the operator", "grill me", "flag a taste choice".'
 ---
 
 # Human-Gate-Post-Webui
 
-The **non-blocking** channel for the rare decision only the developer can make.
+The **only** channel for asking the operator anything (operator ruling 2026-11-07: /decide replaces and supersedes agents asking in chat, AskUserQuestion included).
+A question typed into chat counts as never asked. [INVENTORY.md](INVENTORY.md) records what each old asking path became.
 A bead labelled `human` is the async surface: webui `/decide` shows one card at
 a time and the developer answers on their approve/deny cadence. This skill posts the gate and **returns
 you to other work in the same breath** — it is a note left on the board, never a
@@ -69,13 +70,23 @@ A card is **one decision the operator can make in one tap**. Not a card:
 - **Several decisions**: one card each. **Steps of one rollout** (deploy batches 1-8) get ONE card ("all / first N / none"), never N cards.
 - **New facts on an open card**: never append comments. A card that grew 10 update comments drew "Too much context, rewrite" on 10-30. Close it and post a fresh card, with "replaces <old-id>" in the evidence.
 
-Write the description to a file, lint it, then post. The lint exits 1 and prints the reasons:
+Post with `decide.ts`. It builds the card, runs `lint-card.ts`, files the `human` bead in the right db and prints its id; a card that fails the lint does not post:
 
 ```
-T="<repo>: <the decision in a few words>"
-bun ~/repos/arc-skills/skills/human-gate-post-webui/lint-card.ts "$T" card.md \
-  && bd -C ~/repos create "$T" -p <0-3> -t decision -l human --body-file card.md
+D=~/repos/arc-skills/skills/human-gate-post-webui/decide.ts
+bun $D ask --repo <repo> --title "<repo>: <the decision in a few words>" \
+  --q "<one question>?" --context "<why now + one example>" \
+  --opt "<rec title> | <gain>. <cost>." --opt "<title> | <gain>. <cost>." \
+  --evidence "<file:line refs>" --latency "<§1 math>" --meanwhile "<what you moved to>" \
+  [-p 0-3] [--blocks <your-bead>] [--replaces <old-gate>] [--dry]
+bun $D task --repo <repo> --title "<repo>: <the task>" --do "<do X>" ...   # Will you <do X> today? Done / Not now
 ```
+
+The first `--opt` is the recommendation (`rec="1"`). `--dry` prints the card without posting.
+
+Grilling, interviews and design questions go the same way: one card per decision, independent branches posted together, a dependent question posted only after its parent is answered (`--blocks` keeps your bead out of `bd ready` meanwhile). Finish a grilling run with a card asking whether you have reached a shared understanding before you act on it.
+
+The body `decide.ts` builds has this shape:
 
 Card body:
 
@@ -119,11 +130,11 @@ a reply.** Immediately:
    developer's next cadence pass; that's fine. Don't serialize your own work on
    them.
 
-The developer's reply arrives async as a comment on the bead (`bd list --label decided`, `bd comments <id>`). What each button means for you:
+The developer's reply arrives async as a comment on the bead. `bun $D answers [--repo <repo>]` lists every answered card with its verb, option and note; check it at the start of each turn or tick, never in a wait loop. What each button means for you:
 
 | Comment | Bead state | You do |
 | --- | --- | --- |
-| `DECISION accept <X>: <note>` | `human`→`decided` | Execute option X (the note refines it), then `bd close <gate> --reason "<what you did>"` so dependents unblock. |
+| `DECISION accept <X>: <note>` | `human`→`decided` | Execute option X (the note refines it), then `bun $D done <gate> --reason "<what you did>"` (clears `decided`, closes the gate) so dependents unblock. |
 | `DECISION reject: <note>` | `human`→`decided` | Drop the proposal; the note usually says why. Close with the reason. |
 | `DECISION reply: <text>` | `human`→`decided` | They deferred WITH a question or concern. Answer it; if a decision remains, close this bead and post a NEW card that resolves the concern ("replaces <old-id>"). |
 | `DECISION refresh` | un-deferred, `decided` | They pulled it back from the revisit list. Still relevant? Moot → close with the reason; else rewrite to current facts and swap `decided`→`human`. |

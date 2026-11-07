@@ -135,7 +135,7 @@ re-poll mergeStateStatus at merge time. **BEFORE merging ANY PR, grep the
 ledger for an OPEN gate row citing it**
 (`select id from feedback where state='OPEN' and body_md like '%PR #<n>%'`) —
 a prior pass may have operator-gated it as a scope delta; an OPEN GATE row
-overrides CLEAN/MERGEABLE. Observed 2026-08-09: PR #12 (starlight-slm) was
+overrides CLEAN/MERGEABLE, and so does an open /decide card citing the PR (`bd -C ~/repos list --label human --json`, plus the repo db). Observed 2026-08-09: PR #12 (starlight-slm) was
 hard-merged despite gate row ao-local-models-gate-wm6us8 and 4 rounds of
 attached hold-evidence; merge had to be reverted on origin/main. **Merge multiple green PRs one at a
 time, not in a check-then-merge shell loop**: each merge transiently flips

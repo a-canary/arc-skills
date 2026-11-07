@@ -52,7 +52,7 @@ For each candidate, also pick a short **alias name** to use as the key inside `e
 
 ### 3. Ask the user to choose
 
-Use AskUserQuestion with two questions — one for the **fast** model, one for the **smart** model — offering only templates backed by a reachable provider. Recommend: fast = cheapest high-throughput option (haiku or minimax-low); smart = most capable (opus-max). If only one provider is reachable, you may still split fast/smart by its own tiers (e.g. minimax low vs high thinking).
+Post two /decide cards ([human-gate-post-webui](../human-gate-post-webui/SKILL.md), `decide.ts ask`) — one for the **fast** model, one for the **smart** model — offering only templates backed by a reachable provider. Recommend: fast = cheapest high-throughput option (haiku or minimax-low); smart = most capable (opus-max). If only one provider is reachable, you may still split fast/smart by its own tiers (e.g. minimax low vs high thinking).
 
 ### 4. Validate each pick by running it
 

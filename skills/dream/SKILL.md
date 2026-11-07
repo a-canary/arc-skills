@@ -90,10 +90,9 @@ user-role records (from Phase 1 session set, mtime-filtered to window)
 ~/.claude/dream/proposals/usersig-YYYY-MM-DD.md   (append-only, one file/day)
        │
        ▼  HITL surface (per GLOBAL-RULES "Operator review goes to arc-webui as HTML")
-       ▼  script also emits a human-gate bead row:
-       │    bd|beads_create { kind: task, type: HITL,
-       │                       title: "usersig-YYYY-MM-DD: review DRY user-statement proposals",
-       │                       description: "<proposal path>" }
+       ▼  script also posts a /decide task card (human-gate-post-webui decide.ts):
+       │    "Will you review the repeated-instruction proposals from dream today?"
+       │    Done / Not now, proposal path in Evidence
        ▼
 AWAIT operator verdict → apply chosen rows / defer to a beads ticket / drop
 ```

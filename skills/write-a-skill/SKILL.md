@@ -7,7 +7,7 @@ description: Create new agent skills with proper structure, progressive disclosu
 
 ## Process
 
-1. **Gather requirements** - ask user about:
+1. **Gather requirements** - ask the operator, one /decide card per open point (human-gate-post-webui), about:
    - What task/domain does the skill cover?
    - What specific use cases should it handle?
    - Does it need executable scripts or just instructions?

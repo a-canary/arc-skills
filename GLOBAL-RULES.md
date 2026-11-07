@@ -70,7 +70,7 @@ At session start, load these files into the system prompt:
 - **Public exposure is a human decision (operator ruling 2026-10-28).**
   Agents never decide to (a) invite or grant the public agent account
   (agent-pub's GitHub bot user) access to a repo, or (b) change a repo's
-  visibility to public. File a `human` bead (shows on /decide) and wait for
+  visibility to public. Post a /decide card and hold the action until
   the explicit verdict. Third-party/9router models only see public or
   human-declared pre-public repos; unknown = private, fail closed.
 - **Configs and rules live in a git repo, symlinked into place.**
@@ -81,8 +81,13 @@ At session start, load these files into the system prompt:
 - **Subagent reports UNTRUSTED.** Verify claims against source. Check
   git-clean after fs-sharing.
 - **/counsel over asking.** Decision fork → run /counsel, execute verdict.
-  No AskUserQuestion.
-  Exception: director design/mission/virtue questions → interview the operator (skills/director "Stop and interview").
+- **Every operator ask is a /decide card (operator ruling 2026-11-07).** Always on, every agent, attached or AFK.
+  Any question, decision, approval, design or grilling question, or task only a human can do is posted in the same turn as a `human` bead via `bun ~/repos/arc-skills/skills/human-gate-post-webui/decide.ts ask|task`.
+  The wrapper enforces the strict `<decide>` schema (one question, 2-4 options with gain and cost, the recommendation first) and refuses a card that fails the lint.
+  Never ask in chat, never AskUserQuestion; a question typed into chat counts as never asked.
+  Post, then keep working elsewhere: "wait for the verdict" below means hold that one action, never stall.
+  Read replies with `decide.ts answers` at the start of each turn or tick; close each handled card with `decide.ts done`.
+  Guidelines (filter, latency test, card rules): skills/human-gate-post-webui.
 - **Don't ask to do work.** Idle time > wasted effort. If a next step aligns
   with mission/instructions, take it — don't ask permission. Prefer reversible
   paths (git branch over rebase, trash over rm, new file over in-place edit,
@@ -127,8 +132,8 @@ At session start, load these files into the system prompt:
   2026-08-27).** Anything requiring captain review is presented as a
   self-contained HTML page under /review/<file> on arc-webui
   (http://home-lab-1:8080/review/<file>; artifacts in
-  ~/vault/director/reviews/). Approval and decision items are beads
-  labelled `human` (`bd human list`); review pages link the bead id.
+  ~/vault/director/reviews/). Approval and decision items are /decide
+  cards (rule above); review pages link the card's bead id.
   Never "open this file path".
 - **Push early, push often.** Local divergence from origin creates merge
   conflicts and feature regression risk. Push feature branches to origin
@@ -153,8 +158,7 @@ At session start, load these files into the system prompt:
   arguments against only (if any) plus confirmation of understanding — not a
   full debate. The operator renders the final verdict. Other design and
   architecture decisions use full counsel with evidence as the basis for
-  approval. Always present via arc-webui human-gate, wait for confirmation,
-  then act.
+  approval. Always present as a /decide card; act only after the operator confirms.
 - **Trust nothing without convincing evidence (UM-tier 1).** A claim,
   judgement, plan, request, or idea is a hypothesis until backed by evidence —
   from any source: the model itself, the user, the internet, whitepapers,

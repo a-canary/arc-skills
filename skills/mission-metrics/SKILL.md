@@ -8,8 +8,8 @@ description: Intense HITL grilling session that converges on a project's mission
 TDD for design/UX: approved metrics + gates are the failing test suite written
 before development — doctrine in [references/design-tdd-spec.md](references/design-tdd-spec.md).
 
-A **HITL grilling session** (wayfinder-style): the agent asks **one question at
-a time**, never answers its own questions, and between questions does the
+A **HITL grilling session** (wayfinder-style): the agent asks **one question per
+/decide card** ([human-gate-post-webui](../human-gate-post-webui/SKILL.md), never in chat), never answers its own questions, and between questions does the
 legwork — read the repo, mine recent sessions, WebFetch competitor/domain
 material — so each next question is sharper than the last. The user's answers
 are the source of truth; research only shapes what to ask and what to propose.

@@ -363,39 +363,19 @@ def framing_label(text: str) -> str:
 
 
 def emit_bead(date_str: str, proposal_path: Path) -> None:
-    """Best-effort: file a HITL bead pointing at the proposal doc.
-    Tries beads_create tool env, then falls back to a `bd create` shell call.
-    Silently no-ops if neither is wired — the proposal doc is the durable artifact.
+    """Best-effort: post a /decide task card pointing at the proposal doc (human-gate-post-webui decide.ts).
+    Silently no-ops if bun/bd are missing — the proposal doc is the durable artifact.
     """
-    title = f"usersig-{date_str}: review DRY user-statement proposals"
-    desc = (
-        f"Phase 1b of /dream produced proposal doc at\n\n"
-        f"  {proposal_path}\n\n"
-        f"Review the candidates, decide which to apply (and to which surface), "
-        f"then apply manually or hand off to a driver. Do not auto-apply."
-    )
-    # Try the in-process tool first (some pi-agent harnesses expose it).
-    tool_fn = globals().get("beads_create") or globals().get("bd")
-    if callable(tool_fn):
-        try:
-            return tool_fn({
-                "title": title,
-                "type": "task",
-                "labels": "usersig,review",
-                "description": desc,
-            })
-        except Exception:
-            pass
-    # Fallback to shell — `bd` CLI is the standard arc-skills edge.
     import subprocess
+    decide = Path(__file__).resolve().parents[2] / "human-gate-post-webui" / "decide.ts"
     try:
         subprocess.run([
-            "bd", "create", title,
-            "--type", "task",
-            "--label", "usersig",
-            "--label", "review",
-            "--description", desc,
-        ], check=False, timeout=10)
+            "bun", str(decide), "task", "--repo", "arc-skills", "-p", "3",
+            "--title", f"dream: review user-statement proposals {date_str}",
+            "--do", "review the repeated-instruction proposals from dream",
+            "--context", "Dream found instructions you keep repeating and proposes where to codify each. Nothing is applied until you pick.",
+            "--evidence", f"proposal doc {proposal_path}",
+        ], check=False, timeout=30)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
 

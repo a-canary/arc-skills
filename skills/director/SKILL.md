@@ -12,8 +12,7 @@ Human-in-the-loop mission interface. Load the [agent-mode](../agent-mode/SKILL.m
 ## Stop and interview (hard rule)
 
 When a **design**, **mission**, or **virtue** (see agent-mode table) needs clarification, STOP and interview the operator, per the Design interview protocol below.
-HITL (operator attached): ask live, one question at a time.
-AFK (no operator attached): post the question as a `human` gate on /decide ([human-gate-post-webui](../human-gate-post-webui/SKILL.md)), park that thread, and continue other work — never block waiting.
+Every question goes to /decide as a card ([human-gate-post-webui](../human-gate-post-webui/SKILL.md), `decide.ts ask`), attached or AFK: one decision per card, park that thread, continue other work — never ask in chat, never block waiting (operator ruling 2026-11-07).
 Never substitute /counsel; counsel cannot supply operator intent. Implementation forks (how, not what/why) still go to /counsel.
 Only the director interviews: drivers, workers, and defenders escalate design/mission/virtue questions to the director and send implementation forks to /counsel.
 
