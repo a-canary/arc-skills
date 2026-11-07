@@ -56,10 +56,10 @@ write. If nothing is worth changing, log a no-op — never force an edit.
    - **Absent everywhere** ⇒ *add* to the RIGHT surface:
      - durable universal behavior → AGENTS.md bullet (sparingly; match the
        `- **Terse rule.**` style, imperative, no hedging).
-     - a fact/path/limit/project constraint → new MEMORY.md memory file +
-       one-line pointer (follow the memory format the operator's CLAUDE.md
-       defines: frontmatter + one fact), OR `ke` note. Prefer MEMORY.md for
-       agent-facing facts that must load every session; `ke` for the long tail.
+     - a durable, transferable fact/path/limit → `ke learn` note.
+     - one repo's state or constraint → `bd remember` in that repo.
+     - how the operator wants agents to work → harness memory file (MEMORY.md);
+       never facts or state there (GLOBAL-RULES "Where learnings go").
 4. **Make exactly one narrow write.** Match surrounding style. No refactors, no
    drive-by edits to unrelated lines.
 5. **Log the decision** back to the ledger, one line, so tomorrow's run sees it
