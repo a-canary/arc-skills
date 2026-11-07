@@ -95,11 +95,16 @@ function bd(dir: string, ...args: string[]): string {
   return r.stdout.toString();
 }
 
+// Accept A runs the pin, so A must say so: a card whose A means Done, Answer or Not now would run on a click that meant something else.
+export const RUN_TITLE = /^Run\b/;
+const noRun = (a: Args) => { if (a.run) throw new Error("--run only on ask cards; option A there is the run"); };
+
 function ask(a: Args, card: { q: string; opts: string[] }) {
   const s = (k: string) => (typeof a[k] === "string" ? (a[k] as string) : undefined);
   const title = s("title");
   if (!title) throw new Error("--title is required: ≤70 plain chars, '<repo>: <the decision>'");
   const base = buildCard({ ...card, context: s("context"), evidence: s("evidence"), latency: s("latency"), meanwhile: s("meanwhile"), replaces: s("replaces") });
+  if (s("run") && !RUN_TITLE.test(card.opts[0] ?? "")) throw new Error('--run needs the first --opt titled "Run ..." (accept A runs the script)');
   const run = s("run") ? pinRun(s("run")!, undefined, !a.dry) : "";
   const body = run ? `${base}${base.endsWith("\n") ? "" : "\n"}\n${run}\n` : base;
   const err = lintCard(title, body);
@@ -134,8 +139,9 @@ if (import.meta.main) {
   try {
     switch (a._[0]) {
       case "ask": ask(a, { q: String(a.q ?? ""), opts: a.opt }); break;
-      case "task": ask(a, taskCard(String(a.do ?? ""))); break;
+      case "task": noRun(a); ask(a, taskCard(String(a.do ?? ""))); break;
       case "text": {
+        noRun(a);
         if (typeof a.default !== "string") throw new Error('text needs --default "what you do if skipped"');
         ask(a, textCard(String(a.q ?? ""), a.default));
         break;

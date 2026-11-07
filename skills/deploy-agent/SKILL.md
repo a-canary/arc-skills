@@ -1,6 +1,6 @@
 ---
 name: deploy-agent
-description: Runs, as root, the commands agents would otherwise ask the operator to run. DRY-RUN ONLY until repos-vlqa lands. Use when you need a privileged command executed and have a /decide card for it.
+description: Runs, as root, the commands agents would otherwise ask the operator to run, once the operator accepts the /decide card that pins them. Use when you need a privileged command executed and have a /decide card for it.
 ---
 
 # Deploy Agent
@@ -8,24 +8,30 @@ description: Runs, as root, the commands agents would otherwise ask the operator
 Replaces "please run this as root" chat asks with a pinned script on a /decide card.
 Approved in cards arc-3nr and repos-dnc1.
 
-## Status: dry-run only
+## Trust model (repos-vlqa, answer C: no proof, fences only)
 
-Root execution is NOT enabled.
-`verifyOperator()` in `deploy-run.ts` is a stub returning `{ok:false, why:"pending repos-vlqa"}`.
-Agents can forge `bd comments add --author operator`, so an accept is not yet proof.
-The execute branch (`sudo -n bash <script>`, then a changes-log entry) exists but is unreachable.
+Root execution is live.
+An accept counts when the card's last DECISION comment is `accept` and its author is `operator`.
+That author field is forgeable by any agent; the operator accepted that risk because webui already requires a key.
+Upgrade path: webui signs card id + script sha256 on accept, and deploy-run.ts verifies the signature.
 
 ## Usage
 
 1. Write the script with a `# undo: <cmd>` line.
-2. Post the card: `bun skills/human-gate-post-webui/decide.ts ask|task ... --run ./script.sh`.
+2. Post the card: `bun skills/human-gate-post-webui/decide.ts ask ... --run ./script.sh` (ask cards only, and the first `--opt` must be titled `Run ...`: accept A runs the script, so A must say so; decide.ts and deploy-run.ts both refuse otherwise).
    The script is copied to `~/vault/director/deploy-queue/<sha8>-<name>` and `Run: <path> sha256: <hex>` is appended after `</decide>`.
 3. After the operator accepts: `bun skills/deploy-agent/deploy-run.ts <card-id> [--repo R]`.
+   `--dry` prints the plan without running it.
+   Before running it appends what will run and its undo to the week's changes log, then the exit code after.
 
 ## Checks (any failure: one-line reason, exit 3)
 
-- Last DECISION comment is `accept`.
-- `Run:` path is under the deploy queue and the sha256 matches the file.
+- Card is not closed.
+- Option A's title starts with `Run` (allow-list: a card whose A means Done, Answer or Not now never runs).
+- Last DECISION comment is `accept` with option A or none (B+ such as "Skip" never run), authored `operator`.
+- The last `Run:` line after `</decide>` is the pin; its path is under the deploy queue and the sha256 matches the file.
+- Re-pinning a fixed script means a new card (`--replaces`), never `bd update` on the accepted one.
+- Only `--repo` and `--dry` are accepted flags; a misspelled flag refuses rather than running.
 - Script has a `# undo:` line.
 - Script text matches no regex in `fences.txt`.
 
@@ -35,7 +41,7 @@ The execute branch (`sudo -n bash <script>`, then a changes-log entry) exists bu
 Also eval, base64 decode, pipe-to-shell and curl/wget (no unpinned code).
 
 Fences catch mistakes, not attackers: text regexes are easy to evade.
-The security boundary is the operator proof (repos-vlqa), which must sign card id + script sha256, plus running the hashed bytes via stdin rather than the path.
+The real guards are the sha256 pin, running the hashed bytes (`bash -c`, stdin closed) rather than the path, and the operator reading the card before accepting.
 
 ## Test
 
