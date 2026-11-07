@@ -1,5 +1,5 @@
-// deploy-run.ts — Deploy Agent, DRY-RUN ONLY until verifyOperator() can prove the accept is the operator's (repos-vlqa).
-//   bun deploy-run.ts <card-id> [--repo R]      exit 0 = plan printed, exit 3 = refused (one-line reason)
+// deploy-run.ts — Deploy Agent: runs an operator-accepted card's pinned script as root.
+//   bun deploy-run.ts <card-id> [--repo R] [--dry]   exit = script's code (0 with --dry), 3 = refused (one-line reason)
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -12,16 +12,11 @@ const FENCES = join(dirname(import.meta.path), "fences.txt");
 export class Refuse extends Error {}
 const refuse = (why: string): never => { throw new Refuse(why); };
 
-// STUB: agents can forge `bd comments add --author operator`, so no accept is trusted yet.
-// The proof must sign card id + script sha256: agents can edit a card's description after an accept.
-export const verifyOperator = (_card: string, _sha256: string): { ok: boolean; why: string } => ({ ok: false, why: "pending repos-vlqa" });
-
 export type Deps = {
   bd: (dir: string, ...args: string[]) => string;
   readFile: (p: string) => string;
   queueDir: string;
   fencesFile: string;
-  verify: (card: string, sha256: string) => { ok: boolean; why: string };
   exec: (text: string) => number;
   logChange: (line: string) => void;
 };
@@ -37,7 +32,6 @@ export const realDeps = (): Deps => ({
   readFile: (p) => readFileSync(p, "utf8"),
   queueDir: QUEUE,
   fencesFile: FENCES,
-  verify: verifyOperator,
   // Runs the hashed bytes via stdin, never the path: the queue dir is agent-writable (no swap after the check).
   exec: (text) => Bun.spawnSync(["sudo", "-n", "bash", "-s"], { stdin: Buffer.from(text), stdout: "inherit", stderr: "inherit" }).exitCode ?? 1,
   logChange: (line) => {
@@ -53,10 +47,13 @@ export function plan(id: string, repo: string | undefined, d: Deps) {
   const card = JSON.parse(d.bd(dir, "show", id, "--json") || "null");
   const c = Array.isArray(card) ? card[0] : card;
   if (!c) refuse(`card ${id} not found`);
-  const comments = (c.comments ?? JSON.parse(d.bd(dir, "comments", id, "--json") || "[]")) as { text: string }[];
-  const last = comments.map((x) => parseDecision(x.text)).filter(Boolean).at(-1);
-  if (!last) refuse("no DECISION comment");
-  if (last!.verb !== "accept") refuse(`last decision is ${last!.verb}, not accept`);
+  const comments = (c.comments ?? JSON.parse(d.bd(dir, "comments", id, "--json") || "[]")) as { author?: string; text: string }[];
+  const decided = comments.filter((x) => parseDecision(x.text)).at(-1);
+  if (!decided) refuse("no DECISION comment");
+  const last = parseDecision(decided!.text)!;
+  if (last.verb !== "accept") refuse(`last decision is ${last.verb}, not accept`);
+  // ponytail: the author field is forgeable by any agent; operator chose fences-only trust (repos-vlqa C). Upgrade: webui-signed accepts.
+  if (decided!.author !== "operator") refuse(`decision author is ${decided!.author ?? "unknown"}, not operator`);
 
   const m = /^Run: (\S+) sha256: ([0-9a-f]{64})\s*$/m.exec(c.description ?? "");
   if (!m) return refuse("no 'Run: <path> sha256: <hex>' line in card");
@@ -78,14 +75,12 @@ export function main(argv: string[], d: Deps, out: (s: string) => void = console
   try {
     if (!id) refuse("usage: deploy-run.ts <card-id> [--repo R]");
     const p = plan(id!, ri >= 0 ? argv[ri + 1] : undefined, d)!;
-    const op = d.verify(id!, p.hex);
-    if (!op.ok) {
-      out(`DRY RUN (${op.why})\nscript: ${p.path}\nhash: ok ${p.hex.slice(0, 12)}\nundo: ${p.undo}\nfence: clear`);
+    if (argv.includes("--dry")) {
+      out(`DRY RUN\nscript: ${p.path}\nhash: ok ${p.hex.slice(0, 12)}\nundo: ${p.undo}\nfence: clear`);
       return 0;
     }
-    // Unreachable while verifyOperator() is a stub.
     const code = d.exec(p.text);
-    d.logChange(`\n## ${new Date().toISOString()}\n- what: ran ${p.path} as root\n- card: ${p.id}\n- undo: ${p.undo}\n`);
+    d.logChange(`\n## ${new Date().toISOString()}\n- what: ran ${p.path} as root (exit ${code})\n- card: ${p.id}\n- undo: ${p.undo}\n`);
     return code;
   } catch (e) {
     if (!(e instanceof Refuse)) throw e;
