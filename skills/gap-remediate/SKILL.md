@@ -29,9 +29,10 @@ write. If nothing is worth changing, log a no-op — never force an edit.
    (`/adaptation-review`), so bias hard toward clarifying an existing bullet over
    adding one, and toward the other surfaces over AGENTS.md.
 2. **MEMORY.md** — `~/.claude/projects/-home-aaron/memory/MEMORY.md` + the
-   `*.md` files beside it. Project/factual memory: `- [Title](file.md) — hook`
-   index lines pointing at one-fact files. Most gaps that are *facts* (a path, an
-   API limit, a project constraint) belong here, not in AGENTS.md.
+   `*.md` files beside it: `- [Title](file.md) — hook` index lines. Only how the
+   operator wants agents to work; never facts or state (GLOBAL-RULES "Where
+   learnings go"). Gaps that are *facts* (a path, an API limit) go to ke; one
+   repo's state or constraint goes to `bd remember`.
 3. **ke** (semantic vault) — `ke recall-info "<topic>"` returns ranked `HITS:`
    with `%` scores + file paths. High-scoring hit that already states the fact ⇒
    it's covered there; the gap is a *recall* problem, not a *missing-fact* one.
@@ -74,7 +75,7 @@ write. If nothing is worth changing, log a no-op — never force an edit.
 - **One write per run.** Multiple worthy gaps ⇒ take the top, note runners-up in
   the log line. The loop runs nightly; the rest keep.
 - **AGENTS.md is not the default.** When unsure where a fact goes, it goes to
-  MEMORY.md or ke, not AGENTS.md.
+  ke or `bd remember`, not AGENTS.md or MEMORY.md.
 - **Never delete** existing rules/memories to "make room" — that's a separate
   reviewed action, not this adaptor's job.
 - **Don't trust the collector blindly.** A gap line is a *claim* an open-source
