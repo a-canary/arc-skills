@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildCard, parseArgs, pinRun } from "../human-gate-post-webui/decide";
+import { buildCard, parseArgs, pinRun, taskCard, textCard } from "../human-gate-post-webui/decide";
 import { lintCard } from "../human-gate-post-webui/lint-card";
 import { type Deps, main } from "./deploy-run";
 
@@ -36,6 +36,7 @@ test("fenced script refused", () => {
   expect(run(setup(GOOD + "vi ~/.claude/hooks/a.sh\n")).code).toBe(3);
   expect(run(setup(GOOD + "visudo\n")).code).toBe(3);
 });
+test("path with .. escaping the queue refused", () => expect(run(setup(GOOD, { path: "/q/../etc/x.sh" })).code).toBe(3));
 test("path outside queue refused", () => expect(run(setup(GOOD, { path: "/tmp/x.sh" })).code).toBe(3));
 test("non-accept refused", () => expect(run(setup(GOOD, { verb: "reject" })).code).toBe(3));
 test("accept by a non-operator author refused", () => expect(run(setup(GOOD, { author: "agent" })).code).toBe(3));
@@ -43,6 +44,16 @@ test("accepting a non-A option (e.g. Skip) refused", () => expect(run(setup(GOOD
 test("accept followed by a reject refused", () => {
   const comments = [{ author: "operator", text: "DECISION accept A" }, { author: "operator", text: "DECISION reject: changed my mind" }];
   expect(run(setup(GOOD, { comments })).code).toBe(3);
+});
+test("task and text cards never run (option A means Done / Answer there)", () => {
+  for (const c of [taskCard("restart foo"), textCard("Which?", "skip")]) {
+    const desc = buildCard(c) + `\nRun: /q/abcd1234-x.sh sha256: ${sha(GOOD)}\n`;
+    expect(run(setup(GOOD, { desc, verb: "accept A" })).code).toBe(3);
+  }
+});
+test("ask card with a pin and accept A passes the card-kind check", () => {
+  const desc = buildCard({ q: "Run it?", opts: ["Run it | a", "Skip | b"] }) + `\nRun: /q/abcd1234-x.sh sha256: ${sha(GOOD)}\n`;
+  expect(run(setup(GOOD, { desc, verb: "accept A" }), "--dry").code).toBe(0);
 });
 test("closed card refused", () => expect(run(setup(GOOD, { status: "closed" })).code).toBe(3));
 test("misspelled flag refused, never runs", () => expect(run(setup(GOOD), "--dry-run").code).toBe(3));

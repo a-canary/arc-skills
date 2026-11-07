@@ -95,6 +95,9 @@ function bd(dir: string, ...args: string[]): string {
   return r.stdout.toString();
 }
 
+// Option A on task/text cards means "Done" / "Answer in note", never "run it": a pin there would run on a click that meant something else.
+const noRun = (a: Args) => { if (a.run) throw new Error("--run only on ask cards; option A there is the run"); };
+
 function ask(a: Args, card: { q: string; opts: string[] }) {
   const s = (k: string) => (typeof a[k] === "string" ? (a[k] as string) : undefined);
   const title = s("title");
@@ -134,8 +137,9 @@ if (import.meta.main) {
   try {
     switch (a._[0]) {
       case "ask": ask(a, { q: String(a.q ?? ""), opts: a.opt }); break;
-      case "task": ask(a, taskCard(String(a.do ?? ""))); break;
+      case "task": noRun(a); ask(a, taskCard(String(a.do ?? ""))); break;
       case "text": {
+        noRun(a);
         if (typeof a.default !== "string") throw new Error('text needs --default "what you do if skipped"');
         ask(a, textCard(String(a.q ?? ""), a.default));
         break;

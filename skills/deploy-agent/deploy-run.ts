@@ -4,10 +4,13 @@ import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { parseDecision, repoDir } from "../human-gate-post-webui/decide";
+import { parseDecision, repoDir, taskCard, textCard } from "../human-gate-post-webui/decide";
 
 export const QUEUE = join(homedir(), "vault", "director", "deploy-queue");
 const FENCES = join(dirname(import.meta.path), "fences.txt");
+
+// Option A titles that mean something other than "run it" (decide.ts refuses --run on these; this catches older cards).
+const NOT_RUN = [taskCard("x"), textCard("x", "x")].map((c) => c.opts[0]!.split(" | ")[0]);
 
 export class Refuse extends Error {}
 const refuse = (why: string): never => { throw new Refuse(why); };
@@ -49,12 +52,14 @@ export function plan(id: string, repo: string | undefined, d: Deps) {
   const c = Array.isArray(card) ? card[0] : card;
   if (!c) refuse(`card ${id} not found`);
   if (c.status === "closed") refuse("card is closed");
+  const optA = /<option id="A"[^>]*title="([^"]*)"/.exec(c.description ?? "")?.[1];
+  if (optA && NOT_RUN.includes(optA)) refuse(`only ask cards run; option A here is ${optA}`);
   const comments = (c.comments ?? JSON.parse(d.bd(dir, "comments", id, "--json") || "[]")) as { author?: string; text: string }[];
   const decided = comments.filter((x) => parseDecision(x.text)).at(-1);
   if (!decided) refuse("no DECISION comment");
   const last = parseDecision(decided!.text)!;
   if (last.verb !== "accept") refuse(`last decision is ${last.verb}, not accept`);
-  // Option A is "run it" (the recommendation on ask cards, "Done" on task cards); B+ are the alternatives.
+  // Option A is "run it" on ask cards (the recommendation); B+ are the alternatives.
   if (last.option && last.option !== "A") refuse(`accepted option ${last.option}, not A`);
   // ponytail: the author field is forgeable by any agent; operator chose fences-only trust (repos-vlqa C). Upgrade: webui-signed accepts.
   if (decided!.author !== "operator") refuse(`decision author is ${decided!.author ?? "unknown"}, not operator`);
