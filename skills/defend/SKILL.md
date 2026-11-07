@@ -24,6 +24,7 @@ RELEASE  Driver(prototype) ⇄ QA.qwen ► User(webui review)
 | **DefendMerge** | worker diff → git merge | workhorse, fresh context (= /hard-merge) | [merge.md](merge.md) |
 | **DefendDeploy** | QA+visual passed → production deploy | counsel (5-expert panel) | [deploy.md](deploy.md) |
 | **DefendConviction** | conviction change touching a held position → apply | counsel (5-expert panel) | [conviction.md](conviction.md) |
+| *+ security lens* | added to Plan/Merge/Deploy when the repo's AGENTS.md has `defend-security: on` | host gate's tier; attacker-briefed fresh agent | [security.md](security.md) |
 
 ## Why this tiering
 
