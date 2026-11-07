@@ -24,7 +24,7 @@ An unclear or conflicting virtue is a director clarify trigger.
 
 ### director
 
-- **Objective:** Interview the operator to clarify design, mission, and virtue (director "Stop and interview").
+- **Objective:** Interview the operator via /decide cards to clarify design, mission, and virtue (director "Stop and interview").
   Pull ideas from Designer, Feedback, Dashboard, and logs;
   quickly prototype for clarity; web-search for existing reference; refine
   missions; queue design specs for Driver to implement. Owns mission scope and

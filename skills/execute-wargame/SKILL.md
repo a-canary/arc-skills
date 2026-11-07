@@ -18,8 +18,8 @@ and **abort halts**.
 ```
 
 1. **Gate:** `bash <this-skill>/../wargame/scripts/gate.sh <repo>/.wargame`.
-   Non-zero exit → STOP, list the unresolved `(variable)`s, ask the user to
-   resolve or authorise assumed values. Do not start moves.
+   Non-zero exit → STOP, list the unresolved `(variable)`s, post one /decide card
+   (human-gate-post-webui) asking the operator to resolve them or authorise assumed values. Do not start moves.
 2. **Walk:** follow the full protocol in
    [../wargame/EXECUTE.md](../wargame/EXECUTE.md) — load context, execute each
    move, compare to expected observation, take the fork the trigger matches,

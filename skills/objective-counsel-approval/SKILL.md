@@ -94,7 +94,7 @@ is the one failure mode that leaks the whole trust model):
 - **account** — creates/modifies a credential, mailbox, or identity.
 
 Any class matches → **verdict = `human-gate`** immediately. Do NOT run counsel;
-write the verdict routing it to the user with the matched class named. This is the
+write the verdict, and post one /decide card (`decide.ts ask`, human-gate-post-webui) with the matched class named — the card is how it reaches the user; the feedback row is the audit trail. This is the
 UM-0300 carve-out: counsel is barred, the user is the only approver.
 
 No class matches → the proposal is counsel-eligible; proceed to §3.
@@ -148,7 +148,7 @@ id:        oca-<repo-slug>-<goalSlug>-<epoch>
 source:    objective-counsel        (NEVER 'direct' — 'direct'=trusted mints junk;
                                       see [[auto-oversight-source]])
 project:   <repo>
-state:     OPEN for revise/human-gate (action required) | LOG for approve/reject
+state:     OPEN for revise (action required) | LOG for approve/reject/human-gate (human-gate is acted on via its /decide card)
            (audit trail, [[feedback-log-sink]])
 body_md:   verdict + one-line rationale + panel consensus (N/5) + runners-up +
            for revise: the fix notes; for reject/human-gate: the axis/class named

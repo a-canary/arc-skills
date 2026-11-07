@@ -75,7 +75,7 @@ re-introducing a bash shim.
    d. Diagram source (*.mmd, *.dot, *.puml) → render
    e. CLI tool added/changed → capture `--help` output as text file
    f. Benchmark/eval output in the diff → render as SVG chart
-   g. None → ask the user: capture one, or --skip?
+   g. None → ask the operator as a /decide card (human-gate-post-webui; `decide.ts text` for a typed answer): capture one, or --skip?
 
 3. Copy artifacts into <demo-root>/assets/<branch-or-sha>.<ext>
    Keep < 500KB. Resize if larger. Prefer WebP/compressed JPEG over PNG.
