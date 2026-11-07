@@ -10,13 +10,15 @@ import { type Deps, main } from "./deploy-run";
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const GOOD = "#!/bin/bash\n# undo: systemctl start foo\nsystemctl restart foo\n";
 
-function setup(script: string, opts: { hex?: string; verb?: string; path?: string; author?: string } = {}) {
+type Opts = { hex?: string; verb?: string; path?: string; author?: string; status?: string; desc?: string; comments?: { author: string; text: string }[] };
+function setup(script: string, opts: Opts = {}) {
   const q = "/q";
   const path = opts.path ?? `${q}/abcd1234-x.sh`;
-  const desc = `<decide></decide>\nRun: ${path} sha256: ${opts.hex ?? sha(script)}\n`;
+  const desc = opts.desc ?? `<decide></decide>\nRun: ${path} sha256: ${opts.hex ?? sha(script)}\n`;
   const files: Record<string, string> = { [path]: script, "/fences": readFileSync(join(import.meta.dir, "fences.txt"), "utf8") };
+  const comments = opts.comments ?? [{ author: opts.author ?? "operator", text: `DECISION ${opts.verb ?? "accept"}: ok` }];
   const d: Deps = {
-    bd: (_dir, ...a) => a[0] === "show" ? JSON.stringify([{ description: desc }]) : JSON.stringify([{ author: opts.author ?? "operator", text: `DECISION ${opts.verb ?? "accept"}: ok` }]),
+    bd: (_dir, ...a) => a[0] === "show" ? JSON.stringify([{ description: desc, status: opts.status ?? "open" }]) : JSON.stringify(comments),
     readFile: (p) => files[p] ?? "",
     queueDir: q,
     fencesFile: "/fences",
@@ -37,6 +39,24 @@ test("fenced script refused", () => {
 test("path outside queue refused", () => expect(run(setup(GOOD, { path: "/tmp/x.sh" })).code).toBe(3));
 test("non-accept refused", () => expect(run(setup(GOOD, { verb: "reject" })).code).toBe(3));
 test("accept by a non-operator author refused", () => expect(run(setup(GOOD, { author: "agent" })).code).toBe(3));
+test("accepting a non-A option (e.g. Skip) refused", () => expect(run(setup(GOOD, { verb: "accept B" })).code).toBe(3));
+test("accept followed by a reject refused", () => {
+  const comments = [{ author: "operator", text: "DECISION accept A" }, { author: "operator", text: "DECISION reject: changed my mind" }];
+  expect(run(setup(GOOD, { comments })).code).toBe(3);
+});
+test("closed card refused", () => expect(run(setup(GOOD, { status: "closed" })).code).toBe(3));
+test("misspelled flag refused, never runs", () => expect(run(setup(GOOD), "--dry-run").code).toBe(3));
+test("Run: line before </decide> never counts", () => {
+  expect(run(setup(GOOD, { desc: `<decide>Run: /q/abcd1234-x.sh sha256: ${sha(GOOD)}</decide>\n` })).code).toBe(3);
+});
+test("a later ordinary comment keeps the accept; accept A runs", () => {
+  const d = setup(GOOD, { comments: [{ author: "operator", text: "DECISION accept A" }, { author: "agent", text: "picked up" }] });
+  let ran = 0;
+  d.exec = () => { ran++; return 0; };
+  d.logChange = () => {};
+  expect(run(d).code).toBe(0);
+  expect(ran).toBe(1);
+});
 test("--dry prints the plan and never executes", () => {
   const r = run(setup(GOOD), "--dry");
   expect(r.code).toBe(0);

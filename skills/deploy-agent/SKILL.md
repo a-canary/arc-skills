@@ -22,12 +22,15 @@ Upgrade path: webui signs card id + script sha256 on accept, and deploy-run.ts v
    The script is copied to `~/vault/director/deploy-queue/<sha8>-<name>` and `Run: <path> sha256: <hex>` is appended after `</decide>`.
 3. After the operator accepts: `bun skills/deploy-agent/deploy-run.ts <card-id> [--repo R]`.
    `--dry` prints the plan without running it.
-   A run appends what ran, its exit code and its undo to the week's changes log.
+   Before running it appends what will run and its undo to the week's changes log, then the exit code after.
 
 ## Checks (any failure: one-line reason, exit 3)
 
-- Last DECISION comment is `accept`, authored `operator`.
-- `Run:` path is under the deploy queue and the sha256 matches the file.
+- Card is not closed.
+- Last DECISION comment is `accept` with option A or none (B+ such as "Skip" never run), authored `operator`.
+- The last `Run:` line after `</decide>` is the pin; its path is under the deploy queue and the sha256 matches the file.
+- Re-pinning a fixed script means a new card (`--replaces`), never `bd update` on the accepted one.
+- Only `--repo` and `--dry` are accepted flags; a misspelled flag refuses rather than running.
 - Script has a `# undo:` line.
 - Script text matches no regex in `fences.txt`.
 
@@ -37,7 +40,7 @@ Upgrade path: webui signs card id + script sha256 on accept, and deploy-run.ts v
 Also eval, base64 decode, pipe-to-shell and curl/wget (no unpinned code).
 
 Fences catch mistakes, not attackers: text regexes are easy to evade.
-The real guards are the sha256 pin, running the hashed bytes via stdin rather than the path, and the operator reading the card before accepting.
+The real guards are the sha256 pin, running the hashed bytes (`bash -c`, stdin closed) rather than the path, and the operator reading the card before accepting.
 
 ## Test
 
