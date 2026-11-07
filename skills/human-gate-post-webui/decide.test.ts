@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { buildCard, parseArgs, parseDecision, taskCard } from "./decide";
+import { buildCard, parseArgs, parseDecision, taskCard, textCard } from "./decide";
 import { lintCard } from "./lint-card";
 
 test("ask: first --opt is the rec, card passes lint, evidence goes after </decide>", () => {
@@ -20,6 +20,13 @@ test("task card is Done / Not now and lints", () => {
 test("card text with < or quotes is refused, an option without a cost too", () => {
   expect(() => buildCard({ q: 'Use "fast"?', opts: ["A | x", "B | y"] })).toThrow();
   expect(() => buildCard({ q: "Ship?", opts: ["Yes", "No | y"] })).toThrow();
+});
+
+test("empty question, empty task, and 5 options are refused; a text card lints", () => {
+  expect(() => taskCard(" ")).toThrow();
+  expect(() => buildCard({ q: "", opts: ["A | x", "B | y"] })).toThrow();
+  expect(() => buildCard({ q: "Which?", opts: ["A | x", "B | y", "C | z", "D | w", "E | v"] })).toThrow();
+  expect(lintCard("arc-skills: where is the spec", buildCard(textCard("Which repo holds the spec?", "skip the spec check")))).toEqual([]);
 });
 
 test("parseDecision reads every /decide reply shape", () => {

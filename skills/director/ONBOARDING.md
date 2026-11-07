@@ -17,7 +17,7 @@ into it.
    `directors-registry`, `repo-already-registered` — each `<key>\t<value>`,
    `-` for absent.
 
-2. Ask the user (one batched set of questions), pre-filling suggestions from
+2. Ask the operator, one /decide card per question (human-gate-post-webui), pre-filling suggestions from
    step 1's output — never silently apply a suggestion:
    - **Which repo should this Director manage?** Default: `repo-root` from
      discovery. If `repo-already-registered: yes`, warn and ask whether to

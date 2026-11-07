@@ -5,7 +5,7 @@ description: Create a detailed refactor plan with tiny commits via user intervie
 
 This skill will be invoked when the user wants to create a refactor request. You should go through the steps below. You may skip steps if you don't consider them necessary.
 
-1. Ask the user for a long, detailed description of the problem they want to solve and any potential ideas for solutions.
+1. Ask the operator as a /decide card (human-gate-post-webui; `decide.ts text` for a typed answer) for a long, detailed description of the problem they want to solve and any potential ideas for solutions.
 
 2. Explore the repo to verify their assertions and understand the current state of the codebase.
 

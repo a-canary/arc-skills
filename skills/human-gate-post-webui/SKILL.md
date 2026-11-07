@@ -82,7 +82,11 @@ bun $D ask --repo <repo> --title "<repo>: <the decision in a few words>" \
 bun $D task --repo <repo> --title "<repo>: <the task>" --do "<do X>" ...   # Will you <do X> today? Done / Not now
 ```
 
+bun $D text --repo <repo> --title "<repo>: <what you need>" --q "<question>?" --default "<what you do if skipped>" ...   # typed answer arrives in the reply note
+```
+
 The first `--opt` is the recommendation (`rec="1"`). `--dry` prints the card without posting.
+Need a description, a path, an artifact, access? Use `text`: the operator accepts "Answer in note" and types it.
 
 Grilling, interviews and design questions go the same way: one card per decision, independent branches posted together, a dependent question posted only after its parent is answered (`--blocks` keeps your bead out of `bd ready` meanwhile). Finish a grilling run with a card asking whether you have reached a shared understanding before you act on it.
 

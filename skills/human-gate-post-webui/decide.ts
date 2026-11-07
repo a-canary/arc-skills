@@ -2,6 +2,7 @@
 // Builds a <decide> card, lints it, files it as a `human` bead /decide shows, and reads the answers back.
 //   bun decide.ts ask  --title T --q "…?" --opt "Title | gain, cost" --opt … [common]   first --opt is the recommendation
 //   bun decide.ts task --title T --do "rotate the M1 password" [common]                   → "Will you … today?" Done / Not now
+//   bun decide.ts text --title T --q "Which repo holds the spec?" --default "skip the spec check" [common]  → typed answer in the reply note
 //   bun decide.ts answers [--repo R] [--json]                                              answered cards, one line each
 //   bun decide.ts done <id> --reason "what you did" [--repo R]                            clear `decided`, close the gate
 // common: --context C --evidence E --latency L --meanwhile M --repo R -p 0-3 --blocks <your-bead> --replaces <old-gate> --dry
@@ -33,6 +34,8 @@ const clean = (where: string, s: string) => {
 };
 
 export function buildCard(o: { q: string; opts: string[]; context?: string; evidence?: string; latency?: string; meanwhile?: string; replaces?: string }): string {
+  if (!o.q.trim()) throw new Error("--q (or --do) is required");
+  if (o.opts.length < 2 || o.opts.length > 4) throw new Error(`${o.opts.length} --opt, need 2-4`);
   const opts = o.opts.map((s, i) => {
     const [title, ...rest] = s.split(" | ");
     if (!rest.length) throw new Error(`--opt "${s}": want "Title | gain and cost"`);
@@ -47,9 +50,18 @@ export function buildCard(o: { q: string; opts: string[]; context?: string; evid
   return `<decide><q>${clean("q", o.q)}</q>${ctx}${opts.join("")}</decide>\n${tail.length ? "\n" + tail.join("\n") + "\n" : ""}`;
 }
 
-export const taskCard = (does: string) => ({
-  q: `Will you ${does.replace(/[.?]+$/, "")} today?`,
+export const taskCard = (does: string) => {
+  if (!does.trim()) throw new Error("--do is required");
+  return {
+  q:`Will you ${does.replace(/[.?]+$/, "")} today?`,
   opts: ["Done | It is done; the agent checks and carries on. Costs your time now.", "Not now | Nothing changes today; the work that needs it stays parked."],
+  };
+};
+
+// A question only a typed answer settles: the operator accepts A and types the answer in the note.
+export const textCard = (q: string, fallback: string) => ({
+  q,
+  opts: ["Answer in note | Accept and type the answer in the note. Costs a minute of typing.", `Skip it | The agent goes ahead and will ${fallback.replace(/[.]+$/, "")}. Risk: a wrong guess.`],
 });
 
 // /decide writes "DECISION <verb>[ <opt>][ until <date>][: <note>]" (arc-webui decide.ts).
@@ -83,9 +95,10 @@ function ask(a: Args, card: { q: string; opts: string[] }) {
   const dir = repoDir(s("repo")), f = join(tmpdir(), `decide-${process.pid}.md`);
   writeFileSync(f, body);
   const id = JSON.parse(bd(dir, "create", title, "-p", s("p") ?? "2", "-t", "decision", "-l", "human", "--body-file", f, "--json")).id as string;
-  if (s("blocks")) bd(dir, "dep", "add", s("blocks")!, id);
-  if (s("replaces")) bd(dir, "close", s("replaces")!, "--reason", `replaced by ${id}`);
-  console.log(id);
+  console.log(id); // printed first: the card is live even if a link below fails
+  const link = (what: string, ...args: string[]) => { try { bd(dir, ...args); } catch (e) { console.error(`${id} posted, but ${what} failed: ${(e as Error).message}`); } };
+  if (s("blocks")) link(`dep ${s("blocks")} → ${id}`, "dep", "add", s("blocks")!, id);
+  if (s("replaces")) link(`closing ${s("replaces")}`, "close", s("replaces")!, "--reason", `replaced by ${id}`);
 }
 
 function answers(a: Args) {
@@ -109,6 +122,11 @@ if (import.meta.main) {
     switch (a._[0]) {
       case "ask": ask(a, { q: String(a.q ?? ""), opts: a.opt }); break;
       case "task": ask(a, taskCard(String(a.do ?? ""))); break;
+      case "text": {
+        if (typeof a.default !== "string") throw new Error('text needs --default "what you do if skipped"');
+        ask(a, textCard(String(a.q ?? ""), a.default));
+        break;
+      }
       case "answers": answers(a); break;
       case "done": {
         const id = a._[1], dir = repoDir(a.repo as string | undefined);
@@ -117,7 +135,7 @@ if (import.meta.main) {
         bd(dir, "close", id, "--reason", a.reason);
         break;
       }
-      default: console.error("usage: decide.ts ask|task|answers|done (see header)"); process.exit(2);
+      default: console.error("usage: decide.ts ask|task|text|answers|done (see header)"); process.exit(2);
     }
   } catch (e) { console.error((e as Error).message); process.exit(1); }
 }
