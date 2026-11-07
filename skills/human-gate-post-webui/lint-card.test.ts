@@ -38,5 +38,7 @@ test("title needs [Design|Prototype|Deploy|Task] and no bead ids; context (Probl
   expect(lintCard("trading: deploy fixes", good).join(" ")).toContain("start with [Design|Prototype|Deploy|Task]");
   expect(lintCard("[Deploy] Run card trading-qch2 now", good)).toContain("title: no bead ids");
   expect(lintCard("[Deploy] Read-only access for the bot", good)).toEqual([]);
+  for (const t of ["[Deploy] Restart arc-webui on 8080", "[Deploy] Pause the trading-bot", "[Design] Fix the arc-sim harness"]) expect(lintCard(t, good)).toEqual([]);
+  expect(lintCard("[Deploy] Close repos-vlqa first", good)).toContain("title: no bead ids");
   expect(lintCard("[Design] Keep Qwen", good.replace(/<context>[\s\S]*?<\/context>/, "")).join(" ")).toContain("Problem line");
 });

@@ -7,8 +7,8 @@
 const SHA = /\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/;
 const PATH = /(?:^|\s)(?:~|\.{1,2})?\/[\w.-]+\/|\b[\w-]+\.(?:ts|sh|md|json|py)\b/;
 // Bead ids leaked into titles (operator 2026-11-07: "I don't know ids and commit hashes").
-// ponytail: known prefixes only; add one when a new bead prefix shows up in titles.
-const BEAD = /\b(?:repos|trading|arc|aw3|ndivisible|onenation|webui|rd|slm|workbench)-[a-z0-9]{2,5}(?:\.\d+)*\b/;
+// ponytail: known prefixes only, minus real-word suffixes (arc-webui, trading-bot); extend either list when a title trips it.
+const BEAD = /\b(?:repos|trading|arc|aw3|ndivisible|onenation|webui|rd|slm|workbench)-(?!(?:webui|bot|sim|app|api|cli|ui|db|lab|host|web|gpu|box|agent|proxy|desk|site|data|ops)\b)[a-z0-9]{2,5}(?:\.\d+)*\b/;
 // Operator format 2026-11-07: "[Design|Prototype|Deploy] {Recommendation headline}"; Task = a chore only the operator can do.
 export const KINDS = ["Design", "Prototype", "Deploy", "Task"] as const;
 const HEADLINE = new RegExp(`^\\[(?:${KINDS.join("|")})\\] \\S`);
