@@ -1,21 +1,22 @@
-# DefendMerge — worker diff → git merge (workhorse, fresh context)
+# DefendMerge — worker diff → git merge (defend-attack: local model, then Opus)
 
 DefendMerge **is** /hard-merge. Same procedure, named here so the family is
 complete: the gate is between Worker and `git merge`, run by `defend-attack`.
 
 ## Tier + independence
 
-- The reviewer is `defend-attack`. Run it with `defend-attack <pr> -R owner/repo` or `defend-attack --diff <file>`.
+- The reviewer is `defend-attack` (`~/.claude/skills/defend/bin/defend-attack`). Run it with `defend-attack <pr> -R owner/repo` or `defend-attack --diff <file>`.
 - Independence: `defend-attack` is a separate model call with no author context.
 - Opus scope is set by DEFEND_OPUS_SCOPE. The default is `risk`. The scopes are `risk`, `flags`, and `all`.
 - `risk` means Opus attacks the local model's flags, any diff touching DEFEND_RISK_PATHS, and after three local failures.
 - `flags` means Opus attacks only local flags or after three local failures.
 - `all` means Opus attacks every diff.
 - Exit 2 means no verdict. Do not post a receipt. Do not merge. Fix the cause and re-run.
+- Known gap: the Opus leg runs a headless `claude -p` (DEFEND_OPUS_CMD) and needs a working headless login on the host. Until the GateKeeper (repos-v6m7) takes the Opus tier over, a failed Opus call exits 2 and blocks the merge.
 
 ## Exemption
 
-A deploy merge to a SHA that already carries a `defend/merge` success needs no new attack.
+A deploy merge (fast-forwarding a deploy or live branch) to a SHA that already carries a `defend/merge` success needs no new attack.
 Any commit not already cleared does.
 
 ## Mandatory lenses (align with hard-merge §1–4)

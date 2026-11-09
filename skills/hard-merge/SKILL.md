@@ -1,6 +1,6 @@
 ---
 name: hard-merge
-description: Adversarial pre-merge review gate for merge-on-clear — the author drives it but dispatches a freshly spawned reviewer agent for independence (never reviews own work inline). Use before merging any PR you own, or when the user says "hard-merge", "merge-on-clear", or "adversarial review before merge".
+description: Adversarial pre-merge review gate for merge-on-clear — the author drives it but runs defend-attack (local model, then Opus) as the independent reviewer (never reviews own work inline). Use before merging any PR you own, or when the user says "hard-merge", "merge-on-clear", or "adversarial review before merge".
 ---
 
 # hard-merge — DefendMerge
@@ -16,7 +16,7 @@ Two roles, never the same agent. **Author** produced the diff and drives this ga
 
 On a **production surface** (§4) spawn a *second* reviewer in its own separate context. `defend-attack` is the first reviewer; the spawned agent is the second disjoint reviewer. Give the spawned reviewer the PR/diff to review, "hunt for blockers, do not bless — this diff is wrong until you fail to break it", the §1-4 gate below, and "return a CLEAR/BLOCK verdict + findings ranked severe-first, under ~400 tokens, cite `file:line`, paste nothing." **Materialize the diff to a file ONCE** (`gh pr diff <n> > /tmp/pr<n>.diff`) and give that spawned reviewer that one path — do not have the spawned reviewer re-run `gh pr diff` into its own context, and tell it to Read the file ranged/per-hunk (`grep -n` the file for the target, Read that offset) rather than whole. Confirm the PR head SHA has not drifted before trusting the verdict.
 
-Default posture: *this diff is wrong until the spawned reviewer fails to break it.*
+Default posture: *this diff is wrong until `defend-attack` fails to break it.*
 
 ## The gate — hard-fail short-circuits, cheapest first
 
@@ -45,7 +45,7 @@ Two problems get handled here, and they are NOT the same problem. **Independence
 
 Decide the merge target first: is it a **production surface** — a branch with GitHub protection rules requiring review, OR one your repo names as a deploy target (an unprotected default branch on a pure-docs/tooling repo is NOT one)? Check it observably (`gh api repos/<o>/<r>/branches/<b>/protection` → 200 = protected; else consult the repo's deploy config), don't eyeball "feels like main."
 
-- [ ] **Production surface, small radius -> two disjoint reviewers, no panel.** Author + one spawned reviewer are both agent sessions; a two-party-review policy (or a merge classifier) reads a single agent sign-off on a production branch as self-approval. Close that with a **second freshly spawned reviewer from a disjoint context** — two independent CLEARs, cheap. A one-line doc/config fix on a production branch needs the second reviewer, not a 5-expert panel; reserve the panel for radius (below).
+- [ ] **Production surface, small radius -> two disjoint reviewers, no panel.** Author + `defend-attack` are both agent-run; a two-party-review policy (or a merge classifier) reads a single agent sign-off on a production branch as self-approval. Close that with a **second freshly spawned reviewer from a disjoint context** — two independent CLEARs, cheap. A one-line doc/config fix on a production branch needs the second reviewer, not a 5-expert panel; reserve the panel for radius (below).
 - [ ] **Non-small blast radius (any target) -> STOP and run `/counsel`.** Estimate blast radius. **Small** = reversible, contained, low-stakes: a single skill/doc/config file, a leaf function with tests, an additive change behind a flag. **Non-small** = anything that can hurt broadly or is hard to undo: schema/migration, auth/security/trust boundary, money path, deploy/infra/CI, a shared lib or interface many callers depend on, data deletion/backfill, public API, or a diff touching many modules at once. Non-small on a production surface -> the panel AND two reviewers. No spawned reviewer, however independent, is enough judgment for a change that can go broadly wrong — that is what the 5-expert panel is for.
 - [ ] **Reviewer returns not-CLEAR on a production surface -> escalate to `/counsel`** even if radius looked small: a disputed production merge is exactly where a wider panel earns its cost.
 - [ ] Neither holds (non-production target AND small radius AND reviewer CLEAR) -> the single `defend-attack` CLEAR suffices; proceed to verdict.
