@@ -49,6 +49,12 @@ At session start, load these files into the system prompt:
 - **Measure before you change.** Baseline + delta. State both.
 - **Read tool output literally before hypothesizing.** Dates outside query
   window = nothing newer.
+- **Workers write code; Claude plans, advises, attacks (operator ruling 2026-11-09, repos-51up).** Every Claude session hands code writing (implementation, test-to-green, refactors, mechanical edits, doc updates) to workers when possible, via workbench `bin/worker-task` with a RED commit and `--test`.
+  Public and human-declared pre-public repos: `--lane public` (9router); unknown = private, fail closed.
+  Private repos: `--lane private` (local model queue); never 9router.
+  Claude keeps planning and design (spec, RED test, acceptance), advice and decisions, and adversarial review of worker output.
+  Claude edits code directly only for (a) a few-line fix where dispatch costs more, (b) a task a worker failed twice, or (c) an emergency; name it as `Claude-Edit: a|b|c` in the commit body.
+  Worker commits carry `Worker-Model:` (callers add it until worker-task does; workbench#103). A lane that can't take the work gets a filed gap and the other allowed lane, never a silent fallback to Claude.
 - **Delegate in ≤10-minute subagents (operator 2026-10-31).** The main session orchestrates; each investigation or implementation chunk runs as a subagent timeboxed to ~10 minutes, for context management.
 - **Subagents return distilled findings only** — conclusion + refs, under
   ~500 tokens.
