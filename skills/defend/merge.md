@@ -1,15 +1,22 @@
 # DefendMerge — worker diff → git merge (workhorse, fresh context)
 
 DefendMerge **is** /hard-merge. Same procedure, named here so the family is
-complete: the gate between Worker (qwen|bonsai thin tasks) and `git merge`.
+complete: the gate is between Worker and `git merge`, run by `defend-attack`.
 
 ## Tier + independence
 
-- Reviewer = freshly spawned agent, disjoint context (hard-merge's existing
-  rule). Workhorse tier — no counsel: merges are frequent and git-reversible.
-- Cross-*model* independence only when the worker tier ≠ reviewer model
-  (e.g. bonsai worker → qwen reviewer). Qwen worker → qwen reviewer is
-  context-independence only. Accepted trade-off, recorded here on purpose.
+- The reviewer is `defend-attack`. Run it with `defend-attack <pr> -R owner/repo` or `defend-attack --diff <file>`.
+- Independence: `defend-attack` is a separate model call with no author context.
+- Opus scope is set by DEFEND_OPUS_SCOPE. The default is `risk`. The scopes are `risk`, `flags`, and `all`.
+- `risk` means Opus attacks the local model's flags, any diff touching DEFEND_RISK_PATHS, and after three local failures.
+- `flags` means Opus attacks only local flags or after three local failures.
+- `all` means Opus attacks every diff.
+- Exit 2 means no verdict. Do not post a receipt. Do not merge. Fix the cause and re-run.
+
+## Exemption
+
+A deploy merge to a SHA that already carries a `defend/merge` success needs no new attack.
+Any commit not already cleared does.
 
 ## Mandatory lenses (align with hard-merge §1–4)
 
@@ -31,7 +38,7 @@ complete: the gate between Worker (qwen|bonsai thin tasks) and `git merge`.
 
 ## Verdict routing
 
-`CLEAR | BLOCK + findings` → author (Driver). Production surfaces keep
+The author posts the receipt after `defend-attack` prints CLEAR. Production surfaces keep
 hard-merge's second-disjoint-reviewer rule. Override = ledger note row.
 
 **Receipt (mechanical).** After verifying the verdict, the author posts it on the
