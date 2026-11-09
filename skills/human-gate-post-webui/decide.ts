@@ -18,8 +18,14 @@ export const QUEUE_DIR = join(homedir(), "vault", "director", "deploy-queue");
 // --run <script>: pin the script by sha256 into the deploy queue; deploy-run.ts re-checks the hash before acting.
 export function pinRun(script: string, queueDir = process.env.DEPLOY_QUEUE_DIR ?? QUEUE_DIR, copy = true): string {
   const buf = readFileSync(script);
+  const text = buf.toString();
+  if (text.includes("sudo -u") && !text.includes("PATH=")) {
+    throw new Error("--run script uses sudo -u but never sets PATH: sudo resets it to secure_path, dropping ~/.local/bin and ~/.bun/bin; set PATH=... inside each sudo -u block");
+  }
   const hex = createHash("sha256").update(buf).digest("hex");
-  const dest = join(queueDir, `${hex.slice(0, 8)}-${basename(script)}`);
+  let name = basename(script);
+  name = name.replace(/^[0-9a-f]{8}-/, "");
+  const dest = join(queueDir, `${hex.slice(0, 8)}-${name}`);
   if (copy) { mkdirSync(queueDir, { recursive: true }); copyFileSync(script, dest); }
   return `Run: ${dest} sha256: ${hex}`;
 }
