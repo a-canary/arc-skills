@@ -5,7 +5,7 @@
 #   defend-attack <pr> [-R owner/repo]
 #
 # Local qwen attacks first (up to 3 attempts); Opus attacks based on
-# DEFEND_OPUS_SCOPE (all|flags|risk, default all). A local run or parse
+# DEFEND_OPUS_SCOPE (all|flags|risk, default risk). A local run or parse
 # failure is retried; a local failure never counts as CLEAR.
 #
 # Output: Blocking/Note lines, then VERDICT: CLEAR by=<local|opus> (exit 0)
@@ -40,13 +40,17 @@ case $1 in
 esac
 
 # --- settings ---
-scope=${DEFEND_OPUS_SCOPE:-all}
+scope=${DEFEND_OPUS_SCOPE:-risk}
 case $scope in
   all|flags|risk) ;;
   *) die "DEFEND_OPUS_SCOPE must be all, flags, or risk; got '$scope'" ;;
 esac
 
 risk_paths=${DEFEND_RISK_PATHS:-'(^|/)(orders?|execut|broker|gate|defen[cs]e|auth|secret|cred|\.github/|deploy)'}
+grep -E -- "$risk_paths" </dev/null 2>/dev/null || rc=$?
+if [ ${rc:-0} -eq 2 ]; then
+  die "invalid DEFEND_RISK_PATHS regex"
+fi
 
 # --- commands ---
 if [ -z "${DEFEND_LOCAL_CMD:-}" ]; then
@@ -137,22 +141,32 @@ while [ $local_attempts -lt 3 ]; do
 done
 
 # --- decide routing ---
+risk_hit=0
+if [ "$scope" = risk ]; then
+  heads=$(grep -E '^diff --git ' <<<"$diff_text" || true)
+  if grep -E "$risk_paths" <<<"$heads" >/dev/null; then
+    risk_hit=1
+  fi
+fi
+
 route=local
 if [ $local_ok -eq 0 ]; then
   route=opus_full
 elif [ "$scope" = all ]; then
   route=opus_full
+elif [ "$scope" = risk ] && [ $risk_hit -eq 1 ]; then
+  route=opus_full
 elif { [ "$scope" = flags ] || [ "$scope" = risk ]; } && [ "$parse_verdict" = ATTACKS ]; then
   route=opus_flags
-elif [ "$scope" = risk ] && [ "$parse_verdict" = CLEAR ]; then
-  heads=$(grep -E '^diff --git ' <<<"$diff_text" || true)
-  if grep -E "$risk_paths" <<<"$heads" >/dev/null; then
-    route=opus_full
-  fi
 fi
 
 # --- opus pass ---
 if [ "$route" != local ]; then
+  if [ $local_ok -eq 0 ]; then
+    parse_verdict=
+    parse_blocking=
+    parse_notes=
+  fi
   if [ "$route" = opus_flags ]; then
     flags_text="## Flagged by the first pass"
     while IFS= read -r line; do
