@@ -50,14 +50,7 @@ risk_paths=${DEFEND_RISK_PATHS:-'(^|/)(orders?|execut|broker|gate|defen[cs]e|aut
 
 # --- commands ---
 if [ -z "${DEFEND_LOCAL_CMD:-}" ]; then
-  DEFEND_LOCAL_CMD='
-    prompt=$(cat)
-    body=$(jq -n --arg p "$prompt" --arg m "queue" "{model:$m,messages:[{role:\"user\",content:$p}],stream:false}")
-    out=$(curl -sf -m 1200 -X POST "${DEFEND_LANE_URL:-http://127.0.0.1:8099}/v1/chat/completions" \
-      -H "Content-Type: application/json" -d "$body")
-    content=$(jq -r ".choices[0].message.content" <<<"$out")
-    [ -n "$content" ] && echo "$content" || exit 1
-  '
+  DEFEND_LOCAL_CMD=$'jq -Rs \'{model:"queue",messages:[{role:"user",content:.}],stream:false}\' | curl -sf -m 1200 -X POST "${DEFEND_LANE_URL:-http://127.0.0.1:8099}/v1/chat/completions" -H \'content-type: application/json\' --data-binary @- | jq -r \'.choices[0].message.content // empty\''
 fi
 
 op_cmd=${DEFEND_OPUS_CMD:-'claude -p --model opus --allowedTools ""'}
@@ -67,7 +60,11 @@ if [ -n "$diff_file" ]; then
   [ -r "$diff_file" ] || die "cannot read diff file: $diff_file"
   diff_text=$(cat "$diff_file")
 else
-  diff_text=$(gh pr diff "$pr" ${repo:+"-R $repo"}) || die "cannot get PR diff"
+  diff_text=$(gh pr diff "$pr" ${repo:+-R "$repo"}) || die "cannot get PR diff"
+fi
+
+if [[ "$diff_text" =~ ^[[:space:]]*$ ]]; then
+  die "empty diff"
 fi
 
 # --- prompt builder ---
@@ -112,9 +109,10 @@ parse() {
       parse_notes+="Note: ${BASH_REMATCH[1]}"
     fi
   done <<< "$reply"
-  # unreadable: no verdict, or ATTACKS with zero blocking lines
+  # unreadable: no verdict, ATTACKS with zero blocking lines, or CLEAR with blocking lines
   if [ -z "$parse_verdict" ]; then return 1; fi
   if [ "$parse_verdict" = ATTACKS ] && [ -z "$parse_blocking" ]; then return 1; fi
+  if [ "$parse_verdict" = CLEAR ] && [ -n "$parse_blocking" ]; then return 1; fi
   return 0
 }
 
@@ -144,10 +142,11 @@ if [ $local_ok -eq 0 ]; then
   route=opus_full
 elif [ "$scope" = all ]; then
   route=opus_full
-elif [ "$scope" = flags ] && [ "$parse_verdict" = ATTACKS ]; then
+elif { [ "$scope" = flags ] || [ "$scope" = risk ]; } && [ "$parse_verdict" = ATTACKS ]; then
   route=opus_flags
 elif [ "$scope" = risk ] && [ "$parse_verdict" = CLEAR ]; then
-  if echo "$diff_text" | grep -E '^diff --git a/' | grep -qE "$risk_paths"; then
+  heads=$(grep -E '^diff --git ' <<<"$diff_text" || true)
+  if grep -E "$risk_paths" <<<"$heads" >/dev/null; then
     route=opus_full
   fi
 fi
