@@ -6,7 +6,7 @@ description: Adversarial pre-merge review gate for merge-on-clear — the author
 # hard-merge — DefendMerge
 
 This gate **is DefendMerge**, gate 2 of the Defend* family (see the `defend`
-skill, merge.md): Worker(qwen|bonsai) → git merge. The reviewer is `defend-attack` (local model first, Opus on flags, risk paths or 3 local failures).
+skill, merge.md): Worker(qwen|bonsai) → git merge. The reviewer is `defend-attack` (the local model scouts first, then Opus attacks every diff).
 
 Adversarial review before a merge-on-clear. **Assume the diff is wrong; try to prove it; merge only when you fail.**
 

@@ -7,7 +7,7 @@ complete: the gate is between Worker and `git merge`, run by `defend-attack`.
 
 - The reviewer is `defend-attack` (`~/.claude/skills/defend/bin/defend-attack`). Run it with `defend-attack <pr> -R owner/repo` or `defend-attack --diff <file>`.
 - Independence: `defend-attack` is a separate model call with no author context.
-- Opus scope is set by DEFEND_OPUS_SCOPE. The default is `risk`. The scopes are `risk`, `flags`, and `all`.
+- Opus scope is set by DEFEND_OPUS_SCOPE. The default is `all` (operator ruling 2026-11-09: every gate goes through Opus; the local model scouts ahead). The scopes are `all`, `risk`, and `flags`.
 - `risk` means Opus attacks the local model's flags, any diff touching DEFEND_RISK_PATHS, and after three local failures.
 - `flags` means Opus attacks only local flags or after three local failures.
 - `all` means Opus attacks every diff.

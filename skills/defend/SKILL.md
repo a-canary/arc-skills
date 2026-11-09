@@ -31,7 +31,7 @@ counsel (5-expert adversarial panel) only where the outcome is expensive AND har
 a whole sprint; a bad production deploy is public and affects real users;
 a wrong exit realizes a loss and abandons a live thesis. Merges are frequent
 and git-reversible,
-so a defend-attack call (local model first, Opus on flags or risk paths) is proportionate there. Counsel budget =
+so a defend-attack call (the local model scouts first, then Opus attacks every diff) is proportionate there. Counsel budget =
 junction count, bounded by construction.
 
 ## Rubric rule — floor, not fence
