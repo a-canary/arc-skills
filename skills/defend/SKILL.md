@@ -1,6 +1,6 @@
 ---
 name: defend
-description: The Defend* gate family — named critical junctions where an independent model attacks the artifact before it crosses the seam. DefendPlan (opus, wayfinder→build), DefendMerge (workhorse, worker→git merge = /hard-merge), DefendDeploy (opus, QA+visual passed→production deploy), DefendConviction (opus, conviction change touching a held position → apply). Use when a plan is about to be dispatched to build, a diff is about to merge, anything is about to go public, or a conviction change is about to move/exit a held position.
+description: The Defend* gate family — named critical junctions where an independent model attacks the artifact before it crosses the seam. DefendPlan (opus, wayfinder→build), DefendMerge (defend-attack: local model, then Opus; worker→git merge = /hard-merge), DefendDeploy (opus, QA+visual passed→production deploy), DefendConviction (opus, conviction change touching a held position → apply). Use when a plan is about to be dispatched to build, a diff is about to merge, anything is about to go public, or a conviction change is about to move/exit a held position.
 ---
 
 # defend — critical-junction gate family
