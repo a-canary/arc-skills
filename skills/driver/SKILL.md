@@ -101,7 +101,7 @@ When blocked:
 
 Use the [defend skill](../defend/SKILL.md) gate family at critical junctions:
 - **DefendPlan** (counsel): wayfinder result → build dispatch
-- **DefendMerge** (workhorse): worker diff → git merge (same as /hard-merge)
+- **DefendMerge** (`defend-attack`: local model scouts, then Opus): worker diff → git merge (same as /hard-merge)
 - **DefendDeploy** (counsel): qa-passed artifact → public deploy
 
 **Minimum capability:** Defense reviews must use the tier specified by the defend skill. If that model tier is unavailable via the configured provider, escalate to director for HITL — do not fall back to a weaker model.

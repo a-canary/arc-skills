@@ -1,6 +1,6 @@
 ---
 name: defend
-description: The Defend* gate family — named critical junctions where an independent model attacks the artifact before it crosses the seam. DefendPlan (opus, wayfinder→build), DefendMerge (workhorse, worker→git merge = /hard-merge), DefendDeploy (opus, QA+visual passed→production deploy), DefendConviction (opus, conviction change touching a held position → apply). Use when a plan is about to be dispatched to build, a diff is about to merge, anything is about to go public, or a conviction change is about to move/exit a held position.
+description: The Defend* gate family — named critical junctions where an independent model attacks the artifact before it crosses the seam. DefendPlan (opus, wayfinder→build), DefendMerge (defend-attack: local model, then Opus; worker→git merge = /hard-merge), DefendDeploy (opus, QA+visual passed→production deploy), DefendConviction (opus, conviction change touching a held position → apply). Use when a plan is about to be dispatched to build, a diff is about to merge, anything is about to go public, or a conviction change is about to move/exit a held position.
 ---
 
 # defend — critical-junction gate family
@@ -21,7 +21,7 @@ RELEASE  Driver(prototype) ⇄ QA.qwen ► User(webui review)
 | Gate | Seam | Tier | File |
 | --- | --- | --- | --- |
 | **DefendPlan** | wayfinder result → build dispatch | counsel (5-expert panel) | [plan.md](plan.md) |
-| **DefendMerge** | worker diff → git merge | workhorse, fresh context (= /hard-merge) | [merge.md](merge.md) |
+| **DefendMerge** | worker diff → git merge | defend-attack: local model, then Opus (= /hard-merge) | [merge.md](merge.md) |
 | **DefendDeploy** | QA+visual passed → production deploy | counsel (5-expert panel) | [deploy.md](deploy.md) |
 | **DefendConviction** | conviction change touching a held position → apply | counsel (5-expert panel) | [conviction.md](conviction.md) |
 
@@ -31,7 +31,7 @@ counsel (5-expert adversarial panel) only where the outcome is expensive AND har
 a whole sprint; a bad production deploy is public and affects real users;
 a wrong exit realizes a loss and abandons a live thesis. Merges are frequent
 and git-reversible,
-so fresh-context workhorse independence is proportionate there. Counsel budget =
+so a defend-attack call (the local model scouts first, then Opus attacks every diff) is proportionate there. Counsel budget =
 junction count, bounded by construction.
 
 ## Rubric rule — floor, not fence
