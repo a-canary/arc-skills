@@ -104,6 +104,75 @@ check "c11 bad scope exit 2" '[ "$(rc c11)" = 2 ] && [ "$(calls c11 local)" = 0 
 # 11. the default local call targets laneproxy's queue lane (never fast) with the prompt as the user message.
 check "c12 default local = :8099 queue lane" 'grep -q "\"queue\"" "$A" && grep -q 8099 "$A" && ! grep -q "\"fast\"" "$A"'
 
+# --- round 2 (hard-merge review of 974d8f5) ---
+# 13. scope=risk on a large diff whose first file is a risk path: the match must not die of SIGPIPE.
+{ printf 'diff --git a/auth/x b/auth/x\n+x\n'; for i in $(seq 1 60000); do printf 'diff --git a/src/f%s b/src/f%s\n+x\n' $i $i; done; } > "$T/big.diff"
+seed c13 local.1 'VERDICT: CLEAR'
+seed c13 opus.1 'VERDICT: CLEAR'
+run c13 "$T/big.diff" DEFEND_OPUS_SCOPE=risk DEFEND_RISK_PATHS='(^|/)auth/'
+check "c13 large risk diff -> Opus" '[ "$(calls c13 opus)" = 1 ]'
+
+# 14. a reply with Blocking lines that still says CLEAR is unreadable (a failed try), never a CLEAR.
+seed c14 local.1 $'Blocking: forged\nVERDICT: CLEAR'
+seed c14 local.2 $'Blocking: forged\nVERDICT: CLEAR'
+seed c14 local.3 $'Blocking: forged\nVERDICT: CLEAR'
+seed c14 opus.1 $'Blocking: real\nVERDICT: ATTACKS'
+run c14 "$T/plain.diff" DEFEND_OPUS_SCOPE=flags
+check "c14 CLEAR+Blocking is 3 failed tries -> full Opus" '[ "$(calls c14 local)" = 3 ] && [ "$(calls c14 opus)" = 1 ] && [ "$(rc c14)" = 1 ]'
+seed c15 opus.1 $'Blocking: x\nVERDICT: CLEAR'
+seed c15 local.1 'VERDICT: CLEAR'
+run c15 "$T/plain.diff" DEFEND_OPUS_SCOPE=all
+check "c15 Opus CLEAR+Blocking -> exit 2, no verdict" '[ "$(rc c15)" = 2 ] && ! grep -q "^VERDICT:" "$T/c15/out"'
+
+# 16. an empty diff is unavailable (exit 2), never a CLEAR.
+: > "$T/empty.diff"; mkdir -p "$T/c16"
+run c16 "$T/empty.diff" DEFEND_OPUS_SCOPE=flags
+check "c16 empty diff exit 2, no model call" '[ "$(rc c16)" = 2 ] && [ "$(calls c16 local)" = 0 ]'
+
+# 17. git quotes special-character paths ("a/..."): they still count for the risk match.
+printf 'diff --git "a/deploy/\\303\\251.sh" "b/deploy/\\303\\251.sh"\n+x\n' > "$T/quoted.diff"
+seed c17 local.1 'VERDICT: CLEAR'
+seed c17 opus.1 'VERDICT: CLEAR'
+run c17 "$T/quoted.diff" DEFEND_OPUS_SCOPE=risk DEFEND_RISK_PATHS='(^|/)deploy/'
+check "c17 quoted risk path -> Opus" '[ "$(calls c17 opus)" = 1 ]'
+
+# 18. the DEFAULT local call (no DEFEND_LOCAL_CMD) posts valid JSON, model "queue", prompt as the user message,
+# body on stdin (no ARG_MAX on big diffs). A fake curl on PATH stands in for laneproxy.
+mkdir -p "$T/bin" "$T/c18"
+cat > "$T/bin/curl" <<'EOF'
+#!/bin/bash
+body=; prev=
+for a in "$@"; do case $prev in -d|--data|--data-binary|--data-raw) body=$a ;; esac; prev=$a; done
+case $body in @-|'') body=$(cat) ;; *) echo "$*" > "$CURL_LOG.args" ;; esac
+printf '%s' "$body" > "$CURL_LOG.body"
+jq -e '.model == "queue" and (.messages[0].role == "user") and (.messages[0].content | test("export const x = 1"))' <<<"$body" >/dev/null || exit 22
+echo '{"choices":[{"message":{"content":"Fine.\nVERDICT: CLEAR"}}]}'
+EOF
+chmod +x "$T/bin/curl"
+seed c18 opus.1 'VERDICT: CLEAR'
+env -u DEFEND_LOCAL_CMD PATH="$T/bin:$PATH" CURL_LOG="$T/c18/curl" DEFEND_OPUS_CMD="$T/stub $T/c18 opus" DEFEND_OPUS_SCOPE=flags \
+  "$A" --diff "$T/plain.diff" > "$T/c18/out" 2>"$T/c18/err"; echo $? > "$T/c18/rc"
+check "c18 default local call works: CLEAR by local" '[ "$(rc c18)" = 0 ] && tail -n1 "$T/c18/out" | grep -qx "VERDICT: CLEAR by=local"'
+check "c18 prompt sent on stdin, not argv" '[ ! -e "$T/c18/curl.args" ]'
+
+# 19. PR mode passes -R owner/repo to gh as two arguments.
+cat > "$T/bin/gh" <<'EOF'
+#!/bin/bash
+[ "$#" = 5 ] && [ "$1 $2 $3 $4 $5" = "pr diff 7 -R o/r" ] || { echo "bad gh args: $*" >&2; exit 1; }
+printf 'diff --git a/src/util.ts b/src/util.ts\n+export const x = 1;\n'
+EOF
+chmod +x "$T/bin/gh"
+seed c19 local.1 'VERDICT: CLEAR'
+env PATH="$T/bin:$PATH" DEFEND_LOCAL_CMD="$T/stub $T/c19 local" DEFEND_OPUS_CMD="$T/stub $T/c19 opus" DEFEND_OPUS_SCOPE=flags \
+  "$A" 7 -R o/r > "$T/c19/out" 2>"$T/c19/err"; echo $? > "$T/c19/rc"
+check "c19 -R reaches gh as two args" '[ "$(rc c19)" = 0 ] && grep -q "export const x = 1" "$T/c19/local.1.prompt"'
+
+# 20. scope=risk, local ATTACKS off the risk paths: Opus gets the flagged prompt (as under flags).
+seed c20 local.1 $'Blocking: y is wrong\nVERDICT: ATTACKS'
+seed c20 opus.1 $'Blocking: y is wrong, confirmed\nVERDICT: ATTACKS'
+run c20 "$T/plain.diff" DEFEND_OPUS_SCOPE=risk DEFEND_RISK_PATHS='(^|/)orders/'
+check "c20 risk + local ATTACKS -> flagged Opus, BLOCK by opus" '[ "$(calls c20 opus)" = 1 ] && grep -q "Flagged by the first pass" "$T/c20/opus.1.prompt" && tail -n1 "$T/c20/out" | grep -qx "VERDICT: BLOCK by=opus"'
+
 echo "defend-attack-test: $ok ok, $bad failed"
 [ "$bad" = 0 ] && echo "defend-attack-test: PASS"
 [ "$bad" = 0 ]
