@@ -1,0 +1,109 @@
+#!/bin/bash
+# defend-attack with stubbed models (no network). Usage: defend-attack-test [path]
+A=${1:-$(dirname "$0")/defend-attack}
+A=$(cd "$(dirname "$A")" && pwd)/$(basename "$A")
+T=$(mktemp -d); trap 'command rm -r "$T"' EXIT
+[ -x "$A" ] || { echo "not executable: $A"; exit 1; }
+ok=0; bad=0
+check() { if eval "$2"; then ok=$((ok+1)); else bad=$((bad+1)); echo "FAIL: $1"; fi; }
+
+# A stub model: saves each prompt as <name>.<n>.prompt and prints reply file <name>.<n> (exit 1 if that file is missing).
+cat > "$T/stub" <<'EOF'
+#!/bin/bash
+d=$1; n=$2; c=$(( $(cat "$d/$n.count" 2>/dev/null || echo 0) + 1 )); echo $c > "$d/$n.count"
+cat > "$d/$n.$c.prompt"; [ -f "$d/$n.$c" ] || exit 1; cat "$d/$n.$c"
+EOF
+chmod +x "$T/stub"
+printf 'diff --git a/src/util.ts b/src/util.ts\n+export const x = 1;\n' > "$T/plain.diff"
+printf 'diff --git a/src/orders/place.ts b/src/orders/place.ts\n+placeOrder(sym, qty * 10);\n' > "$T/risk.diff"
+
+# run <case> <diff> [env...]: fresh stub dir $T/<case>, replies pre-seeded by the caller in $T/<case>/
+run() { local c=$1 d=$2; shift 2
+  env DEFEND_LOCAL_CMD="$T/stub $T/$c local" DEFEND_OPUS_CMD="$T/stub $T/$c opus" "$@" \
+    "$A" --diff "$d" > "$T/$c/out" 2>"$T/$c/err"; echo $? > "$T/$c/rc"; }
+seed() { mkdir -p "$T/$1"; printf '%s\n' "$3" > "$T/$1/$2"; }
+calls() { cat "$T/$1/$2.count" 2>/dev/null || echo 0; }
+rc() { cat "$T/$1/rc"; }
+
+# 1. scope=flags, local CLEAR: CLEAR by local, Opus never called.
+seed c1 local.1 $'Looks solid.\nVERDICT: CLEAR'
+run c1 "$T/plain.diff" DEFEND_OPUS_SCOPE=flags
+check "c1 exit 0" '[ "$(rc c1)" = 0 ]'
+check "c1 by=local" 'tail -n1 "$T/c1/out" | grep -qx "VERDICT: CLEAR by=local"'
+check "c1 no Opus" '[ "$(calls c1 opus)" = 0 ]'
+check "c1 diff in prompt, fenced as untrusted" 'grep -q "export const x = 1" "$T/c1/local.1.prompt" && grep -qi untrusted "$T/c1/local.1.prompt"'
+check "c1 lenses in prompt" 'grep -qi "trust boundar" "$T/c1/local.1.prompt" && grep -qi "edge case" "$T/c1/local.1.prompt"'
+
+# 2. local run failure, then unparseable reply, then CLEAR: 3 local calls, still CLEAR by local.
+seed c2 local.2 'I think it is fine'
+seed c2 local.3 'VERDICT: CLEAR'
+run c2 "$T/plain.diff" DEFEND_OPUS_SCOPE=flags
+check "c2 retried to 3 local calls" '[ "$(calls c2 local)" = 3 ]'
+check "c2 CLEAR by local" '[ "$(rc c2)" = 0 ] && tail -n1 "$T/c2/out" | grep -qx "VERDICT: CLEAR by=local"'
+check "c2 no Opus" '[ "$(calls c2 opus)" = 0 ]'
+
+# 3. ATTACKS with no Blocking line is unreadable too; 3 failures -> one full Opus attack.
+seed c3 local.1 'VERDICT: ATTACKS'
+seed c3 opus.1 'VERDICT: CLEAR'
+run c3 "$T/plain.diff" DEFEND_OPUS_SCOPE=flags
+check "c3 3 local tries" '[ "$(calls c3 local)" = 3 ]'
+check "c3 one Opus call" '[ "$(calls c3 opus)" = 1 ]'
+check "c3 full prompt, no flag section" '! grep -q "Flagged by the first pass" "$T/c3/opus.1.prompt" && grep -q "export const x = 1" "$T/c3/opus.1.prompt"'
+check "c3 CLEAR by opus" '[ "$(rc c3)" = 0 ] && tail -n1 "$T/c3/out" | grep -qx "VERDICT: CLEAR by=opus"'
+
+# 4. scope=flags, local ATTACKS: Opus sees only the flags; it confirms -> BLOCK, exit 1, blocking listed.
+seed c4 local.1 $'Blocking: qty scaled 10x without a cap\nVERDICT: ATTACKS'
+seed c4 opus.1 $'Blocking: qty scaled 10x without a cap, confirmed at place.ts:1\nVERDICT: ATTACKS'
+run c4 "$T/plain.diff" DEFEND_OPUS_SCOPE=flags
+check "c4 flagged prompt" 'grep -q "Flagged by the first pass" "$T/c4/opus.1.prompt" && grep -qF -- "- qty scaled 10x without a cap" "$T/c4/opus.1.prompt"'
+check "c4 exit 1" '[ "$(rc c4)" = 1 ]'
+check "c4 BLOCK by opus" 'tail -n1 "$T/c4/out" | grep -qx "VERDICT: BLOCK by=opus"'
+check "c4 blocking listed" 'grep -q "^Blocking: qty scaled 10x without a cap, confirmed" "$T/c4/out"'
+check "c4 one local call" '[ "$(calls c4 local)" = 1 ]'
+
+# 5. scope=flags, Opus refutes every flag -> CLEAR by opus, refuted flags noted.
+seed c5 local.1 $'Blocking: missing test\nVERDICT: ATTACKS'
+seed c5 opus.1 $'Note: refuted: missing test because util_test.ts:3 covers it\nVERDICT: CLEAR'
+run c5 "$T/plain.diff" DEFEND_OPUS_SCOPE=flags
+check "c5 CLEAR by opus" '[ "$(rc c5)" = 0 ] && tail -n1 "$T/c5/out" | grep -qx "VERDICT: CLEAR by=opus"'
+check "c5 refutation kept" 'grep -q "refuted: missing test" "$T/c5/out"'
+
+# 6. scope=all: Opus attacks every diff in full even after a local CLEAR, with the local notes as hints.
+seed c6 local.1 $'Note: x is unused\nVERDICT: CLEAR'
+seed c6 opus.1 'VERDICT: CLEAR'
+run c6 "$T/plain.diff" DEFEND_OPUS_SCOPE=all
+check "c6 Opus called" '[ "$(calls c6 opus)" = 1 ]'
+check "c6 full prompt" 'grep -q "export const x = 1" "$T/c6/opus.1.prompt" && ! grep -q "Flagged by the first pass" "$T/c6/opus.1.prompt"'
+check "c6 by=opus" 'tail -n1 "$T/c6/out" | grep -qx "VERDICT: CLEAR by=opus"'
+
+# 7. unset scope defaults to all (fail-safe until the operator picks one).
+seed c7 local.1 'VERDICT: CLEAR'
+seed c7 opus.1 'VERDICT: CLEAR'
+run c7 "$T/plain.diff"
+check "c7 default scope=all calls Opus" '[ "$(calls c7 opus)" = 1 ]'
+
+# 8. scope=risk: local CLEAR on a risk path still gets a full Opus attack; off the risk paths it does not.
+seed c8 local.1 'VERDICT: CLEAR'
+seed c8 opus.1 'VERDICT: CLEAR'
+run c8 "$T/risk.diff" DEFEND_OPUS_SCOPE=risk DEFEND_RISK_PATHS='(^|/)orders/'
+check "c8 risk path -> Opus" '[ "$(calls c8 opus)" = 1 ] && ! grep -q "Flagged by the first pass" "$T/c8/opus.1.prompt"'
+seed c9 local.1 'VERDICT: CLEAR'
+run c9 "$T/plain.diff" DEFEND_OPUS_SCOPE=risk DEFEND_RISK_PATHS='(^|/)orders/'
+check "c9 off risk path -> local only" '[ "$(calls c9 opus)" = 0 ] && [ "$(rc c9)" = 0 ]'
+
+# 9. Opus unavailable -> exit 2, no verdict line.
+seed c10 local.1 'VERDICT: CLEAR'
+run c10 "$T/plain.diff" DEFEND_OPUS_SCOPE=all
+check "c10 exit 2" '[ "$(rc c10)" = 2 ]'
+check "c10 no verdict" '! grep -q "^VERDICT:" "$T/c10/out"'
+
+# 10. bad scope value refuses (exit 2) before any model call.
+mkdir -p "$T/c11"; run c11 "$T/plain.diff" DEFEND_OPUS_SCOPE=sometimes
+check "c11 bad scope exit 2" '[ "$(rc c11)" = 2 ] && [ "$(calls c11 local)" = 0 ]'
+
+# 11. the default local call targets laneproxy's queue lane (never fast) with the prompt as the user message.
+check "c12 default local = :8099 queue lane" 'grep -q "\"queue\"" "$A" && grep -q 8099 "$A" && ! grep -q "\"fast\"" "$A"'
+
+echo "defend-attack-test: $ok ok, $bad failed"
+[ "$bad" = 0 ] && echo "defend-attack-test: PASS"
+[ "$bad" = 0 ]
