@@ -14,11 +14,6 @@ complete: the gate is between Worker and `git merge`, run by `defend-attack`.
 - Exit 2 means no verdict. Do not post a receipt. Do not merge. Fix the cause and re-run.
 - Known gap: the Opus leg runs a headless `claude -p` (DEFEND_OPUS_CMD) and needs a working headless login on the host. Until the GateKeeper (repos-v6m7) takes the Opus tier over, a failed Opus call exits 2 and blocks the merge.
 
-## Exemption
-
-A deploy merge (fast-forwarding a deploy or live branch) to a SHA that already carries a `defend/merge` success needs no new attack.
-Any commit not already cleared does.
-
 ## Mandatory lenses (align with hard-merge §1–4)
 
 - **Untested paths** — diff lines no test executes; baseline: did the tests
@@ -42,8 +37,10 @@ Any commit not already cleared does.
 The author posts the receipt after `defend-attack` prints CLEAR. Production surfaces keep
 hard-merge's second-disjoint-reviewer rule. Override = ledger note row.
 
-**Receipt (mechanical).** After verifying the verdict, the author posts it on the
-*reviewed* SHA: `~/.claude/skills/defend/bin/defend-receipt CLEAR|BLOCK <pr> <sha> -R owner/repo "<summary>"`
+**Receipt (mechanical).** Record the head before the attack:
+`sha=$(gh pr view <pr> -R owner/repo --json headRefOid -q .headRefOid)`. Never re-read it after
+the attack: a push in between must get no receipt. After verifying the verdict, the author
+posts it on that *reviewed* SHA: `~/.claude/skills/defend/bin/defend-receipt CLEAR|BLOCK <pr> <sha> -R owner/repo "<summary>"`
 (a `defend/merge` commit status). Enforcement is GitHub branch protection on `main`
 requiring the `defend/merge` status (enforce_admins on), so every merge path — `gh pr merge`,
 `gh api`, web UI, `git push` — needs head to carry a success; a push after review voids it.

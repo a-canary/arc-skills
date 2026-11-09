@@ -1,6 +1,6 @@
 ---
 name: ask-claude
-description: Thin cross-model Opus call — no tools, no context, one turn. stdin | claude -p --model opus --allowedTools "". Use for counsel escalation, or any second opinion, or any second opinion that must be disjoint from your model AND your context. Not for routine review — workhorse models do that.
+description: Thin cross-model Opus call — no tools, no context, one turn. stdin | claude -p --model opus --allowedTools "". Use for counsel escalation, or any second opinion, or any second opinion that must be disjoint from your model AND your context. Not for merge review — DefendMerge goes through defend-attack.
 ---
 
 # ask-claude — cross-model text-to-text transport
