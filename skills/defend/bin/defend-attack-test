@@ -220,6 +220,24 @@ env PATH="$T/bin:$PATH" DEFEND_LOCAL_CMD="$T/stub $T/c26 local" DEFEND_OPUS_CMD=
   "$A" -w > "$T/c26/out" 2>"$T/c26/err"; echo $? > "$T/c26/rc"
 check "c26 non-numeric PR refused with usage, gh not run" '[ "$(rc c26)" = 2 ] && ! grep -q "bad gh args" "$T/c26/err"'
 
+# 27. Default Opus call loads no tools: --tools "" drops built-ins, --strict-mcp-config and
+#     ENABLE_CLAUDEAI_MCP_SERVERS=false drop MCP and claude.ai connector tools (a connector's
+#     "make a doc first" instruction cost a second turn and error_max_turns, repos-u68g).
+mkdir -p "$T/c27/bin"
+cat > "$T/c27/bin/claude" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$@" > "$C27/argv"; echo "${ENABLE_CLAUDEAI_MCP_SERVERS-unset}" > "$C27/env"; cat > /dev/null
+echo 'VERDICT: CLEAR'
+EOF
+chmod +x "$T/c27/bin/claude"
+seed c27 local.1 'VERDICT: CLEAR'
+env -u DEFEND_OPUS_CMD -u ENABLE_CLAUDEAI_MCP_SERVERS PATH="$T/c27/bin:$PATH" C27="$T/c27" DEFEND_LOCAL_CMD="$T/stub $T/c27 local" DEFEND_OPUS_SCOPE=all \
+  "$A" --diff "$T/plain.diff" > "$T/c27/out" 2>"$T/c27/err"; echo $? > "$T/c27/rc"
+check "c27 default Opus call: CLEAR by opus" '[ "$(rc c27)" = 0 ] && tail -n1 "$T/c27/out" | grep -qx "VERDICT: CLEAR by=opus"'
+check "c27 default Opus call removes built-in tools" 'grep -qx -- "--tools" "$T/c27/argv" && [ "$(grep -A1 -x -- "--tools" "$T/c27/argv" | tail -n1)" = "" ]'
+check "c27 default Opus call loads no MCP config" 'grep -qx -- "--strict-mcp-config" "$T/c27/argv"'
+check "c27 default Opus call disables claude.ai connectors" '[ "$(cat "$T/c27/env")" = false ]'
+
 echo "defend-attack-test: $ok ok, $bad failed"
 [ "$bad" = 0 ] && echo "defend-attack-test: PASS"
 [ "$bad" = 0 ]
