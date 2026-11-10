@@ -115,8 +115,7 @@ Any agent or user may invoke counsel when facing a **very complex problem** or a
    **ask-claude** skill (no tools, no context, one turn):
 
    ```sh
-   : "${CLAUDE_CODE_OAUTH_TOKEN:=$(pass show api/claude/oauth-token)}"; export CLAUDE_CODE_OAUTH_TOKEN
-   cat /tmp/counsel-<slug>.md | claude -p --model opus --max-turns 1 --allowedTools "" \
+   cat /tmp/counsel-<slug>.md | ENABLE_CLAUDEAI_MCP_SERVERS=false claude -p --model opus --max-turns 1 --allowedTools "" --tools "" --strict-mcp-config \
      "You are a cross-model attacker. Attack this counsel report: find the load-bearing assumption the panel missed, the strongest counter to the recommended action, and any false consensus (experts agreeing because the frame was wrong, not because the answer is right). Respond in the ask-claude verdict contract: CLEAR | ATTACKS, ranked, each attack with what would satisfy it."
    ```
 

@@ -12,9 +12,7 @@ point — never drop `--allowedTools ""`.
 ## Invocation
 
 ```sh
-: "${CLAUDE_CODE_OAUTH_TOKEN:=$(pass show api/claude/oauth-token)}"
-export CLAUDE_CODE_OAUTH_TOKEN
-<artifact + attack frame> | claude -p --model opus --max-turns 1 --allowedTools ""
+<artifact + attack frame> | ENABLE_CLAUDEAI_MCP_SERVERS=false claude -p --model opus --max-turns 1 --allowedTools "" --tools "" --strict-mcp-config
 ```
 
 - **Input**: the full text of the artifact under attack, plus the attack frame
@@ -23,7 +21,8 @@ export CLAUDE_CODE_OAUTH_TOKEN
 - **Output**: a verdict in the contract shape below. If the shape is wrong,
   re-run once with "respond strictly in this shape: …". Never parse prose
   hopelessly — enforce the contract.
-- **Token**: pass `api/claude/oauth-token` (1-yr OAuth). Never print it.
+- **Auth**: the machine's normal `claude` login. The pass OAuth token is org-blocked; do not load it.
+- **No tools**: `--tools ""` drops built-ins only; `--strict-mcp-config` and `ENABLE_CLAUDEAI_MCP_SERVERS=false` drop MCP and claude.ai connector tools, which otherwise cost a second turn and fail `--max-turns 1`.
 - **Model tier per gate**: DefendPlan = opus, DefendMerge = `defend-attack` (see
   defend/merge.md — the local model scouts, then Opus attacks every diff), DefendDeploy = counsel panel.
 
