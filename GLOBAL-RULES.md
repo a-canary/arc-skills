@@ -34,6 +34,7 @@ At session start, load these files into the system prompt:
 
 ## Always-on universal rules
 
+- **Role names in transition (operator ruling 2026-11-11).** "Driver" is now **Lead**: the agent that leads one project. "Master" is now **Assistant**: the operator's own agent, and the default pi role. "Director" is unchanged. Rules, skills, pages and beads that still say Driver or Master mean Lead and Assistant; old names stay valid until those pieces are retired. New text uses the new names.
 - **Markdown: never wordwrap — one concept per line.**
 - **Prove before scaling.** Single manual run beats scheduled fleet.
 - **Never re-Read a file already read this session** unless edited since.
