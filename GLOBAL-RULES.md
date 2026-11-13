@@ -113,6 +113,11 @@ At session start, load these files into the system prompt:
   Before → After evidence of the work and its improvements: diff summary,
   test results, metric deltas, screenshots for UI. No receipts = gate cannot
   clear, regardless of how good the work sounds.
+- **GitHub actions clear on the defense gate (operator ruling 2026-11-13: "Gh actions fall under defense gate and review instance").**
+  Operator gloss, same ruling: "A CLEAR from the defense gate / an independent review instance is the approval for GitHub actions (merge etc.); no separate human card."
+  Covered actions: PR merge, PR open/close/edit, branch delete after merge. Not covered: visibility or access changes (human decision), releases, tag pushes, force push, `--admin`.
+  Independent = `defend-attack`, or a reviewer in another session or on another model, not spawned by the actor whose work it reviews.
+  The CLEAR must be at the current head, recorded with `defend-receipt`, and required checks must be green.
 - **Commit with identity from `~/vault/USER.md`** —
   `-c user.name -c user.email` per-commit.
 - **Never present fabricated data as real (UM-0500).** Unmeasured = not passed.
