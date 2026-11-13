@@ -55,7 +55,10 @@ At session start, load these files into the system prompt:
   Private repos: `--lane private` (local model queue); never 9router.
   Claude keeps planning and design (spec, RED test, acceptance), advice and decisions, and adversarial review of worker output.
   Claude edits code directly only for (a) a few-line fix where dispatch costs more, (b) a task a worker failed twice, or (c) an emergency; name it as `Claude-Edit: a|b|c` in the commit body.
-  Worker commits carry `Worker-Model:` (callers add it until worker-task does; workbench#103). A lane that can't take the work gets a filed gap and the other allowed lane, never a silent fallback to Claude.
+  Worker commits carry `Worker-Model:` (callers add it until worker-task does; workbench#103). A lane that can't take the work gets a filed gap and the other allowed lane; when no worker lane can take it, the fallback is a Sonnet worker at high effort, named in `Worker-Model:`, never a silent fallback.
+- **Model routing (operator ruling 2026-11-13).** Claude sessions run Opus at low effort.
+  Advisor and attacker steps (counsel, defend-attack, ask-claude) go to the local qwen first, then Fable at low effort; never Opus.
+  Research, code and tests go to pi-qwen workers when possible; fallback is Sonnet workers at high effort.
 - **Delegate in ≤10-minute subagents (operator 2026-10-31).** The main session orchestrates; each investigation or implementation chunk runs as a subagent timeboxed to ~10 minutes, for context management.
 - **Subagents return distilled findings only** — conclusion + refs, under
   ~500 tokens.
