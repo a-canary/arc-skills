@@ -162,7 +162,12 @@ check "c18 prompt sent on stdin, not argv" '[ ! -e "$T/c18/curl.args" ]'
 # 19. PR mode passes -R owner/repo to gh as two arguments.
 cat > "$T/bin/gh" <<'EOF'
 #!/bin/bash
-[ "$#" = 5 ] && [ "$1 $2 $3 $4 $5" = "pr diff 7 -R o/r" ] || { echo "bad gh args: $*" >&2; exit 1; }
+# The diff is fetched by sha (compare base...head), never `gh pr diff`: right after a push that
+# endpoint can still serve the previous head's diff (repos-x2i2).
+if [ "$1 $2 $3 $4 $5" = "pr view 7 -R o/r" ]; then
+  echo '{"headRefOid":"1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","baseRefOid":"0000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","url":"https://github.com/o/r/pull/7"}'; exit 0
+fi
+[ "$1 $2" = "api repos/o/r/compare/0000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb...1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ] || { echo "bad gh args: $*" >&2; exit 1; }
 printf 'diff --git a/src/util.ts b/src/util.ts\n+export const x = 1;\n'
 EOF
 chmod +x "$T/bin/gh"
@@ -170,6 +175,7 @@ seed c19 local.1 'VERDICT: CLEAR'
 env PATH="$T/bin:$PATH" DEFEND_LOCAL_CMD="$T/stub $T/c19 local" DEFEND_OPUS_CMD="$T/stub $T/c19 opus" DEFEND_OPUS_SCOPE=flags \
   "$A" 7 -R o/r > "$T/c19/out" 2>"$T/c19/err"; echo $? > "$T/c19/rc"
 check "c19 -R reaches gh as two args" '[ "$(rc c19)" = 0 ] && grep -q "export const x = 1" "$T/c19/local.1.prompt"'
+check "c19 diff pinned to the head sha, which is printed" 'grep -qx "Reviewed: 1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "$T/c19/out" && tail -n1 "$T/c19/out" | grep -qx "VERDICT: CLEAR by=local"'
 
 # 20. scope=risk, local ATTACKS off the risk paths: Opus gets the flagged prompt (as under flags).
 seed c20 local.1 $'Blocking: y is wrong\nVERDICT: ATTACKS'
