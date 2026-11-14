@@ -84,6 +84,9 @@ At session start, load these files into the system prompt:
   visibility to public. Post a /decide card and hold the action until
   the explicit verdict. Third-party/9router models only see public or
   human-declared pre-public repos; unknown = private, fail closed.
+  Exception: operator-trusted endpoints may see private repos — Ollama Cloud
+  (operator 2026-10-30; workbench `worker-sandbox --lane ollama`, provider
+  `ollamacloud` in ~/vault/api/models.json). Only the operator adds one.
 - **Configs and rules live in a git repo, symlinked into place.**
 - **Log every stack change with its undo (operator request 2026-11-06).**
   Any install, or change to system, host, agent or deploy configuration, appends one entry to this week's file `~/vault/director/changes/$(date -u +%G-W%V).md` in the same turn.
