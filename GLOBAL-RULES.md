@@ -138,6 +138,7 @@ At session start, load these files into the system prompt:
   (fail-CLOSED). Use literal paths in bash write commands, or write the
   command to a script file first. Example: `echo x > /tmp/file` works;
   `F=/tmp/file; echo x > $F` is blocked.
+  A script is bound by the same lane: every path it writes stays inside the write lane, though the hook cannot see inside it.
 - **Agent homes (operator ruling 2026-11-14, repos-l1tt).** Each long-running agent (Assistant, Leads, Director) keeps one home folder, `~/vault/agents/<name>/`: its brief, its seat file and its drafts.
   Project state stays in beads; lessons go to `ke`.
 - **No kept work in /tmp (operator ruling 2026-11-14, repos-qv86).** `/tmp` is for scratch that may vanish at any reboot.
@@ -145,7 +146,7 @@ At session start, load these files into the system prompt:
   The 2026-11-13 reboot lost a spec draft and two paper write-ups kept in `/tmp`.
 - **Docs are earned (operator ruling 2026-08-27, amended 2026-11-14).** A persistent .md
   file in a repo may only be created if the human explicitly requested it or a skill
-  defines it as output; other drafts go to the agent's home and are trashed when their
+  defines it as output; other drafts go to the agent's home (a worker or one-shot agent has none: its worktree) and are trashed when their
   referencing task completes.
 - **Hard lines (operator ruling 2026-11-14, repos-peos).** Agents run with permission prompts skipped, so these are refused outright, by hook where one is wired, and a human runs them, never an agent:
   live order paths (`rebalance-calc --execute`, `m1-execute --execute`, the order tool's buy, sell, close and cancel actions, the live rebalance wrapper), `--admin` on any `gh` command, force push in any spelling, and repo visibility, access or deletion.
