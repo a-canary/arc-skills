@@ -8,7 +8,7 @@
 # based on DEFEND_OPUS_SCOPE (all|flags|risk, default all). A local run or
 # parse failure is retried; a local failure never counts as CLEAR.
 #
-# Output: Blocking/Note lines, then VERDICT: CLEAR by=<local|opus> (exit 0)
+# Output: in PR mode `Reviewed: <head sha>` first; Blocking/Note lines, then VERDICT: CLEAR by=<local|opus> (exit 0)
 # or VERDICT: BLOCK by=<local|opus> (exit 1). exit 2 = usage or Opus failure.
 set -euo pipefail
 die() { echo "defend-attack: $*" >&2; exit 2; }
@@ -70,7 +70,13 @@ if [ -n "$diff_file" ]; then
   [ -r "$diff_file" ] || die "cannot read diff file: $diff_file"
   diff_text=$(cat "$diff_file")
 else
-  diff_text=$(gh pr diff "$pr" ${repo:+-R "$repo"}) || die "cannot get PR diff"
+  # Pin the diff to the head sha: `gh pr diff` can serve the previous head's diff right after a push.
+  info=$(gh pr view "$pr" ${repo:+-R "$repo"} --json headRefOid,baseRefOid,url) || die "cannot resolve PR $pr"
+  head_sha=$(jq -r '.headRefOid' <<<"$info"); base_sha=$(jq -r '.baseRefOid' <<<"$info")
+  slug=$(jq -r '.url' <<<"$info"); slug=${slug#https://github.com/}; slug=${slug%/pull/*}
+  [[ $head_sha =~ ^[0-9a-f]{40}$ && $base_sha =~ ^[0-9a-f]{40}$ ]] || die "cannot resolve PR $pr head and base"
+  diff_text=$(gh api "repos/$slug/compare/$base_sha...$head_sha" -H 'Accept: application/vnd.github.diff') || die "cannot get PR diff"
+  echo "Reviewed: $head_sha"
 fi
 
 if [[ "$diff_text" =~ ^[[:space:]]*$ ]]; then
