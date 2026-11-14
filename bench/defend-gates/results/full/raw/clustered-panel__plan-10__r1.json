@@ -1,0 +1,131 @@
+{
+ "approach": "clustered-panel",
+ "case": "plan-10",
+ "rep": 1,
+ "wallMs": 388580,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "Processor deletions run after the DB transaction commits, but the inputs they need (Amplitude, Customer.io, Zendesk and Stripe identifiers, and the Sign in with Apple refresh token) are not stated to be captured before the transaction deletes them. Nothing durable records pending processor work, so a crash between commit and the calls, or a failed call, can leave processor copies of user data with no retry path. This breaks the Art. 17 commitment.",
+   "evidence": "each account is one DB transaction across `users` and the 23 tables that reference it. ... After the DB transaction commits: ... Sign in with Apple users: `POST /auth/revoke` for their refresh token. ... Table `deleted_accounts` keeps only purged user IDs and dates (no PII)"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The 'no other system holds user-level data' claim is contradicted by the plan's own text. Application logs and Sentry hold data for 30 days and are not purged, and Sentry, the transactional email provider and export storage are not in the processor list. The claim rests on an unlisted inventory.",
+   "evidence": "\"No other system holds user-level data beyond the processors below (data inventory DPI-2026, reviewed Sep 2026).\" / \"Application logs and Sentry error reports have 30-day retention\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "The 'worst case (14 + 7 days) stays inside the one-month Art. 17 deadline' claim ignores log retention (up to 30 days after creation) and backup roll-off (35 days). Processor retries that exhaust 7 days go to a single privacy-lead ticket with no owner SLA, no auto-escalation and no deadline, and the 21-day success metric is measured by a dashboard that depends on those same tickets.",
+   "evidence": "\"Worst case (14 + 7 days) stays inside the one-month Art. 17 deadline.\" / \"anything still failing opens a `purge-failed` ticket for the privacy lead.\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Personal data persists in Postgres snapshots for up to 35 days, beyond the one-month deadline, and the plan does not document a beyond-use position (snapshots are not edited and are not expired early). The restore runbook is the only stated control.",
+   "evidence": "\"Postgres snapshots roll off after 35 days and are not edited.\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Store subscriptions cannot be cancelled by Parlo, and the warning depends on detecting an active store subscription, but detection is not specified for iOS or Android. If detection fails, users keep being billed after their account is purged, with no in-app cancellation and no stated refund handling for store billing.",
+   "evidence": "\"If the user has an active store subscription, screen 1 says 'Deleting your account does not cancel your App Store subscription'\" ... (ABSENT: how active store subscriptions are detected)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Subscription state at the end of the grace period is unspecified. If the period ends within the 14 days, the subscription has already lapsed when the user restores, which contradicts 'restores the account exactly as it was'. The plan also does not say whether past_due or Stripe-retrying subscriptions count as 'still-active' at purge, or whether a user can be charged during grace.",
+   "evidence": "\"At purge, any still-active subscription is cancelled.\" / \"'Keep my account' restores the account exactly as it was\""
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "On the unauthenticated web path, control of the mailbox alone starts the deletion and also controls the single-use cancel link. A forwarded or compromised inbox therefore lets an attacker start and then block cancellation. This contradicts the abuse claim that re-auth protects against stolen access.",
+   "evidence": "\"we email a confirmation link to the account address, and clicking it counts as re-auth.\" / \"A stolen session alone cannot delete an account: re-auth is required.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The purge is irreversible and runs nightly, and the job ignores the feature flag. There is no pause or kill switch for the purge job if a registry or code defect is found. The dry-run gate is a manual privacy-lead check with no written criteria or sign-off record.",
+   "evidence": "Requests already confirmed are still purged on schedule (the purge job ignores the flag) / \"the privacy lead checks the account list and per-table row counts before it runs live.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Observability is a dashboard only. There are no alerts for job failure, missed nightly runs, or anomalous per-run row counts, so a registry error that deletes or nullifies too many rows would go unnoticed.",
+   "evidence": "\"A dashboard shows pending, completed and failed per processor.\" (ABSENT: alerting on AccountPurgeJob failures, missed runs, or per-run row-count anomalies)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The export promise has no mechanism. Nothing ties the export job to the day-14 purge, and export generation time is unbounded, so an export requested late in grace can be built from purged tables or never delivered.",
+   "evidence": "\"An export requested here is still delivered after you confirm deletion.\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "The 'new tables cannot be forgotten' claim is overstated. The CI guard matches only column names user_id or *_user_id in db/schema.rb and misses polymorphic, JSON, differently named or email-keyed references, and user files or caches in object storage or CDNs.",
+   "evidence": "\"A CI test fails if any such column in `db/schema.rb` is missing from the registry, so new tables cannot be forgotten.\" (ABSENT: object storage, CDN, caches, non-user_id references)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The restore guarantee is scoped only to Postgres. The runbook re-applies 'purges' from deleted_accounts, but the plan does not say whether that includes Amplitude, Customer.io, Zendesk or Stripe, so a restore could re-sync a deleted profile to a processor while the 'cannot resurrect' claim holds.",
+   "evidence": "\"the restore runbook re-applies purges from it after any restore, so a restore cannot resurrect a deleted account.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The single-use, signed email cancel link has no stated behaviour for a second click, for a click after restore or re-deletion, or for how the purge date is reissued when a user logs in, cancels and deletes again.",
+   "evidence": "\"The link is single-use, signed, valid until the purge.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The nightly purge runs one transaction per account across 23 tables with no stated batch limit, lock or statement timeout, index requirement, or catch-up behaviour after a missed run.",
+   "evidence": "each account is one DB transaction across `users` and the 23 tables that reference it. (ABSENT: batch limits, lock timeouts, index requirements, backlog catch-up)"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The per-email limit of 3 per day and per-IP limit of 5 per hour do not stop a third party from repeatedly sending confirmation emails to a victim's inbox, and no global or per-account cap is stated.",
+   "evidence": "\"Web requests are rate-limited to 5/hour per IP and 3/day per email address.\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "The plan states a 16+ sign-up minimum but has no step for identifying or handling under-16 accounts that exist through misstatement, and the deletion and export flows are not checked against that case.",
+   "evidence": "\"Sign-up requires users to be 16 or older.\" (ABSENT: how under-16 accounts are identified or handled)"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The restore-runbook drill has no pass criterion, and the test list omits concurrency between purge, login and 'Keep my account' on the same account.",
+   "evidence": "\"restore-runbook drill on a staging snapshot.\""
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "Accessibility is claimed through tool names only. There are no criteria for the 14-day countdown, the deactivated state, the scheduled-deletion date announcement or the restore path.",
+   "evidence": "Accessibility: native components only; the destructive button has a full-text label; flow tested with VoiceOver, TalkBack, keyboard-only web and Dynamic Type XXL / 200% font scale."
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The 1,140 requests/month, 6-day median and 9-minute handling figures are the basis for the build and the success target, but the plan shows no query, export or dashboard for them beyond the Zendesk tag name.",
+   "evidence": "\"Zendesk tag `delete-account`\" (ABSENT: query or dashboard reference for the 1,140 figure and 6-day median)"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 24878,
+  "tokOut": 26735,
+  "usd": 0.0183421,
+  "critMs": 102524
+ }
+}

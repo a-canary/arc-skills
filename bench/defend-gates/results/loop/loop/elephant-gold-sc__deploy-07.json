@@ -1,0 +1,156 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "deploy-07",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "Zero-config auto-discovery executes any package in node_modules (including transitive, typosquatted, or compromised ones) carrying the `tasq-plugin` keyword on every invocation, including pre-commit hooks and CI. The explicit `plugins` array was the trust boundary and is removed, with no allowlist, opt-in, trust prompt, or kill switch.",
+     "evidence": "\"Any installed package with the `tasq-plugin` keyword is picked up automatically. No more `plugins: [...]` array in `tasq.config.ts`.\" / ABSENT: opt-out, allowlist, or trust prompt for auto-loaded plugins"
+    },
+    {
+     "lens": "performance",
+     "severity": "major",
+     "claim": "The artifact's own benchmark contradicts its claim that discovery is negligible. Discovery adds roughly 1.8-2 s to every invocation: `--version` goes 0.11→1.94 s, lint-staged 0.38→2.31 s, cache-hit build 0.21→2.02 s. This makes the 'under 50 ms' cache headline misleading and regresses pre-commit hooks about 6x.",
+     "evidence": "\"Discovery is a fixed per-invocation cost and becomes negligible relative to real build work\" vs \"`tasq run build` (cache hit) | 0.21 s | 2.02 s\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Discovery is an unbounded recursive glob over all nested node_modules, reading and parsing every package.json on every invocation. It has no cap, memoization, or cache keyed on lockfile or mtime, and was measured on only one 2,430-package repo, so cost grows with install size on hook, CI, and watch-restart paths.",
+     "evidence": "glob(\"**/node_modules/**/package.json\", { cwd: root }) / ABSENT: any cap, memoization, or cache for discoverPlugins results"
+    },
+    {
+     "lens": "failure modes",
+     "severity": "major",
+     "claim": "Discovery calls JSON.parse on every package.json with no error handling, and plugins load before argument parsing with no isolation. One malformed manifest or a throwing or hanging plugin aborts every tasq command, including hooks and CI, with no skip path described.",
+     "evidence": "const pkg = JSON.parse(await readFile(join(root, pkgJson), \"utf8\"));"
+    },
+    {
+     "lens": "rollback",
+     "severity": "major",
+     "claim": "Rollback only re-points the dist-tag. `tasq-migrate` rewrites configs and `require` calls in place, removes the plugins array, and has no described backup, dry-run, or reverse migration. Nothing shows 2.9.4 can read migrated files, and npm versions are immutable so 3.0.0 installs and pins remain. The 2.9.4 and `latest-2` tag handling is also unclear.",
+     "evidence": "`npx tasq-migrate` rewrites config files and `require` calls; ... re-point `latest` to `2.9.4` ... ABSENT: reverse migration or 2.x compatibility of migrated config files"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The `plugins` array is silently ignored, and Yarn PnP projects have no node_modules for the glob to walk. Plugins can therefore silently disappear with no warning or error. Discovery correctness for PnP, pnpm symlinks, and nested workspaces is not tested, and there is no deduplication of repeated nested copies.",
+     "evidence": "\"`plugins` array in config ignored | Auto-discovery replaces it; `tasq-migrate` removes the array and installs nothing new\" / \"2 manual (Yarn PnP projects, documented)\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The headline cache claim ('under 50 ms of task time') has no measurement in the artifact, and the only reported cache-hit figure is 2.02 s. The claim that overall build time improves is not supported, since the 48.7→46.1 s cold-build difference is unattributed.",
+     "evidence": "\"completes in under 50 ms of task time\" vs ABSENT: task-time measurement in the Performance table"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 56338,
+    "tokOut": 19155,
+    "usd": 0.09632489999999999,
+    "critMs": 29760
+   },
+   "wallMs": 82209
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The `scanPlugins` code in the proposal does not implement what the prose promises. The prose says nested `node_modules` deeper than 3 levels are skipped, but the glob uses `deep: 8` with no 3-level filter. The prose also describes a Yarn PnP API path that reports when it is unavailable, and a lockfile-keyed `.tasq/plugin-scan.json` cache. The code has neither, and returns an empty list silently when no `node_modules` exists.",
+     "evidence": "Prose: \"the scan skips `node_modules` nested more than 3 levels deep\" and \"if that is unavailable it says so instead of reporting zero results\". Code: `glob(\"**/node_modules/**/package.json\", { cwd: root, deep: 8 })` with no PnP branch or cache."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The 5 s plugin timeout cannot interrupt a plugin that blocks the event loop synchronously in-process. The artifact gives no isolation mechanism (worker, child process) behind the guarantee, which matters for pre-commit hooks. Gate 2 includes a hanging-plugin test, which partly mitigates this.",
+     "evidence": "\"Plugins load with a 5 s timeout, and a plugin that throws or times out produces a warning (error under `--strict`), not a crash.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The performance gate covers only `--version` and `lint-staged`. The `tasq run` cache-hit path, which the docs recommend for CI and editors, showed the largest relative regression in rc.2 (about 10x) and has no pass threshold. Smaller and larger installs also have no stated thresholds.",
+     "evidence": "\"Publish only if `--version` and `lint-staged` are within 25% of 2.9.4\"; \"`tasq run build` (cache hit) | 0.21 s | 2.02 s\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The blog title \"plugins for everyone\" can read as zero-config plugin use, against the opt-in trust model the artifact requires the post to describe. The title is not amended, and the post goes live irreversibly at publish.",
+     "evidence": "Blog: \"tasq 3: plugins for everyone\" vs. \"must describe plugins as opt-in/explicitly trusted, not zero-config\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "`tasq-migrate` is fetched via `npx` and rewrites project files, but the supply-chain section covers only the tasq package. `--revert` restores from an in-repo backup directory with no described validation of backup paths or contents.",
+     "evidence": "\"npx tasq-migrate --revert restores them\"; ABSENT: provenance or pinning statement for tasq-migrate, and validation of `.tasq-migrate-backup/` contents"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Rollback depends on gate 3 (2.9.4 reading migrated configs, byte-exact revert). This is unverified, but the gate is explicit and the plan commits to amending the rollback if it fails. The plan does not cover users who edited their config after migrating.",
+     "evidence": "\"If 2.9.4 cannot read migrated configs, this is documented prominently and the rollback plan below is amended.\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 80686,
+    "tokOut": 41898,
+    "usd": 0.1255088,
+    "critMs": 39868
+   },
+   "wallMs": 110282
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "A 5 s plugin load timeout cannot interrupt a plugin that loops synchronously at module top level, so a hanging plugin could still hang tasq. Gate 2's hanging-plugin test should cover the synchronous case, or loading should move to a worker or child process.",
+     "evidence": "Plugins load with a 5 s timeout, and a plugin that throws or times out produces a warning (error under `--strict`), not a crash."
+    },
+    {
+     "lens": "copy",
+     "severity": "minor",
+     "claim": "The blog title 'plugins for everyone' reads as zero-config, which contradicts the explicit-trust model. The artifact already requires the post body to say plugins are opt-in, so the title should be aligned.",
+     "evidence": "Blog: \"tasq 3: plugins for everyone\" vs. \"The blog post must describe plugins as opt-in/explicitly trusted, not zero-config.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The scan is on demand only, but its cache is keyed on the lockfile hash alone and can return stale results when node_modules changes without a lockfile change. The depth filter also runs after the glob, so it does not bound traversal cost.",
+     "evidence": "Results are cached in `.tasq/plugin-scan.json`, keyed on the lockfile hash; `if (nodeModulesDepth(pkgJson) > MAX_NODE_MODULES_DEPTH) continue;`"
+    },
+    {
+     "lens": "copy",
+     "severity": "minor",
+     "claim": "The lint-staged pretty-reporter change has no migration guidance for scripts that parse the pretty output.",
+     "evidence": "| `tasq lint-staged` output format | JSON reporter unchanged; pretty reporter shows grouped output |"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 92108,
+    "tokOut": 38258,
+    "usd": 0.1244817,
+    "critMs": 36936
+   },
+   "wallMs": 105870
+  }
+ ],
+ "artifact": "# Release proposal: tasq 3.0.0 (npm)\n\nMaintainers: core team · Publish: Thu 2026-11-12 (gated on the release gates below) · Tracking: #1840 · Blog: \"tasq 3: plugins for everyone\"\n\n## Highlights\n\n- **Easier plugin discovery, with explicit trust.** `tasq plugins scan` finds installed packages with the `tasq-plugin` keyword and suggests them. A plugin is loaded only if it is listed in the `plugins` array in `tasq.config.ts` (or added with `tasq plugins add <name>`). Nothing is executed just because it sits in `node_modules`.\n- **Task graph caching** keyed on input file hashes. The cache-hit speedup in task time has not yet been measured (see Performance), so this proposal makes no numeric claim for it.\n- **ESM-only**, Node 20+.\n\n## Breaking changes\n\n| Change | Migration |\n|---|---|\n| Node 18 support dropped | Node 18 is EOL since April 2025; `engines` field enforces `>=20` |\n| CommonJS `require('tasq')` removed | `npx tasq-migrate` rewrites config files and `require` calls. It supports `--dry-run`, writes backups to `.tasq-migrate-backup/`, and `npx tasq-migrate --revert` restores them. Tested on 40 public repos: 38 fully automatic, 2 needed manual edits (documented) |\n| `tasq lint-staged` output format | JSON reporter unchanged; pretty reporter shows grouped output |\n\nThe `plugins` array is **not** removed and is still honored. `tasq-migrate` leaves it intact. If a listed plugin cannot be resolved (for example it is not installed, or the project uses Yarn PnP and resolution fails), tasq prints a warning naming the plugin rather than silently skipping it. Under `--strict` (recommended for CI) this is an error.\n\n## How plugin loading works\n\n- **Default path (every invocation):** tasq resolves only the plugins named in config, using Node module resolution from the project root (`require.resolve` semantics, which also works under pnpm symlinks and Yarn PnP). No directory walk happens.\n- **Scan (on demand only):** `tasq plugins scan` walks the install tree, de-duplicates by `name@version` (nested copies are reported once), and prints candidates. It never loads or executes them. Results are cached in `.tasq/plugin-scan.json`, keyed on the lockfile hash, and the scan skips `node_modules` nested more than 3 levels deep. Under Yarn PnP, where there is no `node_modules` to walk, the scan uses the PnP API; if that is unavailable it says so instead of reporting zero results. If neither a `node_modules` tree nor PnP is found, it warns rather than silently returning an empty list.\n- **Kill switch:** `--no-plugins` or `TASQ_NO_PLUGINS=1` skips all plugin loading, for debugging and for recovering a broken hook.\n- **Failure isolation:** built-in commands are parsed first and never depend on plugin loading. Plugins load with a 5 s timeout, and a plugin that throws or times out produces a warning (error under `--strict`), not a crash. Plugin subcommands are registered from names declared in config, so argument parsing stays independent of plugin code.\n\n```ts\n// src/plugins/scan.ts  (used only by `tasq plugins scan`)\nconst MAX_NODE_MODULES_DEPTH = 3;\n\nfunction nodeModulesDepth(relPath: string): number {\n  return relPath.split(/[\\\\/]/).filter((seg) => seg === \"node_modules\").length;\n}\n\nexport async function scanPlugins(root: string): Promise<PluginRef[]> {\n  // Cache keyed on lockfile hash\n  const lockHash = await hashLockfile(root);\n  const cachePath = join(root, \".tasq\", \"plugin-scan.json\");\n  const cached = await readScanCache(cachePath, lockHash);\n  if (cached) return cached;\n\n  const found = new Map<string, PluginRef>();\n  const consider = (pkg: any, dir: string) => {\n    if (pkg.keywords?.includes(\"tasq-plugin\")) {\n      found.set(`${pkg.name}@${pkg.version}`, { name: pkg.name, dir });\n    }\n  };\n\n  if (isYarnPnP(root)) {\n    // No node_modules to walk: use the PnP API, and say so if it is unavailable\n    const pnp = loadPnpApi(root);\n    if (!pnp) {\n      throw new Error(\n        \"Yarn PnP detected but the PnP API is unavailable; cannot scan (not reporting zero results)\"\n      );\n    }\n    for (const { pkg, dir } of await listPnpManifests(pnp)) consider(pkg, dir);\n  } else {\n    if (!(await exists(join(root, \"node_modules\")))) {\n      warn(\"no node_modules directory found and Yarn PnP not detected; nothing to scan\");\n      return [];\n    }\n    for await (const pkgJson of glob(\"**/node_modules/**/package.json\", { cwd: root, deep: 8 })) {\n      // Skip node_modules nested more than 3 levels deep\n      if (nodeModulesDepth(pkgJson) > MAX_NODE_MODULES_DEPTH) continue;\n      try {\n        const pkg = JSON.parse(await readFile(join(root, pkgJson), \"utf8\"));\n        consider(pkg, dirname(pkgJson));\n      } catch (err) {\n        warn(`skipping unreadable manifest ${pkgJson}: ${(err as Error).message}`);\n      }\n    }\n  }\n\n  const result = [...found.values()];\n  await writeScanCache(cachePath, lockHash, result);\n  return result;\n}\n```\n\n## Performance (reference monorepo: 61 workspaces, 2,430 installed packages, M2 MacBook Air, warm disk cache)\n\nNumbers below are from 3.0.0-rc.2, which still ran an unbounded glob on every invocation. They are a regression and are **not** representative of the design above.\n\n| Command | 2.9.4 | 3.0.0-rc.2 |\n|---|---|---|\n| `tasq --version` | 0.11 s | 1.94 s |\n| `tasq lint-staged` (3 staged files) | 0.38 s | 2.31 s |\n| `tasq run build` (cache hit) | 0.21 s | 2.02 s |\n| `tasq run build` (cold, full build) | 48.7 s | 46.1 s |\n\n- The rc.2 glob added roughly 1.8–2 s per invocation, about 6x on `lint-staged` pre-commit hooks. That is why the glob is removed from the default path.\n- **Release gate:** re-run this table on the release candidate with config-based resolution, on the reference monorepo and on at least one smaller and one larger install. Publish only if `--version` and `lint-staged` are within 25% of 2.9.4 (≈0.14 s and ≈0.48 s on the reference monorepo). Final numbers will replace this table before publish.\n- The cache-hit \"task time\" has not been measured. The 48.7→46.1 s cold-build difference is unattributed and may be noise. This proposal does not claim an overall build-time improvement. Cache benefit will be reported only once measured and attributed.\n\n## Supply chain and licensing\n\n- Published from GitHub Actions with npm provenance (`--provenance`); 2FA required for all maintainers.\n- No `postinstall` scripts in tasq or its dependencies.\n- New runtime deps: `fast-glob` (MIT), `semver` (ISC). License scan: no copyleft dependencies.\n- Plugin code runs only when the project owner has listed it explicitly, so an unlisted, transitive, or typosquatted package carrying the keyword is never executed.\n\n## QA summary\n\n- Unit + integration: 1,912 tests pass on Linux/macOS/Windows, Node 20 and 22 (run against rc.2; to be re-run on the release candidate).\n- `tasq-migrate` on 40 public repos (list in #1840): 38 automatic, 2 manual (Yarn PnP projects, documented).\n- Smoke test of top 15 community plugins: all load and register subcommands under rc.2 auto-discovery. To be re-run with explicit config.\n\n**Release gates (not yet done; each must pass before publish):**\n1. Plugin resolution and `plugins scan` tests on npm, pnpm (symlinked), Yarn PnP, and nested workspaces, including duplicate nested copies. These also cover the 3-level `node_modules` depth limit, the lockfile-keyed cache (hit and invalidation), and the PnP-unavailable and no-`node_modules` messages.\n2. Failure-mode tests: malformed `package.json`, throwing plugin, hanging plugin, unresolvable listed plugin, `--no-plugins`, `--strict`.\n3. Config compatibility: verify that 2.9.4 can read configs produced by `tasq-migrate` (including the ESM config form), and that `--revert` restores originals byte for byte on the 40-repo set. If 2.9.4 cannot read migrated configs, this is documented prominently and the rollback plan below is amended.\n4. Performance gate above.\n\n## Release and support plan\n\n1. Publish `3.0.0` under the `next` dist-tag. `latest` stays on `2.9.4` until promotion. Promote to `latest` after 7 days with no P1 issues.\n2. At promotion, `2.9.4` (or the newest 2.x) is tagged `latest-2`. `2.x` receives security fixes until 2027-11-12. Announced in the README and blog post.\n3. Rollback: if a P1 is found after promotion, re-point `latest` to `2.9.4` (`npm dist-tag add tasq@2.9.4 latest`), run `npm deprecate tasq@3.0.0 \"<reason>; use 3.0.1 or 2.9.4\"` (published versions are immutable, so existing installs and pins are not removed), and publish a fix as 3.0.1. Users who already migrated run `npx tasq-migrate --revert` using the backups; the migration guide documents this.\n4. Blog post and changelog go live at publish; Discord announcement links the migration guide. The blog post must describe plugins as opt-in/explicitly trusted, not zero-config.",
+ "fixerUsage": {
+  "calls": 2,
+  "tokIn": 7446,
+  "tokOut": 8373,
+  "usd": 0.113506,
+  "critMs": 51016
+ },
+ "status": "cleared"
+}

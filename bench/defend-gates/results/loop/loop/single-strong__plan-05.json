@@ -1,0 +1,107 @@
+{
+ "approach": "single-strong",
+ "case": "plan-05",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "The plan targets the #2 churn reason (missing ingredients, 22%) but the biggest reason (#1, 38%) is too much setup/typing. The design adds heavy setup: a 15-item pantry with quantity, unit and expiry for each item, and ongoing quantity updates. This worsens the top churn driver and contradicts the mission of minimal effort.",
+     "evidence": "\"Pantry Match unlocks once a user has entered at least 15 items with expiry dates\" vs. \"Too much setup / typing to get useful suggestions — 38%\""
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "major",
+     "claim": "The 15-item gate with mandatory expiry dates delivers zero value until the user has done substantial manual entry, so many users will abandon before unlock. Expiry dates are unknown for many staples. There is no lighter path such as barcode/receipt scan, quick-add, or partial matching below the threshold.",
+     "evidence": "\"unlocks once a user has entered at least 15 items with expiry dates... progress bar ('7 of 15 items added')\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The nightly job scores every recipe for every pantry user in a single SQL statement on the primary. The staging run of 12k users took 41 min; the sizing assumption is 30% of 2.1M MAU = 630k users (52x), and the success metric targets 25%. Linear extrapolation is ~36 hours, which cannot complete in a nightly window. It will also hold heavy load and locks on the single primary that serves the whole production API.",
+     "evidence": "\"12,000 synthetic pantry users completed in 41 minutes\" / \"30% of MAU create a pantry within 90 days\" / \"single SQL statement joining pantry_items x recipe_ingredients on the primary\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "A single giant statement on the write primary is not resumable or chunked. A failure or timeout near the end loses all work, and replication lag and a degraded API for all users are likely. The plan has no timeouts, batching, retries, monitoring, or alerting. Users in all time zones (~78% US) get stale or missing matches if the job overruns.",
+     "evidence": "\"in a single SQL statement joining pantry_items x recipe_ingredients on the primary, then upsert the top 50\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Staging evidence is on synthetic users with unknown pantry size and distribution, and doesn't match the production data shape. There is also no evidence that matching quality needs 15 items, or that pantry-based suggestions will move retention. The +3pt retention target and 25% unlock target are unsupported, and 25% unlock conflicts with the 15-item friction.",
+     "evidence": "\"12,000 synthetic pantry users\"; \"To keep match quality high... at least 15 items\"; \"25% of MAU unlock Pantry Match within 60 days\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The scoring ratio (used/recipe ingredients) ignores quantities even though quantities are collected, and unit and quantity tracking has no use in matching. Always-present staples inflate scores. Recipes with few ingredients score high trivially. Allergens/dietary preferences are not mentioned.",
+     "evidence": "\"Score = (pantry ingredients used / recipe ingredients) weighted by expiry proximity\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The metric of 25% unlock in 60 days and the rollout of 5% beta then 100% is in the same week 6, which gives no time to observe job load or fix issues before full rollout.",
+     "evidence": "\"Week 6: beta to 5% of users, then 100%.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Pantry contents and push notifications are new personal data with no retention or deletion statement. Impact is modest.",
+     "evidence": "ABSENT: retention/deletion policy for pantry_items and pantry_matches"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Nightly recompute for all pantry users regardless of activity is wasteful, and there are no budget numbers for compute or push volume.",
+     "evidence": "\"for each user with a pantry, score every recipe in the catalog (340k recipes)\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2511,
+    "tokOut": 1487,
+    "usd": 0.0214312,
+    "critMs": 11021
+   },
+   "wallMs": 96991
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The week-3 capacity load test takes pantry-size distributions from 'beta/early-user data', but the beta does not start until week 6, so that data will not exist. Without a stated fallback (dogfood or synthetic distribution), the test inputs are undefined. The go/no-go is still gated on the load test, so this is not blocking.",
+     "evidence": "\"using pantry-size distributions taken from beta/early-user data\" vs. \"Week 6: beta to 5% of users\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The on-demand, debounced recompute reads pantry_items from a read replica. Replica lag could omit the item the user just added, and the stale-match fallback only triggers after 48h. This risks the first-match experience and the under-90-second time-to-first-match guardrail.",
+     "evidence": "\"Each batch scores against recipe_ingredients and pantry_items read from a read replica\"; \"Changes to a user's pantry also trigger an on-demand recompute for that user (debounced)\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3842,
+    "tokOut": 980,
+    "usd": 0.0216852,
+    "critMs": 7676
+   },
+   "wallMs": 74602
+  }
+ ],
+ "artifact": "# Pantry Match — build plan\n\nSquad: Discovery (3 eng + 1 mobile) | 6 weeks | PM: Discovery PM\n\n## 1. Problem\nChurned-user exit survey, Q2 (n = 3,800), top reasons:\n1. \"Too much setup / typing to get useful suggestions\" — 38%\n2. \"Recipes need ingredients I don't have\" — 22%\n3. \"Same recipes keep showing up\" — 15%\nPantry Match targets reason #2: suggest recipes that use what the user already has. Because reason #1 (setup effort) is the largest driver, the design must not add setup burden: value has to appear within the first few items, and entry has to be as low-typing as possible. Any design that increases setup effort is a failure even if matching works.\n\n## 2. User experience\n- New Pantry tab. Primary entry is quick-add: tap-to-select from a grid of common ingredients (top ~200 by recipe usage), plus autocomplete over our 9,400-ingredient catalog for everything else. Quantity, unit, and expiry date are optional and hidden behind \"add details\"; they default to \"have it\" with no quantity and no expiry.\n- Lighter entry paths (scoped in weeks 1-2): receipt photo scan and barcode scan, if the spike in week 1 shows acceptable accuracy; otherwise they move to a follow-up. Quick-add ships regardless.\n- No hard unlock gate. Pantry Match works from the first item. Matches are shown as \"partial matches\" (e.g. \"you have 4 of 7 ingredients\") and a gentle nudge (\"add more items for better matches\") replaces the progress bar. Match quality vs. pantry size will be measured in beta (see metrics) rather than assumed.\n- Quantities are not tracked by default. The \"I made this\" screen offers an optional one-tap \"remove used items from pantry\" action rather than asking for quantity updates.\n- Home feed gains a \"Cook from your pantry\" carousel (top 10 matches) as soon as the user has at least 1 pantry item.\n\n## 3. Matching\n- Score = (pantry ingredients used / recipe ingredients) weighted by expiry proximity when an expiry date exists (items without expiry get a neutral weight), with pantry staples (salt, oil, water, pepper) always counted as present.\n- Ingredient normalization reuses the existing ingredient_aliases table (e.g. \"scallion\" = \"green onion\").\n\n## 4. Compute\n- New table pantry_matches(user_id, recipe_id, score, computed_at), top 50 per user.\n- PantryMatchJob (Sidekiq, nightly) is chunked and resumable, and does not run the scoring on the primary:\n  - Users are processed in batches (e.g. 500 users per job), fanned out as independent Sidekiq jobs with a bounded concurrency limit. Each batch scores against recipe_ingredients and pantry_items read from a read replica, and writes only the top 50 per user to the primary in small upserts.\n  - Only users whose pantry changed since their last computation, or who were active in the last 14 days, are recomputed nightly; others keep their existing matches. Candidate recipes are pre-filtered via an inverted index (ingredient -> recipes) so each user is scored against only recipes sharing at least one pantry ingredient, not all 340k.\n  - Per-batch statement timeout, retries with backoff, and idempotent upserts so a failed batch can be re-run without redoing others. A per-batch checkpoint records completion.\n  - Scheduling is staggered by time zone group (US-heavy, ~78% of MAU) so each user's matches are fresh before their local morning/evening cooking window, rather than one global 02:00 UTC run. Changes to a user's pantry also trigger an on-demand recompute for that user (debounced).\n  - Monitoring and alerting: job duration, batch failure rate, queue depth, replica lag, and primary CPU/write load, with an alert if a run exceeds its window or fails; users with stale matches (>48h) fall back to on-the-fly scoring for that request.\n- Capacity validation (before week 3 ends): the 41-minute staging run (12,000 synthetic users) is not used to size production. Linear extrapolation to 630k users (30% of MAU) is ~36 hours for the original single-statement design, which is unacceptable. Instead, run a load test against a production-shaped data copy, using pantry-size distributions taken from beta/early-user data and the real recipe_ingredients table, and report p50/p95 time per batch and projected total runtime at 630k users. Go/no-go for the 100% rollout depends on projected nightly work fitting in the window with headroom and primary load staying within agreed limits.\n- Adoption assumption for sizing: 30% of MAU create a pantry within 90 days (a planning assumption, not a measured number; it will be replaced with measured beta adoption).\n\n## 5. Notifications\n- Optional \"use it before it goes bad\" push when a pantry item is 2 days from expiry (only applies to items where the user supplied an expiry).\n- Opt-in only (off by default), max 1 push per user per day, respects existing quiet hours (21:00-08:00 local).\n\n## 6. Timeline\n- Week 1: pantry data model, quick-add UX, receipt/barcode scan spike, load-test data setup.\n- Week 2: Pantry tab + quick-add and item form (iOS/Android/web).\n- Week 3: scoring, chunked PantryMatchJob on replicas, monitoring/alerting, capacity load test.\n- Week 4: home carousel, \"I made this\" optional remove-items action.\n- Week 5: notifications, analytics events, scan paths if the spike passed.\n- Week 6: beta to 5% of users with a match-quality vs. pantry-size analysis; 100% rollout only if the capacity go/no-go passes.\n\n## 7. Success metrics\n- Primary guardrail: median time-to-first-match (from first Pantry tab open to seeing a pantry-based recipe) under 90 seconds, and Pantry tab setup abandonment tracked against a baseline set in beta. Setup-related churn must not increase.\n- Beta-measured: share of new pantry users who add at least 5 items in session 1, and carousel click-through rate on pantry matches.\n- Retention: the +3 pts 30-day retention target is a hypothesis, not a validated number. It is evaluated via a holdout (users randomly withheld from Pantry Match) rather than a matched control, and the target will be revisited after the 5% beta reports an observed effect size.\n- Unlock/adoption target: the earlier \"25% of MAU unlock within 60 days\" goal is replaced by \"X% of MAU add at least 5 pantry items within 60 days\", with X set after beta adoption data is available. Because there is no hard gate, adoption is measured directly rather than by unlock.",
+ "fixerUsage": {
+  "calls": 1,
+  "tokIn": 2671,
+  "tokOut": 2293,
+  "usd": 0.03361,
+  "critMs": 17455
+ },
+ "status": "cleared"
+}

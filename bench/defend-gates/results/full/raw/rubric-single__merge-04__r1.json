@@ -1,0 +1,149 @@
+{
+ "approach": "rubric-single",
+ "case": "merge-04",
+ "rep": 1,
+ "wallMs": 74662,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The migration is not a rename. It adds a new empty column and drops `notes`, so every existing user note is destroyed on deploy. The PR says notes cannot be recovered elsewhere, so this is irreversible data loss.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text; ALTER TABLE user_recipes DROP COLUMN notes;"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The down migration does not restore data. It recreates an empty `notes` column and drops `private_notes`, so any notes written after deploy are also lost. Because migrations run automatically on merge, there is no safe rollback path.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN notes text; ALTER TABLE user_recipes DROP COLUMN private_notes;"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR description says 'Pure rename, no data change', which the migration contradicts. The claim is load-bearing for the merge decision and must be corrected or the migration rewritten.",
+   "evidence": "\"Pure rename, no data change; the down migration restores the old name.\" versus the migration's ADD COLUMN / DROP COLUMN pair"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Cursor lookup uses `findIndex`, which returns -1 when the cursor row is missing (for example, the user unsaved that recipe between pages). `start` then becomes 0 and the client silently receives the first page again, which can loop or duplicate items.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "The query has no LIMIT, so every request loads the user's entire saved set (up to 200k+ rows, with a join and `private_notes` payloads) into memory before slicing a page. This cannot meet the 300ms p99 budget and is a memory risk on the API process.",
+   "evidence": "ORDER BY ur.saved_at DESC, ur.id DESC`,\n    [userId],"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Pagination is done in JS over the full result set, so page 1 costs the same as page N. Cost grows linearly with saved-recipe count, which is unbounded, and there is no keyset index use.",
+   "evidence": "const page = rows.slice(start, start + limit);"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The cursor is only the row id, but the sort key is (saved_at, id). A keyset cursor should encode the sort tuple so the next page can be found with an indexed WHERE clause. As written, the cursor is not meaningful outside the in-memory list.",
+   "evidence": "ORDER BY ur.saved_at DESC, ur.id DESC"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Deploy ordering is unsafe. Migrations run automatically on merge, so the old code still reading `notes` will error on any request between migration and code rollout, and there is no expand/contract sequence.",
+   "evidence": "Migrations run automatically on deploy after merge to main."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "ABSENT: no evidence that other queries, jobs, or views reference `user_recipes.notes`. Any remaining reference will break at deploy. The diff touches only saved.ts.",
+   "evidence": "ABSENT: grep or search results for `notes` across the repo; diff contains only saved.ts and its test"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "`ALTER TABLE ... DROP COLUMN` on a ~140M-row table takes an ACCESS EXCLUSIVE lock. Within an explicit transaction, the lock waits on any open readers and blocks all traffic to the table while held.",
+   "evidence": "BEGIN;\nALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;\nCOMMIT;"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "Removing the `offset` parameter is a breaking API change. The PR gives no evidence that all callers have moved to `cursor`, and old clients sending `offset` will silently get the first page.",
+   "evidence": "ABSENT: confirmation that no other clients send `offset`; the diff removes req.query.offset handling entirely"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Test coverage misses the failure cases that matter: a cursor for a deleted or unknown row, an invalid cursor, and a saved_at tie across pages. The test fixture only covers the happy path.",
+   "evidence": "expect(c.nextCursor).toBeNull();"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Renaming to `private_notes` is a naming convention only and enforces nothing. The saved endpoint now returns `private_notes` by default, and nothing in the PR blocks it from reaching shared views.",
+   "evidence": "SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.private_notes"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The `db.query<SavedRow>` generic is typed but the rows are never validated, so the type is an assertion and may not match the real schema after the migration.",
+   "evidence": "const { rows } = await db.query<SavedRow>("
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "No security issue found in the diff beyond the existing `requireUser` guard, which the query relies on for scoping by `userId`. The cursor is used only as an in-memory string comparison, so it does not reach SQL.",
+   "evidence": "const cursor = typeof req.query.cursor === \"string\" ? req.query.cursor : null;"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "No vendor lock-in or data residency change is introduced by this PR.",
+   "evidence": "ABSENT: any change to hosting, provider, or data location"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The full-set fetch on every page request multiplies database and memory cost by page count for heavy users, with no budget analysis in the PR.",
+   "evidence": "ABSENT: cost or load estimate for 200k-row users"
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "Heavy users fetch their whole library on each scroll step, which adds latency to the infinite-scroll flow the cursor change was meant to improve.",
+   "evidence": "const { rows } = await db.query<SavedRow>("
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "No accessibility-relevant change in this PR.",
+   "evidence": "ABSENT: UI change; none in diff"
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "No rendering change in this PR. The client consumes `nextCursor`, but the client-side handling is not shown.",
+   "evidence": "ABSENT: client diff handling nextCursor"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "The stated problem (offset drift while scrolling) is real, but the fix trades it for a full-table load per page, which is a worse user experience for heavy users.",
+   "evidence": "Offsets were drifting when users saved recipes while scrolling."
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "User-written notes are personal data. Destroying them without notice or a deletion record raises data-handling obligations that the PR does not address.",
+   "evidence": "ABSENT: user notification or data-handling review for dropped notes"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3453,
+  "tokOut": 3783,
+  "usd": 0.0024124199999999998,
+  "critMs": 17120
+ }
+}

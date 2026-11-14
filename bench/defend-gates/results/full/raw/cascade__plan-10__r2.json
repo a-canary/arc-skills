@@ -1,0 +1,77 @@
+{
+ "approach": "cascade",
+ "case": "plan-10",
+ "rep": 2,
+ "wallMs": 361672,
+ "verdict": "ATTACKS",
+ "confidence": 0.75,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The purge deletes the `users` row and its referencing rows in one transaction, and only then calls five processors. The plan does not say where the processor identifiers (Stripe customer, Apple refresh token, Amplitude/Customer.io/Zendesk IDs) are kept for the 7-day retry window. Once the transaction commits, retries have nothing durable to work from, and processor copies of the user's data can survive silently.",
+   "evidence": "\"each account is one DB transaction across `users` and the 23 tables that reference it\" / \"After the DB transaction commits: Amplitude... Sign in with Apple users: `POST /auth/revoke` for their refresh token.\" ABSENT: a durable outbox or store of external IDs and pending processor deletions."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The no-resurrection guarantee relies on `deleted_accounts`, which lives in the same Postgres. A restore from a snapshot taken before a purge also rolls back that table, so purges made after the snapshot are missing from it. The plan does not say the runbook reads purge records from a source outside the restored database, such as an external log or PITR/WAL. Deleted accounts could come back after a restore.",
+   "evidence": "\"Table `deleted_accounts` keeps only purged user IDs and dates (no PII); the restore runbook re-applies purges from it after any restore, so a restore cannot resurrect a deleted account.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Purge is irreversible and the nightly job ignores the feature flag. Only the first batch is dry-run, and there is no pause switch, per-run cap or halt threshold. If a registry bug is found later, the job keeps destroying data until a deploy.",
+   "evidence": "\"the purge job ignores the flag\" / \"The first real purge batch ... runs in dry-run mode first\" ABSENT: purge pause switch or per-run cap."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The CI guard only catches columns named `user_id` or `*_user_id`. Personal data under other names (polymorphic owner references, email or device-token columns without a user FK) would pass CI and never be purged. This weakens the claim that new tables cannot be forgotten.",
+   "evidence": "\"lists every table with a `user_id` or `*_user_id` column ... A CI test fails if any such column in `db/schema.rb` is missing\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "There is no locking or purge-state check between the nightly purge and a login, \"Keep my account\" click, or cancel-link click near the grace-period boundary. A restore racing the purge could fail or leave a partial account.",
+   "evidence": "ABSENT: row lock or purge-state guard on \"Keep my account\" and the cancel link; \"valid until the purge\"."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Screen 1 promises club messages are permanently deleted, but the registry allows `nullify` for rows owned by others. The promise and the purge action are not reconciled for messages and friend relations. Separately, \"restores exactly as it was\" does not hold for a web subscription whose period ends during the grace window.",
+   "evidence": "\"club messages ... are permanently deleted\" vs \"delete, or nullify for rows owned by someone else\"; \"`cancel_at_period_end`\" / \"restores the account exactly as it was\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "Logged-out deletion is authorised by one emailed link that counts as re-auth. The 14-day cancel window mitigates this. The 3/day per-email limit also lets a third party exhaust the owner's request quota.",
+   "evidence": "\"clicking it counts as re-auth\" / \"3/day per email address\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Purged data persists in backups for up to 35 days, and the export ZIP delivered after confirmation is not covered by any retention statement. Backup retention is not clearly disclosed. The plan could also say that deleted rows are restored only when the purge is re-applied.",
+   "evidence": "\"Postgres snapshots roll off after 35 days and are not edited.\" ABSENT: retention of generated export files; backup disclosure."
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "The plan does not describe what happens to store subscription renewals and store notifications for purged users. Google token or grant revocation is also unspecified, while Apple has a revoke call.",
+   "evidence": "ABSENT: post-purge store webhook handling; Google revocation."
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The 5/hour per-IP rate limit can block legitimate users behind shared NAT, such as schools. The plan does not model this.",
+   "evidence": "\"5/hour per IP\""
+  }
+ ],
+ "usage": {
+  "calls": 2,
+  "tokIn": 10393,
+  "tokOut": 12382,
+  "usd": 0.06454114,
+  "critMs": 68029
+ }
+}

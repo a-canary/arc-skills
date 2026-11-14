@@ -1,0 +1,83 @@
+{
+ "approach": "triage-routed",
+ "case": "merge-12",
+ "rep": 1,
+ "wallMs": 456245,
+ "verdict": "ATTACKS",
+ "confidence": 0.72,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Bookings for a popular class queue on the SELECT ... FOR UPDATE row lock, and the pool's 5s statement_timeout also covers lock wait. Requests queued behind a burst can fail with a Postgres timeout that surfaces as a 500 via next(err), not the clean 409 class_full the PR intends. The PR gives no lock-wait analysis and no test for this path.",
+   "evidence": "'The pg pool sets statement_timeout=5s' and 'const cls = await client.query(... FOR UPDATE ...)' with 'catch (err) { ... throw err; }'"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Each booking holds a pool connection for the whole transaction, including time blocked on the class-row lock. A burst on one class can exhaust the shared pool and delay bookings and other endpoints for unrelated classes. This contradicts the PR's claim of no effect on other classes, and no pool sizing or checkout timeout is stated.",
+   "evidence": "'which serializes bookings per class without affecting other classes' and 'const client = await db.connect();' with no pool sizing or checkout timeout in the artifact"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The app-level lock is the only oversell guard. With 'No schema change' there is no capacity check or unique constraint in the database, so any other writer to bookings that skips the lock can still oversell. The PR does not document this assumption.",
+   "evidence": "ABSENT: no schema constraint, trigger, or partial unique index; 'No schema change.'"
+  },
+  {
+   "lens": "edge case",
+   "severity": "minor",
+   "claim": "now() returns the transaction start time, not the time the row lock is acquired. A request that starts before starts_at but waits on the lock past the start can still book a started class.",
+   "evidence": "'(cancelled_at IS NOT NULL OR starts_at <= now()) AS closed FROM classes WHERE id = $1 FOR UPDATE'"
+  },
+  {
+   "lens": "spec mismatch",
+   "severity": "minor",
+   "claim": "The closed check runs before the existing-booking check, so a member repeating a booking after the class starts gets 409 class_closed rather than 200 with the existing booking. The PR does not state which outcome is intended, and no test covers it.",
+   "evidence": "if (cls.rows[0].closed) return { kind: 'closed' }; appears before if (mine.rows.length > 0) return { kind: 'booked', ... created: false }"
+  },
+  {
+   "lens": "observability",
+   "severity": "minor",
+   "claim": "The new failure modes are not logged or counted: lock-wait duration, pool wait, serialization or statement-timeout errors, and the closed and full outcomes. Operators cannot tell whether the fix works or alert on contention.",
+   "evidence": "'case 'full': return res.status(409)...' and 'case 'closed': return res.status(409)...' with only log.info on the success path"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Nothing bounds how long a transaction can hold the row lock. If the process stalls between statements, the lock stays held and every other booking for that class blocks. No idle-in-transaction timeout is set.",
+   "evidence": "'await client.query('BEGIN');' followed by separate awaited statements with no idle_in_transaction_session_timeout in the artifact"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The new member-lookup and count queries run while holding the lock, and the PR shows no index on bookings(class_id) or bookings(class_id, member_id) to back them. Cost grows with class size.",
+   "evidence": "ABSENT: no index definition or EXPLAIN output for 'SELECT id FROM bookings WHERE class_id = $1 AND member_id = $2 AND cancelled_at IS NULL' or the count query"
+  },
+  {
+   "lens": "test-coverage",
+   "severity": "minor",
+   "claim": "The concurrency test uses 12 requests against a capacity of 3, which says nothing about burst sizes in the hundreds, pool exhaustion, or lock-queue depth.",
+   "evidence": "const members = await seedMembers(db, 12); const results = await Promise.all(members.map((m) => bookClass(db, m, classId)));"
+  },
+  {
+   "lens": "api-contract",
+   "severity": "minor",
+   "claim": "The UUID_RE check returns 404 for any id not in canonical hyphenated form. Postgres accepts other UUID input forms, so ids that previously resolved now return 404. The PR does not mention this behavior change.",
+   "evidence": "const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;"
+  },
+  {
+   "lens": "test-coverage",
+   "severity": "minor",
+   "claim": "The rollback and broken-client path is untested. No test exercises a failing query inside bookLocked or a failing ROLLBACK, so the client.release(broken) logic is unverified.",
+   "evidence": "ABSENT: no test for a failing query inside bookLocked or a failing ROLLBACK; the new tests cover only booked, full, closed, not_found, and duplicate outcomes."
+  }
+ ],
+ "usage": {
+  "calls": 6,
+  "tokIn": 29541,
+  "tokOut": 13310,
+  "usd": 0.012562,
+  "critMs": 29725
+ }
+}

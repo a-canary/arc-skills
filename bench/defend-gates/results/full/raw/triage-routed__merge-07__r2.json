@@ -1,0 +1,101 @@
+{
+ "approach": "triage-routed",
+ "case": "merge-07",
+ "rep": 2,
+ "wallMs": 315420,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "timezone",
+   "severity": "blocker",
+   "claim": "partition_date() now uses local time. Workers run with TZ=America/Los_Angeles and the job starts at 01:30 UTC, which is the previous calendar day in Pacific time. Runs write into the wrong dt partition, which can be one already read downstream, and dashboards that expect the UTC dt will not see this run's data.",
+   "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")"
+  },
+  {
+   "lens": "partial-failure",
+   "severity": "blocker",
+   "claim": "The _SUCCESS marker is written unconditionally, even when failed > 0. Dashboards treat the marker as proof the partition is complete, so partial or missing partner files are published as whole data.",
+   "evidence": "except Exception:\n            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n            failed += 1\n    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+  },
+  {
+   "lens": "injection",
+   "severity": "blocker",
+   "claim": "_upload builds a shell command with an f-string and runs it with shell=True. src.stem comes from partner-chosen SFTP filenames, so metacharacters such as $(), backticks or ; can run arbitrary commands on a worker that holds write credentials for the whole raw bucket. Glob characters and leading dashes are also unescaped, so they can expand to other local files or be parsed as gsutil options. Use an argv list without shell=True and validate or sanitise filenames.",
+   "evidence": "subprocess.run(\n        f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\",\n        shell=True,"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "subprocess.run has no timeout. A hung gsutil transfer of a multi-GB chunk blocks the whole partner run indefinitely, so failure counting and the marker logic are never reached.",
+   "evidence": "subprocess.run(\n        f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\",\n        shell=True,\n        check=True,\n    )"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Per-file failures are logged and counted, but the task still exits zero with no raise, metric or alert. Airflow shows success and on-call sees a healthy run for a partner feed that may be incomplete.",
+   "evidence": "log.info(\"partner=%s dt=%s ok=%d failed=%d\", partner, dt, ok, failed)  (no raise, no nonzero exit, no alert)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The marker is written even when no files were found or processed. An empty or misdelivered drop directory yields a successful-looking partition with no data.",
+   "evidence": "for src in sorted(drop_dir.glob(\"*.csv\")): ...  write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")  (no ok or total guard)"
+  },
+  {
+   "lens": "idempotency",
+   "severity": "major",
+   "claim": "Reruns do not clear the partition or check it for existing objects. Chunk numbering depends on each attempt's row count, so a rerun with fewer chunks leaves stale higher-numbered objects mixed with new ones under the same dt, and the marker is rewritten over them. Downstream then reads duplicated or mixed data.",
+   "evidence": "path = out_dir / f\"{src.stem}-{len(chunks):04d}.csv.gz\"  ...  _upload(chunk, partner, dt, src.stem)  (ABSENT: existence check or prefix cleanup before upload)"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "A file that fails partway keeps its already-uploaded chunks in GCS with no rollback. Its unuploaded chunks and the gzip handle are left on local disk because unlink runs only after a successful upload and there is no try/finally. Multi-GB leftovers can fill the work directory across nightly runs.",
+   "evidence": "for chunk in _write_chunks(src, work_dir):\n                _upload(chunk, partner, dt, src.stem)\n                chunk.unlink()  (ABSENT: try/finally or cleanup on exception)"
+  },
+  {
+   "lens": "spec-mismatch",
+   "severity": "major",
+   "claim": "The object layout changed from raw/{partner}/dt=…/{stem}.csv.gz to a per-file subdirectory of numbered chunks. Existing readers and partition discovery that use the old path will miss data, and the PR does not say the change is intended.",
+   "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\""
+  },
+  {
+   "lens": "schema",
+   "severity": "major",
+   "claim": "The PR says normalisation is unchanged, but normalise_row now receives a csv.DictReader dict instead of a pandas Series read with dtype=str. Missing trailing fields arrive as None. The chunk header is fixed from the first row's keys, so rows whose normalised keys differ will fail in DictWriter or produce mismatched headers.",
+   "evidence": "norm = normalise_row(row)\n            if writer is None:\n                writer = csv.DictWriter(out, fieldnames=list(norm.keys()))"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "There is no retry for transient gsutil or network errors. One transient failure on one chunk fails the whole file and forfeits its work for the run.",
+   "evidence": "_upload(...) has a single subprocess.run call with check=True and no retry loop"
+  },
+  {
+   "lens": "edge-case",
+   "severity": "minor",
+   "claim": "A header-only or empty CSV produces no chunks and no upload, but the file is still counted as ok. Empty drops are accepted silently with no record.",
+   "evidence": "for chunk in _write_chunks(src, work_dir): ...\n            ok += 1"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "ingest_partner gained a required work_dir argument. The diff shows no updated call sites, so callers may break at runtime. This cannot be verified from the diff alone.",
+   "evidence": "ABSENT: updated callers of ingest_partner(partner, drop_dir, work_dir)"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "No tests cover the streaming writer, chunk boundaries, the partition-date change, or failure handling, despite a rewrite of the core ingest path.",
+   "evidence": "ABSENT: no test files or test changes in the diff"
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 25165,
+  "tokOut": 18619,
+  "usd": 0.011817330000000001,
+  "critMs": 36895
+ }
+}

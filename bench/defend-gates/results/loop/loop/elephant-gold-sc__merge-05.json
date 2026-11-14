@@ -1,0 +1,83 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "merge-05",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "accessibility",
+     "severity": "major",
+     "claim": "The embargo badge text is hard-coded white (#ffffff) on background var(--surface), which is #ffffff in the default light theme. The label is invisible (1:1 contrast) in the default theme and fails WCAG 1.4.3, a stated release requirement.",
+     "evidence": ".embargo { ... background: var(--surface); color: #ffffff; ... } with :root { --surface: #ffffff; }"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "major",
+     "claim": "The unpublish control is a span with only an onClick handler: no tabIndex, role, or key handler, so keyboard-only editors cannot reach or activate this destructive action (WCAG 2.1.1, 4.1.2). It also has no :focus-visible styling.",
+     "evidence": "<span className={styles.unpublish} onClick={handleUnpublish}> with no tabIndex, role, or onKeyDown; only .unpublish:hover is styled"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "major",
+     "claim": "The unpublish control is icon-only, with the icon aria-hidden and no aria-label or visible text. Screen readers get no accessible name and sighted users get no label (WCAG 4.1.2, 2.4.6).",
+     "evidence": "<TrashIcon aria-hidden=\"true\" /> inside the span; ABSENT: aria-label, title, or visually hidden text"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "handleUnpublish has no error handling or in-flight guard. If onUnpublish rejects, the failure is an unhandled rejection with no feedback, so the editor may believe the story was pulled while it is still live. Repeat activation can also fire duplicate confirms or requests.",
+     "evidence": "if (ok) await onUnpublish(draft.id);"
+    }
+   ],
+   "usage": {
+    "calls": 18,
+    "tokIn": 57597,
+    "tokOut": 24585,
+    "usd": 0.07163225000000001,
+    "critMs": 19378
+   },
+   "wallMs": 110217
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "After a successful unpublish, the button unmounts while it may hold focus, and nothing announces success. Keyboard and screen-reader users could lose their place, and only failure is announced via role=alert.",
+     "evidence": "{draft.status === \"published\" && (<button type=\"button\" className={styles.unpublish} ... ABSENT: success announcement or focus management"
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The embargo badge shows a bare clock time with no timezone label. Editors outside the newsroom zone could misread the lift time.",
+     "evidence": "Embargo until {formatInNewsroomTz(draft.embargoUntil!, \"MMM d, HH:mm\")}"
+    },
+    {
+     "lens": "logic",
+     "severity": "minor",
+     "claim": "The catch block always says the story is still live. That could be wrong if the request timed out after the server applied the change, or if the confirm dialog rejects on cancel.",
+     "evidence": "catch { setError(\"Couldn't unpublish. The story is still live. Try again.\"); }"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 62831,
+    "tokOut": 25784,
+    "usd": 0.08393300000000001,
+    "critMs": 31928
+   },
+   "wallMs": 84789
+  }
+ ],
+ "artifact": "PR #644: Embargo badge + quick unpublish in the draft queue\n\nDesk editors keep opening drafts just to check whether they are under embargo, and pulling a story that went out early takes four clicks.\nThis adds an embargo badge (amber outline, shows the lift time in the newsroom's timezone) and a one-click unpublish action on each queue row.\nUnpublish still goes through the standard confirm dialog.\n\nAccessibility and reliability notes:\n- The badge text uses `var(--text)`, so it has full contrast in both themes. The amber is only the outline.\n- The unpublish control is a real `<button type=\"button\">` with an accessible name (`aria-label` plus `title`) that includes the headline. It is keyboard reachable and has a `:focus-visible` style.\n- Unpublish is guarded against re-entry while the confirm or request is in flight. If the request fails, the row shows an inline `role=\"alert\"` message, so the editor knows the story is still live.\n\ndiff --git a/web/src/queue/DraftRow.tsx b/web/src/queue/DraftRow.tsx\nindex 6d1e0b4..b38f7c2 100644\n--- a/web/src/queue/DraftRow.tsx\n+++ b/web/src/queue/DraftRow.tsx\n@@ -1,31 +1,75 @@\n+import { useState } from \"react\";\n import { Draft } from \"../api/types\";\n import { formatByline } from \"../lib/format\";\n+import { formatInNewsroomTz } from \"../lib/time\";\n+import { useConfirm } from \"../ui/confirm\";\n+import { TrashIcon } from \"../ui/icons\";\n import styles from \"./DraftRow.module.css\";\n\n type Props = {\n   draft: Draft;\n   onOpen: (id: string) => void;\n+  onUnpublish: (id: string) => Promise<void>;\n };\n\n-export function DraftRow({ draft, onOpen }: Props) {\n+export function DraftRow({ draft, onOpen, onUnpublish }: Props) {\n+  const confirm = useConfirm();\n+  const [busy, setBusy] = useState(false);\n+  const [error, setError] = useState<string | null>(null);\n+  const embargoed =\n+    draft.embargoUntil !== null && new Date(draft.embargoUntil) > new Date();\n+\n+  async function handleUnpublish() {\n+    if (busy) return;\n+    setBusy(true);\n+    setError(null);\n+    try {\n+      const ok = await confirm({\n+        title: \"Unpublish this story?\",\n+        body: `\"${draft.headline}\" will be removed from the site and returned to drafts.`,\n+        confirmLabel: \"Unpublish\",\n+        destructive: true,\n+      });\n+      if (ok) await onUnpublish(draft.id);\n+    } catch {\n+      setError(\"Couldn't unpublish. The story is still live. Try again.\");\n+    } finally {\n+      setBusy(false);\n+    }\n+  }\n+\n   return (\n     <li className={styles.row}>\n       <button className={styles.open} onClick={() => onOpen(draft.id)}>\n         <span className={styles.headline}>{draft.headline}</span>\n         <span className={styles.byline}>{formatByline(draft.authors)}</span>\n       </button>\n+      {embargoed && (\n+        <span className={styles.embargo}>\n+          Embargo until {formatInNewsroomTz(draft.embargoUntil!, \"MMM d, HH:mm\")}\n+        </span>\n+      )}\n       <span className={styles.status} data-status={draft.status}>\n         {draft.status}\n       </span>\n+      {draft.status === \"published\" && (\n+        <button\n+          type=\"button\"\n+          className={styles.unpublish}\n+          onClick={handleUnpublish}\n+          aria-disabled={busy}\n+          aria-label={`Unpublish \"${draft.headline}\"`}\n+          title=\"Unpublish\"\n+        >\n+          <TrashIcon aria-hidden=\"true\" />\n+        </button>\n+      )}\n+      {error && (\n+        <span role=\"alert\" className={styles.error}>\n+          {error}\n+        </span>\n+      )}\n     </li>\n   );\n }\ndiff --git a/web/src/queue/DraftRow.module.css b/web/src/queue/DraftRow.module.css\nindex 1a2b3c4..5d6e7f8 100644\n--- a/web/src/queue/DraftRow.module.css\n+++ b/web/src/queue/DraftRow.module.css\n@@ -1,24 +1,68 @@\n .row {\n   display: flex;\n   align-items: center;\n   gap: 12px;\n   padding: 10px 16px;\n   background: var(--surface);\n   border-bottom: 1px solid var(--border);\n }\n\n .open {\n   flex: 1;\n   text-align: left;\n   background: none;\n   border: 0;\n   color: var(--text);\n }\n+\n+.embargo {\n+  font-size: 12px;\n+  padding: 2px 8px;\n+  border-radius: 999px;\n+  border: 1px solid var(--warn);\n+  background: var(--surface);\n+  color: var(--text);\n+  white-space: nowrap;\n+}\n+\n+.unpublish {\n+  display: inline-flex;\n+  padding: 6px;\n+  border-radius: 6px;\n+  border: 0;\n+  background: none;\n+  color: var(--text-muted);\n+  cursor: pointer;\n+}\n+\n+.unpublish:hover {\n+  color: var(--danger);\n+  background: var(--surface-hover);\n+}\n+\n+.unpublish:focus-visible {\n+  outline: 2px solid var(--text);\n+  outline-offset: 2px;\n+}\n+\n+.unpublish[aria-disabled=\"true\"] {\n+  opacity: 0.5;\n+  cursor: progress;\n+}\n+\n+.error {\n+  font-size: 12px;\n+  color: var(--text);\n+}\ndiff --git a/web/src/theme/tokens.css b/web/src/theme/tokens.css\nindex 0c9a8e1..4f27b1d 100644\n--- a/web/src/theme/tokens.css\n+++ b/web/src/theme/tokens.css\n@@ -1,11 +1,13 @@\n :root {\n   --surface: #ffffff;\n   --surface-hover: #f2f3f5;\n   --text: #1b1d21;\n   --text-muted: #5f6672;\n   --border: #e2e4e8;\n+  --warn: #b45309;\n   --danger: #b91c1c;\n }\n [data-theme=\"dark\"] {\n   --surface: #16181d;\n   --surface-hover: #22252c;\n+  --warn: #f59e0b;\n   --text: #e7e9ee;",
+ "fixerUsage": {
+  "calls": 1,
+  "tokIn": 3025,
+  "tokOut": 2959,
+  "usd": 0.041686,
+  "critMs": 17225
+ },
+ "status": "cleared"
+}

@@ -1,0 +1,83 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-01",
+ "rep": 2,
+ "wallMs": 69180,
+ "verdict": "ATTACKS",
+ "confidence": 0.93,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "clientOrderId is regenerated on every loop iteration, so a retry after an accepted-but-timed-out or 5xx attempt submits a new ID the broker cannot dedupe, which can double-fill a live account. The safety claim in the PR is false as written.",
+   "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { const clientOrderId = randomUUID();"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Math.ceil on lots lets the buy quantity exceed headroom and therefore maxNotional, which sizing must never do. Example: maxNotional 10000, price 33, lotSize 1 gives 304 shares (about $10,032); lotSize 10 gives 310 shares (about $10,230).",
+   "evidence": "const lots = headroom / price / lotSize; return Math.ceil(lots) * lotSize;"
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "After an ambiguous timeout or 502/503/504, the code resubmits or throws without querying the broker by client_order_id to learn whether the first attempt was accepted. A caller that retries on throw can create a second live position.",
+   "evidence": "if (!retryable || attempt === MAX_ATTEMPTS) throw err; ABSENT: any order lookup by client_order_id before resubmit or before surfacing failure"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The no-double-fill constraint rests on broker dedupe of client_order_id, but the artifact cites no broker documentation, dedupe window, or integration test showing what a repeated ID returns.",
+   "evidence": "Retries are safe: every order carries a client_order_id and the broker dedupes on it, so a retry after a timeout cannot double-fill. ABSENT: broker dedupe docs, window, or test"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The timeout branch depends on a timeoutMs option on broker.post and an error named 'TimeoutError', neither of which appears in the diff, so timeouts may never be retried or may be misclassified.",
+   "evidence": "{ timeoutMs: 4000 } and (err as Error).name === \"TimeoutError\"; ABSENT: broker/client.ts post signature and thrown error contract"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "The sizing tests use only exact divisions, so they cannot detect the ceil overshoot, and the test name 'sizes to the cap' is false for non-divisible inputs. No test covers retry, timeout, 4xx non-retry, or client_order_id reuse.",
+   "evidence": "test(\"sizes to the cap in whole lots\", ...) uses only 10_000/100 and 10_000/50 with lotSize 10; ABSENT: any submitOrder retry, timeout, or 4xx test"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The change merges and deploys to live-money order routing before the open with no feature flag, canary, kill switch, or rollback plan. Reverting the deploy does not cancel orders already sent.",
+   "evidence": "This PR is about to merge to main and deploy before the next market open. ABSENT: rollback plan, feature flag, or staged rollout"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The ceil change alters a risk-critical rounding direction (conservative floor to aggressive ceil) yet is described only as tidying rounding, and it is bundled with the retry change so neither can be reviewed or reverted independently.",
+   "evidence": "Also tidies the sizing helper so quantities are rounded to the broker's lot size before submit. vs. - return Math.floor(...) * lotSize; + return Math.ceil(lots) * lotSize;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Retries reuse the original limit price and quantity for up to about 12.75s with no re-validation of the risk check between attempts, so a late fill can execute outside the conditions that were sized and checked.",
+   "evidence": "{ timeoutMs: 4000 } ... await sleep(250 * 2 ** (attempt - 1)); // no re-validation of intent or risk"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Retry exhaustion emits only a warn log that omits clientOrderId and the error, with no metric or alert, so an accepted-but-reported-failed order is hard to trace during the open.",
+   "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, attempt }); ABSENT: metric or alert on final throw"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "504 is retried although the motivation cites only 502/503, and if a thrown value is null or undefined, (err as Error).name masks the original error with a TypeError.",
+   "evidence": "const RETRYABLE_STATUS = new Set([502, 503, 504]); (err as Error).name === \"TimeoutError\""
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 109907,
+  "tokOut": 47517,
+  "usd": 0.04167949,
+  "critMs": 64243
+ }
+}

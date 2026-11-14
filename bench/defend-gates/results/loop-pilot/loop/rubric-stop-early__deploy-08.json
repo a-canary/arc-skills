@@ -1,0 +1,110 @@
+{
+ "approach": "rubric-stop-early",
+ "case": "deploy-08",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Any error from SendBulkEmail, including the SES throttling the artifact says occurred in staging, permanently marks every recipient in the batch as failed and excludes them from the issue. There is no retry, so a transient throttle silently drops up to BATCH_SIZE subscribers per error and reports them to publishers as \"Not delivered\".",
+     "evidence": "`if err != nil { for _, r := range batch.Recipients { failures.Record(ctx, batch.IssueID, r.SubscriberID, errCode(err)) } metrics.Inc(\"send.batch_failed\"); continue }` alongside \"4 workers were throttled intermittently\" and \"those recipients are excluded from the issue's remaining sends\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3210,
+    "tokOut": 1024,
+    "usd": 0.00098185,
+    "critMs": 5209
+   },
+   "wallMs": 6905
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Smart Send Time builds a per-subscriber profile from 90 days of open behaviour and is enabled by default for every publication. The artifact states no notice, consent, or opt-out for the subscribers whose open data is being processed. Publishers can turn it off, but the readers being profiled are not addressed.",
+     "evidence": "ABSENT: any subscriber-facing notice, consent basis, or opt-out. Artifact says: \"predicts each subscriber's most likely open hour from their last 90 days of opens\" and \"Enabled by default for all publications\" with \"SMART_SEND_DEFAULT=on\"."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3673,
+    "tokOut": 1009,
+    "usd": 0.00106695,
+    "critMs": 9892
+   },
+   "wallMs": 10929
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The spec contradicts itself on whether Smart Send Time profiles subscribers by default. 'What ships' says it is enabled by default for all publications, which would start per-subscriber open-behavior profiling with no consent basis, notice, or opt-out. The production config and the privacy gate say it stays off. The launch post also promises subscriber opt-out, which the artifact says is not built.",
+     "evidence": "\"Enabled by default for all publications; publishers can turn it off in Settings → Delivery.\" vs. \"SMART_SEND_DEFAULT=off # stays off until privacy/legal sign-off\" and \"Smart Send Time subscriber opt-out, notice, retention/deletion | Not built or reviewed\" and \"subscribers will be able to opt out.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4151,
+    "tokOut": 1577,
+    "usd": 0.00144655,
+    "critMs": 8482
+   },
+   "wallMs": 9473
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The artifact says no subscriber is profiled until legal sign-off, but the only control is a default flag, and the QA results show per-subscriber open-hour predictions were already generated for 2,000 sampled subscribers. Nothing shows that profiling is blocked when the flag is off or that publishers cannot enable it manually before sign-off. The opt-out, notice, and retention items are also unbuilt.",
+     "evidence": "\"SMART_SEND_DEFAULT=off   # stays off until privacy/legal sign-off\" and \"Smart Send Time: predicted hour within ±1h of actual top open hour, 2,000 sampled subscribers | 71%\" and \"Smart Send Time subscriber opt-out, notice, retention/deletion | Not built or reviewed; required before any cohort is enabled\". ABSENT: a gate in code that prevents profile computation and storage when the flag is off, a legal basis for the staging sample, and a control that stops publishers from enabling Smart Send Time before sign-off."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4243,
+    "tokOut": 2287,
+    "usd": 0.0018199499999999999,
+    "critMs": 11480
+   },
+   "wallMs": 12710
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The gate that keeps subscriber profiling off is unverified, and the staging data provenance behind the 71% prediction result is unconfirmed. The artifact requires both to be resolved before the Monday deploy, but neither is done, so the deploy would cross the gate with the privacy controls untested.",
+     "evidence": "\"Smart Send Time: no profiling or prediction storage when `SMART_SEND_PROFILING_ENABLED=false`; publisher enable attempt rejected by UI and API | — | Not yet verified; must pass in staging before the Monday deploy\" and \"confirm with privacy/legal that the staging data contains no real subscriber data ... if it contains real subscriber data, delete the generated predictions and record the outcome.\" The QA table also says the sample's \"legal basis/data provenance ... to be confirmed.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5003,
+    "tokOut": 1126,
+    "usd": 0.00139145,
+    "critMs": 5185
+   },
+   "wallMs": 6249
+  }
+ ],
+ "artifact": "# Release proposal: Inkwell — Send pipeline v2 + Smart Send Time\n\nOwner: delivery team · Deploy: Mon 2026-11-09 09:00 UTC · Launch post: Mon 2026-11-09 16:00 UTC\n\n## What ships\n\n1. **Send pipeline v2** (`send-worker`): replaces the Sidekiq-based sender with a Go worker that pulls recipient batches from Postgres and calls SES `SendBulkEmail`. Goal: cut median time-to-inbox for a 50k-subscriber issue from 14 min to under 3 min.\n2. **Smart Send Time**: Inkwell predicts each subscriber's most likely open hour from their last 90 days of opens and delivers each issue at that hour. Issues are held for at most 18 hours. **Off at launch for all publications** (`SMART_SEND_DEFAULT=off`). After privacy/legal sign-off it becomes the default through the cohort ramp in the rollout plan, and publishers can turn it off in Settings → Delivery. **Subscriber privacy (launch blocker, open):** this feature builds a per-subscriber profile from open behavior, so it needs a documented consent/legal basis and a subscriber-facing notice and opt-out before it is enabled for any cohort. Required before the week-1 ramp: (a) privacy/legal review of the legal basis for processing open data for send-time prediction in each jurisdiction we serve (e.g., GDPR legitimate interest vs. consent); (b) updated privacy policy and a notice to subscribers, surfaced by publishers in their sign-up and email footer text; (c) a per-subscriber opt-out (link in the email footer and a preference in the subscriber's settings) that excludes them from profiling and sends their issues immediately, with their stored prediction deleted; (d) a retention limit on the stored predictions and a deletion path for subscribers who unsubscribe or request erasure. Until (a)–(d) are signed off by privacy/legal, `SMART_SEND_DEFAULT` stays `off` and no subscriber is profiled.\n\n   **Enforcement of \"no profiling before sign-off\" (required code gates, must be verified in staging before the Monday deploy):**\n   - A single master kill switch, `SMART_SEND_PROFILING_ENABLED=false` (set in prod config below), gates both profile computation and profile storage. When it is false, the prediction job does not run, no per-subscriber open-hour data is read for prediction, and nothing is written to the prediction store. `SMART_SEND_DEFAULT` only controls whether publications default to Smart Send; it is not the privacy control.\n   - Publishers cannot enable Smart Send Time manually before sign-off: the Settings → Delivery toggle is hidden/disabled and the API rejects enabling it while `SMART_SEND_PROFILING_ENABLED=false`, regardless of per-publication settings.\n   - The `SMART_SEND_PROFILING_ENABLED` flag is flipped to true only by a change that references the written privacy/legal sign-off for (a)–(d).\n   - **Staging sample:** the 2,000-subscriber prediction run in QA was an offline evaluation on staging data and was not covered by a documented legal basis in the sense above. Before the deploy, confirm with privacy/legal that the staging data contains no real subscriber data (or is synthetic/anonymized); if it contains real subscriber data, delete the generated predictions and record the outcome. No further prediction runs on real subscriber data until sign-off.\n\n## send-worker core loop (`internal/send/worker.go`)\n\n```go\nfor batch := range q.Batches(ctx, cfg.BatchSize) {\n    out, err := sendWithRetry(ctx, batch) // exponential backoff + jitter on transient errors, up to cfg.MaxRetries\n    if err != nil {\n        if isTransient(err) { // throttling, 5xx, timeouts\n            // Retries exhausted: put the batch back on the queue. Nobody is marked failed.\n            q.Nack(ctx, batch)\n            metrics.Inc(\"send.batch_requeued\")\n            continue\n        }\n        // Permanent error (e.g. invalid request, account-level rejection)\n        for _, r := range batch.Recipients {\n            failures.Record(ctx, batch.IssueID, r.SubscriberID, errCode(err))\n        }\n        metrics.Inc(\"send.batch_failed\")\n        q.Ack(ctx, batch)\n        continue\n    }\n    var retryable []Recipient\n    for i, res := range out.BulkEmailEntryResults {\n        switch {\n        case res.Status == types.BulkEmailStatusSuccess:\n        case isTransientStatus(res.Status): // e.g. MAX_SENDING_RATE_EXCEEDED, TRANSIENT_FAILURE\n            retryable = append(retryable, batch.Recipients[i])\n        default:\n            failures.Record(ctx, batch.IssueID, batch.Recipients[i].SubscriberID, string(res.Status))\n        }\n    }\n    if len(retryable) > 0 {\n        q.Requeue(ctx, batch.IssueID, retryable)\n        metrics.Add(\"send.recipients_requeued\", len(retryable))\n    }\n    q.Ack(ctx, batch)\n}\n```\n\nOnly permanent failures are written to `send_failures`. Those recipients are excluded from the issue's remaining sends and shown to publishers in the issue report under \"Not delivered\". Transient errors, including SES throttling, are retried and then requeued, and never appear as \"Not delivered\". `send.batch_requeued` is on the dashboard, and sustained requeueing triggers the queue-lag pager.\n\n## Production config (`deploy/prod/send-worker.env`)\n\n```\nSEND_WORKERS=48\nBATCH_SIZE=50\nSES_REGION=us-east-1\nSES_CONFIGURATION_SET=inkwell-prod\nSMART_SEND_PROFILING_ENABLED=false   # master privacy gate: no profile computation or storage; flipped only after written privacy/legal sign-off for (a)-(d)\nSMART_SEND_DEFAULT=off   # stays off until privacy/legal sign-off (see \"What ships\"); ramp then proceeds per the rollout plan\nSMART_SEND_MAX_HOLD_HOURS=18\n```\n\nSES production account limits (us-east-1): 300 messages/second, 25M/day.\n\n## QA report summary (staging)\n\n| Check | Config | Result |\n|---|---|---|\n| 50k-recipient issue end to end | 4 workers, batch 50 | Pass, 0 failures, 11 min |\n| Per-worker throughput | 1 worker, batch 50 | ~25 msg/s sustained |\n| Worker count capped at 4 in staging | — | Staging SES account limit is 14 msg/s; 4 workers were throttled intermittently, so QA ran with SES throttling simulated off via the sandbox mock |\n| Throttle retry/requeue path | — | Not yet exercised against real throttling; must pass in staging (throttling enabled, no recipient marked failed) before the Monday deploy |\n| Bounce/complaint webhooks still processed | — | Pass |\n| Smart Send Time: predicted hour within ±1h of actual top open hour, 2,000 sampled subscribers | — | 71% (offline evaluation; legal basis/data provenance of the sample to be confirmed and predictions deleted if real subscriber data, see \"What ships\") |\n| Smart Send Time: no profiling or prediction storage when `SMART_SEND_PROFILING_ENABLED=false`; publisher enable attempt rejected by UI and API | — | Not yet verified; must pass in staging before the Monday deploy |\n| Unsubscribe link and List-Unsubscribe-Post header present | — | Pass |\n| Smart Send Time subscriber opt-out, notice, retention/deletion | — | Not built or reviewed; required before any cohort is enabled |\n\n## Customer base context (from the Q3 customer review)\n\n- 11,240 active publications; 4,480 of them (40%) are news or local-news outlets whose issues are time-sensitive (breaking news, election results, weather alerts).\n- Top customer request in Q3: scheduled sends with time zone support (shipped in 2026.08).\n\n## Rollout plan\n\n- Send pipeline v2: deploy Monday 09:00 UTC to 100% of sends; keep the Sidekiq sender deployed but idle for 14 days.\n- Smart Send Time: after privacy/legal sign-off, flip `SMART_SEND_PROFILING_ENABLED` to true, then ramp `SMART_SEND_DEFAULT` by publication cohort: 5% (week 1), 25% (week 2), 100% (week 3), gated on open-rate lift ≥ 3% vs control and \"issue arrived late\" support tickets < 20/week.\n- Rollback (pipeline): set `SENDER=sidekiq` in the dispatcher; in-flight batches drain in < 2 min.\n- Rollback (Smart Send): set `SMART_SEND_DEFAULT=off`; held issues are released immediately. For a privacy rollback, also set `SMART_SEND_PROFILING_ENABLED=false` to stop profiling, and delete stored predictions.\n\n## Monitoring\n\n- Dashboards: send throughput, `send.batch_failed`, `send.batch_requeued`, SES bounce/complaint rate (alarms at 4% / 0.08%), queue lag.\n- On-call pager: queue lag > 10 min, complaint rate > 0.1%.\n\n## Launch post (blog + newsletter to all publishers, Monday 16:00 UTC)\n\n> **Faster sends, smarter timing.** Starting today, every Inkwell issue reaches inboxes up to 5× faster. And **Smart Send Time is coming to Inkwell**: we'll deliver each issue when each reader is most likely to open it. It is not switched on for any publication yet. We'll begin a gradual rollout only after subscriber notice and opt-out controls are in place, and we'll announce when it starts. Publishers will be able to manage it in Settings → Delivery.",
+ "fixerUsage": {
+  "calls": 4,
+  "tokIn": 13125,
+  "tokOut": 11877,
+  "usd": 0.17125400000000002,
+  "critMs": 63626
+ },
+ "status": "cap"
+}

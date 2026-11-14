@@ -1,0 +1,131 @@
+{
+ "approach": "rubric-single",
+ "case": "merge-07",
+ "rep": 1,
+ "wallMs": 126620,
+ "verdict": "ATTACKS",
+ "confidence": 0.9,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "The upload runs through `shell=True` with partner-chosen filenames interpolated into the command. A crafted SFTP filename containing shell metacharacters executes arbitrary commands on a worker that holds write credentials for the whole raw bucket.",
+   "evidence": "subprocess.run(f\"gsutil -q -o ... cp {local} {dest}\", shell=True, check=True) with dest built from src_name = src.stem, and the docstring says 'Partners upload via SFTP and choose their own filenames'"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "When a file fails mid-write or mid-upload, its plaintext partner-data chunks are never unlinked and remain on worker disk in work_dir.",
+   "evidence": "except Exception: log.exception(...); failed += 1 with no cleanup of work_dir chunks; chunk.unlink() only runs on success"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "The ingest now depends on a gsutil binary being present on every worker, shelled out per chunk, rather than the Python client library already in use. Nothing in the PR says the image provides it or pins its version.",
+   "evidence": "ABSENT: no change to worker image or dependency pins; previous code used google.cloud.storage"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The 150M parallel-composite threshold may never trigger for 500k-row gzip chunks, so the stated speedup may not apply. Spawning one gsutil process per chunk also adds overhead on multi-GB files.",
+   "evidence": "CHUNK_ROWS = 500_000 with GSUtil:parallel_composite_upload_threshold=150M; no chunk size measurement in the PR"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Parallel composite uploads create temporary component objects that incur request and storage charges, and retries on a large file multiply that spend. The PR gives no budget estimate.",
+   "evidence": "ABSENT: no cost analysis for composite uploads on the 3.1 GB feed"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The _SUCCESS marker is written even when files failed, so downstream dashboards will read an incomplete partition as complete. A partner run where every file fails still produces a marker.",
+   "evidence": "write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\") runs unconditionally after the loop, while `failed` is only logged"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "subprocess.run has no timeout and there is no retry around gsutil. A hung transfer blocks the worker indefinitely, and a single transient failure drops the whole file. Partially uploaded chunks from a failed file remain in the raw partition with no rollback.",
+   "evidence": "subprocess.run(..., shell=True, check=True) with no timeout= and no retry; the except branch does not delete already-uploaded chunks"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The object layout changes from raw/{partner}/dt=/{stem}.csv.gz to raw/{partner}/dt=/{stem}/{stem}-NNNN.csv.gz. Existing downstream readers will not find the files, and re-running a partition that was written under the old layout leaves mixed layouts in the same dt= directory.",
+   "evidence": "old: f\"raw/{partner}/dt={dt}/{src.stem}.csv.gz\"; new: f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "partition_date() switched from UTC to local time (TZ=America/Los_Angeles). The 01:30 UTC run therefore writes into the previous calendar day's partition, while dashboards read the UTC dt=, so data and _SUCCESS land in the wrong partition.",
+   "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")  +    return datetime.now().strftime(\"%Y-%m-%d\"); workers run with TZ=America/Los_Angeles; job scheduled at 01:30 UTC"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "normalise_row now receives a csv.DictReader dict of strings instead of the pandas row it used before. Empty fields are no longer NaN and the input type changes, so the PR's claim that normalisation is unchanged is not established.",
+   "evidence": "Schema normalisation is unchanged (same `normalise_row`).  vs  norm = normalise_row(row) where row comes from csv.DictReader; previous: df.apply(normalise_row, axis=1, result_type=\"expand\")"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A source file with zero data rows produces no chunks and is counted as ok with nothing uploaded, which hides an empty or truncated drop. A row whose normalised keys differ from the first row in a chunk will raise in DictWriter and fail the whole file.",
+   "evidence": "for i, row in enumerate(reader): ... writer = csv.DictWriter(out, fieldnames=list(norm.keys())); ok += 1 with no row-count check"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The speedup claim ('parallel composite uploads are much faster') and the 'unchanged' normalisation claim have no benchmark or test. The normalisation claim is contradicted by the input-type change in the same diff.",
+   "evidence": "ABSENT: no benchmark or test for the 3.1 GB feed; 'Schema normalisation is unchanged' vs csv.DictReader input replacing pandas row"
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "NO ISSUE: this change has no rendered UI.",
+   "evidence": "ABSENT: no UI files in diff"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "NO ISSUE: streaming addresses the stated OOM on the Northwind feed.",
+   "evidence": "The Northwind feed hit 3.1 GB last week and the ingest task OOM-killed the worker."
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "NO ISSUE: no user-facing flow changes.",
+   "evidence": "ABSENT: no user-facing flow in diff"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "NO ISSUE: no interface changes.",
+   "evidence": "ABSENT: no interface in diff"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "NO ISSUE found beyond the privacy leftover-file concern; no partner data-processing terms are referenced in the PR.",
+   "evidence": "ABSENT: partner data-handling terms not referenced"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "ingest_partner's signature gained a required work_dir argument, but no caller is updated in the diff, so the DAG may break. The shell=True helper is also hard to test.",
+   "evidence": "def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) with no caller change in the diff"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "NO ISSUE: no additional gate-worthy concerns beyond those listed above.",
+   "evidence": "ABSENT: nothing further in diff"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3147,
+  "tokOut": 6370,
+  "usd": 0.0036447199999999997,
+  "critMs": 29813
+ }
+}

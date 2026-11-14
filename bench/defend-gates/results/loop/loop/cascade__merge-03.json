@@ -1,0 +1,46 @@
+{
+ "approach": "cascade",
+ "case": "merge-03",
+ "rounds": [
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "No problem found. The ORDER BY expression is built only from the fixed sortColumns allowlist, and the direction is one of two constants. Account, since and limit remain bound parameters. The injection test case confirms an unknown key is rejected.",
+     "evidence": "col, ok := sortColumns[o.SortKey]; if !ok { return \"\", fmt.Errorf(...) }"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The PR says unknown keys produce a usage error, but the failure is a plain error returned from runList at execution time. Whether cobra prints usage depends on SilenceUsage, which the diff does not show. The error text does list the valid keys, so the behavior is acceptable.",
+     "evidence": "\"Unknown sort keys fail fast with a usage error\" / return nil, err in runList"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Test coverage is partial. The category key is not tested, and the assertions use substring matching. The strings import in list_test.go is not visible in the hunk, though CI would catch a missing import.",
+     "evidence": "cases contain date, amount desc, payee and two error cases; no \"category\""
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 7877,
+    "tokOut": 3189,
+    "usd": 0.02265782,
+    "critMs": 18181
+   },
+   "wallMs": 78408
+  }
+ ],
+ "artifact": "PR #88: ledgerq: add --sort and --desc to `ledgerq list`\n\nUsers asked to sort transaction listings by amount or payee instead of only by posting date.\nAdds `--sort {amount,category,date,payee}` (default `date`) and `--desc`.\nUnknown sort keys fail fast with a usage error that lists the valid keys.\nTies are broken by transaction id so paging with --limit stays stable.\nIncludes table tests for the query builder.\n\ndiff --git a/cmd/list.go b/cmd/list.go\nindex 51c0e9a..d27a4f3 100644\n--- a/cmd/list.go\n+++ b/cmd/list.go\n@@ -3,6 +3,8 @@ package cmd\n import (\n \t\"context\"\n \t\"database/sql\"\n \t\"fmt\"\n+\t\"sort\"\n+\t\"strings\"\n \t\"time\"\n\n \t\"github.com/spf13/cobra\"\n@@ -14,22 +16,55 @@ type listOpts struct {\n \tSince   time.Time\n \tAccount string\n \tLimit   int\n+\tSortKey string\n+\tDesc    bool\n }\n\n+// sortColumns maps user-facing sort keys to ORDER BY expressions.\n+var sortColumns = map[string]string{\n+\t\"date\":     \"t.posted_at\",\n+\t\"amount\":   \"t.amount_cents\",\n+\t\"payee\":    \"t.payee COLLATE NOCASE\",\n+\t\"category\": \"COALESCE(c.name, '') COLLATE NOCASE\",\n+}\n+\n+func validSortKeys() string {\n+\tkeys := make([]string, 0, len(sortColumns))\n+\tfor k := range sortColumns {\n+\t\tkeys = append(keys, k)\n+\t}\n+\tsort.Strings(keys)\n+\treturn strings.Join(keys, \", \")\n+}\n+\n+func buildListQuery(o listOpts) (string, error) {\n+\tcol, ok := sortColumns[o.SortKey]\n+\tif !ok {\n+\t\treturn \"\", fmt.Errorf(\"invalid --sort %q (valid: %s)\", o.SortKey, validSortKeys())\n+\t}\n+\tdir := \"ASC\"\n+\tif o.Desc {\n+\t\tdir = \"DESC\"\n+\t}\n+\treturn fmt.Sprintf(`SELECT t.id, t.posted_at, t.payee, t.amount_cents, COALESCE(c.name, '')\n+FROM transactions t LEFT JOIN categories c ON c.id = t.category_id\n+WHERE t.account = ? AND t.posted_at >= ?\n+ORDER BY %s %s, t.id %s\n+LIMIT ?`, col, dir, dir), nil\n+}\n+\n func runList(ctx context.Context, db *sql.DB, o listOpts) ([]Txn, error) {\n-\trows, err := db.QueryContext(ctx, `SELECT t.id, t.posted_at, t.payee, t.amount_cents, COALESCE(c.name, '')\n-FROM transactions t LEFT JOIN categories c ON c.id = t.category_id\n-WHERE t.account = ? AND t.posted_at >= ?\n-ORDER BY t.posted_at, t.id\n-LIMIT ?`, o.Account, o.Since.Unix(), o.Limit)\n+\tq, err := buildListQuery(o)\n+\tif err != nil {\n+\t\treturn nil, err\n+\t}\n+\trows, err := db.QueryContext(ctx, q, o.Account, o.Since.Unix(), o.Limit)\n \tif err != nil {\n \t\treturn nil, fmt.Errorf(\"list query: %w\", err)\n \t}\n \tdefer rows.Close()\n@@ -62,6 +97,8 @@ func newListCmd(db *sql.DB) *cobra.Command {\n \tcmd.Flags().StringVar(&o.Account, \"account\", \"checking\", \"account name\")\n \tcmd.Flags().IntVar(&o.Limit, \"limit\", 50, \"max rows\")\n+\tcmd.Flags().StringVar(&o.SortKey, \"sort\", \"date\", \"sort key: \"+validSortKeys())\n+\tcmd.Flags().BoolVar(&o.Desc, \"desc\", false, \"sort descending\")\n \treturn cmd\n }\ndiff --git a/cmd/list_test.go b/cmd/list_test.go\nindex 0b7d1e2..6f4a9c8 100644\n--- a/cmd/list_test.go\n+++ b/cmd/list_test.go\n@@ -40,3 +40,29 @@ func TestRunListSince(t *testing.T) {\n \t}\n }\n+\n+func TestBuildListQuery(t *testing.T) {\n+\tcases := []struct {\n+\t\tkey     string\n+\t\tdesc    bool\n+\t\twant    string\n+\t\twantErr bool\n+\t}{\n+\t\t{key: \"date\", want: \"ORDER BY t.posted_at ASC, t.id ASC\"},\n+\t\t{key: \"amount\", desc: true, want: \"ORDER BY t.amount_cents DESC, t.id DESC\"},\n+\t\t{key: \"payee\", want: \"ORDER BY t.payee COLLATE NOCASE ASC, t.id ASC\"},\n+\t\t{key: \"amount; DROP TABLE transactions\", wantErr: true},\n+\t\t{key: \"\", wantErr: true},\n+\t}\n+\tfor _, tc := range cases {\n+\t\tq, err := buildListQuery(listOpts{SortKey: tc.key, Desc: tc.desc})\n+\t\tif tc.wantErr {\n+\t\t\tif err == nil {\n+\t\t\t\tt.Errorf(\"key %q: expected error\", tc.key)\n+\t\t\t}\n+\t\t\tcontinue\n+\t\t}\n+\t\tif err != nil || !strings.Contains(q, tc.want) {\n+\t\t\tt.Errorf(\"key %q: got %q, err %v\", tc.key, q, err)\n+\t\t}\n+\t}\n+}",
+ "fixerUsage": {
+  "calls": 0,
+  "tokIn": 0,
+  "tokOut": 0,
+  "usd": 0,
+  "critMs": 0
+ },
+ "status": "cleared"
+}

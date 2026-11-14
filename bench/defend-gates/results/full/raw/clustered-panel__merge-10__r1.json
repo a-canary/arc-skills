@@ -1,0 +1,77 @@
+{
+ "approach": "clustered-panel",
+ "case": "merge-10",
+ "rep": 1,
+ "wallMs": 275910,
+ "verdict": "CLEAR",
+ "confidence": 0.75,
+ "attacks": [
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The claim predicate (status = 'queued' OR expired running rows, ORDER BY created_at, id, FOR UPDATE SKIP LOCKED) has no supporting index, so each poll may scan and sort the whole thumbnail_jobs table, including idle polls. This is tolerable at ~20k rows but should be verified with EXPLAIN or covered by an index.",
+   "evidence": "ABSENT: any CREATE INDEX in 0042_thumbnail_job_leases.sql; migration is only \"ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz;\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Lease safety relies on w.id being unique per process run, but the diff never shows how w.id is generated. With replicas at 1 and strategy Recreate this does not bite now, but it must be established before scale-out.",
+   "evidence": "ABSENT: definition of w.id; used as \"store.Complete(ctx, job.ID, w.id, ...)\" and \"WHERE id = $1 AND locked_by = $2\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The safety statement that a live worker never outlives its lease depends on render honoring the job context, and the artifact does not show that render or its subprocesses observe cancellation. With one replica and Recreate, no second claimer can run concurrently, so this is a scale-out risk rather than a merge blocker.",
+   "evidence": "\"the job context is cancelled at jobTimeout, so a live worker never outlives its lease\"; ABSENT: evidence that render observes ctx cancellation"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Complete checks locked_by and status but not locked_until, so a worker whose lease has expired can still complete the job if no one has reclaimed it yet. This conflicts with the stated rule that Complete requires the caller to still hold the lease, though it is harmless with a single replica.",
+   "evidence": "\"WHERE id = $1 AND locked_by = $2 AND status = 'running'\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "On shutdown the worker returns nil before Complete, even when render succeeded. The row stays 'running' until lease expiry, and the clean exit looks the same as normal completion to callers.",
+   "evidence": "\"if ctx.Err() != nil {\n\t\t\treturn nil // shutting down: leave the lease to expire so another worker retries the job\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "A transient DB error on Complete still makes Run return an error and takes the worker down. The job then waits up to a lease period, and the removed startup reset no longer clears it immediately.",
+   "evidence": "\"return fmt.Errorf(\\\"complete job %d: %w\\\", job.ID, err)\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The lease policy (jobTimeout + 1 minute) lives in the worker, while the store accepts any duration and no test ties the lease to jobTimeout, so changing jobTimeout could silently break the invariant.",
+   "evidence": "\"w.store.Claim(ctx, w.id, w.jobTimeout+time.Minute) // lease must outlive jobTimeout\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "TestClaimNeverHandsOutAJobTwice checks only the total claim count, not which job IDs were claimed, so it would not catch a duplicate claim that is offset by a missed job.",
+   "evidence": "\"if n := claims.Load(); n != 40 {\" with no per-job ID tracking"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The migration has no down file and no stated deploy order. New code selects the new columns, so claims fail if the migration has not run before the new binary starts. Rollback leaves the columns in place, which is harmless but undocumented.",
+   "evidence": "ABSENT: migration ordering relative to deploy and any down migration for 0042_thumbnail_job_leases.sql"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The title says the change lets more than one worker run, but the body says replica count stays at 1 and scale-out is separate. Reviewers could read the merge as enabling multi-worker operation.",
+   "evidence": "\"so more than one worker can run\" vs \"Replica count stays 1 here; scale-out and a poison-job attempts cap (#215) are separate changes.\""
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 25866,
+  "tokOut": 18854,
+  "usd": 0.0145992,
+  "critMs": 47106
+ }
+}

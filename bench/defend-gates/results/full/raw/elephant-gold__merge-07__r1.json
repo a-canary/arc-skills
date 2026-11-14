@@ -1,0 +1,137 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-07",
+ "rep": 1,
+ "wallMs": 244998,
+ "verdict": "ATTACKS",
+ "confidence": 0.93,
+ "attacks": [
+  {
+   "lens": "injection",
+   "severity": "blocker",
+   "claim": "_upload builds a shell command by f-string interpolation and runs it with shell=True. The destination includes src.stem, which comes from partner-chosen SFTP filenames, so a crafted name can run arbitrary commands on a worker that holds write credentials for the whole raw bucket.",
+   "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "The _SUCCESS marker is written unconditionally after the loop, even when files failed and `failed > 0`. Dashboards treat the marker as partition-complete, so a partial partition is published as complete.",
+   "evidence": "except Exception:\n            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n            failed += 1\n    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "partition_date() changed from UTC to naive local time. Workers run with TZ=America/Los_Angeles and the job runs at 01:30 UTC (about 17:30 PT the previous day), so dt is the previous UTC date. Data lands in the wrong dt partition, and dashboards that read UTC dates see the wrong or missing day.",
+   "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "Untrusted partner filenames flow unvalidated into GCS object keys and local work-file names. No allowlist or sanitisation exists before the name becomes a write destination.",
+   "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\" with src_name=src.stem; ABSENT: any filename allowlist or sanitisation"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "When a file fails midway, chunks already uploaded stay in the dt partition with no compensating delete. The file is counted as failed, but its partial objects remain and are billed and read as part of the partition.",
+   "evidence": "for chunk in _write_chunks(src, work_dir):\n                _upload(chunk, partner, dt, src.stem)\n                chunk.unlink()\n            ok += 1\n        except Exception:"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Reruns are not idempotent. Chunk names are numbered by count, and nothing clears the destination prefix first, so a rerun producing fewer chunks leaves stale higher-numbered objects. The rewritten marker then covers a mix of old and new rows, which can duplicate data.",
+   "evidence": "path = out_dir / f\"{src.stem}-{len(chunks):04d}.csv.gz\"  (no prefix clear before upload)"
+  },
+  {
+   "lens": "compatibility",
+   "severity": "major",
+   "claim": "The object layout changed from one object per file (raw/{partner}/dt=/{stem}.csv.gz) to a directory per file with multiple chunk objects. Existing consumers of the raw path will not find the expected objects, which contradicts the claim that the change is behaviour-preserving.",
+   "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\"  (previously f\"raw/{partner}/dt={dt}/{src.stem}.csv.gz\")"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Per-file failures are logged and counted, but ingest_partner returns normally and the Airflow task shows success. No alert fires on partial loss.",
+   "evidence": "log.info(\"partner=%s dt=%s ok=%d failed=%d\", partner, dt, ok, failed)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "subprocess.run for gsutil has no timeout and ingest_partner has no run-level deadline. A hung transfer can block the worker and stall the nightly run past its window while accruing compute cost, with no failure signal.",
+   "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True,)  # no timeout= argument"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "There is no retry on transient gsutil or network errors. One failed subprocess call fails the whole file for the night.",
+   "evidence": "subprocess.run(f\"gsutil ... cp {local} {dest}\", shell=True, check=True)"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Plaintext-derived chunk files with partner personal data are left in work_dir when an upload or write fails. Cleanup runs only on the success path, the gzip handle is not closed on exception, and the artifact sets no tempdir scoping or retention for work_dir.",
+   "evidence": "for chunk in _write_chunks(src, work_dir):\n                _upload(chunk, partner, dt, src.stem)\n                chunk.unlink()\n        except Exception:  // ABSENT: finally cleanup, tempdir scoping, or retention for work_dir"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "normalise_row now receives csv.DictReader rows with empty strings, not pandas rows from read_csv(dtype=str) with NaN for missing cells. The PR says normalisation is unchanged, but its input type changed, and nothing tests or compares the output.",
+   "evidence": "norm = normalise_row(row)  (previously df.apply(normalise_row, axis=1)); ABSENT: test or old-vs-new output comparison. Quote: \"Schema normalisation is unchanged (same `normalise_row`).\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The stated speed rationale depends on parallel composite uploads, which only trigger above the 150M threshold. Each object is a 500k-row gzip chunk, and the PR gives no measurement showing chunks exceed 150MB, so the setting may be inert and each chunk pays a separate gsutil startup cost. No benchmark is provided.",
+   "evidence": "CHUNK_ROWS = 500_000 ... -o GSUtil:parallel_composite_upload_threshold=150M  (no benchmark or chunk-size measurement in the PR)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A header-only or empty source file produces zero chunks, so it is counted as ok with no upload and no log entry. A silently empty partner feed looks like a successful ingest.",
+   "evidence": "for chunk in _write_chunks(src, work_dir): ... ok += 1  (no chunks means no upload and no log)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The DictWriter takes its fieldnames from the first normalised row, so a later row with different keys raises ValueError mid-stream after earlier chunks were uploaded.",
+   "evidence": "writer = csv.DictWriter(out, fieldnames=list(norm.keys()))  # fixed from first row"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Per-file failure logging records the source filename and the full exception, and exceptions from normalise_row or the csv module can include raw partner row values.",
+   "evidence": "log.exception(\"partner=%s file=%s failed\", partner, src.name)"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Files and chunks are processed strictly sequentially, with each chunk pushed by a blocking gsutil subprocess before the next starts. At larger feed sizes wall-clock time grows linearly and may miss the 01:30 UTC window, and per-row Python normalisation may lengthen the run further. No runtime estimate is given.",
+   "evidence": "for src in sorted(drop_dir.glob(\"*.csv\")): ... for chunk in _write_chunks(src, work_dir): _upload(...)"
+  },
+  {
+   "lens": "vendor lock-in",
+   "severity": "minor",
+   "claim": "Uploads now shell out to the gsutil binary instead of the google-cloud-storage client. This adds a worker-image dependency on the CLI and makes the upload path harder to test and port.",
+   "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True)"
+  },
+  {
+   "lens": "hidden-coupling",
+   "severity": "minor",
+   "claim": "ingest_partner gains a required work_dir parameter, but the diff shows no caller updates, so two-argument call sites will break. The temp-directory contract is undocumented.",
+   "evidence": "-def ingest_partner(partner: str, drop_dir: Path) -> None:\n+def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None:  // ABSENT: caller updates"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The OOM fix is asserted but not demonstrated. No peak-memory measurement or run on the 3.1 GB Northwind feed is provided.",
+   "evidence": "ABSENT: memory profile or run on the 3.1 GB Northwind feed. Quote: \"The Northwind feed hit 3.1 GB last week and the ingest task OOM-killed the worker.\""
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 59268,
+  "tokOut": 39956,
+  "usd": 0.0318282,
+  "critMs": 39602
+ }
+}

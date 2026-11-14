@@ -1,0 +1,65 @@
+{
+ "approach": "cascade",
+ "case": "merge-01",
+ "rep": 2,
+ "wallMs": 160448,
+ "verdict": "ATTACKS",
+ "confidence": 0.96,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "clientOrderId is generated inside the retry loop, so each attempt uses a fresh ID. The broker cannot dedupe, and a timeout or 5xx after the broker accepted the first order will produce a second live order and a double fill. This contradicts the PR's own safety claim and the agreed retry-safety constraint.",
+   "evidence": "for (let attempt = 1; ...) { const clientOrderId = randomUUID(); try { ... client_order_id: clientOrderId ..."
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Changing Math.floor to Math.ceil in sizeBuy rounds the quantity up, so it exceeds the maxNotional headroom whenever headroom is not an exact multiple of the lot. This breaks the hard risk invariant that sizing must never exceed the cap. For example, 10000 cap, price 300, lot 1 gives 34 shares, which is 10200 notional. The PR describes this as a tidy-up, which hides the behavior change.",
+   "evidence": "-  return Math.floor(headroom / price / lotSize) * lotSize;\n+  return Math.ceil(lots) * lotSize;"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The new sizing tests use only exactly divisible cases, so they pass under both floor and ceil. They do not verify the cap is respected, and the ceil regression goes undetected. Nothing tests submitOrder's retry behavior either: ID reuse, 4xx non-retry, or timeout classification.",
+   "evidence": "expect(sizeBuy({ maxNotional: 10_000, price: 100, ... })).toBe(100); ABSENT: tests for src/router/submit.ts"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The timeout retry path depends on broker.post honoring a timeoutMs option and throwing an error named 'TimeoutError'. The diff does not touch or verify BrokerClient, so hangs may be unbounded or never classified as retryable.",
+   "evidence": "{ timeoutMs: 4000 } and (err as Error).name === \"TimeoutError\"; ABSENT: any change or evidence for src/broker/client.ts"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "There is no reconciliation after an ambiguous failure. The code never checks the broker for the order by client_order_id before resubmitting. A retry can also go out with a stale limit price roughly 13s later in the volatile open.",
+   "evidence": "await sleep(250 * 2 ** (attempt - 1)); ABSENT: order-status lookup before resubmit"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "A real-money order path change deploys right before market open with no flag, staged rollout, or rollback plan. The mistakes it can cause, duplicate fills and oversized orders, cannot be undone.",
+   "evidence": "'about to merge to main and deploy before the next market open.' ABSENT: kill switch or rollback plan"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Backoff has no jitter and there is no global retry budget, so concurrent orders retry in lockstep against a degraded broker.",
+   "evidence": "await sleep(250 * 2 ** (attempt - 1)); no jitter"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The retry log omits clientOrderId and the final failure is not logged, so orders are hard to trace through retries.",
+   "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, attempt });"
+  }
+ ],
+ "usage": {
+  "calls": 2,
+  "tokIn": 8323,
+  "tokOut": 5553,
+  "usd": 0.0308549,
+  "critMs": 29057
+ }
+}

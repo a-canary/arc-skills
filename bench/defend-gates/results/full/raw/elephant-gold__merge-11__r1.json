@@ -1,0 +1,119 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-11",
+ "rep": 1,
+ "wallMs": 321757,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Every trailing ')' is stripped from a matched URL, so balanced-parenthesis URLs such as Wikipedia article titles (e.g. .../Foo_(bar)) become links to the wrong page, and the stripped ')' is shown as plain text. No error is raised.",
+   "evidence": "const TRAILING_PUNCT = /[.,;:!?)\\]]+$/; ... const raw = m[0].replace(TRAILING_PUNCT, '');"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR states truncation 'only cuts at whitespace or between tokens' and the test is named 'never splits a link or a word', but the fallback hard-cuts a leading text token with no whitespace at a character count. The tests assert this mid-word cut as expected behavior, so the code contradicts its stated contract.",
+   "evidence": "else if (out.length === 0) out.push({ kind: 'text', value: Array.from(t.value).slice(0, limit).join('') }); ... expect(truncate(tokenize('x'.repeat(400)), 280).tokens).toEqual([{ kind: 'text', value: 'x'.repeat(280) }]);"
+  },
+  {
+   "lens": "other",
+   "severity": "major",
+   "claim": "A leading link of any length is shown whole, so a long first URL (for example a product link with tracking parameters) stays uncollapsed. The 'Request to borrow' button is still pushed down, which is the problem this PR is meant to solve. The only test uses a 23-character URL.",
+   "evidence": "else if (out.length === 0) out.push(t); // a leading link is shown whole rather than collapsing to nothing ... expect(truncate(tokenize('https://example.com/abc'), 5).tokens[0]).toMatchObject({ kind: 'link' });"
+  },
+  {
+   "lens": "ui",
+   "severity": "major",
+   "claim": "Long unbroken URLs are not wrapped. The regex accepts any run of non-space characters, and the diff adds no overflow-wrap or word-break rule, so a long URL can overflow the item column on phones, the exact case the PR targets.",
+   "evidence": "ABSENT: no CSS change for .item-description__body or the anchor (no overflow-wrap / word-break). const URL_RE = /\\bhttps?:\\/\\/[^\\s<>\"]+/gi;"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Descriptions have no length cap, and TRAILING_PUNCT is unanchored at the start. On a URL-like match followed by a long run of punctuation that does not end the match, the regex retries from each position, which is quadratic in the run length. Because owners control the text, one long crafted description can stall rendering for every neighbor who views the item.",
+   "evidence": "ABSENT: any max length on item.description. const TRAILING_PUNCT = /[.,;:!?)\\]]+$/; ... const raw = m[0].replace(TRAILING_PUNCT, '');"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "A URL-like string that fails parsing (e.g. 'https://[') is returned as plain text, so it can be split by the hard-cut fallback. The PR's guarantee is about links, and an unparseable string is not a link, so this is cosmetic. No test covers it.",
+   "evidence": "} catch {} // unparseable: keep as plain text ... ABSENT: any test with an unparseable http(s) URL near the truncation limit"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The expanded state renders every token, including every link, as DOM nodes. The previous code already rendered the full text, so the added cost comes only from the links and is bounded by the uncapped description length.",
+   "evidence": "const all = useMemo(() => tokenize(text), [text]); ... (expanded ? all : short.tokens).map(...)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A description that exceeds the limit only by trailing whitespace is flagged as truncated. The collapsed and expanded views show the same visible text, yet a 'Show more' toggle and an ellipsis still appear.",
+   "evidence": "if (used + t.value.length <= limit) {...} ... return { tokens: out, truncated: true };"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Expanded state is not keyed to the item. If ItemPage keeps the same ItemDescription mounted while the item changes, the previous item's expanded state carries over to the next description.",
+   "evidence": "const [expanded, setExpanded] = useState(false); ... <ItemDescription text={item.description} /> (no key)"
+  },
+  {
+   "lens": "injection",
+   "severity": "minor",
+   "claim": "The anchor text is the raw matched string, but the href is the normalized url.href. For inputs such as https://trusted.example@evil.example/ or IDN hostnames, the visible text and the navigation target differ, so a neighbor can be shown a link that looks like it goes elsewhere.",
+   "evidence": "return { kind: 'link', value: raw, href: url.href }; ... <a key={i} href={t.href} ...>{t.value}</a>"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "Links open in a new tab (target=\"_blank\") with no indication to the user, so screen reader and keyboard users get no warning that focus will move to a new window.",
+   "evidence": "<a key={i} href={t.href} target=\"_blank\" rel=\"noopener noreferrer nofollow\">{t.value}</a> with no visually hidden text or icon"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "The toggle changes its visible label between 'Show more' and 'Show less' while also setting aria-expanded, so the state is conveyed twice and the accessible name changes on each activation.",
+   "evidence": "aria-expanded={expanded} aria-controls={bodyId} ... {expanded ? 'Show less' : 'Show more'}"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Links after the 280-character cut are hidden in the collapsed view, and nothing indicates that a link is hidden. A buyer looking for the owner's product or manual link may not know it exists without expanding.",
+   "evidence": "ABSENT: no indication of hidden links or content in the collapsed state; toggle label is only 'Show more'."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The truncate() branches depend on implicit rules. A text token with no whitespace cut is silently dropped when prior output exists, and the limit is exempt for a leading link. These rules are not documented, and the tests pin exact token arrays without covering the dropped-text branch.",
+   "evidence": "} else if (out.length === 0) { out.push(t); // a leading link is shown whole ... ABSENT: a test for a non-empty output followed by an unbreakable text token"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The tests assert on internal token shapes from linkify helpers rather than on rendered output, so any refactor of the token representation breaks tests that describe user-visible behavior.",
+   "evidence": "expect(truncate(tokenize('alpha beta gamma'), 8).tokens).toEqual([{ kind: 'text', value: 'alpha' }]);"
+  },
+  {
+   "lens": "scope drift",
+   "severity": "minor",
+   "claim": "The PR bundles two independent features, collapsing long descriptions and linkifying URLs, each with its own module and tests. They could be reviewed, reverted, or shipped separately.",
+   "evidence": "Descriptions over 280 characters now render collapsed with a \"Show more\" toggle, and http(s) URLs in the text become links."
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "A 281-to-300-character description snaps back to a word boundary, so the 'Show more' toggle reveals only a few words for an extra tap.",
+   "evidence": "export function ItemDescription({ text, limit = 280 }: ...) ... {short.truncated && (<button ...>"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 70967,
+  "tokOut": 37727,
+  "usd": 0.0330535,
+  "critMs": 58619
+ }
+}

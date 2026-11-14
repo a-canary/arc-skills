@@ -1,0 +1,65 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "plan-09",
+ "rep": 1,
+ "wallMs": 365494,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The check that justifies per-partition dedup ran on the 4.2B-row fct table, which is already deduplicated globally by event_id. It cannot reveal an event_id mapping to two event_dates, so the 0 result proves nothing. The check has to run on raw.events. Detection after cutover is only a weekly test, so double counts could reach dashboards and the customer export for up to a week.",
+   "evidence": "Checked over all 4.2B rows: 0 such `event_id`s (query linked in DATA-412). ... New dbt test `unique_event_id` runs weekly"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The watermark is 'max ingested_at already in the table', but the plan says columns are unchanged and never says whether ingested_at is persisted in fct_page_events. If it is not, the core partition-selection logic cannot be built as written.",
+   "evidence": "max `ingested_at` already in the table − 2 h ... Columns, types, grain and dedup logic ... are unchanged"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Erasure is no longer self-healing. If the fct delete fails after the raw delete, the erased rows stay, because rebuilds only touch partitions that receive new raw rows. The old nightly full refresh would have removed them. The plan has no retry, alert or verification for this step, and the staging test covers only the success path.",
+   "evidence": "privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`. ... assert 0 rows for that user."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The legacy rebuild is a separate dbt Cloud job, and the plan never says it takes the analytics_write lock. An erasure could interleave with a legacy full refresh that read raw before the erasure, writing erased rows back into fct_page_events_legacy. Rollback would then restore them.",
+   "evidence": "privacy-svc and the dbt jobs already share the `analytics_write` lock (unchanged) ... It runs as a separate dbt Cloud job after the main job"
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The parity test scans both full tables (about 1.9 TiB each) with all-column fingerprints, roughly $24 per night. The plan budgets about $17 for the 7 parity nights. The test keeps running for 30 more nights (about $720) and is absent from the cost table. The v1 full-refresh runs during parity are also unbudgeted, so the 'Month 1 is below today' claim is unsupported.",
+   "evidence": "One-time backfill + 7 parity nights | — | ~$76 ... The nightly parity test keeps running (new vs legacy)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "After the legacy table is dropped at day 30, nothing detects gaps. The 2h overlap is justified only by a 4-minute measured p99.9, and no later reconciliation catches a late-visible row. The only alerting is dbt job failure, so a run that selects no partitions would go unnoticed.",
+   "evidence": "After 30 clean parity nights: drop the legacy model and table (DATA-431). ... Failure alerting is the existing dbt Cloud job alert"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The Looker savings come from dry runs of only the top 20 queries by bytes. The plan doesn't show this represents all 41 dashboards, and the customer export's filter pattern and post-change cost are never stated.",
+   "evidence": "dry runs of September's top 20 queries by bytes against v2: 61.2 → 8.7 TiB"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "BIT_XOR over per-row fingerprints cancels identical pairs, so the fingerprint is a weak signal and relies on the count check.",
+   "evidence": "BIT_XOR(FARM_FINGERPRINT(TO_JSON_STRING(t)))"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 23896,
+  "tokOut": 34794,
+  "usd": 0.08318153999999998,
+  "critMs": 78338
+ }
+}

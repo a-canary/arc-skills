@@ -1,0 +1,89 @@
+{
+ "approach": "cascade",
+ "case": "merge-04",
+ "rep": 2,
+ "wallMs": 193845,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The up migration adds an empty private_notes column and drops notes with no copy step, destroying all existing user notes. The down migration recreates an empty notes column, so the data is unrecoverable. Migrations auto-run on deploy after merge.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The PR describes a pure rename with no data change and a down migration that restores the name. The SQL is add+drop, so the description contradicts the migration that actually runs in production.",
+   "evidence": "\"Pure rename, no data change; the down migration restores the old name.\" vs ADD COLUMN private_notes / DROP COLUMN notes"
+  },
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "The handler removes LIMIT from SQL, fetches every saved recipe for the user (200k+ for heavy users), joins and serializes them, then slices in memory on each page request. This will break the 300ms p99 and risks memory exhaustion.",
+   "evidence": "WHERE ur.user_id = $1 ORDER BY ur.saved_at DESC, ur.id DESC`, [userId] ... rows.slice(start, start + limit)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "During a rolling deploy, old instances still SELECT ur.notes, which the migration drops, so they will error. The ALTER also takes ACCESS EXCLUSIVE locks on a 140M-row table with no lock_timeout, so traffic can queue behind it.",
+   "evidence": "BEGIN;\nALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;\nCOMMIT;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "A negative limit (e.g. -5) passes the Math.min clamp and makes page empty. start+limit < rows.length is still true, so page[page.length-1].id throws a TypeError and returns a 500.",
+   "evidence": "const limit = Math.min(Number(req.query.limit) || 50, 100); ... start + limit < rows.length ? page[page.length - 1].id : null"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "An unknown or deleted cursor makes findIndex return -1, so start becomes 0 and the response silently restarts from page one. Clients can loop or see duplicates instead of getting a 400.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Cursor lookup is a linear scan over the full result set per request, making a full walk O(N^2). There is no keyset WHERE on (saved_at, id), so the index cannot be used for seeking.",
+   "evidence": "rows.findIndex((r) => r.id === cursor)"
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "Each page view pulls the user's entire saved set from DB through the app, so DB, network and memory spend per request is unbounded for heavy users.",
+   "evidence": "db.query<SavedRow>(... WHERE ur.user_id = $1 ...) with no LIMIT"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The migration destroys user-written private notes that the context says cannot be recovered elsewhere, which is a loss of user content.",
+   "evidence": "notes are user-written free text that users cannot recover elsewhere; DROP COLUMN notes"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Removing offset is an API contract change that is not called out. Old clients sending offset will silently get the first page every time.",
+   "evidence": "-  const offset = Math.max(Number(req.query.offset) || 0, 0);"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The claim that the client already sends cursor is unreferenced, and tests cover only the happy path (no migration test, no invalid-cursor or negative-limit case).",
+   "evidence": "\"The client already sends `cursor` from the previous page's `nextCursor`.\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "A destructive schema migration and a pagination rewrite are bundled as two small changes, which obscures the risk of the migration in review.",
+   "evidence": "\"Two small changes bundled because they touch the same table.\""
+  }
+ ],
+ "usage": {
+  "calls": 2,
+  "tokIn": 9998,
+  "tokOut": 5754,
+  "usd": 0.040104310000000004,
+  "critMs": 31668
+ }
+}

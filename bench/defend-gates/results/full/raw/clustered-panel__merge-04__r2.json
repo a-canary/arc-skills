@@ -1,0 +1,83 @@
+{
+ "approach": "clustered-panel",
+ "case": "merge-04",
+ "rep": 2,
+ "wallMs": 186233,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The up migration adds an empty private_notes column and drops notes without copying data. It is not a rename. Every existing user note is destroyed on deploy, and the context says notes cannot be recovered elsewhere. The down migration cannot restore the data.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "Migrations run automatically on merge and the code change ships in the same step. Nothing stages the change (add, backfill, dual-write, switch reads, then drop). Old instances still running during rollout query ur.notes and will fail once the column is gone, and rolling back code does not restore the dropped data.",
+   "evidence": "Context: \"Migrations run automatically on deploy after merge to main.\" / diff: \"-    `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.notes`\""
+  },
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "The handler fetches every saved row for the user with no LIMIT and slices in JavaScript. For users with more than 200k saved recipes, each page reads, joins and sorts the full set and transfers it, which breaks the 300ms p99 budget and makes cost grow with total saves rather than page size.",
+   "evidence": "\"WHERE ur.user_id = $1 ORDER BY ur.saved_at DESC, ur.id DESC`,\n    [userId],\n  );\" / \"const page = rows.slice(start, start + limit);\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "ADD and DROP COLUMN run in one transaction on a roughly 140M-row table and take an ACCESS EXCLUSIVE lock with no lock_timeout. The migration can queue behind long reads and then block all reads and writes on user_recipes. No lock or timeout guard is included.",
+   "evidence": "\"BEGIN;\\nALTER TABLE user_recipes ADD COLUMN private_notes text;\\nALTER TABLE user_recipes DROP COLUMN notes;\\nCOMMIT;\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "An unknown or stale cursor (for example, a recipe unsaved between pages) makes findIndex return -1, so start becomes 0. The client silently receives the first page again, which causes duplicates or looping. Errors are not surfaced.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "A negative or otherwise non-positive limit (for example limit=-1) is not validated. page becomes empty, so page[page.length - 1].id throws a TypeError inside an async handler, producing a 500 or an unhandled rejection.",
+   "evidence": "const limit = Math.min(Number(req.query.limit) || 50, 100);\n ... start + limit < rows.length ? page[page.length - 1].id : null;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The offset parameter is removed with no compatibility path. Clients still sending offset always get page one, so any client that loops until an empty page never terminates. The PR asserts the client already sends cursor, but the diff provides no evidence and the old response had no nextCursor.",
+   "evidence": "-  const offset = Math.max(Number(req.query.offset) || 0, 0);\n...The client already sends `cursor` from the previous page's `nextCursor`."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The JSON response key changes from notes to private_notes. Existing API clients that read notes will break, and the PR does not mention or version this change.",
+   "evidence": "SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.private_notes"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR says 'pure rename, no data change', but the SQL is add plus drop and the PR gives no evidence that all readers and writers of user_recipes.notes were updated. Other routes, jobs, exports or the shared-collections work could still reference notes and fail after the drop.",
+   "evidence": "ABSENT: grep or list of readers/writers of user_recipes.notes outside server/routes/saved.ts"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Cursor resolution uses findIndex over the full result set, so each page is O(n) on top of the full fetch. Keyset pagination on (saved_at, id) with LIMIT and a (user_id, saved_at, id) index is the appropriate fix. No index change or EXPLAIN evidence is provided.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0; / ABSENT: any index on user_recipes(user_id, saved_at) or query plan"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Tests cover only the happy path. They do not cover an unknown or deleted cursor, a malformed cursor, a non-positive limit, a user with exactly limit rows, or the migration's data preservation. Two unrelated changes are also bundled, which makes the migration risk harder to review and revert independently.",
+   "evidence": "it(\"pages with cursor\", async () => { ... }) / \"Two small changes bundled because they touch the same table.\""
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 21069,
+  "tokOut": 12923,
+  "usd": 0.008358580000000001,
+  "critMs": 23571
+ }
+}

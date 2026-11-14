@@ -1,0 +1,155 @@
+{
+ "approach": "elephant-gold",
+ "case": "plan-09",
+ "rep": 2,
+ "wallMs": 482124,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "privacy-erasure-retention",
+   "severity": "major",
+   "claim": "The erasure and retention jobs cover only `fct_page_events` (and `_legacy` after the swap). `fct_page_events_v2` is backfilled from raw with personal event data and kept through 7 parity nights, so an erasure during that window leaves the user's rows in v2. The swap then copies v2over the live table, so erased rows can reach production.",
+   "evidence": "\"privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`.\" and \"For those 30 days the retention and erasure jobs include `fct_page_events_legacy`\". ABSENT: any erasure or 25-month retention coverage for `fct_page_events_v2` before the swap."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Erasure has no completion check. If the raw.events delete succeeds and the fct_page_events delete fails, the user's rows stay in the fact table. Rebuilds only touch partitions with new raw ingestion, so those old partitions are not rebuilt and the stale rows persist with no alert or retry. The only test covers the success path.",
+   "evidence": "\"privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`. Rebuilds read only `raw.events`\" and \"New staging integration test: erase a test user, force a 31-day rebuild, assert 0 rows\". ABSENT: retry, alert, or completion check for the fct_page_events erasure step."
+  },
+  {
+   "lens": "privacy-erasure-retention",
+   "severity": "major",
+   "claim": "The legacy copy holds full personal event data with no hard end. It is covered by retention and erasure for 30 days, but its drop (DATA-431) is gated on 30 clean parity nights. If parity never comes clean, the full copy persists outside retention and erasure scope.",
+   "evidence": "\"After 30 clean parity nights: drop the legacy model and table (DATA-431).\" and \"For those 30 days the retention and erasure jobs include `fct_page_events_legacy`\""
+  },
+  {
+   "lens": "authz",
+   "severity": "major",
+   "claim": "The live table is replaced with `bq cp -f`, and the plan does not say whether table IAM, row-access policies, or policy tags on `analytics.fct_page_events` survive the overwrite. The customer-facing usage export reads that table, so access could be widened or broken.",
+   "evidence": "\"`bq cp -f fct_page_events_v2 fct_page_events`. A same-region copy job is free and replaces the table atomically for readers.\" ABSENT: any statement that IAM bindings, row-access policies, or policy tags are preserved or re-applied, and any access check for the customer export."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The 2h overlap is sized from a p99.9 visibility delay of 4 min, which says nothing about the tail. A row that becomes visible more than 2h after the watermark's ingestion point is never selected by a later run and is silently and permanently missing. That breaks the 'never see gaps' constraint.",
+   "evidence": "\"every `event_date` that appears in raw rows with `ingested_at` > (max `ingested_at` already in the table − 2 h). The 2 h overlap covers streaming-insert visibility delay (p99.9 measured at 4 min in September)\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The cross-partition duplicate check was run on the 4.2B-row fct table, which is already globally deduplicated, so it returns 0 by construction. It does not show that raw has no event_id spanning two event_dates. Late replays, which the plan says arrive more than 7 days late, are not covered by the SDK-retry argument. Per-partition dedup can then double count, and the weekly test detects this only after up to a week.",
+   "evidence": "\"Checked over all 4.2B rows: 0 such `event_id`s (query linked in DATA-412). SDK retries happen within minutes of the original send.\" and \"New dbt test `unique_event_id` runs weekly on the full table\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Rollback copies `fct_page_events_legacy` over production, but legacy is rebuilt by a separate dbt job that can fail or lag while the main job succeeds. No freshness or cutoff check is stated, so rollback can silently restore a snapshot missing recent events, and the 'no gap, no lost events' claim does not hold.",
+   "evidence": "\"It runs as a separate dbt Cloud job after the main job, with the same `run_cutoff`\" and \"Rollback: `bq cp -f fct_page_events_legacy fct_page_events`... No gap, no lost events.\" ABSENT: freshness or row-count check on legacy before rollback."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The three-step swap (cp to legacy, cp -f v2 over prod, merge PR) is not atomic. The plan gives no abort or resume procedure for a partial failure, no guard against concurrent dbt runs, and no ordering requirement for the PR merge. If the merge is delayed past 02:20, the old full-refresh SQL can overwrite the freshly copied v2 table.",
+   "evidence": "\"`bq cp -f fct_page_events_v2 fct_page_events`.\" and \"Merge the PR that points model `fct_page_events` at the incremental SQL\" and \"the nightly job starts at 02:20, so all three steps land with no build in between\". ABSENT: abort/resume procedure, concurrency guard, or merge-before-02:20 enforcement."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The only alert is the dbt Cloud job-failure alert. There is no freshness or SLA alert for the 05:00 UTC dashboard refresh, which is the stated pain point. A run that succeeds but misses late rows, a stalled high-water mark, or a job that never starts can leave dashboards stale or incomplete with no page before 05:00.",
+   "evidence": "\"Failure alerting is the existing dbt Cloud job alert to #data-oncall.\" ABSENT: freshness monitor on `fct_page_events`, high-water-mark stall alert, or alert tied to the 05:00 refresh SLA."
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The nightly parity test that runs after cutover is absent from the cost table. It compares every column across full tables of about 1.9 TiB each, roughly $24 per night, or about $700 over the 30-day legacy window. The 'one-time backfill + 7 parity nights ~$76' line also omits the v1 full-refresh read during parity.",
+   "evidence": "\"The nightly parity test keeps running (new vs legacy) and alerts #data-oncall on any mismatch.\" and \"One-time backfill + 7 parity nights | — | ~$76\". Cost table has no parity line after cutover."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The incremental selection depends on a high-water mark defined as max `ingested_at` already in the table. The plan does not say the fact table carries `ingested_at`, and it declares no column changes. Without a defined, persisted watermark source, the selection logic cannot be implemented or verified as written.",
+   "evidence": "\"every `event_date` that appears in raw rows with `ingested_at` > (max `ingested_at` already in the table − 2 h)\" alongside \"no change to the model's columns or grain\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The month-1 total omits the v1 full-refresh nightly run during the 7 parity nights. At about $59 per night that is roughly $411, and it is not in the cost table.",
+   "evidence": "\"v1 and v2 run in the same dbt invocation with a shared `run_cutoff`\" versus \"One-time backfill + 7 parity nights | — | ~$76\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The incremental job has no bytes-billed cap or cost alert. If the high-water mark stops advancing, the selected window grows with the backlog, and the plan's $2.40/run bound does not hold.",
+   "evidence": "\"We therefore budget for the worst case every night: ~390 GiB ≈ $2.40/run.\" ABSENT: `maximum_bytes_billed` or cost alert on the rebuild job."
+  },
+  {
+   "lens": "privacy-erasure-retention",
+   "severity": "minor",
+   "claim": "The erasure guarantee checks only the live table. BigQuery time travel and fail-safe storage can retain deleted rows and the replaced table's prior contents after `bq cp -f` and DELETE, and the plan does not address this.",
+   "evidence": "\"`bq cp -f fct_page_events_v2 fct_page_events`\" and \"assert 0 rows for that user\". ABSENT: any mention of time travel or fail-safe retention for erased rows."
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The legacy table is a second full copy of event data for 30 days. The plan does not state who can read it, whether it inherits the live table's access restrictions, or which BigQuery location it lives in relative to the EU refresh requirement.",
+   "evidence": "\"`fct_page_events_legacy` is still rebuilt nightly from raw with the old full-refresh SQL, so it contains every event ingested after cutover.\" ABSENT: read access controls and dataset location for raw, v2, and legacy."
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Disabling `require_partition_filter` removes the only guardrail against full scans. Future queries that omit the partition filter will regress cost silently, and no test or lint is proposed.",
+   "evidence": "\"`require_partition_filter = false`: 38 of 41 dashboards already filter on `event_date`\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Correctness of the 31-day read window depends on the existing `event_time` clamp to [`ingested_at` − 30 d, `ingested_at`]. Nothing ties the lookback to the clamp, so changing the clamp silently breaks the window and produces gaps.",
+   "evidence": "\"Today's model already clamps `event_time` to [`ingested_at` − 30 d, `ingested_at`] ... the run reads raw from the oldest selected date onward (at most ~31 days).\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The Looker savings (61.2 → 8.7 TiB) come from dry runs of only the top 20 queries by bytes. The remaining queries, including the 3 unfiltered all-time dashboards and the customer export, are unmeasured, so the $54 post-change figure is not established.",
+   "evidence": "\"dry runs of September's top 20 queries by bytes against v2: 61.2 → 8.7 TiB\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "BIT_XOR is order-insensitive and cancels identical duplicate rows (x XOR x = 0). Row count and count(distinct event_id) only partly cover this, so the 'must match exactly' guarantee is weaker than stated.",
+   "evidence": "\"`BIT_XOR(FARM_FINGERPRINT(TO_JSON_STRING(t)))` over all columns\" and \"All must match exactly on all 7 nights\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The parity test runs in the same dbt invocation as the builds. If v1 or v2 fails, the parity signal is lost, and the plan does not say whether a mismatch fails the job or only alerts, so mismatches could pass silently.",
+   "evidence": "\"v1 and v2 run in the same dbt invocation with a shared `run_cutoff`\" and \"alerts #data-oncall on any mismatch\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The 7 parity nights and the nightly parity test do not show that late rows beyond the 2h overlap, the 30-day clamp boundary, or erasure are exercised. Parity success therefore does not establish correctness on the risky cases.",
+   "evidence": "\"Parity for 7 consecutive nights.\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "For 30 days two full transformation pipelines (incremental v2 and full-refresh legacy) must stay in sync. Future dedup or column changes must be made in both, and the plan does not say how drift is prevented.",
+   "evidence": "\"keeps the old full-refresh SQL as model `fct_page_events_legacy`\""
+  },
+  {
+   "lens": "privacy-erasure-retention",
+   "severity": "minor",
+   "claim": "The claim that an erasure never interleaves with a build relies on a shared `analytics_write` lock. The plan does not show that the lock covers the nightly job's raw read phase, so a rebuild that read raw before erasure could write erased rows back.",
+   "evidence": "\"privacy-svc and the dbt jobs already share the `analytics_write` lock (unchanged), so an erasure never interleaves with a running build.\""
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 71972,
+  "tokOut": 64128,
+  "usd": 0.036055920000000005,
+  "critMs": 92255
+ }
+}

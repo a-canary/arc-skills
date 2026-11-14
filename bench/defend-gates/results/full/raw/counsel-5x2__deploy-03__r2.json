@@ -1,0 +1,143 @@
+{
+ "approach": "counsel-5x2",
+ "case": "deploy-03",
+ "rep": 2,
+ "wallMs": 283842,
+ "verdict": "ATTACKS",
+ "confidence": 0.82,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The 2.14 rollback is justified only by schema compatibility. The artifact does not say whether every 2.15 write path (including cross-device merges and saver repairs) updates streak_count, nor which source wins after rollback or how sync is re-enabled without losing or double-counting events.",
+   "evidence": "\"schema is additive and `streak_count` remains authoritative-compatible, so 2.14 runs against the migrated database unchanged (verified in staging).\" / ABSENT: reconciliation path from streak_events into streak_count and winner rule on re-enable"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The transaction boundary and write ordering between the streak_events insert and the habits.streak_count dual-write are unspecified. Concurrent cross-device completions can leave the two stores disagreeing, so 3.1 and 3.2 clients may show different streaks.",
+   "evidence": "\"`habits.streak_count` is **kept** and dual-written by 2.15 so 3.1 clients ... keep working unchanged.\" / ABSENT: transaction or reconciliation logic for the dual write"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The timezone basis for `day` (device-local or UTC) is not defined. The idempotency key (user_id, habit_id, day) can collide or split for the same completion seen from two devices in different zones. QA covered only a single-device timezone change.",
+   "evidence": "\"idempotent on `(user_id, habit_id, day)`\" / \"Timezone change mid-streak (UTC−8 → UTC+9), DST boundary | staging | Pass\" / ABSENT: derivation of `day` and multi-device cross-zone same-day case"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The saver limit was verified only for online single-device use. Offline repairs on two devices can each appear applied locally, and the artifact does not state how the server resolves the second repair at sync.",
+   "evidence": "\"Streak saver: limit 1 per 30 days enforced server-side | staging | Pass\" / ABSENT: offline multi-device saver behavior"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The 18.4M-row backfill runs live immediately after full fleet deploy with no stated throttle, concurrency cap, replica-lag guard, or abort condition. It can degrade the p95 < 250ms gate the rollout depends on.",
+   "evidence": "\"Backfill job starts after full deploy.\" / \"batches of 5k, checkpointed\" / ABSENT: rate limit, load budget, or abort condition"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The zero-mismatch result comes from a snapshot dry run. Writes made after the snapshot, and during the live checkpointed backfill, are not verified, and there is no live-write concurrency test.",
+   "evidence": "\"dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches vs `streak_count`\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The step-advancement gates (crash-free, streak_mismatch_total, p95, support tickets) have no stated alert wiring, owner, or auto-halt. Each 24h step depends on manual observation, and a breach at 1% may not trigger action before the next step.",
+   "evidence": "\"Gates to advance each step: crash-free sessions ≥ 99.5%, `streak_mismatch_total` < 0.1% of synced users...\" / ABSENT: alert wiring, owner, auto-halt criteria"
+  },
+  {
+   "lens": "other",
+   "severity": "major",
+   "claim": "The agreed 'staged rollouts only' constraint is applied to store and flag steps, but the backend moves from a 1h 10% canary to 100% with no stated gate criteria for that step. The backfill also starts before the canary result is evaluated.",
+   "evidence": "\"canary 10% of pods for 1h, then full. Backfill job starts after full deploy.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The 99.87% crash-free figure is from a 1,900-user, 6-day internal beta on prod. It clears the agreed 99.5% threshold, but the artifact states no minimum session count for the 1% step.",
+   "evidence": "\"Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The < 0.1% mismatch gate has no observed baseline from QA or beta, and no minimum sample size is stated for the 1% step, so the gate may be statistically unstable.",
+   "evidence": "\"`streak_mismatch_total` (server vs client recompute) < 0.1% of synced users\" (no observed value)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "Staging-to-prod parity rests on one point-in-time export. The rollout does not re-check that other keys still match at each step.",
+   "evidence": "\"Staging remote config was exported from prod and only `streak_sync_v2` differed\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Rollback via config takes up to 15 minutes, and offline or backgrounded clients keep syncing, so sync-on and sync-off devices can coexist during that window with no described reconciliation.",
+   "evidence": "\"3.2 clients revert to local-only streaks within one config fetch (≤ 15 min).\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The support-ticket gate (2× a 4-week baseline) has no measurement window or absolute floor, so low-volume weeks can pass or fail on noise.",
+   "evidence": "\"support tickets tagged `streak` < 2× 4-week baseline\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "streak_events grows by one row per habit per completed day with no retention, partitioning, or index plan for the (user_id, habit_id, day) lookup on the p95 path. Storage and index cost are not projected.",
+   "evidence": "\"streak_events (user_id, habit_id, day, source_device, created_at)\" / ABSENT: retention, partitioning, archival, cost projection"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "streak_events holds a per-day, per-habit history keyed to a stable per-install ID, and the artifact does not state retention or deletion on account erasure, yet it asserts the privacy label is unchanged.",
+   "evidence": "\"`source_device` stores a per-install random ID\" / \"Privacy nutrition label and Play data-safety form unchanged\" / ABSENT: erasure behavior for streak_events"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The artifact does not state that user_id is bound to the authenticated principal on the streak_events write path and the saver endpoint. It also does not state server-side validation or bounds on the client-supplied source_device.",
+   "evidence": "ABSENT: authn/authz checks on streak_events writes and saver endpoint; ABSENT: validation of source_device"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Streak state exists in two sources of truth (streak_events and dual-written streak_count) until 3.4, and that removal is gated only by a ticket with no expiry or owner. Server and client recompute logic also has no shared spec or test vectors.",
+   "evidence": "\"It is scheduled for 3.4 ... (tracked in STR-1244).\" / ABSENT: shared streak spec or cross-platform test vectors"
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "The button label 'Repair yesterday' may not match behavior if older missed days can be repaired within the one-per-30-days allowance.",
+   "evidence": "\"Saver button: \\\"Repair yesterday\\\"\" vs \"one missed day per 30 days can be repaired from the streak screen\""
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "The saver disabled-state label embeds a locale-dependent date, and the accessibility QA does not name this state, so screen-reader reading and localization are unverified.",
+   "evidence": "\"Streak saver available again on Nov 28\" / accessibility QA covers \"streak screen and pre-prompt\" only"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "The five-language opt-in pre-prompt copy has no stated localized legal or consent review.",
+   "evidence": "\"Want a nudge at 8:00 PM so you don't lose your streak?\" / ABSENT: localized consent review"
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "After Android denial, the user sees 'Turn on in system settings' with a deep link and no explanation of the reminder's value, which adds a dead-end step.",
+   "evidence": "\"Denial is stored and the reminder toggle shows \\\"Turn on in system settings\\\" with a deep link.\""
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 99084,
+  "tokOut": 40942,
+  "usd": 0.03620459,
+  "critMs": 84984
+ }
+}

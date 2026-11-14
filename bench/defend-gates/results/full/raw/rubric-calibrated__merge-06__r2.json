@@ -1,0 +1,77 @@
+{
+ "approach": "rubric-calibrated",
+ "case": "merge-06",
+ "rep": 2,
+ "wallMs": 128961,
+ "verdict": "ATTACKS",
+ "confidence": 0.72,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The single retry on upstream 429 doubles upstream request volume exactly when the upstream is already throttling. Each retried request also holds its connection for up to 5s, so concurrency and memory grow during the very incident this PR is meant to fix.",
+   "evidence": "let res = await upstream.chat(req.body, { signal: req.signal }); if (res.status === 429) { ... await new Promise((r) => setTimeout(r, delay)); res = await upstream.chat(req.body, { signal: req.signal }); }"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The default of 20 rps / burst 40 is enforced immediately on every tenant without a shadow or log-only mode or a per-tenant config migration. Any tenant with legitimate sustained traffic above 20 rps will start receiving hard 429s on deploy, and the artifact does not say whether existing tenants already have configured limits.",
+   "evidence": "limits from tenant config, default 20 rps / burst 40 ... returns 429 with Retry-After when a tenant is over"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The motivating claim is that one tenant starved others via upstream 429s, but per-tenant caps do not bound aggregate load. With ~120 tenants at 20 rps each the sum is about 2400 rps, so if the upstream capacity is lower, all tenants can stay under their own caps and still be starved. No capacity figure or load test supports the fix.",
+   "evidence": "one batch job at 400 rps pushed everyone else into upstream 429s on Tuesday. ... ABSENT: upstream capacity/quota numbers or any evidence that per-tenant caps prevent upstream 429s"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The bucket uses wall-clock Date.now. A backward clock step yields negative elapsed time, which drives tokens negative and can lock a tenant out for as long as the step lasts. A monotonic clock would avoid this.",
+   "evidence": "constructor(private now: () => number = Date.now) {} ... const elapsedSec = (nowMs - b.updatedMs) / 1000;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "retryAfterMs silently returns 1000ms for HTTP-date Retry-After values, which are valid per RFC. It also retries early when Retry-After exceeds 5s, which will likely produce a second 429 and a wasted upstream call.",
+   "evidence": "if (!Number.isFinite(secs) || secs < 0) return 1_000; return Math.min(secs * 1000, MAX_UPSTREAM_RETRY_MS);"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The retry sleep uses a plain setTimeout that ignores req.signal. If the client disconnects during the wait, the gateway still sleeps and issues the second upstream call.",
+   "evidence": "await new Promise((r) => setTimeout(r, delay)); res = await upstream.chat(req.body, { signal: req.signal });"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Every rate-limited request emits an info log line. At the 400 rps batch rate this creates a large log volume during the exact overload scenario.",
+   "evidence": "req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, \"tenant rate limited\");"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The key fingerprint is an unsalted SHA-256 truncated to 40 bits. This is not a key leak for high-entropy keys, but it is a stable per-key identifier that is more than needed for debugging. Tenant identity alone would suffice.",
+   "evidence": "return createHash(\"sha256\").update(apiKey).digest(\"hex\").slice(0, 10);"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Tests cover only the bucket class. The route's 429 response, the upstream retry path, and the Retry-After parsing have no tests.",
+   "evidence": "ABSENT: tests for completions.ts (rate-limited response, upstream 429 retry, retryAfterMs edge cases)"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The limiter is in-process, so limits silently multiply by replica count once the gateway scales horizontally. The PR does not record this as a constraint.",
+   "evidence": "ABSENT: a note that per-tenant limits are per-process and must change before horizontal scaling"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3815,
+  "tokOut": 4827,
+  "usd": 0.00245183,
+  "critMs": 21983
+ }
+}

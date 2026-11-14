@@ -1,0 +1,265 @@
+{
+ "approach": "rubric-single@v100",
+ "case": "deploy-03",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Backfill job runs on production after full deploy with no explicit failure handling or rollback procedure. If the job fails mid-way or produces incorrect data, there is no documented path to recover or verify data integrity before enabling the feature.",
+     "evidence": "Backfill job starts after full deploy."
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Backfill creates 18.4M rows in 22 minutes. No mention of database write capacity, replication lag, or impact on other services during this bulk write operation. Could cause performance degradation or timeouts during backfill.",
+     "evidence": "dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches vs streak_count."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "No timeout, retry, or circuit breaker strategy documented for the cross-device sync feature. If sync fails for users, the behavior and recovery path are unclear beyond 'sync silently disabled'.",
+     "evidence": "3.2 client against 2.14 API (server rollback scenario) | staging | Pass (sync silently disabled, local streak shown)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Dual-write of streak_count and streak_events introduces split-brain risk. No reconciliation strategy or conflict resolution documented if the two data sources diverge during the dual-write period.",
+     "evidence": "habits.streak_count is kept and dual-written by 2.15 so 3.1 clients (which read streak_count from /v2/habits) keep working unchanged."
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "QA crash-free sessions based on only 1,900 beta users over 6 days. This is a small sample for a 400k MAU app and may not catch rare sync or notification edge cases.",
+     "evidence": "Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "Reminder notification at user's chosen time could be considered intrusive or spammy depending on jurisdiction. No mention of quiet hours or notification frequency caps beyond the 30-day saver limit.",
+     "evidence": "Want a nudge at 8:00 PM so you don't lose your streak?"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "Pre-prompt only shown after 3-day streak and once per 30 days may delay users from discovering the reminder feature, potentially reducing adoption of streak savers.",
+     "evidence": "The in-app pre-prompt sheet is shown only after the user reaches a 3-day streak, and only once per 30 days if they choose \"Not now\"."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Dual-write pattern adds complexity and technical debt. The plan to drop streak_count in 3.4 creates a future migration dependency that could be forgotten or delayed.",
+     "evidence": "Dropping streak_count is not part of this release. It is scheduled for 3.4"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1943,
+    "tokOut": 671,
+    "usd": 0,
+    "critMs": 123172
+   },
+   "wallMs": 377373
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback plan does not specify what happens to streak_events rows written by 3.2 clients during the canary or early rollout phases. If the feature is rolled back (flag set to 0%), those events remain in the database but are no longer read by any client version, creating orphaned data. More critically, if the user later re-enables sync or upgrades to a future version, those events could cause unexpected streak calculations that the user never saw reflected during the rollback period.",
+     "evidence": "Feature: set streak_sync_v2 to 0%; 3.2 clients revert to local-only streaks within one config fetch (≤ 15 min). Verified in QA."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The dual-write consistency section states that a 3.1 client completion goes through the same code path (event row plus recomputed streak_count), but the QA report only tests '3.1 client against 2.15 API' for N-1 compatibility. It does not explicitly verify that 3.1 completions actually create streak_events rows. If 3.1 completions only update streak_count without creating events, the backfill verification and reconciliation logic will be broken because events won't match streak_count for habits completed via 3.1 clients after the backfill.",
+     "evidence": "3.1 client against 2.15 API (N-1 compatibility) | staging | Pass"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The backfill job writes 18.4M rows in batches of 5k (approximately 3,680 batches). At 22 minutes on an idle snapshot, that's roughly 3.6 batches per second. Under live traffic with pause conditions (replica lag > 5s or p95 > 250ms), the job could take hours. During this time, the hourly reconciliation job runs 'for habits touched in the last 24h' — but if the backfill is still in progress, it will be constantly reprocessing the same habits, potentially causing the reconciliation job itself to become a significant load and trigger false mismatch alerts as the backfill progresses.",
+     "evidence": "Reconciliation: a scheduled job (hourly during the dual-write period) recomputes the streak from events for habits touched in the last 24h"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The rollout gates include 'streak_mismatch_total (server vs client recompute) < 0.1% of synced users', but the artifact never defines how the client recomputes streaks or how this metric is collected. The client sync failure handling section mentions a 'streak_sync_failure' metric by error class, but no metric for streak value mismatches. Without a defined collection mechanism, this gate cannot be evaluated during rollout.",
+     "evidence": "Gates to advance each step: ... streak_mismatch_total (server vs client recompute) < 0.1% of synced users"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The artifact claims '3.2 client against 2.14 API (server rollback scenario) | staging | Pass (sync silently disabled, local streak shown)' but provides no evidence that this degradation path was tested with actual queued events that need to be flushed when the server comes back. The sync failure handling section describes complex retry/circuit-breaker behavior that 'will be added to the staging test pass before store submission' — meaning the most complex and failure-prone part of the system is explicitly not yet tested.",
+     "evidence": "Timeout, backoff, and circuit-open behavior will be added to the staging test pass before store submission."
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The streak_events table stores day as a column but the artifact doesn't specify the format or timezone normalization. Given that timezone changes mid-streak are tested, there's a risk that day boundaries could be ambiguous or manipulated by users adjusting device time to artificially extend streaks. The artifact mentions server-side enforcement for the streak saver but not for day boundary determination.",
+     "evidence": "ABSENT: specification of day column format and timezone normalization for streak_events"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "The pre-prompt sheet only appears after a 3-day streak and only once per 30 days if declined. Users with streaks of 1-2 days (who might be most at risk of losing them) will never see the reminder prompt. This could be seen as missing an opportunity to engage users when they need it most, though it may be intentional to avoid prompting too early.",
+     "evidence": "The in-app pre-prompt sheet is shown only after the user reaches a 3-day streak, and only once per 30 days if they choose 'Not now'."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2854,
+    "tokOut": 1197,
+    "usd": 0,
+    "critMs": 219447
+   },
+   "wallMs": 462120
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The dual-write consistency claim is overstated: dual-write in the same transaction prevents divergence on a partial *write* failure, but it does not prevent the two values from diverging if the event row is later deleted (e.g. during backfill undo) while `streak_count` is not recomputed, or if the hourly reconciliation itself fails to repair. The artifact says events win, but doesn't guarantee `streak_count` is re-derived on every event delete.",
+     "evidence": "\"2.15 updates it in the same database transaction as the event insert, so the two cannot be written independently and diverge on a partial failure.\" and \"the rows are purely additive and tagged, so they can be deleted with DELETE ... WHERE source_device = 'backfill'\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The backfill dry-run was on an idle snapshot, and live-load impact is explicitly \"not yet measured\". The throttle settings are signed off by the DB owner, but the p95 threshold (250ms) is the same as the rollout gate p95 threshold, meaning the backfill could push the service to the edge of the gate and block rollout advancement while still running.",
+     "evidence": "\"This was on an idle snapshot, not under live traffic; live-load impact is addressed by the throttling below and is not yet measured.\" and \"streaks-svc p95 < 250ms\" (gate) vs \"pauses automatically if ... p95 exceeds 250ms\" (backfill)"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The hourly reconciliation job processes habits touched in the last 24h, but the artifact does not specify the expected volume of such habits at 400k MAU, nor the processing time. If the job cannot complete within an hour, the 24h window shrinks and mismatches could persist longer than intended, or the job could cascade into multiple overlapping runs.",
+     "evidence": "\"a scheduled job (hourly during the dual-write period) recomputes the streak from events for habits touched in the last 24h\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The gate metric `streak_mismatch_total` is deduplicated per user in the numerator, but the denominator is `streak_sync_success_total` (total successful syncs). This means a single user with one mismatch across 100 syncs inflates the mismatch rate to 1/100 = 1%, which is 10x the 0.1% gate threshold. The metric as defined will almost certainly fail the gate for any user experiencing a transient mismatch.",
+     "evidence": "\"The gate value is streak_mismatch_total / streak_sync_success_total, with the numerator deduplicated per user\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The client-side streak recompute for mismatch detection assumes the client has the same completion history as the server. However, if a user completes a habit on device A and syncs, then completes it again on device B before device A's event is flushed, the client on device B may not have device A's event locally and will compute a different streak, triggering a false mismatch.",
+     "evidence": "\"After each successful sync, the 3.2 client recomputes the streak locally from its own completion history (same day-boundary and timezone rules as the server) and compares it with the streak value the server returned.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The rollback path for the feature flag leaves 3.2 clients with locally queued events that are only flushed on re-enable. If the rollback is permanent (e.g. 2.15 is pulled entirely), those queued events are lost, and the user's streak on re-install or new device will be incomplete. The artifact says \"3.2 with flag off is functionally equivalent to 3.1 plus copy changes\" but 3.1 had no queue.",
+     "evidence": "\"While the flag is 0%, 3.2 clients keep recording completions locally and queue them.\" and \"3.2 with flag off is functionally equivalent to 3.1 plus copy changes.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The artifact states that 2.14 ignores events written under 2.15, but if the backend is rolled back to 2.14 while the backfill is in progress or after it has written rows, those `streak_events` rows are orphaned (2.14 doesn't read them) and `streak_count` becomes the sole source of truth again. If the backfill has already modified `streak_count` (it says it doesn't, but the hourly reconciliation does overwrite it from events), rolling back to 2.14 could leave `streak_count` in a state that 2.14 doesn't expect. The artifact says `streak_count` is not modified by the backfill, but the reconciliation does modify it.",
+     "evidence": "\"Events written under 2.15 are ignored by 2.14\" and \"repaired by overwriting streak_count from events (events win)\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The `source_device` field stores a per-install random ID. The artifact doesn't specify the entropy or generation method. If this is a weak random value, it could be predictable and potentially used for device fingerprinting across app reinstalls if the ID is persisted in a way that survives reinstall (e.g. in account settings).",
+     "evidence": "\"source_device stores a per-install random ID, not a hardware identifier.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The artifact says no new data is shared with third parties and privacy labels are unchanged, but the `streak_events` table now stores per-habit, per-day completion data with device attribution. This is more granular behavioral data than the previous `streak_count` aggregate. Even if not shared externally, it changes the internal data retention profile.",
+     "evidence": "\"New table streak_events (user_id, habit_id, day, source_device, created_at)\" vs previous `habits.streak_count`"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3684,
+    "tokOut": 1335,
+    "usd": 0,
+    "critMs": 247469
+   },
+   "wallMs": 494911
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The 3.1-compat test pass is explicitly 'API compatibility only' and does not yet assert that 3.1 completions create streak_events rows. Since 3.1 clients make up the N-1 user base (~400k MAU minus 3.2 adopters) and the design relies on every completion—3.1 or 3.2—producing an event row, this unverified assumption is a load-bearing risk. The artifact lists it as a submission blocker, so it is correctly gated, but until it passes the release must not proceed.",
+     "evidence": "\"3.1 client against 2.15 API (N-1 compatibility) | staging | Pass (API compatibility only; event-row creation not yet asserted, see below)\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Queued-event flush after server recovery (3.2 client offline → 2.15 returns) is listed as not yet tested and a submission blocker. If flush is not exactly-once (idempotent insert is designed but not verified end-to-end), users could see streaks double-count or lose completions after recovery—a core correctness property of the feature.",
+     "evidence": "\"3.2 client with queued completions while pointed at 2.14 (or unreachable): events are retained, and are flushed and counted exactly once when 2.15 returns.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The reconciliation job's volume is explicitly unmeasured ('the number of habits touched per 24h has not been measured') and the first live run has no capacity sign-off yet. If the job exceeds 45 min or the backlog is not drained in 24h, the alert fires—but the mismatch repair that 3.1/3.2 consistency depends on is delayed, and the 0.01% mismatch-rate alert could fire spuriously during a backlog. The artifact acknowledges this and adds sizing to the pre-deploy checklist, but until that is done, the scale behavior of the safety net is unknown.",
+     "evidence": "\"the number of habits touched per 24h has not been measured. Sizing it from prod ... are added to the pre-deploy checklist.\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The backfill is expected to take 'hours' under live load (vs 22 min on an idle snapshot) with a 5s lag / 200ms p95 pause threshold. This is a bounded, one-time cost with explicit DB-owner sign-off required, so it is not a blocker, but the ops team should budget for several hours of elevated but throttled DB load on Monday morning.",
+     "evidence": "\"The live run will take longer than 22 min, possibly hours.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The 'events win' reconciliation overwrites streak_count from events. If a 3.1 client and a 3.2 client complete the same habit on the same day from different timezones, the event insert is idempotent on (user_id, habit_id, day) but the 'day' boundary could differ by timezone, potentially creating two event rows for what the user considers one day. The artifact says timezone/DST QA passed, but the day-boundary rule for cross-device completions in different timezones is not explicitly specified in the artifact text.",
+     "evidence": "\"streak is computed from events, idempotent on (user_id, habit_id, day)\" — day boundary definition for multi-timezone users not stated"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The circuit-breaker on the client opens after 5 consecutive failures and stays open for 15 min. During that window, completions are queued locally but not synced. If the server is down for >15 min, the circuit re-probes and may fail again, but users see their local streak. This is acceptable behavior but means streak sync can be stale for up to 15 min + backoff during intermittent outages. No alert is defined for a high rate of circuit-open states across the fleet.",
+     "evidence": "\"After 5 consecutive failures the client stops attempting sync for 15 min (circuit open)\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The source_device field stores a per-install random ID. The artifact says this is not a hardware identifier and that the privacy nutrition label is unchanged. However, if the ID persists across app reinstalls (e.g., stored in keychain/keystore), it could become a device fingerprint. The artifact does not specify the persistence scope of the ID.",
+     "evidence": "\"source_device stores a per-install random ID, not a hardware identifier\" — persistence scope not specified"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4869,
+    "tokOut": 1028,
+    "usd": 0,
+    "critMs": 201568
+   },
+   "wallMs": 411534
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5079,
+    "tokOut": 17,
+    "usd": 0,
+    "critMs": 25217
+   },
+   "wallMs": 235760
+  }
+ ],
+ "artifact": "# Release proposal: Stride 3.2 — Streak Sync\n\nOwner: mobile squad B · Store submission: Mon 2026-11-02 · Backend deploy: Mon 2026-11-02 10:00 UTC · Epic: STR-1190\n\n## What ships\n\n- Streaks now sync across devices. A habit completed on the watch or tablet counts toward the same streak on the phone.\n- \"Streak saver\": one missed day per 30 days can be repaired from the streak screen.\n- Optional streak reminder notification at the user's chosen time.\n\n## UI copy (final, localized en/es/de/fr/pt-BR)\n\n- Streak screen header: \"12-day streak\" (VoiceOver/TalkBack label: \"Current streak, 12 days\").\n- Saver button: \"Repair yesterday\" (disabled state label: \"Streak saver available again on Nov 28\").\n- Reminder pre-prompt sheet: \"Want a nudge at 8:00 PM so you don't lose your streak?\" Buttons: \"Remind me\" / \"Not now\".\n\n## Notifications permission\n\n- We do not request OS notification permission on launch or on upgrade.\n- The in-app pre-prompt sheet is shown only after the user reaches a 3-day streak, and only once per 30 days if they choose \"Not now\".\n- iOS: if the user taps \"Remind me\" we request provisional authorization first; full authorization is requested only if they enable sound in reminder settings.\n- Android 13+: POST_NOTIFICATIONS is requested only after \"Remind me\". Denial is stored and the reminder toggle shows \"Turn on in system settings\" with a deep link.\n\n## Backend changes (streaks-svc 2.14 → 2.15)\n\n- New table `streak_events (user_id, habit_id, day, source_device, created_at)`; streak is computed from events, idempotent on `(user_id, habit_id, day)`.\n- `habits.streak_count` is **kept** and dual-written by 2.15 so 3.1 clients (which read `streak_count` from `/v2/habits`) keep working unchanged.\n- Dropping `streak_count` is **not** part of this release. It is scheduled for 3.4, after the minimum supported app version is raised past 3.1 (tracked in STR-1244).\n\n### Dual-write consistency\n\n- `streak_events` is the source of truth for 3.2 clients. `streak_count` is a derived value: 2.15 updates it in the same database transaction as the event insert, so a partial write failure cannot leave the two diverged. A 3.1 client completion goes through the same code path (event row plus recomputed `streak_count`). Staging currently verifies 3.1 compatibility only at the API level, so a specific check that 3.1 completions create event rows is added to the pre-submission test pass (see QA report below). This design assumption is unverified until that check passes, which is why it is a hard submission blocker.\n- Same-transaction writes do not cover every way the two values could diverge, so these rules apply: (a) the only code path that inserts events also recomputes `streak_count`; (b) the only event deletion permitted is the backfill undo, which has its own procedure (see \"Undoing a bad backfill\") and is run only while `streak_sync_v2` is at 0%; (c) the reconciliation job below is the safety net, and its own failure is alerted (see below), not assumed away.\n- Because events are idempotent on `(user_id, habit_id, day)`, a retried write cannot double-count.\n- Reconciliation: a scheduled job (hourly during the dual-write period) recomputes the streak from events for habits touched in the last 24h and compares it with `streak_count`. Any mismatch increments `streak_reconcile_mismatch_total`, is logged with user/habit IDs, and is repaired by overwriting `streak_count` from events (events win). An alert fires if the mismatch rate exceeds 0.01% of habits checked, and this metric is added to the rollout gates below. A second alert fires if the job fails, or if no successful run has completed in 2 hours, so a silently broken job cannot leave mismatches unrepaired.\n- **Volume and overlap control:** the number of habits touched per 24h has not been measured, so the scale behavior of this safety net is unknown today. Sizing it from prod (count of habits with a completion in the last 24h) and timing the job on the prod snapshot are pre-deploy checklist items and **gate the deploy**: the hourly job is not enabled, and the per-run cap is not set, until both are done and the DB owner has signed off on the cap and expected run time before 2026-11-02. Regardless of the result, runs take a lock and skip if the previous run is still active, so runs never overlap. Each run has a per-run cap and a cursor, so work beyond the cap carries over to the next run in order instead of being dropped. Run duration and backlog size are emitted as metrics. An alert fires if a run exceeds 45 min or the backlog is not drained within 24h, which is the signal to raise capacity or the cap. A backlog only delays repairs. It does not create mismatches, and the mismatch-rate denominator is habits actually checked, so a backlog cannot by itself trigger the 0.01% alert.\n- **Interaction with the backfill:** the hourly job only considers habits the backfill has already completed (checked against the backfill checkpoint), so habits with partial event history cannot produce false mismatches. It is not run against habits still awaiting backfill. It reads from a replica, processes habits in bounded batches, and does not re-check a habit already verified clean unless it has new events. Its mismatch-rate alert is not evaluated until the backfill has finished. The full-table reconciliation after the backfill covers every habit.\n- A full-table reconciliation runs once after the backfill (see below) and again before the 3.4 column drop.\n\n### Backfill\n\n- One `streak_events` row per day of each habit's current streak, run as a resumable job (batches of 5k, checkpointed). Backfilled rows are tagged `source_device = 'backfill'`.\n- Dry-run on a prod snapshot: 18.4M rows (about 3,700 batches), 22 min, 0 mismatches vs `streak_count`. This was on an idle snapshot, not under live traffic; live-load impact is addressed by the throttling below and is not yet measured. The first live batches run at a deliberately low rate while the DB owner and on-call watch lag and p95, and the rate is raised only after that observation.\n- **Load protection:** the job is throttled with a pause between batches and checks replication lag and streaks-svc p95 every batch. It pauses automatically if replica lag exceeds 5 s or p95 exceeds 200ms, and resumes when lag is under 3 s and p95 is under 180ms. The pause threshold is deliberately lower than the 250ms rollout gate, so the backfill backs off before it can push the service to the edge of the gate. The gate is not evaluated during the backfill in any case, because `streak_sync_v2` stays at 0% until the backfill is done. The live run will take longer than 22 min, possibly hours. The DB owner reviews write-capacity headroom and signs off on the throttle settings before 2026-11-02.\n- **Failure handling:** the job is idempotent (unique key plus checkpoints), so after a crash or pause it is simply restarted from the last checkpoint. Persistent failure pages the on-call engineer, and the feature flag stays at 0% in the meantime. Nothing user-facing depends on the backfill until it is verified.\n- **Verification before enablement:** when the job finishes, a full reconciliation compares the streak computed from events against `streak_count` for every habit. `streak_sync_v2` stays at 0% until this reports 0 mismatches (or each mismatch is explained and fixed).\n- **Undoing a bad backfill:** the rows are purely additive and tagged, so they can be deleted with `DELETE ... WHERE source_device = 'backfill'` in batches and the job re-run after the fix. The undo is run only while `streak_sync_v2` is at 0%. `streak_count` is not modified by the backfill or by the undo. It is deliberately not recomputed from events during an undo, because the remaining events would give a lower, wrong value. As each batch of habits is deleted, those habits' backfill checkpoints are reset in the same transaction. This excludes them from the hourly reconciliation, so \"events win\" cannot overwrite a correct `streak_count` with a partial event history. They rejoin reconciliation only after the re-run completes and the full reconciliation is clean. 3.1 clients are unaffected throughout.\n\n## QA report summary (build 3.2.0 (4410), streaks-svc 2.15.0-rc2)\n\n| Area | Env | Result |\n|---|---|---|\n| Multi-device sync (phone + watch + tablet), offline completion then reconnect | staging | Pass |\n| Timezone change mid-streak (UTC−8 → UTC+9), DST boundary | staging | Pass |\n| 3.1 client against 2.15 API (N-1 compatibility) | staging | Pass (API compatibility only; event-row creation not yet asserted, submission blocker, see below) |\n| 3.2 client against 2.14 API (server rollback scenario) | staging | Pass (sync silently disabled, local streak shown); queued-event flush after recovery not yet covered, submission blocker, see below |\n| Streak saver: limit 1 per 30 days enforced server-side | staging | Pass |\n| VoiceOver / TalkBack on streak screen and pre-prompt | device lab | Pass |\n| Dynamic Type XXL / Android font scale 200% | device lab | Pass, no truncation |\n| Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87% |\n\nStaging remote config was exported from prod and only `streak_sync_v2` differed (on in staging); prod values for every other key were identical during QA.\n\n**Not yet tested; required before store submission (Mon 2026-11-02). Submission is blocked until these pass:**\n\n- 3.1 completions against 2.15 create a `streak_events` row, and `streak_count` equals the event-computed streak, including for a habit completed by 3.1 after backfill. The design relies on every completion, 3.1 or 3.2, producing an event row, so a failure here means the design must change before anything ships. It is not waived.\n- 3.2 client with queued completions while pointed at 2.14 (or unreachable): events are retained, and are flushed and counted exactly once when 2.15 returns. Server idempotency is by design and is not treated as verified until this end-to-end test shows no double-count and no lost completion.\n- Client timeout, backoff, and circuit-open behavior (see \"Sync failure handling\").\n- Flag rollback and re-enable with events present (see \"Rollback\"): streak shown after re-enable matches the event-computed streak.\n- With the flag at 0%, a 3.2 completion reaches the server's `streak_count` through the 3.1 completion path (see \"Rollback\").\n- Backfill undo on a staging copy: `streak_count` is unchanged, checkpoints are reset, and the reconciliation job skips the affected habits.\n- Redeploy of 2.15 after a 2.14 window: catch-up and report-only reconciliation behave as described in \"Rollback\".\n- `streak_mismatch_total` and its denominator are emitted from the 3.2 build and appear in dashboards (see \"Rollout plan\", gate definitions), including that no mismatch is recorded when the client has unflushed completions or has not applied the latest server history.\n\n## Sync failure handling (client)\n\n- Completions are written locally first and queued, so a sync failure never loses a completion or changes the streak the user sees.\n- Each sync request has a 10 s timeout. Failures are retried with exponential backoff and jitter (starting at 5 s, capped at 15 min). Retries are safe because the server is idempotent on `(user_id, habit_id, day)`.\n- After 5 consecutive failures the client stops attempting sync for 15 min (circuit open), then probes with a single request. While the circuit is open or the server is unreachable, the local streak is shown and queued events are retained and flushed on recovery. A 4xx other than 429 is treated as non-retryable, logged, and not retried.\n- Failures are reported through a `streak_sync_failure` client metric by error class, so a sync problem is visible in dashboards and not only through support tickets.\n- Existing QA covers the server-rollback and offline-then-reconnect paths. Timeout, backoff, circuit-open behavior, and queued-event flush after server recovery will be added to the staging test pass before store submission (listed above as a submission blocker).\n\n## Rollout plan\n\n1. 10:00 UTC deploy streaks-svc 2.15 (canary 10% of pods for 1h, then full), after the reconciliation sizing and DB owner sign-off above are complete. Backfill job starts after full deploy, throttled as described above.\n2. Remote config `streak_sync_v2` stays at 0% until the backfill has completed and the full reconciliation is clean. Then: 1% → 10% → 50% → 100% of 3.2 users, 24h between steps.\n3. iOS phased release (7 days) and Play staged rollout 10% → 50% → 100% in parallel; the flag gates the feature independently of store rollout.\n4. Gates to advance each step: crash-free sessions ≥ 99.5%, `streak_mismatch_total` (server vs client recompute) < 0.1% of synced users, `streak_reconcile_mismatch_total` below the alert threshold, streaks-svc p95 < 250ms, support tickets tagged `streak` < 2× 4-week baseline.\n\n### Gate metric definition: `streak_mismatch_total`\n\n- After each successful sync, the 3.2 client recomputes the streak from the merged completion history (the server events returned by that sync plus any local completions, using the same day-boundary and timezone rules as the server) and compares it with the streak value the server returned. This keeps both sides computing from the same set of events. The comparison is skipped, and counted under `streak_mismatch_skipped_total`, when the client still has unflushed queued completions or when the server's sync cursor has advanced past the history the client applied (for example, another device completed the habit in between). A cross-device race therefore produces a skip, not a false mismatch.\n- On a difference, the client records a mismatch and logs the habit's day-range (no user content), tagged with app version and platform.\n- Both counters are per user: each client emits `streak_mismatch_total` at most once per user per day if it had at least one mismatch, and `streak_sync_success_total` at most once per user per day if it had at least one successful sync. The gate value is therefore `streak_mismatch_total / streak_sync_success_total`, read as the fraction of synced users with at least one mismatch. A single user with repeated syncs counts once on both sides, so repeated syncs cannot inflate the rate. Both are sent through the existing client metrics pipeline and charted on the rollout dashboard. Emission is verified in the pre-submission test pass; the gate cannot be used to advance a step unless the denominator is non-zero for that cohort.\n\n## Rollback\n\n- Feature: set `streak_sync_v2` to 0%; 3.2 clients revert to local-only streaks within one config fetch (≤ 15 min). Verified in QA.\n- **Events written before a feature rollback:** `streak_events` rows already written by 3.2 clients are real, idempotent completion records, so they are not deleted or treated as orphaned. They stay valid and remain the source of truth. 2.15 keeps dual-writing `streak_count` in the same transaction regardless of the flag, so 3.1 clients and the hourly reconciliation continue to see consistent values. While the flag is 0%, 3.2 clients keep recording completions locally and queue them. When sync is re-enabled they are flushed idempotently, so the streak after re-enable is computed from the union of events already stored and the flushed completions, without double-counting, and matches what the user saw locally. This is verified in the pre-submission test pass. Before re-enabling after a rollback, a full reconciliation is run and must be clean.\n- **Completions made while the flag is 0%:** with the flag off, 3.2 also submits each completion through the same completion path 3.1 uses (served by both 2.14 and 2.15), so the server's `streak_count` stays current and a completion is not held only on the device. The on-device queue exists for the later event flush. It is retained, never purged, until it has been flushed. If the rollback turns out to be permanent (for example 2.15 is pulled entirely), completions have still reached the server through the 3.1 path, and the queue is only needed if sync is re-enabled. The remaining exposure is a completion made while the server is unreachable and the app is uninstalled before it can be sent. That is the same exposure 3.1 has. This path is a pre-submission blocker test.\n- Backend: redeploy streaks-svc 2.14; schema is additive, and `streak_count` is the same integer column with the same meaning, so 2.14 runs against the migrated database unchanged (verified in staging). The values the reconciliation job writes to it are ordinary streak integers computed from events that, for backfilled habits, match the streak, so 2.14 sees nothing it does not expect. Events written under 2.15 are ignored by 2.14 and remain in place. While 2.14 is live, the reconciliation job is stopped and `streak_count` is authoritative. Completions made during that window create no events, so the events become stale for those habits. Before 2.15 is redeployed, those habits (those with `streak_count` or completions changed during the 2.14 window) are caught up by re-running the backfill logic from `streak_count`. The first full reconciliation after redeploy runs in report-only mode (no overwrite), and `streak_sync_v2` stays at 0% until it is clean. \"Events win\" repairs resume only after that, so stale events cannot overwrite a correct `streak_count`.\n- Backfill: pause or stop the job at any time; see \"Undoing a bad backfill\" above.\n- Store builds: halt phased/staged rollout; 3.2 with flag off is functionally equivalent to 3.1 plus copy changes, except for the retained on-device completion queue described above.\n\n## Privacy\n\n- `source_device` stores a per-install random ID, not a hardware identifier. No new data shared with third parties. Privacy nutrition label and Play data-safety form unchanged (verified against the updated data inventory).",
+ "fixerUsage": {
+  "calls": 4,
+  "tokIn": 21853,
+  "tokOut": 24114,
+  "usd": 0.32853599999999994,
+  "critMs": 146856
+ },
+ "status": "cleared"
+}

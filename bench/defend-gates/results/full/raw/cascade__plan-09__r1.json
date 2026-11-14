@@ -1,0 +1,65 @@
+{
+ "approach": "cascade",
+ "case": "plan-09",
+ "rep": 1,
+ "wallMs": 378583,
+ "verdict": "ATTACKS",
+ "confidence": 0.72,
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The erasure and retention jobs cover only raw.events and fct_page_events, and fct_page_events_legacy only after the swap. The new fct_page_events_v2 is excluded for the backfill and the 7+ parity nights. Erasures during that period hit v1 but not v2. The final `bq cp -f v2 -> fct_page_events` at swap can then resurrect erased users' rows into production.",
+   "evidence": "ABSENT: v2 is not listed in erasure/retention. Only \"For those 30 days the retention and erasure jobs include `fct_page_events_legacy`\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The parity gate requires exact matches on all 7 nights. Any erasure applied to v1 but not v2 (or the reverse) in that window makes the per-(date, account) fingerprints differ. The gate may never pass, or it gets waived. The plan has no rule for reconciling erasures during parity.",
+   "evidence": "All must match exactly on all 7 nights before step 3."
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Today the nightly full refresh from raw self-heals any failed or partial erasure in fct within a day. After this change, only partitions with new arrivals are rebuilt. A failed or partial fct delete after the raw delete leaves erased data in old partitions indefinitely. The plan adds no retry, reconciliation, or alert for this path, and its test covers only the success path.",
+   "evidence": "privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`. ... New staging integration test: erase a test user, force a 31-day rebuild, assert 0 rows for that user."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "Both cutover and rollback depend on `bq cp -f` atomically replacing the production table with one of a different partitioning spec. The current table is unpartitioned and v2 is partitioned and clustered, and the reverse applies at rollback. BigQuery commonly rejects replacing a table with a different partitioning spec. The prototype only covers the rebuild, not the swap or rollback, so the assumption is untested.",
+   "evidence": "`bq cp -f fct_page_events_v2 fct_page_events`. A same-region copy job is free and replaces the table atomically for readers."
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The nightly parity test fingerprints all columns of both full tables, about 1.9 TiB each, or roughly $24 per night. It runs 7 nights pre-swap and 30 nights post-swap. This is not in the cost table, so the claim that month 1 is below today's $2,143 is likely false.",
+   "evidence": "Month 1 is ~$1,960, still below today. ... The nightly parity test keeps running (new vs legacy)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The legacy full refresh takes about 2h40m after the main job, so it runs until roughly 05:10. It holds the shared analytics_write lock for that time, which can block erasure. The plan's claim that it cannot delay the 05:00 refresh is asserted without a check of slot or lock contention.",
+   "evidence": "it cannot delay the 05:00 refresh. privacy-svc and the dbt jobs already share the `analytics_write` lock"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The watermark uses `ingested_at` from the target table, but the plan never states that fct_page_events carries that column. It also bounds visibility delay only by a p99.9 of 4 min with a 2 h overlap and no max, so the tail is not shown.",
+   "evidence": "max `ingested_at` already in the table − 2 h ... (p99.9 measured at 4 min in September)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The Looker savings come from dry runs of only the top 20 queries. The artifact does not show that the 8.7 TiB figure covers the full 61.2 TiB workload.",
+   "evidence": "dry runs of September's top 20 queries by bytes against v2: 61.2 → 8.7 TiB"
+  }
+ ],
+ "usage": {
+  "calls": 2,
+  "tokIn": 9839,
+  "tokOut": 19520,
+  "usd": 0.09440782,
+  "critMs": 112706
+ }
+}

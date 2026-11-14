@@ -1,0 +1,181 @@
+{
+ "approach": "cascade",
+ "case": "deploy-02",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "Migration 0148 drops legacy_legs (and the conversion function) at 06:00, before the orders-svc deploy. v4.18.2 template endpoints read legacy_legs, so `kubectl rollout undo` to v4.18.2 cannot work. This violates the agreed 30-minute rollback requirement, and the 15-minute rollback target is unachievable. Data written by v5 to legs_json is also unreadable by v4.",
+     "evidence": "\"ALTER TABLE order_templates DROP COLUMN legacy_legs;\" and \"Migrations are forward-only; no down migrations are needed for this release.\" vs. \"`kubectl rollout undo deploy/orders-svc` to v4.18.2\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "blocker",
+     "claim": "The scheduled public announcement is not fair and balanced under FINRA Rule 2210. It claims zero fees on options, but the release notes state a $0.50 per contract fee and regulatory fees on sells. It also says 'No catches, no fine print' and 'one tap' while the flow requires a review sheet and slide-to-submit. 'Rebuy your winners' is promissory with no risk context.",
+     "evidence": "\"trade stocks, ETFs **and options** with zero commissions and zero fees. No catches, no fine print.\" vs. \"options contract fee lowered to $0.50 per contract\" and \"Regulatory fees (SEC, FINRA TAF) still apply to sells.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Dropping legacy_legs at 06:00 breaks any 4.18.2 orders-svc pods that are still serving, both before and during the 06:10 rolling deploy. It also breaks 4.x mobile clients that call template endpoints. This produces a template-endpoint 5xx window and, with rollback impossible, a non-recoverable state.",
+     "evidence": "\"06:00 ET apply migrations 0147, 0148.\" then \"06:10 ET deploy orders-svc v5.0.0 (rolling, 12 pods).\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Migration 0147 adds the column, backfills all rows, and sets NOT NULL in one transaction while live 4.x pods keep writing templates through legacy_legs only. Rows inserted or updated after the UPDATE have NULL legs_json, so SET NOT NULL fails and aborts the migration, or the writers are blocked behind locks. In addition, 4.x inserts after 0147 commits will fail the NOT NULL constraint, since 4.x does not populate legs_json.",
+     "evidence": "\"ALTER TABLE order_templates ALTER COLUMN legs_json SET NOT NULL;\" with 4.x pods still live until 06:10"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The migration dry run was against a static snapshot. It does not show lock behaviour or duration under live write concurrency, and 0148 is not timed. The rollback time claim of 15 min is also untested.",
+     "evidence": "\"Migration 0147 dry run against a prod snapshot (2.9M templates): 41s, 0 conversion errors.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The release note says Reorder prefills the same order type, but closed-market reorders convert market orders to limit at last close, so the user-facing description is inaccurate.",
+     "evidence": "\"same symbol, side, quantity and order type\" vs. \"defaults market orders to limit at last close\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "There is no evidence of registered-principal approval of the blog/X retail communication, and no customer notice for the fee change.",
+     "evidence": "ABSENT: principal approval record for the announcement and fee-change notice."
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The announcement says 'Update the app today' while store rollouts ramp over 6–7 days and many users cannot get 5.0 yet. The post is scheduled at 09:00 ET, before the ramp could complete.",
+     "evidence": "\"Update the app today.\" vs. \"7-day ramp\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "A single-statement UPDATE of 2.9M rows in one transaction creates WAL bloat and long lock hold times that grow with table size.",
+     "evidence": "\"UPDATE order_templates SET legs_json = legacy_legs_to_json(legacy_legs);\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Nothing material found.",
+     "evidence": "\"no new order-entry endpoint\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Nothing material found.",
+     "evidence": "ABSENT: no new data collection described."
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "Nothing material found.",
+     "evidence": "No new vendor dependency listed."
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Nothing material found on infrastructure spend.",
+     "evidence": "\"options contract fee lowered to $0.50 per contract (was $0.65)\""
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 9138,
+    "tokOut": 9036,
+    "usd": 0.04185413,
+    "critMs": 44612
+   },
+   "wallMs": 96573
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The design has no mechanism to keep `legs_json` in sync when v4.x edits an existing template. v4.x writes only `legacy_legs`. Rows already backfilled, or edited during the 06:10 rolling deploy or after a rollback, therefore end up with a stale non-NULL `legs_json`. v5 reads `legs_json` first, so it would show outdated legs on an order template. The `legs_json IS NULL` sweep and the 0148 gate (d) only detect NULLs, not divergence. Dropping `legacy_legs` would then lock in the stale data.",
+     "evidence": "\"4.x pods keep writing `legacy_legs` only until the 06:10 deploy completes, a final sweep of `WHERE legs_json IS NULL` runs after the rollout finishes\" / \"v5 reads `legs_json`, falling back to converting `legacy_legs` if `legs_json` is NULL\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The 15-minute rollback time is unmeasured. The artifact itself lists the staging rehearsal as a required pre-go item tracked in CHG-30551, so this is a go/no-go condition rather than a hidden defect. Execution of the rehearsal should be verified before go.",
+     "evidence": "\"Open before go (required): ... rehearse the full `kubectl rollout undo` ... The 15-minute rollback figure is a target, not a measured result\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "No observability or alert owner is defined for the batched backfill, such as lag, errors, or lock waits, so a stalled job would go unnoticed.",
+     "evidence": "\"Monitoring: order reject rate, template endpoint 5xx, crash-free sessions ≥ 99.6%.\""
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 10988,
+    "tokOut": 3425,
+    "usd": 0.040496120000000004,
+    "critMs": 20375
+   },
+   "wallMs": 129023
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The reconciliation sweep, which gates the rollout and the later 0148 migration, filters on `v4_unsupported_flag`. Migration 0147 only adds `legs_json`, so the column is never created, and the query would error or the flag would never be set. The multi-leg v4 compatibility path is also left as two alternatives, 'readable form' or 'flagged unsupported', so it is undefined.",
+     "evidence": "\"OR (NOT v4_unsupported_flag AND legs_json IS DISTINCT FROM ...\" vs 0147 DDL: ABSENT: ADD COLUMN v4_unsupported_flag; \"in a form v4.x can read, or flagged so v4.x shows them as unsupported\""
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 14657,
+    "tokOut": 9982,
+    "usd": 0.05572032,
+    "critMs": 51445
+   },
+   "wallMs": 135230
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The Rule 2210 principal approval, archiving and fee-notice checklist covers only the blog and X copy. The App Store / Play release notes also announce the options fee cut publicly, and they carry no risk language or approval step.",
+     "evidence": "\"Required before publication (Rule 2210): - Approval of the blog and X copy by a registered principal\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Migration 0147 uses a 3s lock_timeout, and CREATE TRIGGER takes a lock that blocks writes. The artifact does not say what to do if the migration aborts on timeout, such as retrying or aborting the window. The staging rehearsal is already a required pre-go item, so this is non-blocking.",
+     "evidence": "\"SET lock_timeout = '3s';\" and \"ABSENT: retry/abort behavior on lock timeout\""
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 15896,
+    "tokOut": 4488,
+    "usd": 0.05544982,
+    "critMs": 25233
+   },
+   "wallMs": 49699
+  }
+ ],
+ "artifact": "# Release proposal: BrokerLite 5.0 — Quick Reorder\n\nRelease manager: M. Okafor · Window: Tue 2026-11-10, 06:00–07:30 ET (pre-market) · Change ticket: CHG-30551\n\n## Components\n\n| Component | From | To |\n|---|---|---|\n| iOS app | 4.18.2 | 5.0.0 (App Store phased release) |\n| Android app | 4.18.2 | 5.0.0 (Play staged rollout) |\n| api (orders-svc) | v4.18.2 | v5.0.0 |\n| DB migrations | 0146 | 0147 (expand, this release); 0148 (contract, separate later release) |\n\n## Release notes (customer-facing, App Store / Play)\n\n- **Quick Reorder**: open any filled order in History and tap \"Reorder\" to prefill a new ticket with the same symbol, side, and quantity, and the same order type when the market is open. If the market is closed, market orders are prefilled as limit orders at the last close. You always land on the review sheet with the live quote and estimated cost, and you still slide to submit.\n- **Options pricing update**: options contract fee lowered to $0.50 per contract (was $0.65). Stock and ETF trades remain commission-free. Regulatory fees (SEC, FINRA TAF) still apply to sells.\n- Saved order templates now support multi-leg options strategies.\n- Fixes: watchlist sort order persists across restarts; dark mode chart axis labels.\n\n## Engineering notes\n\n- Saved templates move from `order_templates.legacy_legs` (pipe-delimited text, read by the 4.x orders-svc template endpoints) to `order_templates.legs_json` (jsonb), which is what enables multi-leg templates.\n- This release uses expand/contract. 0147 adds two columns (`legs_json`, nullable, and `v4_unsupported_flag`, boolean default false) and a sync trigger, and backfills `legs_json`; `legacy_legs` stays in place so v4.18.2 keeps working. The destructive 0148 is deferred to a later release, after the rollback window has passed and the v5 rollout is stable at 100% (see Rollback plan).\n- v5.0.0 dual-writes: every template write populates both `legs_json` and `legacy_legs`.\n  - **Single-leg templates (representable in the 4.x format):** `legacy_legs` is written in the 4.x pipe-delimited format and `v4_unsupported_flag` is false.\n  - **Multi-leg templates (not representable in 4.x):** v5 writes `legs_json`, sets `v4_unsupported_flag = true`, and sets `legacy_legs` to NULL. There is no lossy serialization. The 4.x template endpoints must skip or tolerate these rows rather than error; this is a required staging check (see QA) before go.\n  - v5 reads `legs_json`, falling back to converting `legacy_legs` if `legs_json` is NULL.\n- **Keeping `legs_json` in sync with v4.x writes:** v4.x writes only `legacy_legs`, so a database trigger (created in 0147) re-derives `legs_json` from `legacy_legs` whenever a write changes `legacy_legs` without changing `legs_json`, and clears `v4_unsupported_flag` on that row (a v4.x write replaces the template with a single-leg representable form). This covers v4.x inserts and edits for the whole lifetime of the expand phase: before the deploy, during the 06:10 rolling deploy when old and new pods coexist, and after any rollback. v5 writes set `legs_json` themselves, so the trigger does not override them. If a v5 edit leaves `legs_json` unchanged, `legacy_legs` is unchanged too, so there is nothing to re-derive. Consequently a non-NULL `legs_json` is never stale relative to `legacy_legs` for representable (unflagged) templates.\n- Because v5 dual-writes, single-leg templates created or edited under v5 remain readable by v4.18.2 after a rollback. Multi-leg templates are not visible to v4.18.2 (they have no 4.x representation, as before). Templates edited by v4.18.2 after a rollback are picked up correctly by v5 on re-deploy via the trigger.\n- Reorder from History reuses the template prefill path; no new order-entry endpoint.\n- If the market is closed, Reorder prefills but the review sheet shows the existing \"Queued for open\" banner and defaults market orders to limit at last close (unchanged behavior from 4.x).\n\n### Migration 0147_template_legs_json.sql (expand)\n\n```sql\n-- Nullable column add and constant-default boolean add are metadata-only changes\n-- (no table rewrite); no NOT NULL on legs_json in this release.\nSET lock_timeout = '3s';\nBEGIN;\nALTER TABLE order_templates ADD COLUMN IF NOT EXISTS legs_json jsonb;\nALTER TABLE order_templates ADD COLUMN IF NOT EXISTS v4_unsupported_flag boolean NOT NULL DEFAULT false;\n\n-- Keep legs_json in sync when a writer (v4.x) changes legacy_legs only.\nCREATE OR REPLACE FUNCTION order_templates_sync_legs_json() RETURNS trigger AS $$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.legs_json IS NULL AND NEW.legacy_legs IS NOT NULL THEN\n      NEW.legs_json := legacy_legs_to_json(NEW.legacy_legs);\n    END IF;\n  ELSIF NEW.legacy_legs IS DISTINCT FROM OLD.legacy_legs\n        AND NEW.legs_json IS NOT DISTINCT FROM OLD.legs_json THEN\n    NEW.legs_json := legacy_legs_to_json(NEW.legacy_legs);\n    NEW.v4_unsupported_flag := false;\n  END IF;\n  RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;\n\nDROP TRIGGER IF EXISTS order_templates_sync_legs_json ON order_templates;\nCREATE TRIGGER order_templates_sync_legs_json\n  BEFORE INSERT OR UPDATE ON order_templates\n  FOR EACH ROW EXECUTE FUNCTION order_templates_sync_legs_json();\nCOMMIT;\n```\n\nThe trigger is created before the backfill starts, so any row written by v4.x from that point on is already consistent. The backfill only sets `legs_json` and leaves `legacy_legs` and `v4_unsupported_flag` untouched, so it does not fire the trigger's re-derive branch. Existing rows all have `v4_unsupported_flag = false`, because multi-leg templates did not exist before 5.0.\n\nBackfill runs as a separate batched job (not inside the DDL transaction), so it does not hold long locks against live 4.x writers:\n\n```sql\n-- Run in batches of 5,000 ids, committing per batch, with a short sleep between batches.\nUPDATE order_templates\n   SET legs_json = legacy_legs_to_json(legacy_legs)\n WHERE id BETWEEN :lo AND :hi\n   AND legs_json IS NULL;\n```\n\nAfter the rollout finishes, a final reconciliation sweep runs. It repairs both missing and divergent rows, not just NULLs:\n\n```sql\n-- Reconciliation: NULL or divergent legs_json for representable templates.\nSELECT count(*) FROM order_templates\n WHERE legs_json IS NULL\n    OR (NOT v4_unsupported_flag\n        AND legs_json IS DISTINCT FROM legacy_legs_to_json(legacy_legs));\n```\n\nRows returned are re-derived in batches and the count is re-run until it is zero. Rows flagged `v4_unsupported_flag = true` (multi-leg, `legacy_legs` NULL) are excluded from the divergence comparison; for those rows the check is only that `legs_json` is non-NULL. Until a later release, readers tolerate NULL `legs_json` via the fallback above. No `SET NOT NULL` is applied in this release.\n\n### Migration 0148_drop_legacy_legs.sql (contract, NOT part of this release)\n\nDeferred to a later change ticket, to run only after (a) v5 is at 100%, (b) the rollback window has closed, (c) no v4.x orders-svc remains deployable as a rollback target, and (d) the reconciliation query above returns zero rows (no NULL and no divergent `legs_json`), re-run immediately before the migration. Draft only:\n\n```sql\nBEGIN;\nDROP TRIGGER IF EXISTS order_templates_sync_legs_json ON order_templates;\nDROP FUNCTION IF EXISTS order_templates_sync_legs_json();\nALTER TABLE order_templates ALTER COLUMN legs_json SET NOT NULL;\nALTER TABLE order_templates DROP COLUMN legacy_legs;\nALTER TABLE order_templates DROP COLUMN v4_unsupported_flag;\nDROP FUNCTION legacy_legs_to_json(text);\nCOMMIT;\n```\n\n## QA summary\n\n- Regression suite (1,284 cases) on staging: pass.\n- Reorder: equities, ETFs, single-leg and 2/3/4-leg options, fractional shares, closed-market queueing: pass.\n- Migration 0147 backfill dry run against a prod snapshot (2.9M templates): 41s, 0 conversion errors. Note: this was a static snapshot and does not show lock behavior or duration under live write concurrency.\n- **Open before go (required):** rehearse 0147 (including column adds and trigger creation) and the batched backfill on staging under synthetic concurrent template writes (4.x and 5.0 pods) and record lock waits and duration. In the same rehearsal, verify that a v4.x edit to an already-backfilled template updates `legs_json` (v5 reads the edited legs), and that the reconciliation query returns zero rows afterward. Verify that v4.18.2 template endpoints list and open templates without error when multi-leg rows exist (`legacy_legs` NULL, `v4_unsupported_flag = true`). Rehearse the full `kubectl rollout undo` to v4.18.2 on staging with v5-written templates (single- and multi-leg), edit templates under v4.18.2 after the rollback, and record the elapsed time. The 15-minute rollback figure is a target, not a measured result, until this rehearsal is recorded in CHG-30551.\n- Accessibility: VoiceOver/TalkBack pass on History and Reorder review sheet.\n\n## Rollout plan\n\n1. 06:00 ET apply migration 0147 (add `legs_json`, `v4_unsupported_flag`, and the sync trigger; `lock_timeout` 3s), then start the batched backfill.\n2. 06:10 ET deploy orders-svc v5.0.0 (rolling, 12 pods). Old and new pods coexist safely because `legacy_legs` is untouched, the trigger keeps `legs_json` in sync with v4.x writes, and v5 tolerates NULL `legs_json`.\n3. After rollout completes, run the reconciliation sweep (NULL and divergent `legs_json`) until it returns zero rows.\n4. 06:30 ET smoke test with house accounts in the paper environment and one live house account.\n5. Mobile: App Store phased release (7-day ramp) and Play staged rollout 5% → 20% → 50% → 100% over 6 days.\n6. Monitoring: order reject rate, template endpoint 5xx, crash-free sessions ≥ 99.6%, and a periodic reconciliation count (alert if non-zero).\n7. Migration 0148 is NOT run in this window; it is scheduled under a separate change ticket after the criteria above are met.\n\n## Rollback plan\n\n- Trigger: orders-svc 5xx > 1% for 5 min, or order reject rate +50% over baseline.\n- Action: `kubectl rollout undo deploy/orders-svc` to v4.18.2 (target: complete within 15 min, inside the 30-minute rollback SLO; to be validated by the staging rehearsal listed in QA). This is feasible because `legacy_legs` remains in the schema and v5 dual-writes it for single-leg templates, so v4.18.2 can read every template it could read before. Multi-leg templates, which v4.x never supported, are flagged and have NULL `legacy_legs`; v4.18.2 must tolerate them (verified in the staging rehearsal). `legs_json` and `v4_unsupported_flag` are additive columns that v4 ignores, and the sync trigger keeps `legs_json` consistent with any `legacy_legs` edits v4.18.2 makes after the rollback.\n- No down migration is needed: 0147 is additive and harmless to v4.18.2. The trigger leaves `legacy_legs` untouched and only sets `legs_json` and clears `v4_unsupported_flag`.\n- Mobile: halt phased release; 5.0 clients fall back to hiding Reorder if `/v5/templates` returns 404.\n\n## Launch announcement (blog + X, scheduled 09:00 ET)\n\n**Status: DRAFT, not approved. Do not schedule or publish until the approvals below are recorded.**\n\n> **BrokerLite 5.0 is here.** Quick Reorder lets you prefill a new order from a past one in History — you still review the live quote and estimated cost and confirm before anything is submitted. We've also lowered our options contract fee to $0.50 per contract (was $0.65). Stock and ETF trades remain commission-free. Regulatory fees (SEC, FINRA TAF) still apply to sells. Investing involves risk, including loss of principal, and past trades are not indicative of future results. See our fee schedule at [link] for details. Update the app today.\n\nRequired before publication (Rule 2210):\n- Approval of the blog and X copy by a registered principal, recorded in CHG-30551 with name, date, and the approved text.\n- Customer notice of the options fee change delivered per the firm's fee-change notice procedure (the change is a reduction, but notice and the updated fee schedule must still be published and recorded in CHG-30551 by Compliance).\n- Archiving of the approved communication per recordkeeping requirements.",
+ "fixerUsage": {
+  "calls": 3,
+  "tokIn": 12854,
+  "tokOut": 14172,
+  "usd": 0.193124,
+  "critMs": 80886
+ },
+ "status": "cleared"
+}

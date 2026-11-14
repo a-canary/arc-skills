@@ -1,0 +1,137 @@
+{
+ "approach": "triage-routed",
+ "case": "plan-12",
+ "rep": 1,
+ "wallMs": 457409,
+ "verdict": "ATTACKS",
+ "confidence": 0.82,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "purge_image permanently deletes every key under the `<id>-` prefix and issues a wildcard CloudFront invalidation. The plan adds no id validation, dry-run or confirmation step, bucket versioning, or restore path, so a malformed or overly broad id on a takedown is unrecoverable.",
+   "evidence": "\"It is extended to delete every key under the image's `<id>-` prefix and invalidate `/media/YYYY/MM/<id>-*`.\" ABSENT: id format validation, dry-run mode, S3 versioning or retention, restore procedure."
+  },
+  {
+   "lens": "authz",
+   "severity": "major",
+   "claim": "Takedown coverage is limited to one image id's prefix. Re-crops create new image ids and new keys, so a legal takedown of a photo can leave re-cropped derivatives live on the CDN. The plan does not map re-crops to their source or test that they are removed.",
+   "evidence": "\"Re-crops already create a new image id (new keys)\" and \"delete every key under the image's `<id>-` prefix\". ABSENT: source-to-re-crop mapping or a takedown test covering re-crops."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Takedown purge has no partial-failure handling or post-purge verification. If some S3 deletes fail, or the asynchronous CloudFront invalidation never completes, the command can report success while publicly cached AVIF/WebP/JPEG copies remain served.",
+   "evidence": "\"Test: purge an image with a full responsive set; assert zero remaining keys and one wildcard invalidation.\" ABSENT: retry for partial delete failures, invalidation completion polling, alerting on failed invalidation."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "make_responsive_set writes 16 derivative keys, but the plan does not say has_responsive_set is set only after all writes succeed and are verified. A partial write could flip the flag and emit <picture> sources pointing at missing keys. It also states no task time limit and no handling for a worker crash or OOM mid-write.",
+   "evidence": "\"`<picture>` is rendered only when `image.has_responsive_set` is true (set by the task).\" and \"3 retries, then alert to #web-alerts\". ABSENT: write ordering (flag last), key-existence verification, task time limit, crash/OOM recovery, cleanup of partial sets."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The rollout ramp (10%→50%→100%) has monitoring but no alert thresholds, stop conditions, or named owner for advancing or halting. A regression could reach all traffic before anyone acts.",
+   "evidence": "\"Monitoring: RUM p75 LCP/CLS per group; CloudFront 4xx rate on `*.avif` / `*.webp`; ...\" ABSENT: alert thresholds, stop criteria per step, decision owner."
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The plan relies on VIPS_BLOCK_UNTRUSTED=1 as a decoder hardening control, but it is pinned to libvips 8.14, and that variable is, to my knowledge, a 8.15+ feature. If so, the stated protection does not exist. This must be verified before the gate.",
+   "evidence": "\"workers run with `VIPS_BLOCK_UNTRUSTED=1`\" alongside \"libvips 8.14 from the Debian 12 package\"."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "If the metadata-stripping step fails in production, GPS, XMP or IPTC data could sit in publicly cached derivatives across the backfilled set. The rollback setting does not remove these objects, and the plan gives only per-image purge, with no bulk purge or regeneration procedure for about 310,000 images.",
+   "evidence": "\"Derivatives can stay in S3 or be deleted by prefix later; nothing reads them with the setting off.\" ABSENT: fleet-scale purge or regeneration runbook for a metadata or encoder defect found after 100%."
+  },
+  {
+   "lens": "licensing",
+   "severity": "major",
+   "claim": "The plan treats wire-photo licences as already covering new sizes and formats, and the basis is an internal photo-desk confirmation. The licence terms are not cited, and the backfill would create derivatives for up to 310,000 images, including wire photos.",
+   "evidence": "\"Extra sizes and formats of the same licensed image for the same display use are covered by the current licences (photo desk confirmation on WEB-778, Oct 19).\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The 'publishing is never delayed' guarantee is unsupported. A low-priority Celery queue on the same existing worker nodes does not isolate publishing from backfill load unless the backfill has dedicated workers or pool slots, and the plan does not say which.",
+   "evidence": "\"run over two nights (01:00–06:00) on a separate low-priority Celery queue, so publishing tasks are never delayed.\" and \"Two existing worker nodes × 4 workers\""
+  },
+  {
+   "lens": "success-criteria",
+   "severity": "major",
+   "claim": "The success target is ≤2.5 s p75 mobile LCP in the field, but the only supporting evidence is a lab result of 2.6 s. The plan does not show the field target is reachable with this change.",
+   "evidence": "\"p75 LCP 3.9 s → 2.6 s\" and \"CrUX p75 mobile LCP on article pages ≤ 2.5 s within 6 weeks of 100%.\""
+  },
+  {
+   "lens": "capacity",
+   "severity": "minor",
+   "claim": "The backfill estimate assumes c6i.xlarge timings on two existing nodes, but the node type is not stated. The 9.7 h estimate leaves roughly 3% slack in the 10 h window, and the plan has no completion metric or behaviour for overrun.",
+   "evidence": "\"0.9 s per image for the full set (prototype, c6i.xlarge).\" and \"≈ 9.7 h, run over two nights (01:00–06:00)\". ABSENT: backfill progress metric, completion alert."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Derivative keys carry no encoder or recipe version, so changing quality, sizes or colour handling later cannot run side by side. A bad recipe would require overwriting objects that browsers and CDN caches may already hold.",
+   "evidence": "\"AVIF (q 50) and WebP (q 75)\" with keys such as \"a81f3c-800.avif\". ABSENT: recipe version or hash in the key scheme."
+  },
+  {
+   "lens": "authz",
+   "severity": "minor",
+   "claim": "The RESPONSIVE_IMAGES site setting switches public rendering for all articles, but the plan does not say who may change it or whether changes are audited.",
+   "evidence": "\"Site setting `RESPONSIVE_IMAGES` (no deploy needed)\". ABSENT: edit permissions, change logging."
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "HEIC is an accepted upload type and depends on libheif and its codec libraries, which are separate from libvips. The plan commits only to libvips security updates and does not describe patch coverage for those libraries or the worker's IAM and network scope if a parser is exploited.",
+   "evidence": "\"JPEG/PNG/WebP/HEIC only\" and \"security updates via unattended-upgrades\". ABSENT: libheif patch coverage, worker IAM scope, network isolation."
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The prototype sample is small and narrow (50 articles, one device model, three lab runs each), with no variance or confidence interval. It is weak support for a field-wide p75 claim.",
+   "evidence": "\"Prototype (WEB-771) on 50 recent articles ... WebPageTest (Moto G Power, 4G, 3 runs per article)\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "AVIF encoding is not verified on the production Debian 12 libvips 8.14 build, and no fallback is described if the encoder is missing. The prototype suggests encoding works, but the plan does not confirm it is the same package.",
+   "evidence": "\"libvips 8.14 from the Debian 12 package\" and \"AVIF (q 50)\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The markup is inconsistent. The JPEG srcset stops at 1200 px while the AVIF and WebP sources include 1600 px. The 3x density claim is overstated, since the 100vw case on phones is about 1200 device px.",
+   "evidence": "\"an `<img>` with the JPEG `srcset`; `src` is the existing 1600 px JPEG. `sizes=\"(max-width: 720px) 100vw, 720px\"`\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The cost estimate omits S3 request charges for about 11 objects per image across ~310k images, and CloudFront invalidation charges for each wildcard takedown.",
+   "evidence": "\"Compute: existing worker nodes, off-peak; no new instances.\" and \"Storage: ~340 KB of new derivatives per image\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The 'Unchanged' list omits JSON-LD ImageObject markup and image sitemaps. Their behaviour is unspecified.",
+   "evidence": "\"Unchanged: Open Graph / Twitter cards, RSS, the Apple News feed, newsletter emails, and any externally shared or embedded image URL\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The takedown test asserts zero keys under the `<id>-` prefix but does not verify that the original upload key sits under that prefix. An original stored elsewhere would survive a purge while the test passes.",
+   "evidence": "\"Keys share the image's existing prefix: `media/2026/10/a81f3c-1600.jpg` (existing)\" ABSENT: verification that the original key falls under the prefix."
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 29661,
+  "tokOut": 28645,
+  "usd": 0.02014405,
+  "critMs": 75666
+ }
+}

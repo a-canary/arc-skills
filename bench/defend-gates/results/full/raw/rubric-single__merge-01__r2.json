@@ -1,0 +1,137 @@
+{
+ "approach": "rubric-single",
+ "case": "merge-01",
+ "rep": 2,
+ "wallMs": 101260,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The client_order_id is generated inside the retry loop, so every attempt sends a new UUID. The broker cannot dedupe a retry after a timeout or 502/503 that actually reached it, which is the duplicate-fill risk the agreed constraint forbids.",
+   "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { const clientOrderId = randomUUID(); try { const res = await broker.post(... client_order_id: clientOrderId ...)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Changing floor to ceil can size an order above the per-symbol maxNotional cap, which sizing must never exceed. Example: maxNotional 10000, price 33, lotSize 10 gives 310 shares, or $10,230.",
+   "evidence": "-  return Math.floor(headroom / price / lotSize) * lotSize;\n+  const lots = headroom / price / lotSize;\n+  return Math.ceil(lots) * lotSize;"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR asserts that retries are safe because the broker dedupes on client_order_id, but the diff contradicts that claim. No test exercises a retry with a stable ID or checks the dedupe behavior.",
+   "evidence": "Retries are safe: every order carries a client_order_id and the broker dedupes on it, so a retry after a timeout cannot double-fill. ... ABSENT: any retry or dedupe test in sizing.test.ts or submit tests"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The timeout branch depends on the error name 'TimeoutError' from the broker client, which the artifact never shows. If the client throws a different error, timeouts are silently not retried or are misclassified.",
+   "evidence": "(err as Error).name === \"TimeoutError\"  ABSENT: broker/client.ts timeout error definition"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The sizing test for the cap does not cover the rounding-up boundary, so the cap violation above goes uncaught. The test case with price 50 and lotSize 10 happens to divide evenly.",
+   "evidence": "expect(sizeBuy({ maxNotional: 10_000, price: 50, currentQty: 0, lotSize: 10 })).toBe(200);"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Retrying 502/503/504 and timeouts means the router may resubmit orders the broker already accepted. Combined with a fresh UUID each attempt, this produces duplicates. Retrying minutes after the open also submits a stale limit price without re-checking the market.",
+   "evidence": "const RETRYABLE_STATUS = new Set([502, 503, 504]); ... await sleep(250 * 2 ** (attempt - 1));"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Only a warn log is emitted on retry, with no metric or alert on retry exhaustion. Ops would not learn that orders are being dropped or duplicated during the open.",
+   "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, attempt });"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The change is shipped to live trading just before market open with no feature flag or staged rollout, and the sizing change is labeled a tidy-up. A bad change cannot be disabled without a redeploy during trading hours.",
+   "evidence": "This PR is about to merge to main and deploy before the next market open. ... Also tidies the sizing helper"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Each failed submit can trigger up to 3 broker calls. Worst case is about 12.75s of blocking and 3x request volume during the open, with no budget or rate limit stated.",
+   "evidence": "{ timeoutMs: 4000 } ... MAX_ATTEMPTS = 3"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "No security issue found in the diff. Secrets and authn are unchanged.",
+   "evidence": "nothing"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "No personal data handling is changed.",
+   "evidence": "nothing"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "No new vendor dependency is introduced. Dependence on the single existing broker is unchanged.",
+   "evidence": "nothing"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Retries are bounded, and no unbounded growth or N+1 pattern appears in the diff.",
+   "evidence": "nothing"
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "No UI surface is changed.",
+   "evidence": "nothing"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Retries address dropped orders during the open, which is a real user problem, though the fix's safety is unresolved.",
+   "evidence": "we drop the order on the floor"
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "No user-facing flow or latency change beyond retry delay.",
+   "evidence": "nothing"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "No accessibility surface is changed.",
+   "evidence": "nothing"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Duplicate or unreported orders caused by the ID bug could create order-reporting and best-execution compliance exposure. This is a consequence of the correctness blocker, not a separate defect.",
+   "evidence": "ABSENT: reconciliation or audit of retried order IDs"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The retry policy is inline and untestable in isolation, and it mixes the sizing change into a retry PR.",
+   "evidence": "Retries are safe ... Also tidies the sizing helper"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Backoff has no jitter, so retries from concurrent orders can synchronize against a recovering broker.",
+   "evidence": "await sleep(250 * 2 ** (attempt - 1));"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3312,
+  "tokOut": 4095,
+  "usd": 0.0020808,
+  "critMs": 18684
+ }
+}

@@ -1,0 +1,83 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-12",
+ "rep": 1,
+ "wallMs": 264987,
+ "verdict": "ATTACKS",
+ "confidence": 0.7,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Requests queued on the per-class FOR UPDATE lock are subject to the pool's 5s statement_timeout. During a burst on one popular class, waiting statements are cancelled and surface as 500s through next(err), not the intended 409 class_full. The PR does not map lock or timeout errors or estimate per-class serialized throughput.",
+   "evidence": "'SELECT capacity, (cancelled_at IS NOT NULL OR starts_at <= now()) AS closed FROM classes WHERE id = $1 FOR UPDATE' with context 'The pg pool sets statement_timeout=5s'; route: '} catch (err) { next(err); }'; ABSENT: lock/timeout error mapping, load test, or queue-depth estimate"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "bookClass holds a pooled connection from db.connect() through BEGIN and COMMIT, including the whole lock wait. A burst on one class can exhaust the pool and stall other classes and endpoints that share it. No pool max, acquisition timeout, or backpressure is stated, and pg's default connect wait is unbounded.",
+   "evidence": "'const client = await db.connect(); ... await client.query('BEGIN');' ... 'await client.query('COMMIT');'; ABSENT: pool max, connectionTimeoutMillis, or load test for the serialized path"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Each booking runs member-check and count scans filtered by class_id (and member_id), and these run while holding the class lock. The PR does not show indexes on bookings(class_id) or bookings(class_id, member_id), so lock hold time may grow with booking history.",
+   "evidence": "'SELECT id FROM bookings WHERE class_id = $1 AND member_id = $2 AND cancelled_at IS NULL'; ABSENT: index definitions; 'No schema change.'"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The no-oversell invariant depends on every insert into bookings taking the class row lock first. The diff changes only bookClass, and nothing shows whether other insert paths (admin add, waitlist, bulk import) exist or take the lock. A future or existing path that skips it would reintroduce overselling, and no DB constraint enforces capacity.",
+   "evidence": "ABSENT: grep or list of other 'INSERT INTO bookings' sites; no constraint or trigger; 'No schema change.'"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The PR bundles the overselling fix with unrelated behavior changes: duplicate-submit idempotency, a new 'closed' state and 409 body, DB-clock start/cancel rejection, and UUID-validation 404s. These cannot be reviewed or reverted independently.",
+   "evidence": "Title 'bookings: stop overselling classes under concurrent requests', yet the body also lists 'returns the existing booking (200)', 'rejected using the database clock', and 'malformed class ids return 404'"
+  },
+  {
+   "lens": "free",
+   "severity": "minor",
+   "claim": "A repeat submit now returns 200 where every successful call previously returned 201. Clients that branch on 201 for a new booking will see a changed status, and the PR does not call out this contract change.",
+   "evidence": "return res.status(result.created ? 201 : 200).json({ bookingId: result.bookingId });"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "No metrics or logs cover lock wait time, full-class rejections, rollback failures, or client destruction via release(broken). The new failure modes are invisible to ops and cannot be alerted on.",
+   "evidence": "client.release(broken); // a client that could not roll back is destroyed, not reused; ABSENT: any log or metric on these paths"
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "Each booking now takes six round trips (BEGIN, locking SELECT, ownership SELECT, count SELECT, INSERT, COMMIT) instead of three, and same-class bookings queue behind the lock. Members during a busy opening will see added latency.",
+   "evidence": "await client.query('BEGIN'); ... await client.query('COMMIT');"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Cancelled and started classes return the same 'class_closed' error, so a member who lost a spot to a race cannot tell whether the class was cancelled or has already started.",
+   "evidence": "case 'closed': return res.status(409).json({ error: 'class_closed' });"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The motivating incident ('oversold by 1-2') and the claim that malformed ids previously caused a Postgres 500 are asserted without a ticket, log, or reproduction. The schema columns the new SQL relies on (starts_at, cancelled_at, capacity) are also not shown.",
+   "evidence": "'support saw classes oversold by 1-2'; 'malformed class ids return 404 instead of a Postgres 500'; 'No schema change.' with no schema excerpt"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The concurrency test is offered as proof of the fix, but nothing shows it fails on the pre-PR code. The test does not confirm that the 12 Promise.all calls actually overlap on the connection pool.",
+   "evidence": "'never oversells when members book concurrently' with 'Promise.all(members.map((m) => bookClass(db, m, classId)))'; ABSENT: pre-fix failing run"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 79036,
+  "tokOut": 22300,
+  "usd": 0.0269538,
+  "critMs": 39761
+ }
+}

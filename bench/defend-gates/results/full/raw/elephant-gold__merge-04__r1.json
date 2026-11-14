@@ -1,0 +1,83 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-04",
+ "rep": 1,
+ "wallMs": 178297,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The up migration is not a rename. It adds an empty private_notes column and drops notes without copying data, so every existing user-written note is destroyed when migrations run automatically on deploy. The PR's 'Pure rename, no data change' claim is false, and the context says these notes cannot be recovered elsewhere.",
+   "evidence": "0087_private_notes.up.sql: \"ALTER TABLE user_recipes ADD COLUMN private_notes text; ALTER TABLE user_recipes DROP COLUMN notes;\" vs PR text: \"Pure rename, no data change; the down migration restores the old name.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The down migration does not restore data. It recreates notes as NULL and drops private_notes, so rolling back is itself a destructive, irreversible step and any notes written after the up migration are lost.",
+   "evidence": "0087_private_notes.down.sql: \"ALTER TABLE user_recipes ADD COLUMN notes text; ALTER TABLE user_recipes DROP COLUMN private_notes;\""
+  },
+  {
+   "lens": "performance-timeout",
+   "severity": "blocker",
+   "claim": "Every page request runs an unbounded query for all of the user's saved rows (up to 200k+, including free-text notes) and slices in JavaScript. The SQL LIMIT was removed, so per-request DB, memory, and transfer cost scales with total saved count and is unlikely to meet the 300ms p99 budget for heavy users.",
+   "evidence": "db.query<SavedRow>(`SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.private_notes ... WHERE ur.user_id = $1 ORDER BY ur.saved_at DESC, ur.id DESC`, [userId]); ... const page = rows.slice(start, start + limit);"
+  },
+  {
+   "lens": "migration-locking",
+   "severity": "major",
+   "claim": "ALTER TABLE on a ~140M-row table takes ACCESS EXCLUSIVE locks. Migrations run automatically on deploy with no lock_timeout, so the statements can queue behind long-running queries and block all reads and writes on user_recipes, cascading into API latency and outages.",
+   "evidence": "0087_private_notes.up.sql: \"BEGIN; ALTER TABLE user_recipes ADD COLUMN private_notes text; ALTER TABLE user_recipes DROP COLUMN notes; COMMIT;\""
+  },
+  {
+   "lens": "deploy-compatibility",
+   "severity": "major",
+   "claim": "The schema changes on merge before the new code is live. During rolling deploy, old instances selecting ur.notes will fail with column-does-not-exist errors. No expand/contract sequencing is provided.",
+   "evidence": "Context: \"migrations run automatically on deploy after merge to main\"; old query: \"SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.notes\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "An unknown, stale, or deleted cursor makes findIndex return -1, so start becomes 0 and the endpoint silently returns page one again with no error. Clients can loop or see duplicates, which is the drift problem the PR claims to fix. No test covers this case.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The response key changes from notes to private_notes with no alias or client update in the PR, so existing consumers reading notes will receive undefined.",
+   "evidence": "SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.private_notes ... res.json({ items: page, nextCursor });"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "A negative limit is not clamped below. limit=-1 yields an empty page, the nextCursor condition is true, and page[page.length - 1] reads page[-1] and throws a TypeError, returning a 500.",
+   "evidence": "const limit = Math.min(Number(req.query.limit) || 50, 100); ... start + limit < rows.length ? page[page.length - 1].id : null;"
+  },
+  {
+   "lens": "deploy-compatibility",
+   "severity": "major",
+   "claim": "Clients still sending offset are silently ignored and receive the first page on every call, with no error or deprecation signal, and may page forever. The PR asserts the client already uses cursor but provides no client diff or verification.",
+   "evidence": "-  const offset = Math.max(Number(req.query.offset) || 0, 0);  (removed, no fallback); \"The client already sends `cursor` from the previous page's `nextCursor`.\""
+  },
+  {
+   "lens": "scope-drift",
+   "severity": "minor",
+   "claim": "Two unrelated changes are bundled, so reverting pagination also requires reverting the destructive schema migration and vice versa, coupling their rollbacks.",
+   "evidence": "\"Two small changes bundled because they touch the same table.\""
+  },
+  {
+   "lens": "hidden-coupling",
+   "severity": "major",
+   "claim": "The rename is not shown to be complete. No search for other readers or writers of user_recipes.notes is included, so other queries, write paths, or clients may break.",
+   "evidence": "ABSENT: no list of other references to notes or private_notes; diff touches only 0087_*, saved.ts, and saved.test.ts."
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 60072,
+  "tokOut": 24697,
+  "usd": 0.0243595,
+  "critMs": 17842
+ }
+}

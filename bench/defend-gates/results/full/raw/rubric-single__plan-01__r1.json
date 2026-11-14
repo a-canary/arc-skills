@@ -1,0 +1,107 @@
+{
+ "approach": "rubric-single",
+ "case": "plan-01",
+ "rep": 1,
+ "wallMs": 100337,
+ "verdict": "ATTACKS",
+ "confidence": 0.93,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The plan's data source cannot support its own design. chain_poller needs 160 requests/min (40 underlyings × 2 expiries every 15 s), but the chosen Starter tier allows 5 req/min and serves only 15-minute-delayed option quotes. Intraday triggers on delayed quotes do not implement the real-time logic in §1–§3.",
+   "evidence": "\"chain_poller (new): every 15 s, fetch a real-time option chain snapshot for each held underlying... 40 underlyings => 160 requests/min during RTH.\" vs. \"Starter | $79 | 5 req/min | 15-min delayed\" and \"We stay on Starter.\""
+  },
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "The $250/month cap is violated or the feature is infeasible under the cap. The only tiers that meet the 160 req/min need and real-time quotes are Growth ($199, still below 160 req/min, so it fails the rate requirement) or Pro ($499, over cap). The stated $139 total depends on the Starter tier, which the design cannot use. Real-time data at Growth plus VPS is $259, already over the cap, and the plan does not mention this.",
+   "evidence": "\"Monthly run cost: Optiq Starter $79 + existing VPS $60 = $139, comfortably inside the $250 cap.\" and \"Growth | $199 | 100 req/min | real-time\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The migration is destructive, irreversible, and has no rollback. It drops the roll_history column in the same transaction as a partial backfill, so every roll older than 90 days is permanently lost from prod. Roll history is audit and tax-relevant data. The plan gives no backup, snapshot, or down-migration.",
+   "evidence": "\"Backfill copies roll_history entries from the last 90 days into rolls; older entries are not needed by roll_engine.\" and \"In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.\" and \"Migration 0042 runs in-place against prod Monday 08:00 ET\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The fallback path is broken by the migration it depends on. roll_eod.py is kept as the fallback through week 4, but the migration drops the column it likely reads, so enabling ROLLER_V2=false would fail. The plan's rollback story is therefore not real.",
+   "evidence": "\"roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4.\" and \"DROP COLUMN roll_history\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The headline benefit (+3.8% net APR) has no backtest, prototype, or quantified source. The rationale rests on anecdotes (\"several days\" in desk notes) and an unsupported appeal to what other funds do. Intraday mean-reversion capture is asserted, not shown.",
+   "evidence": "\"Expected impact: +3.8% net APR vs. EOD rolling (see §2).\" and \"Intraday rolling is also standard practice among the option-income funds we follow.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The success criterion is statistically and operationally unsound. A 30-day live window on 40 underlyings cannot reliably detect a 3.8% APR difference against a baseline. It also falls outside the 4-week build, and the rollout to all 40 names starts with only 2 weeks of paper comparison.",
+   "evidence": "\"Success criterion: realized net APR over the first 30 live days >= EOD baseline + 3.8%.\" and \"Week 4: ROLLER_V2=true on 5 underlyings, then all 40.\""
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "Trading costs are not modeled, though the claimed gain is a \"net\" APR. Intraday triggers on delta ≥ 0.70 and extrinsic thresholds, with up to 8 roll orders per day and repricing every 20 s up to 3 times, can multiply commission and spread costs. The plan never accounts for them.",
+   "evidence": "\"Expected impact: +3.8% net APR\" with no commission or slippage term; \"re-priced every 20 s up to 3 times, then cancelled.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Triggers are evaluated on stale data with no staleness check. Vendor quotes may be delayed, yet the heartbeat guard covers only the broker, not the market data feed. The engine can roll on prices that no longer reflect the market.",
+   "evidence": "\"roll_engine stops emitting intents when the last successful broker heartbeat is > 60 s old.\" (no equivalent guard for chain_poller data freshness)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Order-cancel race is unaddressed. After the 3rd reprice the plan cancels the combo, but a fill can arrive before or during cancellation. The plan has no reconciliation of the position state and no handling of a late fill, which can leave the book inconsistent.",
+   "evidence": "\"re-priced every 20 s up to 3 times, then cancelled.\" (no cancel-ack or fill-reconciliation logic specified)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "There is no observability or alerting plan for a live trading engine. Failures in polling, intent emission, or order submission have no specified alarms or dashboards, and the ops burden of a 15-second polling loop is not described.",
+   "evidence": "ABSENT: alerting, metrics, or on-call ownership for chain_poller, roll_engine, or order_router"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The runaway-protection limits are inconsistent with the scope. A cap of 8 roll orders per account per day is smaller than the number of names that could trigger across 40 underlyings, so the cap blocks legitimate rolls and produces silent under-rolling. The plan does not say what happens to intents beyond the cap.",
+   "evidence": "\"max 1 roll per contract per day and max 8 roll orders per account per day\" (with 40 underlyings in scope)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The gap trigger is underspecified. It is unclear whether \"gaps > 4% through strike\" is measured from prior close, from last price, or as a sustained move. This affects when rolls fire.",
+   "evidence": "\"Underlying gaps > 4% through strike within the session.\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The live order path has no authorization, approval, or audit control described. A single env switch (ROLLER_KILL) is the only guard on automated submission of live orders, and the plan does not specify who can set flags or how changes are logged.",
+   "evidence": "\"plus a ROLLER_KILL env switch read on every loop.\" (no access control or audit trail specified)"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "Trade decisions depend entirely on one market-data vendor with no fallback or exit path. The plan does not discuss switching cost if Optiq changes pricing or terms.",
+   "evidence": "\"Current vendor: Optiq Data.\" (no alternative vendor or exit plan)"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Automated options trading for a family office may raise regulatory or broker-ToS questions around algorithmic order submission and rate-limit use of vendor data. Neither is addressed.",
+   "evidence": "ABSENT: review of broker or vendor terms covering automated trading, data redistribution, or rate-limit circumvention"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 2991,
+  "tokOut": 4440,
+  "usd": 0.00264852,
+  "critMs": 20546
+ }
+}

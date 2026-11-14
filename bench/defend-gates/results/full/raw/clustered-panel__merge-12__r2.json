@@ -1,0 +1,59 @@
+{
+ "approach": "clustered-panel",
+ "case": "merge-12",
+ "rep": 2,
+ "wallMs": 278589,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Each booking holds a pool connection (db.connect()) for the whole transaction, including while it waits on the class row lock. A burst on one popular class can occupy every pool connection, stalling bookings for unrelated classes and other endpoints. This contradicts the PR's claim of no effect on other classes, and pool size and connectionTimeoutMillis are not addressed.",
+   "evidence": "\"const client = await db.connect();\" ... \"await client.query('BEGIN'); const result = await bookLocked(client, memberId, classId);\" alongside \"which serializes bookings per class without affecting other classes.\" ABSENT: pool sizing, connection-timeout, or queueing analysis."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The pool's 5s statement_timeout covers the FOR UPDATE statement, including time spent waiting for the row lock. Bookings queued behind a hot class during the spike can time out and surface as 500s via next(err) instead of the intended 409 class_full. This failure mode is neither handled nor tested.",
+   "evidence": "\"statement_timeout=5s\" (pool setting) ... \"SELECT capacity, (cancelled_at IS NOT NULL OR starts_at <= now()) AS closed FROM classes WHERE id = $1 FOR UPDATE\" ; the concurrency test uses only 12 members."
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The capacity count scans bookings by class_id on every serialized booking while the lock is held. The PR does not establish an index on bookings(class_id) or measure its cost for large classes.",
+   "evidence": "ABSENT: index on bookings(class_id). \"SELECT count(*)::int AS n FROM bookings WHERE class_id = $1 AND cancelled_at IS NULL\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The no-oversell guarantee relies entirely on the application-level row lock. There is no unique partial index on (class_id, member_id) or database-level capacity enforcement, so any other insert path into bookings would bypass it. The diff touches only bookClass.",
+   "evidence": "\"No schema change.\" ABSENT: a search showing no other INSERT INTO bookings paths, or a DB constraint enforcing one active booking per member."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The concurrency test may not reproduce the original oversell on a shared default-size pool, so it could pass even without the lock. The ROLLBACK-failure path that destroys the client via client.release(broken) is also untested.",
+   "evidence": "\"const results = await Promise.all(members.map((m) => bookClass(db, m, classId)));\" ; \"client.release(broken); // a client that could not roll back is destroyed, not reused\" with no test for this path."
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Malformed ids now return 404 and a duplicate booking returns 200 instead of 201. Both are public API behaviour changes, and the 201→200 change is not called out as breaking for clients that check for 201.",
+   "evidence": "\"return res.status(404).json({ error: 'class_not_found' });\" ; \"return res.status(result.created ? 201 : 200)\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "There is no metric, alert, or distinct log for lock wait time, pool wait, or rollback failures, so a regression in the new locking path would surface only as customer-facing errors.",
+   "evidence": "log.info({ bookingId: result.bookingId, classId, created: result.created }, 'class booked') ; ABSENT: metrics or alerts on lock wait or rollback failure"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 25301,
+  "tokOut": 11664,
+  "usd": 0.010891199999999998,
+  "critMs": 24729
+ }
+}

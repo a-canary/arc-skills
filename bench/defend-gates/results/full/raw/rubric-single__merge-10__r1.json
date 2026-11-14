@@ -1,0 +1,65 @@
+{
+ "approach": "rubric-single",
+ "case": "merge-10",
+ "rep": 1,
+ "wallMs": 150602,
+ "verdict": "ATTACKS",
+ "confidence": 0.6,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The headline test TestClaimNeverHandsOutAJobTwice only checks the total claim count. If one job were handed to two workers while another job was never claimed, the count would still be 40 and the test would pass. The core no-double-claim property is not actually asserted.",
+   "evidence": "if n := claims.Load(); n != 40 { t.Fatalf(\"got %d claims for 40 jobs\", n) }"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Stale-holder fencing in Complete depends on w.id being unique per running process. The diff does not show how w.id is set. If it is a constant or non-unique value, a stale worker's Complete would match the new holder's locked_by and succeed.",
+   "evidence": "ABSENT: definition or source of w.id. Complete uses \"WHERE id = $1 AND locked_by = $2 AND status = 'running'\" with w.id as the locked_by value."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Graceful shutdown leaves the lease held instead of releasing it. Each deploy or restart now delays re-running interrupted jobs by up to jobTimeout+1m (about 3 minutes). The old ResetRunning requeued them immediately. This user-visible latency change is not mentioned in the PR.",
+   "evidence": "if ctx.Err() != nil { return nil } // shutting down: leave the lease to expire so another worker retries the job"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The claim subquery filters on status with an OR on locked_until and orders by created_at, but the migration adds no index to support it. Each claim scans and sorts the table, and the cost grows linearly with ththumbnail_jobs size at 10-100x load.",
+   "evidence": "WHERE status = 'queued' OR (status = 'running' AND (locked_until IS NULL OR locked_until < now())) ORDER BY created_at, id LIMIT 1 ... ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz; (no index)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "There is no attempts cap. A job that crashes the worker is reclaimed after each lease expiry and, because it is ordered first by created_at, can keep being picked first. The PR defers the cap to #215, but this change makes the retry loop slower without bounding it.",
+   "evidence": "attempts = attempts + 1 with no cap; \"poison-job attempts cap (#215) are separate changes\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The invariant that a live worker never outlives its lease is enforced only by convention. The lease starts at Claim, before jobCtx is created and before Complete runs. The 1m buffer is the only margin, and nothing verifies that render honours context cancellation. If render overruns, a second worker can reclaim and double-execute the job.",
+   "evidence": "\"the job context is cancelled at jobTimeout, so a live worker never outlives its lease\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The title says the change lets more than one worker run, but the deployment stays at one replica. Multi-worker behaviour is exercised only by the store-level test, not by any multi-process run.",
+   "evidence": "TITLE: \"lease-based job claiming so more than one worker can run\" vs \"Replica count stays 1 here\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The migration has no down script. The added nullable columns are additive, so rollback is mostly safe, but the rollback path is not documented.",
+   "evidence": "ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz; (no down migration)"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 4688,
+  "tokOut": 8600,
+  "usd": 0.00506792,
+  "critMs": 40846
+ }
+}

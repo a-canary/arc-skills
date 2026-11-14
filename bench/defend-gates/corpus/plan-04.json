@@ -1,0 +1,35 @@
+{
+  "id": "plan-04",
+  "gate": "plan",
+  "title": "Migrate document-QA inference from self-hosted vLLM to a managed LLM platform",
+  "context": "LexiQA is a B2B document question-answering SaaS for EU law firms. Today it runs a self-hosted vLLM cluster (4x A100, Frankfurt) serving a fine-tuned Llama-3.1-70B plus LoRA adapters per practice area, with pgvector retrieval. Agreed constraints: under customer DPAs all customer documents and anything derived from them (chunks, embeddings, prompts) must be processed and stored in the EU; the 4,100-case regression eval suite is the release gate for any model change. This plan is about to be dispatched for a 6-week build.",
+  "artifact": "# Plan: Move generation + retrieval to Nimbus AI\n\nOwner: ML platform | 6 weeks | 3 engineers\n\n## 1. Why\n- GPU reservation is $18.4k/mo and sits at ~35% average utilization.\n- Two on-call pages per month trace to vLLM OOMs under long-context load.\n- Nimbus Atlas-L supports 200k context natively; our current ceiling is 32k.\n\n## 2. Target architecture\n- Generation: Nimbus Atlas-L via the Nimbus Inference API, region eu-west-1 (Dublin). Zero data retention is enabled on our org account (signed addendum, ref NMB-ZDR-2291).\n- Embeddings: Nimbus embed-3 (1,536 dims), called from the ingest workers.\n- Retrieval: Nimbus Vector Store (managed). Collections are created per tenant; Vector Store is in public preview and currently provisioned in us-east-2, with EU regions on Nimbus's GA roadmap. Moving retrieval in the same project lets us drop pgvector and its index-maintenance jobs.\n- Prompting: practice-area behaviour that lived in LoRA adapters moves into per-practice system prompts (drafted in week 1 by the applied team).\n\n## 3. Quality\nThe applied team ran 25 representative questions from the support inbox through both stacks. Two lawyers on staff compared answers blind; Atlas-L was preferred in 19 of 25 and tied in 3. This confirms quality parity or better, so the full regression suite run moves to post-migration hardening (week 6+) rather than blocking cutover.\n\n## 4. Security\n- Nimbus API keys live in Vault, injected per pod, rotated every 30 days; no keys in images or env files.\n- Tenant isolation in Vector Store uses one collection per tenant with a tenant-scoped API key, mirroring today's per-tenant pgvector schemas.\n\n## 5. Timeline\n- Week 1: per-practice system prompts; Nimbus client library; key management.\n- Week 2: re-embed corpus (~41M chunks) into Nimbus Vector Store; dual-write new documents.\n- Week 3: release the A100 reservation (saves $18.4k/mo from the next billing cycle) and delete fine-tuned checkpoints and LoRA adapters from object storage to close out the 6.2 TB storage line.\n- Week 4: cut all tenants over to Nimbus (generation + retrieval).\n- Week 5: remove pgvector, vLLM manifests, and GPU node pool from Terraform.\n- Week 6+: regression suite run, prompt tuning on any failures.\n\n## 6. Cost\n| Item                       | Today     | After      |\n|----------------------------|-----------|------------|\n| GPU reservation            | $18,400   | $0         |\n| Object storage (weights)   | $140      | $0         |\n| Nimbus generation (est.)   | $0        | $7,900     |\n| Nimbus embeddings + store  | $0        | $1,650     |\n| Total / month              | $18,540   | $9,550     |\n\n## 7. Risks\n- Nimbus rate limits: our peak is ~40 req/s; our contracted tier allows 120 req/s.\n- Latency: Atlas-L p95 time-to-first-token measured at 640 ms from our Frankfurt pods (1,000 requests, week of 10-05), vs 910 ms on vLLM.\n",
+  "expected_verdict": "ATTACKS",
+  "defects": [
+    {
+      "id": "d1",
+      "lens": "sovereignty",
+      "severity": "blocker",
+      "description": "Customer-derived chunks and embeddings would be stored in Nimbus Vector Store in us-east-2, directly violating the agreed EU data-residency DPA constraint. The EU region is only on a roadmap, so retrieval cannot move until it exists (or must stay on pgvector).",
+      "evidence": "currently provisioned in us-east-2, with EU regions on Nimbus's GA roadmap"
+    },
+    {
+      "id": "d2",
+      "lens": "evidence",
+      "severity": "major",
+      "description": "Quality parity is asserted from 25 hand-picked support questions judged by two staff, and the 4,100-case regression suite — the agreed release gate — is deferred until after cutover. Replacing fine-tuned LoRA behaviour with system prompts is an unprototyped assumption that the gate exists to test.",
+      "evidence": "This confirms quality parity or better, so the full regression suite run moves to post-migration hardening (week 6+)"
+    },
+    {
+      "id": "d3",
+      "lens": "reversibility",
+      "severity": "blocker",
+      "description": "Cross-reference §5 timeline: GPU reservation released and fine-tuned checkpoints/LoRA adapters deleted in week 3, before the week-4 cutover and the week-6 eval run. If Nimbus fails the suite or cutover, there is no path back — the self-hosted fallback is destroyed before the new stack is proven.",
+      "evidence": "Week 3: release the A100 reservation (saves $18.4k/mo from the next billing cycle) and delete fine-tuned checkpoints and LoRA adapters from object storage"
+    }
+  ],
+  "decoys": [
+    "API key leakage: handled in §4 — keys in Vault, per-pod injection, 30-day rotation.",
+    "Latency regression: handled in §7 with a measured p95 TTFT from production pods (1,000 requests)."
+  ]
+}

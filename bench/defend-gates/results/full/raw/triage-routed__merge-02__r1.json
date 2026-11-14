@@ -1,0 +1,53 @@
+{
+ "approach": "triage-routed",
+ "case": "merge-02",
+ "rep": 1,
+ "wallMs": 236172,
+ "verdict": "ATTACKS",
+ "confidence": 0.92,
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "blocker",
+   "claim": "The duplicate-ballot log line writes the voter's email together with the choice they attempted. Application logs ship to a third-party host readable by the whole support team, so this links a resident's identity to their ballot choice outside the tally, breaking the anonymity promise. Once shipped, the exposure cannot be recalled.",
+   "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value,)"
+  },
+  {
+   "lens": "authz",
+   "severity": "major",
+   "claim": "The new results.csv route has no role check, although the PR describes it as an admin export and the codebase uses Depends(require_role(\"admin\")) for admin routes. Any caller can fetch the tally for any measure.",
+   "evidence": "@router.get(\"/measures/{measure_id}/results.csv\") async def export_results(measure_id: int, db: Session = Depends(get_db),)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The export has no closed-measure check, although it is meant to return the tally once a measure closes. It returns running counts for open measures, exposing interim results during voting, and the CSV does not mark the figures as provisional.",
+   "evidence": "measure = db.get(Measure, measure_id)\n    if measure is None:\n        raise HTTPException(404)"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Per-choice counts are exported with no minimum-cell suppression. For a measure with very few voters, a count of 0 or 1 can reveal how a specific individual or small group voted, especially if the file goes into a council packet.",
+   "evidence": "writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "measure.slug is written unescaped into the CSV body and the Content-Disposition header. A slug starting with '=' could trigger spreadsheet formula injection, and a double quote could malform the header. Impact depends on whether slugs are admin-controlled, and the diff shows no slug validation.",
+   "evidence": "writer.writerow([measure.slug, choice.value, counts.get(choice, 0)]) … headers={\"Content-Disposition\": f'attachment; filename=\"{measure.slug}-results.csv\"'}"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The counts dict is keyed by the raw Ballot.choice column value, but the loop looks up Choice enum members. If the column returns plain strings, every lookup misses and the CSV reports 0 for every choice. The diff does not show the column type, so this is unverified.",
+   "evidence": "counts = dict(db.query(Ballot.choice, func.count(Ballot.id))...)  ABSENT: Ballot.choice column type / enum mapping  …  counts.get(choice, 0)"
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 19931,
+  "tokOut": 9263,
+  "usd": 0.00850705,
+  "critMs": 19031
+ }
+}

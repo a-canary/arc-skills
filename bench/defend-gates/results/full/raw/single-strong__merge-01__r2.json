@@ -1,0 +1,53 @@
+{
+ "approach": "single-strong",
+ "case": "merge-01",
+ "rep": 2,
+ "wallMs": 91362,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The client_order_id is generated inside the retry loop, so every attempt uses a fresh UUID. Broker dedupe on client_order_id cannot work, and a retry after a timeout (where the first order may have been accepted) can produce duplicate fills. This violates the agreed constraint that submission must be safe to retry.",
+   "evidence": "for (let attempt = 1; ...) { const clientOrderId = randomUUID(); try { ... client_order_id: clientOrderId"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "sizeBuy now uses Math.ceil instead of Math.floor, so the quantity rounds up and can exceed the headroom. This breaks the invariant that sizing must never exceed the per-symbol maxNotional cap. For example, with maxNotional 10,000, price 30, and lotSize 1, headroom/price is 333.33, which now yields 334 and a notional of 10,020.",
+   "evidence": "const lots = headroom / price / lotSize;\n  return Math.ceil(lots) * lotSize;"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR description claims retries are safe because the broker dedupes on client_order_id. The diff contradicts this, since the id changes on each attempt, and no test or evidence covers the retry path. The added sizing tests only use values that divide evenly, so they cannot catch the ceil bug.",
+   "evidence": "\"Retries are safe: every order carries a client_order_id and the broker dedupes on it\"; tests use 10_000/100 and 10_000/50/lot 10, which divide exactly"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "A timeout is retried without first checking whether the original order was accepted, for example by looking it up by client_order_id. With the id regenerated, a late-accepted first order is also orphaned and untracked. The 4s timeout combined with retries and backoff also adds latency at the open.",
+   "evidence": "(err as Error).name === \"TimeoutError\"; ... { timeoutMs: 4000 }"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "This deploys before market open on a live money account with defects that cause real duplicate fills and cap breaches. Executed trades cannot be rolled back, and the PR names no flag or kill switch.",
+   "evidence": "\"about to merge to main and deploy before the next market open\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "A risk-critical sizing behavior change is bundled into a retry PR under the label \"tidies\", which hides a semantic change from reviewers.",
+   "evidence": "\"Also tidies the sizing helper so quantities are rounded to the broker's lot size\""
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3314,
+  "tokOut": 946,
+  "usd": 0.0097952,
+  "critMs": 11019
+ }
+}

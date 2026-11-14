@@ -1,0 +1,77 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-12",
+ "rep": 2,
+ "wallMs": 251181,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "pool-starvation",
+   "severity": "major",
+   "claim": "Each booking holds a pooled connection for the whole transaction, including while it waits on the per-class FOR UPDATE lock. A burst on one popular class can occupy every pool connection (pg defaults to 10), stalling bookings for unrelated classes and other routes. The PR says the lock works 'without affecting other classes', and it does not address pool sizing or queueing.",
+   "evidence": "const client = await db.connect(); ... await client.query('BEGIN'); const result = await bookLocked(client, memberId, classId);"
+  },
+  {
+   "lens": "timeouts",
+   "severity": "major",
+   "claim": "The 5s statement_timeout also covers time spent waiting on the row lock, and no lock_timeout or pool checkout timeout is configured. Members queued behind a popular class can time out and reach next(err) as generic 500s during the exact burst this PR targets, rather than getting a clean class_full. Clients get no retryable signal, so retries may amplify the burst.",
+   "evidence": "The pg pool sets statement_timeout=5s. 'SELECT capacity, (cancelled_at IS NOT NULL OR starts_at <= now()) AS closed FROM classes WHERE id = $1 FOR UPDATE'. } catch (err) { next(err); } ABSENT: lock_timeout or connectionTimeoutMillis configuration"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The concurrency test uses only 12 members and does not measure latency, lock wait, or timeouts under load. It is also not shown to fail on the pre-fix code, so it is unproven that it catches the oversell bug it targets.",
+   "evidence": "const members = await seedMembers(db, 12); ABSENT: pre-fix test run or load measurement; 'support saw classes oversold by 1-2' with no ticket or count"
+  },
+  {
+   "lens": "observability",
+   "severity": "minor",
+   "claim": "No metrics or logs are added for lock wait time, pool saturation, timeouts, rollback failures, or full/closed outcomes. A pool or timeout regression, and whether the oversell is actually fixed, would be invisible after merge.",
+   "evidence": "log.info({ bookingId: result.bookingId, classId, created: result.created }, 'class booked') ; ABSENT: metrics or logs for 'full', 'closed', lock wait, pool checkout"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Cancelled and already-started classes both collapse into one 'class_closed' error, so a member cannot tell why the booking was refused.",
+   "evidence": "case 'closed': return res.status(409).json({ error: 'class_closed' });"
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "A successful booking now takes six round trips (BEGIN, locking SELECT, duplicate SELECT, count SELECT, INSERT, COMMIT) versus three before. That adds latency on the hot path during the burst, and the statements could be combined.",
+   "evidence": "await client.query('BEGIN'); ... await client.query('COMMIT');"
+  },
+  {
+   "lens": "scope drift",
+   "severity": "minor",
+   "claim": "One PR bundles five independent behavior changes: the concurrency fix, idempotent double submit, the new closed rejection and 409 code, UUID validation returning 404, and the started/cancelled check. A problem in one blocks the others and makes clean revert harder.",
+   "evidence": "PR #131: bookings: stop overselling classes under concurrent requests ... Also: booking the same class twice returns the existing booking (200) ... malformed class ids return 404"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The fix covers only bookClass. The PR does not show whether other code paths insert into bookings (admin add, waitlist promotion, imports) and take the same class-row lock, so they can still oversell despite the title.",
+   "evidence": "The diff changes only src/bookings/bookClass.ts and src/routes/bookings.ts; ABSENT: audit of other INSERT INTO bookings call sites"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The closed check runs before the duplicate check, so a member who already holds a booking for a class that has since started gets 409 class_closed instead of the 200 existing-booking response. The idempotency behavior is inconsistent.",
+   "evidence": "if (cls.rows[0].closed) return { kind: 'closed' }; appears before if (mine.rows.length > 0) return { kind: 'booked', bookingId: mine.rows[0].id, created: false };"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Duplicate bookings now return 200 instead of 201. Clients that treat 201 as the success signal may break, and the PR does not note the contract change or client impact.",
+   "evidence": "return res.status(result.created ? 201 : 200).json({ bookingId: result.bookingId }); ABSENT: note on API contract or client compatibility"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 78263,
+  "tokOut": 19350,
+  "usd": 0.01217392,
+  "critMs": 29003
+ }
+}

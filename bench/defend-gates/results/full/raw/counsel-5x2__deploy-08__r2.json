@@ -1,0 +1,143 @@
+{
+ "approach": "counsel-5x2",
+ "case": "deploy-08",
+ "rep": 2,
+ "wallMs": 317629,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "evidence",
+   "severity": "blocker",
+   "claim": "Throughput and zero-failure QA ran with SES throttling simulated off, against a staging SES limit of 14 msg/s, so the production scale claim is unmeasured.",
+   "evidence": "\"Staging SES account limit is 14 msg/s; 4 workers were throttled intermittently, so QA ran with SES throttling simulated off via the sandbox mock\""
+  },
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "48 workers at ~25 msg/s each is roughly 1,200 msg/s of demand against a 300 msg/s SES cap. The loop has no rate limiter, concurrency cap, or backoff, so production will throttle on large sends.",
+   "evidence": "\"SEND_WORKERS=48\" \"BATCH_SIZE=50\" \"SES production account limits (us-east-1): 300 messages/second, 25M/day\" with \"~25 msg/s sustained\" measured on 1 worker; ABSENT: rate limiter or backoff"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "On any batch-level SendBulkEmail error, every recipient is recorded as a permanent failure, excluded from remaining sends, and reported as 'Not delivered', with no retry. Transient throttling or timeouts silently drop up to 50 subscribers per batch. If the batch is redelivered instead, recipients are re-sent after already being recorded as failed.",
+   "evidence": "\"if err != nil { for _, r := range batch.Recipients { failures.Record(ctx, batch.IssueID, r.SubscriberID, errCode(err)) } metrics.Inc(\"send.batch_failed\") continue }\" / \"those recipients are excluded from the issue's remaining sends\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Per-entry failures are attributed by index batch.Recipients[i] with no length check or ordering guarantee, so a mismatched response can assign failures to the wrong subscribers.",
+   "evidence": "\"for i, res := range out.BulkEmailEntryResults { ... batch.Recipients[i].SubscriberID }\" ABSENT: length check or ordering guarantee"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Ack happens after processing, so a crash between the SES call and q.Ack redelivers the batch and can double-send. No idempotency key or dedupe is described.",
+   "evidence": "\"q.Ack(ctx, batch)\" after the SES call; ABSENT: idempotency key or dedupe on (issue, subscriber)"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The public launch post states Smart Send is live for every publication today, contradicting the 5%→25%→100% ramp. A published claim cannot be recalled by a config flag.",
+   "evidence": "\"Smart Send Time is live for every publication today\" / \"Nothing to set up; it's already on.\" vs \"ramp SMART_SEND_DEFAULT by publication cohort: 5% (week 1), 25% (week 2), 100% (week 3)\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "blocker",
+   "claim": "The production config sets SMART_SEND_DEFAULT=on for all publications at deploy, so the staged cohort ramp does not control exposure and the artifact misdescribes what ships.",
+   "evidence": "\"SMART_SEND_DEFAULT=on\" in deploy/prod/send-worker.env vs \"ramp SMART_SEND_DEFAULT by publication cohort: 5% (week 1)\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "blocker",
+   "claim": "Default-on Smart Send holds time-sensitive issues (breaking news, election results, weather alerts) for up to 18 hours across roughly 4,480 news and local-news publications, defeating the purpose of immediacy for that segment.",
+   "evidence": "\"Issues are held for at most 18 hours. Enabled by default for all publications\" / \"4,480 of them (40%) are news or local-news outlets whose issues are time-sensitive (breaking news, election results, weather alerts)\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The '5× faster' launch claim is unsupported. The staging run went from 14 to 11 min (about 1.3×), and the sub-3-min target was never measured.",
+   "evidence": "\"every Inkwell issue reaches inboxes up to 5× faster\" vs \"50k-recipient issue end to end | 4 workers, batch 50 | Pass, 0 failures, 11 min\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The 71% within ±1h figure is an offline prediction accuracy with no fixed-hour or control baseline, so the ≥3% open-rate lift gate cannot be evaluated.",
+   "evidence": "\"predicted hour within ±1h of actual top open hour, 2,000 sampled subscribers | — | 71%\" ABSENT: control cohort assignment and measured open-rate lift"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "No alert fires on send.batch_failed or on the Not-delivered count, the most likely failure signal. The pager covers only queue lag and complaint rate.",
+   "evidence": "\"Dashboards: send throughput, `send.batch_failed`\" / \"On-call pager: queue lag > 10 min, complaint rate > 0.1%.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Sidekiq rollback assumes send_failures rows and issue state written by v2 are compatible with the idle Sidekiq path. A mid-issue switch could double-send or skip recipients. The 2-minute drain is also unmeasured.",
+   "evidence": "\"set SENDER=sidekiq in the dispatcher; in-flight batches drain in < 2 min\" / \"keep the Sidekiq sender deployed but idle for 14 days\" ABSENT: send_failures compatibility"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Smart Send rollback releases all held issues at once, which can burst past the 300 msg/s SES cap. The path is not described as rehearsed.",
+   "evidence": "\"Rollback (Smart Send): set SMART_SEND_DEFAULT=off; held issues are released immediately.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Transient sender-side failures are reported to publishers as subscriber-level 'Not delivered', which misstates the cause and may be inaccurate after timeouts.",
+   "evidence": "\"shown to publishers in the issue report under 'Not delivered'\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Per-subscriber open-hour profiles from 90 days of opens are created by default with only a publisher-level toggle. No subscriber notice, retention, deletion, or opt-out is described.",
+   "evidence": "\"predicts each subscriber's most likely open hour from their last 90 days of opens\" / \"publishers can turn it off in Settings → Delivery\" ABSENT: subscriber notice, retention, deletion"
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Default-on profiling and deliberate delay of election and weather content need legal and publisher-contract review, which the artifact does not reference.",
+   "evidence": "ABSENT: legal or ToS review; \"issues are time-sensitive (breaking news, election results, weather alerts)\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Predicted send hours cluster, so synchronized bursts across publications can concentrate load on the shared 300 msg/s cap with no per-publication fairness bound.",
+   "evidence": "\"delivers each issue at that hour\" / ABSENT: per-publication concurrency limit"
+  },
+  {
+   "lens": "other",
+   "severity": "major",
+   "claim": "The pipeline goes to 100% of sends at deploy with no canary, and the public launch follows seven hours later, leaving little production observation before an irreversible claim.",
+   "evidence": "\"deploy Monday 09:00 UTC to 100% of sends\" / \"Launch post: Mon 2026-11-09 16:00 UTC\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "No SES cost or volume projection exists for 25M/day across 11,240 publications, and any added retries would multiply spend with no cap.",
+   "evidence": "ABSENT: projected daily send volume, cost model, or retry budget"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "The sender is bound to SES in one region with no fallback provider, so an SES regional or account incident halts all sends.",
+   "evidence": "\"SES_REGION=us-east-1\" / ABSENT: fallback provider"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "SES credential handling and authorization on Settings → Delivery are not described.",
+   "evidence": "ABSENT: IAM or credential handling for SES; ABSENT: authz on Settings → Delivery"
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 137459,
+  "tokOut": 44038,
+  "usd": 0.04555963999999999,
+  "critMs": 85838
+ }
+}

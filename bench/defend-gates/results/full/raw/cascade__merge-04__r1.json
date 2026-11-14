@@ -1,0 +1,77 @@
+{
+ "approach": "cascade",
+ "case": "merge-04",
+ "rep": 1,
+ "wallMs": 270757,
+ "verdict": "ATTACKS",
+ "confidence": 0.96,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The migration is not a rename. It adds an empty private_notes column and drops notes, permanently destroying all user-written notes (which cannot be recovered elsewhere). It runs automatically on merge. The down migration only re-adds an empty notes column, so the data is lost for good.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The PR says 'Pure rename, no data change; the down migration restores the old name', but the SQL does neither. There is no data copy, and the down migration cannot restore data. Description and implementation contradict each other. Fix is ALTER TABLE ... RENAME COLUMN, or an expand/backfill/contract sequence.",
+   "evidence": "Pure rename, no data change; the down migration restores the old name."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The migration runs on deploy and drops `notes` while old app instances are still serving and selecting `ur.notes`. During a rolling deploy the old code errors. There is no expand/contract sequencing, so rollback of the code also breaks.",
+   "evidence": "Migrations run automatically on deploy after merge to main."
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The handler fetches every saved row for the user (200k+ rows, joined to recipes and including notes text) on every page request, then paginates in memory with findIndex and slice. This is not cursor pagination at the DB level. It will blow the 300ms p99 and put heavy memory pressure on the server. It needs a keyset WHERE (saved_at, id) < cursor with LIMIT.",
+   "evidence": "ORDER BY ur.saved_at DESC, ur.id DESC`,\n    [userId],\n  );\n\n  const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "An unknown or deleted cursor makes findIndex return -1, so start becomes 0 and the client silently gets page one again. A user who unsaves the cursor row mid-scroll gets repeats or loops, which is the drift problem the PR set out to fix. The cursor is also not validated.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The offset parameter is dropped, so any client still sending offset gets page one every time, and may loop if it pages until empty. The claim that the client already sends cursor has no supporting evidence in the diff.",
+   "evidence": "The client already sends `cursor` from the previous page's `nextCursor`."
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "No index supports the (user_id, saved_at, id) ordering on a 140M-row table.",
+   "evidence": "ABSENT: no CREATE INDEX on user_recipes(user_id, saved_at DESC, id DESC)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A negative limit passes the clamp, since Math.min(-5, 100) is -5, and slice(start, start-5) yields wrong results. No lower bound is enforced.",
+   "evidence": "const limit = Math.min(Number(req.query.limit) || 50, 100);"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The ALTERs take ACCESS EXCLUSIVE locks on a very large, hot table with no lock_timeout. If they queue behind a long query, they block all traffic to user_recipes.",
+   "evidence": "BEGIN;\nALTER TABLE user_recipes ADD COLUMN private_notes text;"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The test covers only the happy path. It has no unknown cursor, negative limit, or large-data case.",
+   "evidence": "ABSENT: tests for invalid cursor, negative limit, large row counts"
+  }
+ ],
+ "usage": {
+  "calls": 3,
+  "tokIn": 12334,
+  "tokOut": 10120,
+  "usd": 0.03639102,
+  "critMs": 50656
+ }
+}

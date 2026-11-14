@@ -1,0 +1,167 @@
+{
+ "approach": "rubric-stop-early",
+ "case": "merge-07",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "`_upload` builds a shell command by f-string interpolation and runs it with `shell=True`. `src.stem` comes from partner-chosen SFTP filenames, which are untrusted, so a filename containing shell metacharacters (for example `$(...)` or `;`) executes arbitrary commands on workers that hold write credentials for the whole raw bucket.",
+     "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True) and dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\" where src_name=src.stem from \"Partners ... choose their own filenames\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3160,
+    "tokOut": 633,
+    "usd": 0.00077635,
+    "critMs": 3061
+   },
+   "wallMs": 73565
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The PR says partner filenames are safe because gsutil runs without a shell, but gsutil expands wildcards (`*`, `?`, `[`) in local source paths itself. The partner-chosen `src.stem` goes straight into the local chunk path passed as `str(local)`, so a crafted filename can match or mis-select other local files, and the artifact never escapes or validates it.",
+     "evidence": "path = out_dir / f\"{src.stem}-{len(chunks):04d}.csv.gz\" ... \"cp\", str(local), dest  (the only stated guarantee is \"Argument list, no shell\")"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3263,
+    "tokOut": 1590,
+    "usd": 0.00127545,
+    "critMs": 8273
+   },
+   "wallMs": 28789
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "`partition_date()` switched from UTC to local time, but workers run in America/Los_Angeles and the job fires at 01:30 UTC. That is about 17:30-18:30 PT on the previous calendar day, so every run writes to the prior day's `dt=` partition. Downstream dashboards read the UTC-date partition and treat its `_SUCCESS` marker as ready, so they will see the wrong or missing day.",
+     "evidence": "\"return datetime.now().strftime(\\\"%Y-%m-%d\\\")\" vs. context: \"Workers run with TZ=America/Los_Angeles ... scheduled at 01:30 UTC ... dt=YYYY-MM-DD partition (UTC date)\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3635,
+    "tokOut": 1270,
+    "usd": 0.0011898500000000001,
+    "critMs": 6458
+   },
+   "wallMs": 25160
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The per-file `except` now swallows failures, but `write_success_marker` still runs unconditionally after the loop. If any file fails, the partition is marked complete while missing data. Downstream dashboards read a partition as soon as `_SUCCESS` appears, so they will silently show partial partner data.",
+     "evidence": "except Exception:\n            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n            failed += 1\n    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3668,
+    "tokOut": 972,
+    "usd": 0.0010474500000000001,
+    "critMs": 4825
+   },
+   "wallMs": 27271
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The PR says schema normalisation is unchanged, but the call contract changed. `normalise_row` used to receive pandas Series rows via `df.apply(..., axis=1)` and now receives `csv.DictReader` dicts. Null handling also changes: pandas read NaN for empty cells, while DictReader yields empty strings and short rows yield None. Whether `normalise_row` behaves identically under these inputs is not shown.",
+     "evidence": "Old: \"df = df.apply(normalise_row, axis=1, result_type=\\\"expand\\\")\" / New: \"norm = normalise_row(row)\" with \"row\" from \"csv.DictReader(fh)\". The PR text says \"Schema normalisation is unchanged (same `normalise_row`)\", but no test or evidence shows the outputs match. ABSENT: a before/after equivalence test on the Northwind sample or the normaliser's input type contract."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3863,
+    "tokOut": 2959,
+    "usd": 0.0020799499999999997,
+    "critMs": 14648
+   },
+   "wallMs": 33451
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR changes the call contract of `normalise_row` (pandas Series with NaN for empty and missing cells, now `csv.DictReader` dicts with `\"\"` and `None`) and the author states the output equivalence is unverified. The equivalence test is added, but no passing run is shown, and the artifact says it should also be run against a Northwind sample, which is not shown either.",
+     "evidence": "\"I have not verified that the outputs are identical for those inputs. This PR adds `tests/test_partner_ingest_equivalence.py` ... If it fails, `normalise_row` (or an input adapter) has to be fixed before merge. It should also be run against a Northwind sample.\" ABSENT: a passing CI or local run of the equivalence test, and any Northwind sample run."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4486,
+    "tokOut": 2094,
+    "usd": 0.0017720499999999998,
+    "critMs": 10989
+   },
+   "wallMs": 71690
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The new streaming path and the old pandas path produce different values for empty and short-row cells. The equivalence test normalises the old output to None, but the new path yields \"\" for empty cells and None for missing trailing fields, and `normalise_row` is said to be unchanged. The test's equality assertion will likely fail on the sample's `B2,,5.00,gift` and `C3,1` rows, so the claimed behaviour parity is unestablished.",
+     "evidence": "\"empty cells are `\"\"`, missing trailing fields are `None`). I have not verified that the outputs are identical\" and test: `return out.astype(object).where(out.notna(), None).to_dict(\"records\")` vs `return [normalise_row(r) for r in csv.DictReader(...)]`"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4655,
+    "tokOut": 1716,
+    "usd": 0.00161685,
+    "critMs": 13195
+   },
+   "wallMs": 44965
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR's central correctness claim, that the streaming path produces the same normalised output as the old pandas path, has not been verified. The artifact says both checks are unrun and merge is blocked until they pass, so the change cannot cross the merge gate as submitted.",
+     "evidence": "\"[ ] `tests/test_partner_ingest_equivalence.py` passing: **not yet run.** No result is claimed here.\" and \"[ ] Equivalence check against a Northwind sample: **not yet run.**\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5403,
+    "tokOut": 3399,
+    "usd": 0.00260795,
+    "critMs": 16745
+   },
+   "wallMs": 46419
+  }
+ ],
+ "artifact": "PR #58: Stream partner feeds instead of loading into pandas; upload with gsutil\n\nThe Northwind feed hit 3.1 GB last week and the ingest task OOM-killed the worker.\nThis rewrites `ingest_partner` to stream rows through the normaliser and write gzip CSV chunks, then push them with gsutil (parallel composite uploads are much faster than the client library for multi-GB objects).\ngsutil is invoked with an argument list and no shell, so partner-chosen filenames are never interpreted by a shell. gsutil itself also expands wildcards (`*`, `?`, `[`) in local source paths, so no partner-chosen text reaches a local path or object name unsanitised: `_safe_name` reduces the filename stem to `[A-Za-z0-9._-]` and appends a short hash of the original stem so that names which differ only in special characters don't collide.\nPer-file failures no longer abort the whole partner run; they are logged and counted. The `_SUCCESS` marker is only written when every file succeeded: if any file fails, no marker is written and the task raises after processing all files, so downstream dashboards never read a partially loaded partition as complete.\nThe `normalise_row` logic itself is unchanged, but its call contract would have changed: it used to receive pandas Series rows (via `df.apply(..., axis=1)`), where empty cells, missing trailing fields and pandas' default NA tokens (`NA`, `null`, `N/A`, etc.) were read as NaN. A raw `csv.DictReader` yields `\"\"` for empty cells and `None` for missing trailing fields, which would have fed `normalise_row` different values. To keep the contract identical, this PR adds an input adapter, `_as_pandas_row`, which maps `\"\"`, `None` and pandas' default NA tokens to `float(\"nan\")` before calling `normalise_row`. On output, `_write_chunks` writes NaN/None as an empty cell, matching what `df.to_csv` did. I have not verified that the outputs are identical end to end. `tests/test_partner_ingest_equivalence.py` runs the old pandas path and the new streaming path (with the adapter) on a sample containing empty cells, a short row and an NA-token cell, and asserts the normalised records match, treating NaN and None as equal on both sides. If it fails, `normalise_row` or the adapter has to be fixed before merge. It should also be run against a Northwind sample.\n\n**Verification status (merge blocked until both are done):**\n- [ ] `tests/test_partner_ingest_equivalence.py` passing: **not yet run.** No result is claimed here. The CI run or local output will be attached to this PR before merge.\n- [ ] Equivalence check against a Northwind sample: **not yet run.** The sample run and its result will be attached to this PR before merge.\n\nIf either check fails, the fix to `normalise_row` (or the input adapter) goes into this PR and both checks are rerun.\n\n`partition_date()` is unchanged and still returns the UTC date, which is what downstream dashboards read. Workers run with TZ=America/Los_Angeles, so local time would write to the previous day's partition.\n\ndiff --git a/pipelines/partner_ingest.py b/pipelines/partner_ingest.py\nindex a17c3e2..f48b0d9 100644\n--- a/pipelines/partner_ingest.py\n+++ b/pipelines/partner_ingest.py\n@@ -1,52 +1,98 @@\n+import csv\n+import gzip\n+import hashlib\n import logging\n+import re\n+import subprocess\n from datetime import datetime, timezone\n from pathlib import Path\n\n-import pandas as pd\n-from google.cloud import storage\n-\n from pipelines.normalise import normalise_row\n from pipelines.markers import write_success_marker\n\n log = logging.getLogger(__name__)\n BUCKET = \"acme-retail-raw\"\n CHUNK_ROWS = 500_000\n\n+# pandas' default NA tokens for read_csv; the old path saw these as NaN.\n+_NA_TOKENS = frozenset({\n+    \"\", \"#N/A\", \"#N/A N/A\", \"#NA\", \"-1.#IND\", \"-1.#QNAN\", \"-NaN\", \"-nan\",\n+    \"1.#IND\", \"1.#QNAN\", \"<NA>\", \"N/A\", \"NA\", \"NULL\", \"NaN\", \"None\", \"n/a\",\n+    \"nan\", \"null\",\n+})\n+\n\n def partition_date() -> str:\n     return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n\n\n-def ingest_partner(partner: str, drop_dir: Path) -> None:\n-    dt = partition_date()\n-    client = storage.Client()\n-    bucket = client.bucket(BUCKET)\n-    for src in sorted(drop_dir.glob(\"*.csv\")):\n-        df = pd.read_csv(src, dtype=str)\n-        df = df.apply(normalise_row, axis=1, result_type=\"expand\")\n-        blob = bucket.blob(f\"raw/{partner}/dt={dt}/{src.stem}.csv.gz\")\n-        blob.upload_from_string(df.to_csv(index=False, compression=\"gzip\"))\n-        log.info(\"uploaded %s rows=%d\", src.name, len(df))\n-    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")\n+def _as_pandas_row(row: dict) -> dict:\n+    # Input adapter: give normalise_row the same values it got from pandas\n+    # (NaN for empty cells, missing trailing fields and default NA tokens)\n+    # instead of csv.DictReader's \"\" / None.\n+    return {\n+        k: (float(\"nan\") if v is None or v in _NA_TOKENS else v)\n+        for k, v in row.items()\n+    }\n+\n+\n+def _is_null(v) -> bool:\n+    return v is None or v != v  # None or NaN\n+\n+\n+def _safe_name(stem: str) -> str:\n+    # gsutil expands wildcards (* ? [ ]) in local paths itself, so partner-chosen\n+    # names must be reduced to a safe character set before they reach a path.\n+    safe = re.sub(r\"[^A-Za-z0-9._-]\", \"_\", stem)\n+    digest = hashlib.sha1(stem.encode()).hexdigest()[:8]\n+    return f\"{safe}-{digest}\"\n+\n+\n+def _write_chunks(src: Path, out_dir: Path) -> list[Path]:\n+    chunks: list[Path] = []\n+    safe = _safe_name(src.stem)\n+    with src.open(newline=\"\") as fh:\n+        reader = csv.DictReader(fh)\n+        writer = None\n+        out = None\n+        for i, row in enumerate(reader):\n+            if i % CHUNK_ROWS == 0:\n+                if out:\n+                    out.close()\n+                path = out_dir / f\"{safe}-{len(chunks):04d}.csv.gz\"\n+                out = gzip.open(path, \"wt\", newline=\"\")\n+                writer = None\n+                chunks.append(path)\n+            norm = normalise_row(_as_pandas_row(row))\n+            if writer is None:\n+                writer = csv.DictWriter(out, fieldnames=list(norm.keys()))\n+                writer.writeheader()\n+            # NaN/None are written as empty cells, as df.to_csv did.\n+            writer.writerow({k: \"\" if _is_null(v) else v for k, v in norm.items()})\n+        if out:\n+            out.close()\n+    return chunks\n+\n+\n+def _upload(local: Path, partner: str, dt: str, src_name: str) -> None:\n+    # src_name must already be sanitised via _safe_name.\n+    dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\"\n+    # Argument list, no shell: partner-controlled filenames must never be\n+    # parsed by a shell. The local path is built only from _safe_name output,\n+    # so gsutil's own wildcard expansion has nothing to expand.\n+    subprocess.run(\n+        [\n+            \"gsutil\",\n+            \"-q\",\n+            \"-o\",\n+            \"GSUtil:parallel_composite_upload_threshold=150M\",\n+            \"cp\",\n+            str(local),\n+            dest,\n+        ],\n+        check=True,\n+    )\n+\n+\n+def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None:\n+    dt = partition_date()\n+    ok = failed = 0\n+    for src in sorted(drop_dir.glob(\"*.csv\")):\n+        try:\n+            for chunk in _write_chunks(src, work_dir):\n+                _upload(chunk, partner, dt, _safe_name(src.stem))\n+                chunk.unlink()\n+            ok += 1\n+        except Exception:\n+            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n+            failed += 1\n+    log.info(\"partner=%s dt=%s ok=%d failed=%d\", partner, dt, ok, failed)\n+    if failed:\n+        # Do not mark the partition complete: dashboards read it as soon as\n+        # _SUCCESS appears, so a partial load must not look finished.\n+        raise RuntimeError(\n+            f\"partner={partner} dt={dt}: {failed} file(s) failed, {ok} succeeded; \"\n+            \"_SUCCESS marker not written\"\n+        )\n+    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")\ndiff --git a/tests/test_partner_ingest_equivalence.py b/tests/test_partner_ingest_equivalence.py\nnew file mode 100644\nindex 0000000..b3c9d41\n--- /dev/null\n+++ b/tests/test_partner_ingest_equivalence.py\n@@ -0,0 +1,34 @@\n+import csv\n+import io\n+\n+import pandas as pd\n+\n+from pipelines.normalise import normalise_row\n+from pipelines.partner_ingest import _as_pandas_row, _is_null\n+\n+# Empty cell (B2), short row (C3), and a pandas default NA token (D4).\n+SAMPLE = \"sku,qty,price,note\\nA1,3,9.99,\\nB2,,5.00,gift\\nC3,1\\nD4,2,N/A,ok\\n\"\n+\n+\n+def _canon(records):\n+    # NaN and None both mean \"missing\"; compare them as equal.\n+    return [{k: (None if _is_null(v) else v) for k, v in r.items()} for r in records]\n+\n+\n+def _old(sample):\n+    df = pd.read_csv(io.StringIO(sample), dtype=str)\n+    out = df.apply(normalise_row, axis=1, result_type=\"expand\")\n+    return _canon(out.astype(object).to_dict(\"records\"))\n+\n+\n+def _new(sample):\n+    return _canon(\n+        [normalise_row(_as_pandas_row(r)) for r in csv.DictReader(io.StringIO(sample))]\n+    )\n+\n+\n+def test_streaming_rows_match_pandas_rows():\n+    assert _new(SAMPLE) == _old(SAMPLE)",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 22872,
+  "tokOut": 21520,
+  "usd": 0.30666,
+  "critMs": 122463
+ },
+ "status": "cap"
+}

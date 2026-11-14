@@ -1,0 +1,191 @@
+{
+ "approach": "elephant-gold",
+ "case": "deploy-01",
+ "rep": 2,
+ "wallMs": 209289,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "privacy/compliance",
+   "severity": "blocker",
+   "claim": "The public Recent signers panel renders each signer's full name and full postal code. The agreed rule allows only first name, last initial and city, and the artifact's own feature description says so. Publishing this is irreversible once cached or scraped, and the rollback does not remove the panel.",
+   "evidence": "<li>{{ s.full_name }} <span class=\"loc\">{{ s.city }} {{ s.postal_code }}</span></li>"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The template reads `s.city`, but the sign form collects only full_name, email, postal_code and newsletter_opt_in. No city value is ever captured, so the agreed city display cannot render from the data the form produces.",
+   "evidence": "Sign form fields: full_name, email, postal_code, newsletter_opt_in. Template: <span class=\"loc\">{{ s.city }} {{ s.postal_code }}</span>"
+  },
+  {
+   "lens": "compliance/GDPR consent",
+   "severity": "major",
+   "claim": "The organizer-updates checkbox is pre-ticked and bundles consent for other campaigns from the organizer. Under GDPR Art. 4(11) and Art. 7, consent must be an affirmative, specific act, so this does not yield valid consent for EU signers. It also contradicts the artifact's claim that signers 'can choose' to receive updates.",
+   "evidence": "<input type=\"checkbox\" id=\"news\" name=\"newsletter_opt_in\" value=\"1\" checked> ... \"Keep me updated about this campaign and others from {{ petition.organizer.name }}\""
+  },
+  {
+   "lens": "correctness/ux",
+   "severity": "major",
+   "claim": "The submit handler handles only 422 and success. A 409 duplicate, a 5xx, or a network failure produces no branch and no message, and `.form-error` is never populated. The signer cannot tell whether the signature was recorded, and the error-rate metric may be undercounted.",
+   "evidence": "if (res.status === 422) { ... return; } if (res.ok) window.location = res.headers.get('Location');  |  \"Duplicate signature (same email) rejected with 409 | Pass\""
+  },
+  {
+   "lens": "accessibility/WCAG 3.3.1, 1.4.1",
+   "severity": "major",
+   "claim": "Invalid fields are indicated only by a border and background colour change. There is no aria-invalid, no aria-describedby link to error text, and no text message announced to assistive technology, so the error is not identified in a way that meets WCAG 2.1 AA.",
+   "evidence": "for (const name of fields) form.elements[name].classList.add('is-invalid'); ... .sign-form input.is-invalid { border: 2px solid #d93025; background: #fdecea; } ... <p class=\"form-error\" aria-live=\"polite\"></p>"
+  },
+  {
+   "lens": "evidence/accessibility",
+   "severity": "major",
+   "claim": "The only WCAG evidence is an automated axe-core scan of the default sign page. That scan does not cover the error, duplicate or panel states, and no keyboard or screen-reader testing is listed, so AA conformance for the public flows is not shown.",
+   "evidence": "| axe-core automated scan on sign page | 0 violations | (no manual AA or assistive-technology test listed)"
+  },
+  {
+   "lens": "compliance/GDPR Art. 13",
+   "severity": "major",
+   "claim": "The sign form collects name, email and postal code with no privacy notice, controller identity, purpose or lawful-basis text at the point of collection, which GDPR Art. 13 requires for EU signers.",
+   "evidence": "ABSENT: privacy notice or information-at-collection text on sign.html, and no reference to one in the release"
+  },
+  {
+   "lens": "privacy/GDPR Art. 5(1)(e), 17",
+   "severity": "major",
+   "claim": "Retention is specified only for unconfirmed signatures (purged after 7 days). Confirmed signatures containing name, email and postal code have no retention period, erasure path or newsletter unsubscribe/withdrawal mechanism.",
+   "evidence": "unconfirmed signatures are not counted and are purged after 7 days. ABSENT: retention period for confirmed signatures; erasure and newsletter unsubscribe handling"
+  },
+  {
+   "lens": "data-residency/GDPR Chapter V",
+   "severity": "major",
+   "claim": "Storage region is chosen from a self-declared postal code, and 'EU-resolved' is undefined. EU signers whose codes do not resolve to the EU, or who are non-US, are stored in us-east-1 with no stated transfer basis. Email addresses are also sent to the US-based Postmark, and the release names no SCCs or DPF mechanism beyond a DPA.",
+   "evidence": "Postgres, eu-central-1 for EU-resolved postal codes, us-east-1 otherwise. Confirmation emails go through Postmark; DPA countersigned 2026-09-14"
+  },
+  {
+   "lens": "privacy/enumeration",
+   "severity": "major",
+   "claim": "A 409 on duplicate email lets anyone check whether a given address has signed a specific petition. Petition signing reveals political opinion, a special-category data point under GDPR Art. 9, so this creates a membership-probing and linkability exposure.",
+   "evidence": "Duplicate signature (same email) rejected with 409 | Pass"
+  },
+  {
+   "lens": "security/abuse + cost",
+   "severity": "major",
+   "claim": "The sign endpoint has no stated CSRF protection, rate limit, quota or CAPTCHA. Anyone can forge or flood signatures for arbitrary emails, and each accepted signature triggers a billable Postmark confirmation email. The rollout has no send-volume or spend cap.",
+   "evidence": "<form class=\"sign-form\" action=\"/p/{{ petition.slug }}/sign\" method=\"post\" novalidate> ... ABSENT: rate limit on sign submission; \"export is rate-limited\" is the only rate limit described"
+  },
+  {
+   "lens": "reversibility/rollback",
+   "severity": "major",
+   "claim": "Rollback flips the flag, which only replaces the form. The POST /sign endpoint, the Recent signers panel, live counts, and already-collected signatures and opt-ins are not addressed, so disabling the flag does not stop collection or undo the exposure.",
+   "evidence": "Rollback: flip `petitions_signing` off; sign form is replaced by the existing \"Follow this petition\" button. No schema changes in this release beyond the additive `signatures` table"
+  },
+  {
+   "lens": "reliability/rollout",
+   "severity": "major",
+   "claim": "The rollout relies on someone watching two rates for 24h. There is no alert, named on-call owner, or automatic abort at the stated thresholds, so a regression at 10% could persist unnoticed.",
+   "evidence": "Watch `sign_submit_error_rate` (< 0.5%) and confirmation email bounce rate (< 2%) for 24h."
+  },
+  {
+   "lens": "scale/reliability",
+   "severity": "major",
+   "claim": "Live counts poll every 15s with a 10s CDN TTL, so the cache expires between polls and origin load scales with open pages. The polling and count read path is not in the load test, and there is no timeout or fallback if the count or panel endpoint is slow.",
+   "evidence": "Signature counts update live (polling every 15s, cached at the CDN for 10s). Load: 400 signatures/s sustained for 10 min, p95 210ms"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The client does a single fetch with no timeout, retry, or disabled-button guard. A network timeout after server commit can lead to resubmission and a 409, and that path is not reflected in the error-rate definition.",
+   "evidence": "const res = await fetch(form.action, { method: 'POST', body: new FormData(form) });"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Duplicate detection rejects any existing record for the email, including unconfirmed ones, so a signer who did not confirm is blocked from re-signing until the 7-day purge. The artifact describes no path around this.",
+   "evidence": "\"Duplicate signature (same email) rejected with 409\"; \"unconfirmed signatures ... purged after 7 days\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "If a 422 returns an empty `fields` array, `fields[0]` is undefined and `.focus()` throws after the invalid classes are applied, leaving the form partially updated.",
+   "evidence": "for (const name of fields) ... form.elements[fields[0]].focus();"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The panel is described as the '20 most recent' confirmed signers, but the query specifies no ordering key, so the result set is undefined.",
+   "evidence": "petition.recent_signers(limit=20, confirmed_only=True)"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The Recent signers query runs on every page render with no stated index, cache or TTL. There is also no stated index or uniqueness constraint on (petition, email) for the duplicate check, which becomes a hot-path scan at volume.",
+   "evidence": "{% for s in petition.recent_signers(limit=20, confirmed_only=True) %} ... ABSENT: index or uniqueness constraint on signatures for (petition, email)"
+  },
+  {
+   "lens": "scale/reliability",
+   "severity": "minor",
+   "claim": "The 7-day purge job has no stated batching, chunking, alerting or dry-run. A failure would silently retain unconfirmed PII, and a large single delete could cause lock contention or irreversible loss.",
+   "evidence": "Signature is confirmed by email (double opt-in): unconfirmed signatures are not counted and are purged after 7 days."
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Petition pages that embed signer names and postal codes are cached at the CDN. The release does not say whether the cache is keyed or excludes personal data from shared caches.",
+   "evidence": "cached at the CDN for 10s"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Organizer CSV export of signer personal data has rate limiting and audit logging, but no organizer access scoping, field list, row cap or streaming behaviour is defined.",
+   "evidence": "Organizers can export signers who opted in to updates as CSV; export is rate-limited and audit-logged."
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The load test may have sent real billable confirmation emails through Postmark. The artifact does not say whether they were suppressed or sent to a sandbox, and it records no cost impact.",
+   "evidence": "Load: 400 signatures/s sustained for 10 min, p95 210ms | Pass. ABSENT: whether confirmation emails were suppressed during this test"
+  },
+  {
+   "lens": "ux",
+   "severity": "minor",
+   "claim": "The success path (the Location redirect) and any pending-confirmation message are not described. Signers may assume they are counted when the signature is not yet confirmed, and the petition may lose the signatures it was meant to gain.",
+   "evidence": "Signature is confirmed by email (double opt-in) ... if (res.ok) window.location = res.headers.get('Location');"
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "The Recent signers panel has no empty state, so a petition with zero confirmed signatures shows an empty heading and list.",
+   "evidence": "<ul class=\"recent-signers\">{% for s in ... %} ... ABSENT: {% else %} empty-state message"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "Focus-visible styles for inputs, checkbox and the sign button are not specified, and the error colours (#a50e0e text, #d93025 border on #fdecea) have no contrast evidence against WCAG 1.4.3 and 1.4.11.",
+   "evidence": "ABSENT: focus-visible styles; ABSENT: contrast ratio evidence for .form-error and .is-invalid"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "Live polling updates the signer count and list with no aria-live or announcement control, and no screen-reader test results are recorded.",
+   "evidence": "ABSENT: screen reader testing results (NVDA/VoiceOver/TalkBack) and polling-update announcement behaviour"
+  },
+  {
+   "lens": "scope/maintainability",
+   "severity": "minor",
+   "claim": "The release bundles organizer newsletter opt-in and CSV export into a petition-signing flag. The flag does not cleanly gate those paths, so they are not reversible with the rollback.",
+   "evidence": "\"Optional organizer updates ... \" and \"Rollback: flip `petitions_signing` off\""
+  },
+  {
+   "lens": "resilience/single-provider",
+   "severity": "minor",
+   "claim": "Confirmation email is the only channel for double opt-in and depends on one vendor with no documented failover. A Postmark outage would block confirmation and therefore the counting of all signatures.",
+   "evidence": "ABSENT: secondary email provider or failover plan. Artifact says: \"Confirmation emails go through Postmark.\""
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 60891,
+  "tokOut": 37906,
+  "usd": 0.02314248,
+  "critMs": 44219
+ }
+}

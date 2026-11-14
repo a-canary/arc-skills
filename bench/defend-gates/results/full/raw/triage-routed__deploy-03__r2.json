@@ -1,0 +1,113 @@
+{
+ "approach": "triage-routed",
+ "case": "deploy-03",
+ "rep": 2,
+ "wallMs": 287510,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "rollback",
+   "severity": "major",
+   "claim": "The backend rollback to 2.14 assumes `streak_count` is sufficient, but 2.14 does not read `streak_events`. Completions, repairs, and cross-device events accepted while the flag was above 0% may be missing from what 2.14 serves, and the artifact gives no reconciliation step. It also does not say how locally recorded events are reconciled when a client reverts to local-only or the flag is turned back on.",
+   "evidence": "\"Backend: redeploy streaks-svc 2.14; schema is additive and `streak_count` remains authoritative-compatible, so 2.14 runs against the migrated database unchanged (verified in staging).\" ABSENT: reconciliation of events written after the flag was raised, and handling of locally recorded events on revert."
+  },
+  {
+   "lens": "correctness/n-1-compatibility",
+   "severity": "major",
+   "claim": "The source of truth for streaks is unclear. The dual-write is described but its ordering, transaction boundary, and conflict rule are not, so concurrent multi-device writes or 3.1 client writes can leave `streak_count` and the event-derived streak disagreeing. The N-1 evidence only shows 3.1 reads, not whether 3.1 writes create `streak_events` rows.",
+   "evidence": "\"`habits.streak_count` is **kept** and dual-written by 2.15 so 3.1 clients (which read `streak_count` from `/v2/habits`) keep working unchanged.\" and \"3.1 client against 2.15 API (N-1 compatibility) | staging | Pass\" ABSENT: write ordering or conflict rule, and whether 3.1 writes populate `streak_events`."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The backfill runs after the full 2.15 deploy with no stated cutover rule for when reads switch to event-derived streaks. Users not yet backfilled, or partially backfilled, could show a streak that disagrees with `streak_count`, and the mismatch metric is not defined to catch this during the backfill window.",
+   "evidence": "\"Backfill job starts after full deploy.\" and \"run as a resumable job (batches of 5k, checkpointed)\" ABSENT: read-path cutover condition, and how a failed or partial backfill is detected and handled."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Feature rollback relies on clients fetching remote config within 15 minutes. Offline clients or clients with stale caches keep sync enabled, and no server-side control is described to stop sync writes that are already being accepted.",
+   "evidence": "\"set `streak_sync_v2` to 0%; 3.2 clients revert to local-only streaks within one config fetch (≤ 15 min).\" ABSENT: server-side kill switch or write rejection for sync requests from stale clients."
+  },
+  {
+   "lens": "copy-correctness",
+   "severity": "major",
+   "claim": "The disabled-state label is a fixed string with a hard-coded date, but the saver's next availability depends on when the user last repaired. The copy is marked final, so repairs on most days would show the wrong date.",
+   "evidence": "\"Saver button: \\\"Repair yesterday\\\" (disabled state label: \\\"Streak saver available again on Nov 28\\\").\""
+  },
+  {
+   "lens": "privacy/data-lifecycle",
+   "severity": "major",
+   "claim": "Cross-device sync adds a per-event table keyed by user_id with timestamps and a persistent per-install ID. The artifact asserts the privacy label and data-safety form are unchanged, but the data inventory is not attached, and it does not address deletion or retention of `streak_events` on account deletion.",
+   "evidence": "\"Privacy nutrition label and Play data-safety form unchanged (verified against the updated data inventory).\" ABSENT: attached data inventory, and deletion or retention policy for `streak_events` on account deletion."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The `streak_mismatch_total` gate has no stated breach action, paging threshold, or owner, and it is only checked between 24h steps, so a regression within a step has no automated stop.",
+   "evidence": "\"Gates to advance each step: crash-free sessions ≥ 99.5%, `streak_mismatch_total` (server vs client recompute) < 0.1% of synced users\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Backend canary has no success or error-rate criteria, and the p95 gate has no evaluation window.",
+   "evidence": "\"canary 10% of pods for 1h, then full\" / \"streaks-svc p95 < 250ms\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Silent sync disablement on the 2.14 rollback path hides failures, and no client-side error telemetry or alerting for sync failure is described.",
+   "evidence": "\"3.2 client against 2.14 API (server rollback scenario) | staging | Pass (sync silently disabled, local streak shown)\""
+  },
+  {
+   "lens": "logic",
+   "severity": "minor",
+   "claim": "The saver's 30-day window is not defined (rolling or calendar, and in which timezone the day key is computed), so off-by-one behavior at the boundary is untested by the artifact.",
+   "evidence": "\"one missed day per 30 days can be repaired from the streak screen\" ABSENT: window definition and day-key timezone."
+  },
+  {
+   "lens": "logic",
+   "severity": "minor",
+   "claim": "The backfill's 0-mismatch dry-run compared against `streak_count`, while the rollout gate measures server vs client recompute. The dry-run therefore does not validate the rollout gate.",
+   "evidence": "\"0 mismatches vs `streak_count`\" versus \"`streak_mismatch_total` (server vs client recompute) < 0.1%\""
+  },
+  {
+   "lens": "logic",
+   "severity": "minor",
+   "claim": "The idempotency key collapses multi-device completions for the same habit and day into one event. The artifact does not say this is intended, does not define the day timezone, and does not say which `source_device` is retained on conflict.",
+   "evidence": "\"idempotent on `(user_id, habit_id, day)`\" ABSENT: day timezone, and source_device retention on conflict."
+  },
+  {
+   "lens": "privacy/regulatory",
+   "severity": "minor",
+   "claim": "Backfill migrates historical personal data for existing users, and the artifact does not describe any user-facing notice of the new cross-device sync behavior.",
+   "evidence": "ABSENT: user notice or in-app disclosure for existing users; backfill described only as \"one `streak_events` row per day of each habit's current streak\"."
+  },
+  {
+   "lens": "copy-consistency",
+   "severity": "minor",
+   "claim": "The pre-prompt hard-codes 8:00 PM, but the feature says reminders fire at the user's chosen time. Users who later choose another time would see a mismatched prompt.",
+   "evidence": "\"Want a nudge at 8:00 PM so you don't lose your streak?\" vs \"Optional streak reminder notification at the user's chosen time.\""
+  },
+  {
+   "lens": "rollout-coupling",
+   "severity": "minor",
+   "claim": "Store phased rollouts run in parallel with the flag's 24h steps, and the artifact does not say how the two are gated against each other or what happens when the flag is above 0% on users whose build is still partially rolled out.",
+   "evidence": "\"iOS phased release (7 days) and Play staged rollout 10% → 50% → 100% in parallel; the flag gates the feature independently of store rollout.\""
+  },
+  {
+   "lens": "backfill-load",
+   "severity": "minor",
+   "claim": "The 22-minute backfill was dry-run on a snapshot, but its load impact on the production database during live traffic and concurrent dual-writes is not assessed.",
+   "evidence": "\"dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches\" and \"Backfill job starts after full deploy.\""
+  }
+ ],
+ "usage": {
+  "calls": 6,
+  "tokIn": 21366,
+  "tokOut": 12616,
+  "usd": 0.00894163,
+  "critMs": 44827
+ }
+}

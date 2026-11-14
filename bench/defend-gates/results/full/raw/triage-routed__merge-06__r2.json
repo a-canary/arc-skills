@@ -1,0 +1,83 @@
+{
+ "approach": "triage-routed",
+ "case": "merge-06",
+ "rep": 2,
+ "wallMs": 338107,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "logic",
+   "severity": "major",
+   "claim": "The upstream 429 retry calls upstream.chat again without going back through the tenant limiter, so each admitted request can cause two upstream calls. During an upstream-wide 429 storm, every tenant retries at the same moment with no jitter or global budget, which roughly doubles upstream load when the provider is already shedding it. The per-tenant bound therefore no longer limits upstream calls.",
+   "evidence": "let res = await upstream.chat(req.body, { signal: req.signal });\n    if (res.status === 429) {\n      const delay = retryAfterMs(res.headers.get(\"retry-after\") ?? undefined);\n      ...\n      res = await upstream.chat(req.body, { signal: req.signal });"
+  },
+  {
+   "lens": "rollout-safety",
+   "severity": "major",
+   "claim": "The limiter is enabled unconditionally for all tenants on merge, and tenants without explicit config get 20 rps / burst 40. Any tenant already sending more than 20 rps starts receiving 429s immediately, with no feature flag, log-only or shadow mode, or staged rollout.",
+   "evidence": "ABSENT: no feature flag or log-only mode. \"limits from tenant config, default 20 rps / burst 40\"; route calls \"limiter.take(tenant.id, limitsFor(tenant))\" unconditionally."
+  },
+  {
+   "lens": "correctness-clock",
+   "severity": "major",
+   "claim": "The bucket uses wall-clock Date.now. If the clock steps backwards (NTP correction, VM resume), elapsedSec goes negative and tokens are reduced, possibly far below zero. This yields a very large waitMs and can lock out tenants for a long period, and the limiter has no clamp or monotonic time source.",
+   "evidence": "constructor(private now: () => number = Date.now) {}\n...\nconst elapsedSec = (nowMs - b.updatedMs) / 1000;\nb.tokens = Math.min(limits.burst, b.tokens + elapsedSec * limits.ratePerSec);"
+  },
+  {
+   "lens": "test-coverage",
+   "severity": "major",
+   "claim": "Only the bucket class is tested. The route's 429 response shape, the upstream-429 retry and its delay cap, retryAfterMs parsing, and keyFingerprint have no tests, even though these change request handling for every tenant.",
+   "evidence": "ABSENT: no test file for src/routes/completions.ts or the retry path. bucket.test.ts covers only \"admits burst, then rate-limits, then refills\" and \"tenants are isolated\"."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The retry sleep uses setTimeout and ignores req.signal. If the client disconnects during the up-to-5s wait, the gateway still sleeps and then issues an upstream call for a caller that is gone.",
+   "evidence": "await new Promise((r) => setTimeout(r, delay));\n      res = await upstream.chat(req.body, { signal: req.signal });"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Every rate-limited request logs at info level with no sampling and no counter or metric. The incident this PR targets is one tenant at 400 rps, so log volume spikes during the event, and operators have no rate-limit or upstream-429 metric to detect starvation.",
+   "evidence": "req.log.info(\n  { tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs },\n  \"tenant rate limited\",\n);"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "A tenant ratePerSec of 0 or a non-positive value from config is not validated. It produces an Infinity waitMs, and the 429 carries the header Retry-After: \"Infinity\", which is not valid delta-seconds.",
+   "evidence": "return Math.ceil(((1 - b.tokens) / limits.ratePerSec) * 1000);\n...\n.header(\"Retry-After\", String(Math.ceil(waitMs / 1000)))"
+  },
+  {
+   "lens": "edge-case",
+   "severity": "minor",
+   "claim": "Retry-After is parsed with Number(), so an HTTP-date value becomes NaN and silently falls back to 1s, and an empty or \"0\" value triggers an immediate retry. Neither case is handled or tested.",
+   "evidence": "const secs = Number(header);\n  if (!Number.isFinite(secs) || secs < 0) return 1_000;"
+  },
+  {
+   "lens": "fairness",
+   "severity": "minor",
+   "claim": "When the LRU evicts a tenant's bucket, the next request recreates it at full burst, so an evicted tenant can briefly exceed its configured rate. The idle-tenant bound holds, but the eviction side effect is not handled.",
+   "evidence": "private buckets = new LRUCache<string, Bucket>({ max: 10_000 });\n...\nconst b = this.buckets.get(tenantId) ?? { tokens: limits.burst, updatedMs: nowMs };"
+  },
+  {
+   "lens": "secret-handling",
+   "severity": "minor",
+   "claim": "A derived fingerprint of the raw tenant API key is written to logs on every rate-limit decision. The tenant id is already logged, so the fingerprint adds little, and it is a stable derivative of a secret. A keyed HMAC or the tenant id alone would avoid this.",
+   "evidence": "createHash(\"sha256\").update(apiKey).digest(\"hex\").slice(0, 10)\n...\n{ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }"
+  },
+  {
+   "lens": "spec-mismatch",
+   "severity": "minor",
+   "claim": "The stated default of 20 rps / burst 40 lives in limitsFor, which is not in this diff, so the default cannot be verified from the artifact.",
+   "evidence": "ABSENT: limitsFor(tenant) implementation and the default 20 rps / burst 40 values in src/tenants"
+  }
+ ],
+ "usage": {
+  "calls": 6,
+  "tokIn": 24030,
+  "tokOut": 16662,
+  "usd": 0.01130192,
+  "critMs": 38904
+ }
+}

@@ -1,0 +1,89 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-02",
+ "rep": 1,
+ "wallMs": 250692,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "blocker",
+   "claim": "The duplicate-ballot log line writes the voter's email alongside the measure and attempted choice. Logs ship to a third-party host readable by all of support, so a named resident becomes linkable to their choice outside the tally, which breaks the anonymity promise.",
+   "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value)"
+  },
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "The results export route declares no authentication or role dependency, unlike close_measure which uses Depends(require_role(\"admin\")). Any caller who can reach the route can download tallies for any measure, including open ones.",
+   "evidence": "async def export_results(measure_id: int, db: Session = Depends(get_db),): ABSENT: no Depends(current_user) or Depends(require_role(\"admin\"))"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The export never checks whether the measure is closed, though its stated purpose is a tally once a measure closes. Admins can pull interim counts mid-vote, which may be published in a council packet and diverge from the final tally.",
+   "evidence": "measure = db.get(Measure, measure_id)\n    if measure is None:\n        raise HTTPException(404)  ABSENT: no is_open() or closed-state check"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "No minimum cell size is applied to per-choice counts. In a low-turnout measure, a count of 1 or 0 can reveal an individual resident's vote in the published CSV.",
+   "evidence": "writer.writerow([measure.slug, choice.value, counts.get(choice, 0)]) ABSENT: any suppression threshold for small counts"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Counts are keyed by the stored Ballot.choice value but looked up with Choice enum members. If the stored type does not match the enum, every row silently reads 0 in a tally going into a council packet. The diff does not show the column type, so this is unverified and needs a test.",
+   "evidence": "counts = dict(db.query(Ballot.choice, func.count(Ballot.id))...) ... counts.get(choice, 0)"
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Logging voter identity alongside ballot choice and publishing per-choice counts from the export may conflict with local ballot-secrecy and election-records rules. No legal or policy sign-off appears in the PR.",
+   "evidence": "ABSENT: any legal or policy sign-off for logging voter identity with choice or for exporting closed-measure tallies"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "No tests cover the export's access control, open/closed behaviour, zero-fill, count accuracy, or the duplicate log line's content. The claimed behaviour is unverified.",
+   "evidence": "ABSENT: no test file or test function for GET /measures/{id}/results.csv or the duplicate-ballot log path in PR #231"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The duplicate check is check-then-insert with no visible unique constraint on Receipt.token, so concurrent requests can both pass. This predates the PR but the new diagnostic cannot distinguish a race from a genuine repeat vote.",
+   "evidence": "if db.query(Receipt).filter_by(token=receipt).first(): ... db.add(Receipt(token=receipt)) ABSENT: unique constraint on Receipt.token"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The log line fires on every duplicate 409 with no rate limit or sampling, so retry loops can flood the third-party log pipeline.",
+   "evidence": "logger.info(\"duplicate ballot rejected ...\") on the 409 path"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "measure.slug is interpolated unescaped into the Content-Disposition header and the first CSV cell. Quotes or CRLF could corrupt the header, and a leading = or + could act as a spreadsheet formula when clerks open the file.",
+   "evidence": "f'attachment; filename=\"{measure.slug}-results.csv\"' and writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Once a CSV is attached to a council packet it cannot be recalled, and the route has no feature flag or staged rollout, so shipping before the access fix creates an irreversible exposure window.",
+   "evidence": "ABSENT: feature flag, staged rollout, or rollback plan for the new route"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Tally export logic sits in the ballot-casting module next to the anonymity-critical write path, making the privacy-sensitive code harder to review in isolation.",
+   "evidence": "@router.get(\"/measures/{measure_id}/results.csv\") added to app/routes/ballots.py"
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 85331,
+  "tokOut": 36114,
+  "usd": 0.03335989,
+  "critMs": 54944
+ }
+}

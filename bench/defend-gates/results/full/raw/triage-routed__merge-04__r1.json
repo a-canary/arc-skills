@@ -1,0 +1,89 @@
+{
+ "approach": "triage-routed",
+ "case": "merge-04",
+ "rep": 1,
+ "wallMs": 267989,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The up migration is not a rename. It adds an empty private_notes column and then drops notes without copying any data, so every existing user note on ~140M rows is destroyed on auto-run deploy. The PR's 'pure rename, no data change' description is contradicted by the SQL, and the context says these notes cannot be recovered elsewhere.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The down migration cannot restore data. It recreates an empty notes column and drops private_notes, so any notes written after the up migration are lost on rollback. A real RENAME COLUMN in both directions would be lossless and reversible.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN notes text;\nALTER TABLE user_recipes DROP COLUMN private_notes;"
+  },
+  {
+   "lens": "deploy-compat",
+   "severity": "blocker",
+   "claim": "Migrations run automatically on deploy and the column is renamed in the same release. Old instances still running during a rolling deploy, or after a code rollback, select ur.notes and will fail once the column is gone. There is no expand/contract sequence.",
+   "evidence": "Migrations run automatically on deploy after merge to main; old query selects ur.notes, new query selects ur.private_notes; ABSENT: expand/contract plan or compatibility view."
+  },
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "The handler fetches every saved row for the user, including private_notes text, on every page request and slices in memory. For users with 200k+ saves this cannot meet the 300ms p99 budget, and cost scales with total saves rather than page size.",
+   "evidence": "const { rows } = await db.query<SavedRow>(`... WHERE ur.user_id = $1 ORDER BY ur.saved_at DESC, ur.id DESC`, [userId]); ... const page = rows.slice(start, start + limit);"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The keyset order (saved_at DESC, id DESC) has no supporting index on user_recipes(user_id, saved_at, id). On a 140M-row table each request needs a filter and sort, and a SQL keyset WHERE could not use an index as written.",
+   "evidence": "ABSENT: no CREATE INDEX in 0087_private_notes.up.sql or elsewhere in the PR."
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The ALTER TABLE statements take ACCESS EXCLUSIVE on a ~140M-row table with no lock_timeout. Queued behind a long-running reader or writer, they block all later queries on user_recipes during peak load.",
+   "evidence": "BEGIN; ALTER TABLE user_recipes ADD COLUMN private_notes text; ALTER TABLE user_recipes DROP COLUMN notes; COMMIT; (no SET lock_timeout)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "An unknown or deleted cursor makes findIndex return -1, so start becomes 0 and the response silently returns page one. Clients can loop or receive duplicates with no error.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "A negative limit is not clamped. With an empty page, page[page.length - 1].id throws a TypeError and returns a 500. With rows present, the slice and nextCursor are wrong.",
+   "evidence": "const limit = Math.min(Number(req.query.limit) || 50, 100); ... start + limit < rows.length ? page[page.length - 1].id : null"
+  },
+  {
+   "lens": "api-contract",
+   "severity": "major",
+   "claim": "The response field notes is renamed to private_notes, breaking existing clients that read item.notes. The offset parameter is also dropped without compatibility handling, so old clients silently receive page one on every call. The PR does not mention either change.",
+   "evidence": "SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.private_notes ... res.json({ items: page, nextCursor }); (offset no longer read)"
+  },
+  {
+   "lens": "scope",
+   "severity": "major",
+   "claim": "Nothing in the PR shows that other code (other routes, jobs, exports, the client) referencing user_recipes.notes was updated. The rename can break those paths at deploy.",
+   "evidence": "ABSENT: no changes outside db/migrations/0087_private_notes.*, server/routes/saved.ts, and saved.test.ts; no search for remaining references to notes."
+  },
+  {
+   "lens": "logic",
+   "severity": "minor",
+   "claim": "Tests cover only the happy path. They do not cover unknown or deleted cursors, negative or non-numeric limits, empty results, or the renamed response field.",
+   "evidence": "it(\"pages with cursor\", ...); expect(c.nextCursor).toBeNull();"
+  },
+  {
+   "lens": "client-contract",
+   "severity": "minor",
+   "claim": "The claim that the client already sends cursor from nextCursor is unverified. No client diff or prior nextCursor support is shown.",
+   "evidence": "ABSENT: client-side evidence for \"The client already sends `cursor` from the previous page's `nextCursor`.\""
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 26888,
+  "tokOut": 14336,
+  "usd": 0.01243495,
+  "critMs": 24209
+ }
+}
