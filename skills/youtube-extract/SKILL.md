@@ -43,11 +43,12 @@ Classify links: github / arxiv-whitepaper / docs / promo-noise. Keep the first t
 **Ingest first.** The local youtube-ingest service (`~/lib/youtube-ingest`, port 8098) already holds transcripts for subscribed channels and fetches others on request, with no bot-gate on this side:
 
 ```bash
-scripts/ingest_transcript.sh "$URL" > transcript.txt   # 0 = done; 2 = queued, retry in a few minutes; 3 = no service, use yt-dlp below
+scripts/ingest_transcript.sh "$URL" > transcript.txt   # 0 = done; 2 = queued, retry in a few minutes; 1 or 3 = use yt-dlp below
 ```
 
 The ingest transcript is plain text with no timestamps; cite provenance as the URL alone, or use the yt-dlp path when `@ MM:SS` matters.
-Run the yt-dlp path only on exit 3, or on exit 2 when a retry still returns 2:
+Any exit but 0 leaves `transcript.txt` empty: never read it then.
+Run the yt-dlp path on exit 1 (no video id found) or 3 (no ingest service, or ingest failed on this video), or on exit 2 when a retry still returns 2:
 
 ```bash
 scripts/ytdlp.sh "$URL" --skip-download --write-auto-subs --sub-langs en --sub-format vtt -o t   # no en subs? check meta.json subtitles keys
