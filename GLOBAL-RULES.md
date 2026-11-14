@@ -125,17 +125,32 @@ At session start, load these files into the system prompt:
   reduces cost at no quality loss.
 - **Write lane (prose rule; structural gate pending — arc-director
   DESIGN.md invariant 7).** Only write files under `~/repos/**`, `/tmp/**`,
-  `~/vault/ke/**`, `~/vault/director/**`, and beads (via `bd`).
+  `~/vault/ke/**`, `~/vault/director/**`, `~/vault/agents/**`, and beads (via `bd`).
   `~/trash/**` is move-in only — the to-trash/retire/GC destination; never
   author files or read config/code back from it (operator ruling
   2026-10-30).
   Any other path — new home dirs, `~/bin`, `~/agents`, other vault subtrees —
   requires captain approval before the first write. Check the target path
   before writing, not after.
-- **Docs are earn-or-tmp (operator ruling 2026-08-27).** A persistent .md
-  file may only be created if the human explicitly requested it or a skill
-  defines it as output; everything else goes to /tmp and is trashed when its
+  **Shell variables in bash write commands are blocked.** The `pre-write-lane`
+  hook cannot resolve unexpanded shell syntax (`$VAR`, `${VAR}`, `$()`), so any
+  bash command whose write target contains a shell variable is rejected
+  (fail-CLOSED). Use literal paths in bash write commands, or write the
+  command to a script file first. Example: `echo x > /tmp/file` works;
+  `F=/tmp/file; echo x > $F` is blocked.
+  A script is bound by the same lane: every path it writes stays inside the write lane, though the hook cannot see inside it.
+- **Agent homes (operator ruling 2026-11-14, repos-l1tt).** Each long-running agent (Assistant, Leads, Director) keeps one home folder, `~/vault/agents/<name>/`: its brief, its seat file and its drafts.
+  Project state stays in beads; lessons go to `ke`.
+- **No kept work in /tmp (operator ruling 2026-11-14, repos-qv86).** `/tmp` is for scratch that may vanish at any reboot.
+  Anything a later turn, session or agent will need (a spec draft, a paper run, a script that produced a reported number, a task file) lives in the agent's home, a worktree or a pushed branch.
+  The 2026-11-13 reboot lost a spec draft and two paper write-ups kept in `/tmp`.
+- **Docs are earned (operator ruling 2026-08-27, amended 2026-11-14).** A persistent .md
+  file in a repo may only be created if the human explicitly requested it or a skill
+  defines it as output; other drafts go to the agent's home (a worker or one-shot agent has none: its worktree) and are trashed when their
   referencing task completes.
+- **Hard lines (operator ruling 2026-11-14, repos-peos).** Agents run with permission prompts skipped, so these are refused outright, by hook where one is wired, and a human runs them, never an agent:
+  live order paths (`rebalance-calc --execute`, `m1-execute --execute`, the order tool's buy, sell, close and cancel actions, the live rebalance wrapper), `--admin` on any `gh` command, force push in any spelling, and repo visibility, access or deletion.
+  A blocked hard line is never routed around: post a /decide card that names the exact command.
 - **File layout: overlays nest, registries don't (operator ruling
   2026-08-27).** Context overlays (AGENTS.md, CONTEXT.md) are
   path-inherited — they apply to their folder + subfolders, nearest wins.
