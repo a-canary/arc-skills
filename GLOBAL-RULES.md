@@ -111,13 +111,13 @@ At session start, load these files into the system prompt:
   violation when X is reversible and obvious from context.
 - **Reversible in-domain actions clear on review, not on the operator (operator ruling 2026-11-15, repos-f2fj).** An action needs no operator card when all four hold:
   (1) it is inside the acting owner's domain, per `~/vault/director/leads/OWNERSHIP.md`;
-  (2) it is reversible, and the exact undo is written down before it runs;
+  (2) it is reversible, and the exact undo is written before it runs, in the same changes-file entry as the action;
   (3) it is logged in the weekly changes file, per agent and scope;
-  (4) it is read-only, or it carries out a ruling the operator already gave, or an independent review has cleared it at the current version.
-  This includes a pinned sudo command run by the deploy runner: the operator sees the log, not a question.
+  (4) it is read-only, or it carries out a ruling the operator already gave (the log entry names that card), or an independent review has cleared it at the current version.
+  This includes a sudo script run by the deploy runner, when the script sits in the deploy queue, the independent review cleared that exact script and names its sha256 in the receipt, and the runner runs only those bytes: the operator sees the log, not a question.
   Independent means what it means for GitHub actions below.
   Reversibility is judged with care: a restart that loses a running job, or a config change that can lock out remote access, is not reversible.
-  Still the operator's, always by /decide card: money (purchases, returns, leased compute); public exposure, repo visibility and access, new accounts or mailboxes; secrets (revoking a leaked key may be done first and reported after); changes to the global rules, missions or ownership, a new Lead or a new repo; anything destructive with no undo; design choices only the operator can weigh.
+  Still the operator's, always by /decide card: money (purchases, returns, leased compute); public exposure, repo visibility and access, new accounts or mailboxes; secrets (revoking a leaked key may be done first and reported after); changes to sudoers, logins, keys, firewall or the guards themselves (hooks, fences, the deploy runner's root wrapper); changes to the global rules, missions or ownership, a new Lead or a new repo; anything destructive with no undo; design choices only the operator can weigh.
   Irreversible actions inside a sanctioned pipeline (the trading live cycle, the engagement publishing pipeline) run on that pipeline's own safeguards, sized to the cost in money or reputation; a partial undo counts as a cost, not as free; a human is needed only where the safeguard does not cover the action.
 - **Hygiene (operator ruling 2026-11-15, repos-f2fj).** Keep only what the current task will use; prune temporary files, context and code when no longer useful; label so things can be found later.
   A review does not clear while duplicate or contradictory work it touched remains: the reviewer flags, the author prunes.
@@ -167,6 +167,7 @@ At session start, load these files into the system prompt:
   live order paths (`rebalance-calc --execute`, `m1-execute --execute`, the order tool's buy, sell, close and cancel actions, the live rebalance wrapper), `--admin` on any `gh` command, force push in any spelling, and repo visibility, access or deletion.
   A blocked hard line is never routed around: post a /decide card that names the exact command.
   Live orders inside the sanctioned trading pipeline are that pipeline's own gated path, not an agent running these commands (ruling 2026-11-15, repos-f2fj).
+  The sanctioned pipeline is the scheduled job the operator installed. No agent starts, re-runs or changes a live cycle by hand, and the hook refuses these commands from any agent session as before.
 - **File layout: overlays nest, registries don't (operator ruling
   2026-08-27).** Context overlays (AGENTS.md, CONTEXT.md) are
   path-inherited — they apply to their folder + subfolders, nearest wins.
