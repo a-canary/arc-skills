@@ -41,7 +41,9 @@ test("the guard fence names the write-lane guard, not every unit with lane in it
   d.exec = () => 0;
   d.logChange = () => {};
   expect(run(d).code).toBe(0);
-  expect(run(setup(GOOD + "systemctl --user disable pre-write-lane.timer\n")).code).toBe(3);
+  expect(run(setup(GOOD + "systemctl --user disable lane-guard.timer\n")).code).toBe(3);
+  expect(run(setup(GOOD + "echo gate; crontab -r\n")).code).toBe(3);
+  expect(run(setup(GOOD + "crontab -r # drop the hook lines\n")).code).toBe(3);
 });
 test("path with .. escaping the queue refused", () => expect(run(setup(GOOD, { path: "/q/../etc/x.sh" })).code).toBe(3));
 test("path outside queue refused", () => expect(run(setup(GOOD, { path: "/tmp/x.sh" })).code).toBe(3));
