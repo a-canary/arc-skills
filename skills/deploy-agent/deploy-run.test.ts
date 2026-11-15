@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCard, parseArgs, pinRun, taskCard, textCard } from "../human-gate-post-webui/decide";
 import { lintCard } from "../human-gate-post-webui/lint-card";
-import { type Deps, main } from "./deploy-run";
+import { type Deps, ROOT_WRAPPER, execArgv, main } from "./deploy-run";
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const GOOD = "#!/bin/bash\n# undo: systemctl start foo\nsystemctl restart foo\n";
@@ -114,7 +114,7 @@ test("--dry prints the plan and never executes", () => {
 test("operator accept runs the hashed bytes and logs the change with its undo", () => {
   const d = setup(GOOD);
   const ran: string[] = [], logged: string[] = [];
-  d.exec = (t) => { ran.push(t); return 0; };
+  d.exec = (p) => { ran.push(p.text); return 0; };
   d.logChange = (l) => { logged.push(l); };
   expect(run(d).code).toBe(0);
   expect(ran).toEqual([GOOD]);
@@ -130,4 +130,10 @@ test("decide --run pins the hash and the card still lints", () => {
   const body = buildCard({ q: "Run the fix?", opts: ["Run it | Fixes foo. Runs as root.", "Skip | Nothing changes. Foo stays broken."], evidence: "x.ts:3", context: "Foo is down." }) + `\n${line}\n`;
   expect(lintCard("[Deploy] Run the foo fix", body)).toEqual([]);
   expect(parseArgs(["ask", "--run", script]).run).toBe(script);
+});
+
+test("a root run goes through the root wrapper with the pinned hash and path; never a bare root shell", () => {
+  const p = { text: "echo hi", hex: "a".repeat(64), path: "/q/aaaaaaaa-x.sh" };
+  expect(execArgv(p, false)).toEqual(["sudo", "-n", ROOT_WRAPPER, p.hex, p.path]);
+  expect(execArgv(p, true)).toEqual(["bash", "-c", "echo hi"]);
 });

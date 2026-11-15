@@ -17,7 +17,7 @@ export type Deps = {
   readFile: (p: string) => string;
   queueDir: string;
   fencesFile: string;
-  exec: (text: string, asUser: boolean) => number;
+  exec: (p: { text: string; hex: string; path: string }, asUser: boolean) => number;
   logChange: (line: string) => void;
 };
 
@@ -27,16 +27,21 @@ function realBd(dir: string, ...args: string[]): string {
   return r.stdout.toString();
 }
 
+export const ROOT_WRAPPER = "/usr/local/sbin/deploy-root";
+// Root: the root-owned wrapper (the one command sudoers allows) copies the queue file into a root-only folder,
+// re-checks the hash, the undo line and its own root-owned fence list, logs, then runs the copy (repos-vjpl).
+// --as-user: no sudo; the hashed bytes run as an argument, never the path (the queue dir is agent-writable), and not
+// via stdin (a command that reads stdin would swallow the remaining lines). For scripts whose every step is `sudo -u <you>`.
+// ponytail: root cannot check the accept (card data is writable by the agents' user). Upgrade: signed accepts checked in the wrapper.
+export const execArgv = (p: { text: string; hex: string; path: string }, asUser: boolean): string[] =>
+  asUser ? ["bash", "-c", p.text] : ["sudo", "-n", ROOT_WRAPPER, p.hex, p.path];
+
 export const realDeps = (): Deps => ({
   bd: realBd,
   readFile: (p) => readFileSync(p, "utf8"),
   queueDir: QUEUE,
   fencesFile: FENCES,
-  // Runs the hashed bytes as an argument, never the path: the queue dir is agent-writable (no swap after the check).
-  // Not via stdin: a command in the script that reads stdin would swallow the remaining lines.
-  // --as-user: no sudo. For scripts whose every step is `sudo -u <you>`; grants nothing an agent running as you lacks.
-  // ponytail: the caller vouches no step needs root (a root step fails, and `|| echo` would hide it). Upgrade: signed accepts + a root wrapper.
-  exec: (text, asUser) => Bun.spawnSync([...(asUser ? [] : ["sudo", "-n"]), "bash", "-c", text], { stdin: "ignore", stdout: "inherit", stderr: "inherit" }).exitCode ?? 1,
+  exec: (p, asUser) => Bun.spawnSync(execArgv(p, asUser), { stdin: "ignore", stdout: "inherit", stderr: "inherit" }).exitCode ?? 1,
   logChange: (line) => {
     const wk = Bun.spawnSync(["date", "-u", "+%G-W%V"]).stdout.toString().trim();
     const f = join(homedir(), "vault", "director", "changes", `${wk}.md`);
@@ -97,7 +102,7 @@ export function main(argv: string[], d: Deps, out: (s: string) => void = console
     // Logged before the run, so a run killed partway still leaves its undo in the changes log.
     const asUser = argv.includes("--as-user");
     d.logChange(`\n## ${new Date().toISOString()}\n- what: running ${p.path} as ${asUser ? process.env.USER ?? "invoking user" : "root"}\n- card: ${p.id}\n- undo: ${p.undo}\n`);
-    const code = d.exec(p.text, asUser);
+    const code = d.exec(p, asUser);
     d.logChange(`- exit: ${code}\n`);
     return code;
   } catch (e) {

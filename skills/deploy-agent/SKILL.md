@@ -23,7 +23,10 @@ Upgrade path: webui signs card id + script sha256 on accept, and deploy-run.ts v
 3. After the operator accepts: `bun skills/deploy-agent/deploy-run.ts <card-id> [--repo R]`.
    `--dry` prints the plan without running it.
    `--as-user` runs it as you, without sudo: use it only when every step in the script is `sudo -u <you>` (no root step; a root step fails and `|| echo` would hide it).
-   Root runs need a sudoers rule that is not installed (sudo -n bash fails); until the operator decides how, root steps are run by hand.
+   Root runs go through `/usr/local/sbin/deploy-root <sha256> <queue file>`, the one command the sudoers rule allows (operator-installed 2026-11-15, repos-vjpl; source and installer in `~/vault/director/scripts/`).
+   The wrapper is root-owned: it copies the queue file into `/var/log/deploy-root/`, re-checks the hash, the undo line and its own fence list (`/etc/deploy-root/fences.txt`), logs the run, then runs the copy.
+   It cannot check the accept: that stays here, in deploy-run.ts. So an agent could call the wrapper directly; what holds then is the root-owned fences and a record agents cannot erase.
+   The root fence list is a copy: a change to `fences.txt` here reaches root only when the operator reinstalls it.
    Before running it appends what will run and its undo to the week's changes log, then the exit code after.
 
 ## Checks (any failure: one-line reason, exit 3)
