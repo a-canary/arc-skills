@@ -45,6 +45,14 @@ test("the guard fence names the write-lane guard, not every unit with lane in it
   expect(run(setup(GOOD + "echo gate; crontab -r\n")).code).toBe(3);
   expect(run(setup(GOOD + "crontab -r # drop the hook lines\n")).code).toBe(3);
 });
+test("crontab removal is fenced in every flag spelling; listing is not", () => {
+  for (const c of ["crontab -r", "crontab -ri", "crontab -ir", "crontab -u aaron -r"])
+    expect(run(setup(GOOD + c + "\n")).code).toBe(3);
+  const d = setup(GOOD + "crontab -u aaron -l\n");
+  d.exec = () => 0;
+  d.logChange = () => {};
+  expect(run(d).code).toBe(0);
+});
 test("path with .. escaping the queue refused", () => expect(run(setup(GOOD, { path: "/q/../etc/x.sh" })).code).toBe(3));
 test("path outside queue refused", () => expect(run(setup(GOOD, { path: "/tmp/x.sh" })).code).toBe(3));
 test("non-accept refused", () => expect(run(setup(GOOD, { verb: "reject" })).code).toBe(3));
