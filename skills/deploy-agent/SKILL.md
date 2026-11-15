@@ -43,6 +43,7 @@ Upgrade path: webui signs card id + script sha256 on accept, and deploy-run.ts v
 Also eval, base64 decode, pipe-to-shell and curl/wget (no unpinned code).
 
 Fences catch mistakes, not attackers: text regexes are easy to evade.
+The crontab fence refuses only the remove flag; replacing the crontab from a file or stdin passes, because that is how cron lines are installed.
 The real guards are the sha256 pin, running the hashed bytes (`bash -c`, stdin closed) rather than the path, and the operator reading the card before accepting.
 
 ## Test

@@ -45,13 +45,17 @@ test("the guard fence names the write-lane guard, not every unit with lane in it
   expect(run(setup(GOOD + "echo gate; crontab -r\n")).code).toBe(3);
   expect(run(setup(GOOD + "crontab -r # drop the hook lines\n")).code).toBe(3);
 });
-test("crontab removal is fenced in every flag spelling; listing is not", () => {
+// Only the remove flag is fenced. Replace forms (crontab <file>, ... | crontab -) pass by design: they are how
+// cron lines are installed, and a regex cannot tell an install from a wipe; the operator reads the card.
+test("the crontab remove flag is fenced in every spelling; listing and installing are not", () => {
   for (const c of ["crontab -r", "crontab -ri", "crontab -ir", "crontab -u aaron -r"])
     expect(run(setup(GOOD + c + "\n")).code).toBe(3);
-  const d = setup(GOOD + "crontab -u aaron -l\n");
-  d.exec = () => 0;
-  d.logChange = () => {};
-  expect(run(d).code).toBe(0);
+  for (const c of ["crontab -u aaron -l", "crontab -l | sort -r", "crontab /tmp/new.cron"]) {
+    const d = setup(GOOD + c + "\n");
+    d.exec = () => 0;
+    d.logChange = () => {};
+    expect(run(d).code).toBe(0);
+  }
 });
 test("path with .. escaping the queue refused", () => expect(run(setup(GOOD, { path: "/q/../etc/x.sh" })).code).toBe(3));
 test("path outside queue refused", () => expect(run(setup(GOOD, { path: "/tmp/x.sh" })).code).toBe(3));
