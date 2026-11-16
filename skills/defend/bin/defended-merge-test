@@ -1,0 +1,57 @@
+#!/bin/bash
+# Stub-gh checks for defended-merge (no network). Usage: defended-merge-test [path]
+# defended-merge <pr> [-R owner/repo]: merges only when the PR is open, its current head carries a
+# defend/merge=success receipt, and every other status on that head is success; then
+# gh pr merge <pr> --squash --match-head-commit <head>. Anything else: non-zero, no merge call.
+M=${1:-$(dirname "$0")/defended-merge}
+M=$(cd "$(dirname "$M")" && pwd)/$(basename "$M")
+T=$(mktemp -d); export T; HEAD=abcdef0123456789abcdef0123456789abcdef01
+trap 'command rm -r "$T"' EXIT
+[ -x "$M" ] || { echo "not executable: $M"; exit 1; }
+
+cat > "$T/gh" <<'EOF'
+#!/bin/bash
+if [ "$1 $2" = "pr view" ]; then
+  jq -n --arg h "$STUB_HEAD" --arg s "${STUB_STATE:-OPEN}" '{headRefOid:$h,state:$s}'; exit 0
+fi
+[ "$1 $2" = "repo view" ] && { echo o/r; exit 0; }
+if [ "$1" = api ] && [[ $2 == */commits/*/status ]]; then
+  [[ $2 == */commits/$STUB_HEAD/status ]] || { echo 'gh: status asked for the wrong sha' >&2; exit 1; }
+  echo "$STUB_STATUS"; exit 0
+fi
+echo "$*" >> "$T/calls"
+EOF
+chmod +x "$T/gh"; export PATH="$T:$PATH" STUB_HEAD=$HEAD
+st() { jq -cn --argjson s "$1" '{statuses:$s}'; }
+RECEIPT='{"context":"defend/merge","state":"success"}'
+CI='{"context":"ci/test","state":"success"}'
+ok=0; bad=0
+t() { local want=$1; shift; : > "$T/calls"; "$M" "$@" >/dev/null 2>&1; rc=$?; got=$(cat "$T/calls")
+  if [ "$want" = fail ]; then [ $rc -ne 0 ] && [ -z "$got" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL expected refusal: $* rc=$rc calls=$got"; }
+  else [ $rc -eq 0 ] && [ "$got" = "$want" ] && ok=$((ok+1)) || { bad=$((bad+1)); echo "FAIL want '$want': $* rc=$rc calls=$got"; }; fi; }
+
+export STUB_STATUS=$(st "[$RECEIPT,$CI]")
+t "pr merge 7 --squash --match-head-commit $HEAD" 7
+t "pr merge 7 -R o/r --squash --match-head-commit $HEAD" 7 -R o/r
+STUB_STATUS=$(st "[$RECEIPT]") t "pr merge 7 --squash --match-head-commit $HEAD" 7     # no other checks
+
+STUB_STATUS=$(st "[$CI]") t fail 7                                                     # no receipt
+STUB_STATUS=$(st '[{"context":"defend/merge","state":"failure"},'"$CI"']') t fail 7    # BLOCK receipt
+STUB_STATUS=$(st '[{"context":"defend/merge","state":"pending"}]') t fail 7
+STUB_STATUS=$(st "[$RECEIPT"',{"context":"ci/test","state":"pending"}]') t fail 7     # a check still running
+STUB_STATUS=$(st "[$RECEIPT"',{"context":"ci/test","state":"failure"}]') t fail 7
+STUB_STATUS=$(st "[$RECEIPT"',{"context":"ci/test","state":"error"}]') t fail 7
+STUB_STATUS=$(st '[]') t fail 7
+STUB_STATUS='not json' t fail 7
+STUB_STATE=MERGED t fail 7
+STUB_STATE=CLOSED t fail 7
+STUB_HEAD= t fail 7                                                                    # head not resolved
+t fail                                                                                 # no PR number
+t fail 7x
+t fail 7 --admin                                                                       # never forwards --admin
+t fail 7 -R o/r --admin
+t fail 7 --auto
+t fail 7 -R                                                                            # -R without a repo
+
+echo "defended-merge-test: $ok ok, $bad bad"
+[ $bad -eq 0 ]
