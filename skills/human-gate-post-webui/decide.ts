@@ -5,7 +5,7 @@
 //   bun decide.ts text --title T --q "Which repo holds the spec?" --default "skip the spec check" [common]  → typed answer in the reply note
 //   bun decide.ts answers [--repo R] [--json]                                              answered cards, one line each
 //   bun decide.ts done <id> --reason "what you did" [--repo R]                            clear `decided`, close the gate
-// common: --context C --evidence E --latency L --meanwhile M --repo R -p 0-3 --blocks <your-bead> --replaces <old-gate> --dry --run <script>   (pin a root script for the Deploy Agent; see skills/deploy-agent)
+// common: --adds A --context C --evidence E --latency L --meanwhile M --repo R -p 0-3 --blocks <your-bead> --replaces <old-gate> --dry --run <script>   (pin a root script for the Deploy Agent; see skills/deploy-agent)
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -50,7 +50,7 @@ const clean = (where: string, s: string) => {
   return s.trim();
 };
 
-export function buildCard(o: { q: string; opts: string[]; context?: string; evidence?: string; latency?: string; meanwhile?: string; replaces?: string }): string {
+export function buildCard(o: { q: string; opts: string[]; adds?: string; context?: string; evidence?: string; latency?: string; meanwhile?: string; replaces?: string }): string {
   if (!o.q.trim()) throw new Error("--q (or --do) is required");
   if (o.opts.length < 2 || o.opts.length > 4) throw new Error(`${o.opts.length} --opt, need 2-4`);
   const opts = o.opts.map((s, i) => {
@@ -61,6 +61,7 @@ export function buildCard(o: { q: string; opts: string[]; context?: string; evid
   });
   const ctx = o.context ? `<context>${clean("context", o.context)}</context>` : "";
   const tail = [
+    ["Operator adds", o.adds],
     ["Evidence", [o.evidence, o.replaces && `replaces ${o.replaces}`].filter(Boolean).join("; ")],
     ["Latency", o.latency], ["Meanwhile", o.meanwhile],
   ].filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`);
@@ -124,7 +125,7 @@ function ask(a: Args, card: { q: string; opts: string[]; kind?: string }) {
   const K = kind && KINDS.find((k) => k.toLowerCase() === kind.toLowerCase());
   if (!K) throw new Error(`--kind is required: ${KINDS.join("|").toLowerCase()}`);
   const title = `[${K}] ${head}`;
-  const base = buildCard({ ...card, context: s("context"), evidence: s("evidence"), latency: s("latency"), meanwhile: s("meanwhile"), replaces: s("replaces") });
+  const base = buildCard({ ...card, adds: s("adds"), context: s("context"), evidence: s("evidence"), latency: s("latency"), meanwhile: s("meanwhile"), replaces: s("replaces") });
   if (s("run") && !RUN_TITLE.test(card.opts[0] ?? "")) throw new Error('--run needs the first --opt titled "Run ..." (accept A runs the script)');
   const run = s("run") ? pinRun(s("run")!, undefined, !a.dry) : "";
   const body = run ? `${base}${base.endsWith("\n") ? "" : "\n"}\n${run}\n` : base;
