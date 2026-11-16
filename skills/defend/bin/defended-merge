@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# defended-merge — merge a PR only if its current head is cleared: open, carries the
+# defend/merge=success receipt, and every other commit status on that head is success.
+# Never passes --admin; relies on branch protection and checks to actually hold.
+# ponytail: combined commit statuses only; GitHub Actions check-runs are not read, add when a repo with Actions uses this.
+set -euo pipefail
+die() { echo "defended-merge: $*" >&2; exit 2; }
+
+# Step 1: arguments
+[ $# -ge 1 ] || die "usage: defended-merge <pr> [-R owner/repo]"
+pr=$1
+[[ $pr =~ ^[0-9]+$ ]] || die "PR number must be digits, got '$pr'"
+shift
+repo=
+if [ $# -eq 2 ] && [ "$1" = "-R" ]; then
+  repo=$2
+elif [ $# -gt 0 ]; then
+  die "unexpected arguments: $*"
+fi
+
+# Step 2: PR must be open with a valid 40-hex head
+info=$(gh pr view "$pr" ${repo:+-R "$repo"} --json headRefOid,state) || die "cannot resolve PR $pr"
+head=$(jq -r '.headRefOid' <<< "$info") || die "cannot parse PR view"
+state=$(jq -r '.state' <<< "$info") || die "cannot parse PR view"
+[ "$state" = "OPEN" ] || die "PR $pr is not OPEN (state: $state)"
+[[ $head =~ ^[0-9a-f]{40}$ ]] || die "PR $pr headRefOid '$head' is not a 40-hex sha"
+
+# Step 3: resolve repo path for status check (only if user didn't provide one)
+check_repo=$repo
+if [ -z "$check_repo" ]; then
+  check_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner) || die "cannot resolve repo"
+fi
+
+# Step 4: head must have defend/merge=success and every status success
+status_json=$(gh api "repos/$check_repo/commits/$head/status") || die "cannot get commit status for $check_repo@$head"
+jq -e '.statuses | length > 0 and all(.state == "success") and any(.context == "defend/merge")' <<< "$status_json" >/dev/null \
+  || die "commit $head not cleared: missing defend/merge=success or a check is not green"
+
+# Step 5: merge, pinned to the reviewed head (only pass -R if user provided it)
+exec gh pr merge "$pr" ${repo:+-R "$repo"} --squash --match-head-commit "$head"
