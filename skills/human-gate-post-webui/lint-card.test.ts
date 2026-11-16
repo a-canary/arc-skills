@@ -5,6 +5,7 @@ import { lintCard } from "./lint-card.ts";
 
 const good = `<decide><q>Which model may the agent-pub container use?</q><context>agent-pub moves into a rootless container whose only network path is the lane proxy.</context><option id="A" rec="1" title="Qwen only (V100)">No Claude spend, nothing secret in the container. Weaker reviews on hard diffs.</option><option id="B" title="Keep Opus">Reviews keep today's quality. Costs Claude budget and a credential in the container.</option></decide>
 
+Operator adds: whether a weaker reviewer is worth keeping a credential out of the container.
 Evidence: tick.sh:12 defaults MODEL=claude-opus-5-5 (paths and SHAs are fine down here)`;
 
 test("skill example passes", () => expect(lintCard("[Design] Keep Qwen in the agent-pub container", good)).toEqual([]));
@@ -45,3 +46,29 @@ test("title needs [Design|Prototype|Deploy|Task] and no bead ids; context (Probl
     expect(lintCard(t, good, isBead).join(" ")).toContain("no bead ids");
   expect(lintCard("[Design] Keep Qwen", good.replace(/<context>[\s\S]*?<\/context>/, "")).join(" ")).toContain("Problem line");
 });
+
+// repos-0f2e, operator 2026-11-16 18:10Z: "this is me being a meat proxy ... maximize my contribution per card".
+// Every card names the judgement only the operator adds; running or re-approving reviewed work is not one.
+test("a card must say what the operator's judgement adds", () => {
+  const none = good.replace(/^Operator adds:.*\n/m, "");
+  expect(lintCard("[Design] Keep Qwen", none).join(" ")).toContain("Operator adds:");
+  const thin = good.replace(/^Operator adds:.*$/m, "Operator adds: approval");
+  expect(lintCard("[Design] Keep Qwen", thin).join(" ")).toContain("Operator adds:");
+  const inside = good.replace(/^Operator adds:.*\n/m, "").replace("</context>", " Operator adds: whether a weaker reviewer is worth it.</context>");
+  expect(lintCard("[Design] Keep Qwen", inside).join(" ")).toContain("Operator adds:");
+});
+
+test("meat-proxy cards are refused", () => {
+  const cases: [string, string][] = [
+    ["[Deploy] Re-accept the live pull", good],
+    ["[Deploy] Reapprove the merge", good],
+    ["[Deploy] Keep Qwen", good.replace("Which model may the agent-pub container use?", "Will you run the reviewed pull?")],
+    ["[Task] Keep Qwen", good.replace('title="Keep Opus">', 'title="Paste this line">')],
+    ["[Deploy] Keep Qwen", good.replace("No Claude spend", "Type this command for me. No Claude spend")],
+    ["[Deploy] Keep Qwen", good.replace(/^Operator adds:.*$/m, "Operator adds: re-run the approved command after the agent bug")],
+  ];
+  for (const [title, body] of cases) expect(lintCard(title, body).join(" ")).toContain("meat-proxy");
+});
+
+test("a Run card with real judgement passes", () =>
+  expect(lintCard("[Deploy] Run the drop-folder installer", good.replace('title="Qwen only (V100)"', 'title="Run the installer"'))).toEqual([]));

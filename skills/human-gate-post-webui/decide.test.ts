@@ -26,7 +26,7 @@ test("empty question, empty task, and 5 options are refused; a text card lints",
   expect(() => taskCard(" ")).toThrow();
   expect(() => buildCard({ q: "", opts: ["A | x", "B | y"] })).toThrow();
   expect(() => buildCard({ q: "Which?", opts: ["A | x", "B | y", "C | z", "D | w", "E | v"] })).toThrow();
-  expect(lintCard("[Design] Point the agent at the spec", buildCard({ ...textCard("Which repo holds the spec?", "skip the spec check"), context: "No spec found." }))).toEqual([]);
+  expect(lintCard("[Design] Point the agent at the spec", buildCard({ ...textCard("Which repo holds the spec?", "skip the spec check"), context: "No spec found.", adds: "which repo the operator treats as the source of the spec." }))).toEqual([]);
 });
 
 test("parseDecision reads every /decide reply shape", () => {
@@ -35,4 +35,10 @@ test("parseDecision reads every /decide reply shape", () => {
   expect(parseDecision("DECISION defer until 2026-11-20")?.until).toBe("2026-11-20");
   expect(parseDecision("DECISION skip")?.verb).toBe("skip");
   expect(parseDecision("BLOCKED-MASTER: create repo")).toBeNull();
+});
+
+test("--adds lands as the Operator adds line after </decide>", () => {
+  const body = buildCard({ q: "Ship?", opts: ["Yes | x", "No | y"], adds: "whether the risk is worth it today.", evidence: "e" });
+  expect(body).toMatch(/<\/decide>\n\nOperator adds: whether the risk is worth it today\.\nEvidence: e\n/);
+  expect(parseArgs(["--adds", "taste"]).adds).toBe("taste");
 });
