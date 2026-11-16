@@ -76,6 +76,7 @@ Post with `decide.ts`. It builds the card, runs `lint-card.ts`, files the `human
 D=~/repos/arc-skills/skills/human-gate-post-webui/decide.ts
 bun $D ask --repo <repo> --kind design|prototype|deploy --title "<recommendation headline>" \
   --q "<one question>?" --context "<Problem: what is wrong, why now, one example>" \
+  --adds "<the judgement only the operator adds: direction, taste, risk, money, policy>" \
   --opt "<rec title> | <gain>. <cost>." --opt "<title> | <gain>. <cost>." \
   --evidence "<file:line refs>" --latency "<§1 math>" --meanwhile "<what you moved to>" \
   [-p 0-3] [--blocks <your-bead>] [--replaces <old-gate>] [--dry]
@@ -86,6 +87,7 @@ bun $D text --repo <repo> --kind design --title "<what you need>" --context "<Pr
 ```
 
 The first `--opt` is the recommendation (`rec="1"`). `--dry` prints the card without posting.
+`--adds` is required on every card (repos-0f2e, operator 2026-11-16: "maximize my contribution per card"). If nothing in it needs the operator, don't post the card: fix the guard so the reviewed path runs by itself. The lint refuses meat-proxy cards (re-accept, re-approve, run the reviewed command, type this line).
 Need a description, a path, an artifact, access? Use `text`: the operator accepts "Answer in note" and types it.
 
 Grilling, interviews and design questions go the same way: one card per decision, independent branches posted together, a dependent question posted only after its parent is answered (`--blocks` keeps your bead out of `bd ready` meanwhile). Finish a grilling run with a card asking whether you have reached a shared understanding before you act on it.

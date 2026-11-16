@@ -4,7 +4,7 @@ import { lintCard } from "./lint-card";
 
 test("ask: first --opt is the rec, card passes lint, evidence goes after </decide>", () => {
   const a = parseArgs(["ask", "--q", "Keep Opus for reviews?", "--opt", "Keep Opus | Better reviews. Costs budget.", "--opt", "Qwen only | No spend. Weaker reviews.", "--evidence", "x.ts:3", "--dry"]);
-  const body = buildCard({ q: a.q as string, opts: a.opt, evidence: a.evidence as string, context: "The fix is ready." });
+  const body = buildCard({ q: a.q as string, opts: a.opt, evidence: a.evidence as string, context: "The fix is ready.", adds: "whether better reviews are worth the budget." });
   expect(body).toContain('<option id="A" rec="1" title="Keep Opus">Better reviews. Costs budget.</option><option id="B" title="Qwen only">');
   expect(body.split("</decide>")[1]).toContain("Evidence: x.ts:3");
   expect(lintCard("[Design] Keep Opus for container reviews", body)).toEqual([]);
@@ -12,7 +12,7 @@ test("ask: first --opt is the rec, card passes lint, evidence goes after </decid
 });
 
 test("task card is Done / Not now and lints", () => {
-  const body = buildCard({ ...taskCard("rotate the M1 password."), context: "The old password leaked." });
+  const body = buildCard({ ...taskCard("rotate the M1 password."), context: "The old password leaked.", adds: "only the operator holds the M1 account login." });
   expect(body).toContain("<q>Will you rotate the M1 password today?</q>");
   expect(lintCard("[Task] Rotate the M1 password today", body)).toEqual([]);
 });

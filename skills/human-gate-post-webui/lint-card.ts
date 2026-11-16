@@ -57,6 +57,13 @@ export function lintCard(title: string, body: string, isBead: (token: string) =>
     if (!o.title || o.title.split(/\s+/).length > 5) err.push(`option ${o.id}: title needs 1-5 words`);
     if (o.body.length > 200) err.push(`option ${o.id}: ${o.body.length} chars, max 200`);
   }
+  // repos-0f2e (operator 2026-11-16): each card names the judgement only the operator adds; running or re-approving reviewed work is not one.
+  const after = body.slice(e + 9);
+  const adds = /^Operator adds: (.+)$/m.exec(after)?.[1]?.trim() ?? "";
+  if (adds.length < 20) err.push('"Operator adds:" line after </decide> is required: the judgement only the operator can add (direction, taste, risk, money, policy)');
+  const PROXY = /\bre-?(?:accept|approve|run)\b|\brun (?:this|the|it) (?:reviewed|approved|cleared)\b|\b(?:type|paste) (?:this|the|that) (?:line|command)\b|\b(?:type|paste) (?:it|this) for me\b/i;
+  const all = [title, q, adds, ...opts.flatMap((o) => [o.title, o.body])].join("\n");
+  if (PROXY.test(all)) err.push("meat-proxy card: running or re-approving reviewed work adds nothing; fix the guard so the reviewed path runs by itself");
   return err;
 }
 
