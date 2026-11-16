@@ -180,6 +180,7 @@ At session start, load these files into the system prompt:
   Live orders inside the sanctioned trading pipeline are that pipeline's own gated path, not an agent running these commands (ruling 2026-11-15, repos-f2fj).
   The sanctioned pipeline is the scheduled job as the Trading Lead maintains it through reviewed changes. No agent starts or re-runs a live cycle by hand, and the hook refuses these commands from any agent session as before.
   Putting one of these commands on a schedule is the same hard line: no agent installs or edits a scheduler entry (cron, systemd timer, at) that runs a hard-line command, except as a reviewed edit to a sanctioned pipeline within the limits of the ask-modes rule above.
+  Stated plainly, because it is the one place an agent's edit reaches a hard-line command: no hook sees a crontab edit, no card pins an entry in the owner's own crontab, and the independent review receipt is the only control there. The operator accepted this for the pipeline's owner alone (rulings cited in the ask-modes rule); any other agent, and any edit without that receipt, is refused as before.
   An edit outside those limits that changes when or how often a hard-line command runs (a new, more frequent or earlier live cycle) stays a hard line even with an accepted card: the card names the exact scheduler entry and a human installs it.
 - **File layout: overlays nest, registries don't (operator ruling
   2026-08-27).** Context overlays (AGENTS.md, CONTEXT.md) are
