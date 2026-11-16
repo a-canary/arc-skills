@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCard, parseArgs, pinRun, taskCard, textCard } from "../human-gate-post-webui/decide";
 import { lintCard } from "../human-gate-post-webui/lint-card";
-import { type Deps, main } from "./deploy-run";
+import { type Deps, ROOT_WRAPPER, execArgv, main } from "./deploy-run";
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const GOOD = "#!/bin/bash\n# undo: systemctl start foo\nsystemctl restart foo\n";
@@ -35,6 +35,27 @@ test("fenced script refused", () => {
   expect(run(setup(GOOD + "cp x /etc/sudoers.d/y\n")).code).toBe(3);
   expect(run(setup(GOOD + "vi ~/.claude/hooks/a.sh\n")).code).toBe(3);
   expect(run(setup(GOOD + "visudo\n")).code).toBe(3);
+});
+test("the guard fence names the write-lane guard, not every unit with lane in its name", () => {
+  const d = setup(GOOD + "systemctl --user stop lane-front-box2\n");
+  d.exec = () => 0;
+  d.logChange = () => {};
+  expect(run(d).code).toBe(0);
+  expect(run(setup(GOOD + "systemctl --user disable lane-guard.timer\n")).code).toBe(3);
+  expect(run(setup(GOOD + "echo gate; crontab -r\n")).code).toBe(3);
+  expect(run(setup(GOOD + "crontab -r # drop the hook lines\n")).code).toBe(3);
+});
+// Only the remove flag is fenced. Replace forms (crontab <file>, ... | crontab -) pass by design: they are how
+// cron lines are installed, and a regex cannot tell an install from a wipe; the operator reads the card.
+test("the crontab remove flag is fenced in every spelling; listing and installing are not", () => {
+  for (const c of ["crontab -r", "crontab -ri", "crontab -ir", "crontab -u aaron -r"])
+    expect(run(setup(GOOD + c + "\n")).code).toBe(3);
+  for (const c of ["crontab -u aaron -l", "crontab -l | sort -r", "crontab /tmp/new.cron"]) {
+    const d = setup(GOOD + c + "\n");
+    d.exec = () => 0;
+    d.logChange = () => {};
+    expect(run(d).code).toBe(0);
+  }
 });
 test("path with .. escaping the queue refused", () => expect(run(setup(GOOD, { path: "/q/../etc/x.sh" })).code).toBe(3));
 test("path outside queue refused", () => expect(run(setup(GOOD, { path: "/tmp/x.sh" })).code).toBe(3));
@@ -93,7 +114,7 @@ test("--dry prints the plan and never executes", () => {
 test("operator accept runs the hashed bytes and logs the change with its undo", () => {
   const d = setup(GOOD);
   const ran: string[] = [], logged: string[] = [];
-  d.exec = (t) => { ran.push(t); return 0; };
+  d.exec = (p) => { ran.push(p.text); return 0; };
   d.logChange = (l) => { logged.push(l); };
   expect(run(d).code).toBe(0);
   expect(ran).toEqual([GOOD]);
@@ -109,4 +130,10 @@ test("decide --run pins the hash and the card still lints", () => {
   const body = buildCard({ q: "Run the fix?", opts: ["Run it | Fixes foo. Runs as root.", "Skip | Nothing changes. Foo stays broken."], evidence: "x.ts:3", context: "Foo is down." }) + `\n${line}\n`;
   expect(lintCard("[Deploy] Run the foo fix", body)).toEqual([]);
   expect(parseArgs(["ask", "--run", script]).run).toBe(script);
+});
+
+test("a root run goes through the root wrapper with the pinned hash and path; never a bare root shell", () => {
+  const p = { text: "echo hi", hex: "a".repeat(64), path: "/q/aaaaaaaa-x.sh" };
+  expect(execArgv(p, false)).toEqual(["sudo", "-n", ROOT_WRAPPER, p.hex, p.path]);
+  expect(execArgv(p, true)).toEqual(["bash", "-c", "echo hi"]);
 });
