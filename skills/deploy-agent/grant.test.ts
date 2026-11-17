@@ -156,3 +156,12 @@ test("reviewer env is an allow-list: no DEFEND_* override or caller PATH reaches
   expect(env.PATH).not.toContain("/tmp/evil");
   expect(env.HOME).not.toContain("/tmp/hb-fake-home");
 });
+
+// repos-f9azm: reasons echo text the untrusted script shaped, so control characters (C0 and C1) are removed and the
+// total is capped before they reach the Lead.
+test("BLOCK reasons carry no control characters and are capped", () => {
+  const r = reviewVerdict(`Blocking: a \x1b[31mred\x1b[0m \x9b2J b\nBlocking: ${"x".repeat(6000)}\nVERDICT: BLOCK by=opus\n`, 0);
+  expect(r.reasons.join("\n")).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
+  expect(r.reasons[0]).toBe("Blocking: a [31mred[0m 2J b");
+  expect(r.reasons.join("\n").length).toBeLessThanOrEqual(4000);
+});
