@@ -88,6 +88,7 @@ bun $D text --repo <repo> --kind design --title "<what you need>" --context "<Pr
 
 The first `--opt` is the recommendation (`rec="1"`). `--dry` prints the card without posting.
 `--adds` is required on every card (repos-0f2e, operator 2026-11-16: "maximize my contribution per card"). If nothing in it needs the operator, don't post the card: fix the guard so the reviewed path runs by itself. The lint refuses meat-proxy cards (re-accept, re-approve, run the reviewed command, type this line).
+`--run` cards only for scripts that cross a `skills/deploy-agent/human-only.txt` line; everything else goes through a Lead grant (`deploy-run.ts --grant`, repos-jedj).
 Need a description, a path, an artifact, access? Use `text`: the operator accepts "Answer in note" and types it.
 
 Grilling, interviews and design questions go the same way: one card per decision, independent branches posted together, a dependent question posted only after its parent is answered (`--blocks` keeps your bead out of `bd ready` meanwhile). Finish a grilling run with a card asking whether you have reached a shared understanding before you act on it.

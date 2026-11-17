@@ -19,6 +19,7 @@ Upgrade path: webui signs card id + script sha256 on accept, and deploy-run.ts v
 
 1. Write the script with a `# undo: <cmd>` line.
 2. Post the card: `bun skills/human-gate-post-webui/decide.ts ask ... --run ./script.sh` (ask cards only, and the first `--opt` must be titled `Run ...`: accept A runs the script, so A must say so; decide.ts and deploy-run.ts both refuse otherwise).
+   `--run` cards only for scripts that cross a `human-only.txt` line; everything else goes through a Lead grant (`--grant`, repos-jedj).
    The script is copied to `~/vault/director/deploy-queue/<sha8>-<name>` and `Run: <path> sha256: <hex>` is appended after `</decide>`.
 3. After the operator accepts: `bun skills/deploy-agent/deploy-run.ts <card-id> [--repo R]`.
    `--dry` prints the plan without running it.
