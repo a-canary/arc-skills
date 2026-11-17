@@ -156,3 +156,21 @@ test("reviewer env is an allow-list: no DEFEND_* override or caller PATH reaches
   expect(env.PATH).not.toContain("/tmp/evil");
   expect(env.HOME).not.toContain("/tmp/hb-fake-home");
 });
+
+// repos-f9azm: reasons echo text the untrusted script shaped, so control characters (C0 and C1) are removed and the
+// total is capped before they reach the Lead.
+test("BLOCK reasons carry no control characters and are capped", () => {
+  const r = reviewVerdict(`Blocking: a \x1b[31mred\x1b[0m \x9b2J b\nBlocking: ${"x".repeat(6000)}\nVERDICT: BLOCK by=opus\n`, 0);
+  expect(r.reasons.join("\n")).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
+  expect(r.reasons[0]).toBe("Blocking: a [31mred[0m 2J b");
+  expect(r.reasons.join("\n").length).toBeLessThanOrEqual(4000);
+});
+
+// PR 222 review: the verdict line and its by= token are untrusted-shaped too.
+test("verdict line carries no control characters and by= is a plain name", () => {
+  expect(reviewVerdict("VERDICT: CLEAR by=\x1b[2Jopus\n", 0).clear).toBe(false);
+  expect(reviewVerdict("VERDICT: CLEAR by=op\x85us\n", 0).clear).toBe(false);
+  expect(reviewVerdict("VERDICT: BLOCK by=\x1b[2Jopus\n", 0).line).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
+  expect(reviewVerdict("VERDICT: CLEAR by=local-qwen_3.6\n", 0).clear).toBe(true);
+  expect(reviewVerdict(`VERDICT: BLOCK by=opus ${"x".repeat(10000)}\n`, 0).line.length).toBeLessThanOrEqual(200);
+});
