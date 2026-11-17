@@ -31,6 +31,11 @@ function realBd(dir: string, ...args: string[]): string {
   return r.stdout.toString();
 }
 
+// From /etc/passwd, not $HOME (Bun's userInfo().homedir follows $HOME): a caller-set HOME could point the grant path's
+// only gate at a stub that prints CLEAR.
+const passwdHome = readFileSync("/etc/passwd", "utf8").split("\n").map((l) => l.split(":")).find((f) => f[2] === String(process.getuid?.()))?.[5];
+export const DEFEND_ATTACK = join(passwdHome ?? "/nonexistent", ".claude", "skills", "defend", "bin", "defend-attack");
+
 export const ROOT_WRAPPER = "/usr/local/sbin/deploy-root";
 // Root: the root-owned wrapper (the one command sudoers allows) copies the queue file into a root-only folder,
 // re-checks the hash, the undo line and its own root-owned fence list, logs, then runs the copy (repos-vjpl).
@@ -54,16 +59,15 @@ export const realDeps = (): Deps => ({
     appendFileSync(f, line);
   },
   review: (text) => {
-    const lines = text.split("\n");
+    const lines = text.replace(/\n$/, "").split("\n");
     const diff = [`--- /dev/null`, `+++ b/deploy-script.sh`, `@@ -0,0 +1,${lines.length} @@`, ...lines.map((l) => `+${l}`)].join("\n");
     const tmp = join(homedir(), `.deploy-review-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.diff`);
     writeFileSync(tmp, diff);
     try {
-      // No env override: the review is the grant path's only gate, and a caller-set path could point at a stub that prints CLEAR.
       // ponytail: the reviewer reads text, so obfuscated commands can slip the human-only regexes; it is the backstop, not a proof.
-      const defendPath = join(homedir(), ".claude", "skills", "defend", "bin", "defend-attack");
+      // ponytail: a same-user process could swap the temp diff mid-review; deploy-root re-hashing the queue file is what pins the bytes run.
       // A hung reviewer is killed and counts as not clear (exitCode null).
-      const r = Bun.spawnSync([defendPath, "--diff", tmp], { stdin: "ignore", stderr: "pipe", timeout: 20 * 60_000 });
+      const r = Bun.spawnSync([DEFEND_ATTACK, "--diff", tmp], { stdin: "ignore", stderr: "pipe", timeout: 20 * 60_000 });
       return reviewVerdict(r.stdout.toString(), r.exitCode);
     } finally {
       try { unlinkSync(tmp); } catch {}
@@ -120,6 +124,9 @@ export const LEAD = /^[a-z][a-z0-9-]{1,39}$/;
 export function grantRun(lead: string, path: string, d: Deps) {
   if (!LEAD.test(lead)) refuse("--grant must be a seat name like agents-lead");
   const resolved = resolve(path);
+  // Plain characters only: the path is written into the changes log, so a newline in a file name could forge lines.
+  // ponytail: no realpath, so a symlink in the queue dir passes; deploy-root runs its own copy only if the hash matches.
+  if (!/^[\w./-]+$/.test(resolved)) refuse("script path must be letters, digits, . _ - and /");
   if (!resolved.startsWith(resolve(d.queueDir) + "/")) refuse(`script not under ${d.queueDir}`);
   const text = d.readFile(resolved);
   const undo = /^#\s*undo:\s*(\S.*)$/m.exec(text)?.[1];
@@ -162,6 +169,8 @@ export function main(argv: string[], d: Deps, out: (s: string) => void = console
     const hasGrant = flags["--grant"] !== undefined;
     const hasScript = flags["--script"] !== undefined;
     if (hasGrant !== hasScript) refuse("--grant and --script must both be present");
+    const positional = argv.some((a, i) => !a.startsWith("-") && !valueIndices.has(i));
+    if (hasGrant && (positional || flags["--repo"] !== undefined)) refuse("--grant runs a script, not a card: drop the card id and --repo");
 
     const dry = argv.includes("--dry");
     const asUser = argv.includes("--as-user");

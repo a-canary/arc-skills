@@ -121,3 +121,25 @@ test("lead names: one plain token; newlines and spaces refused", () => {
   expect(run(d, "--grant", "x\n- exit: 0", "--script", P)).toBe(3);
   expect(calls.exec).toEqual([]);
 });
+
+test("script path with a newline or other odd characters refused before review", () => {
+  const { d, calls } = setup(GOOD);
+  expect(run(d, "--grant", "agents-lead", "--script", "/q/x\n- exit: 0.sh")).toBe(3);
+  expect(run(d, "--grant", "agents-lead", "--script", "/q/x y.sh")).toBe(3);
+  expect(calls.review).toEqual([]);
+});
+
+test("--grant refuses a card id or --repo alongside it", () => {
+  const { d, calls } = setup(GOOD);
+  expect(run(d, "--grant", "agents-lead", "--script", P, "repos-abc")).toBe(3);
+  expect(run(d, "--grant", "agents-lead", "--script", P, "--repo", "arc")).toBe(3);
+  expect(calls.exec).toEqual([]);
+});
+
+test("reviewer path ignores a caller-set HOME", () => {
+  const r = Bun.spawnSync(["bun", "-e", "import { DEFEND_ATTACK } from './deploy-run'; console.log(DEFEND_ATTACK)"], {
+    cwd: here, env: { ...process.env, HOME: "/tmp/hb-fake-home" },
+  });
+  expect(r.stdout.toString()).not.toContain("/tmp/hb-fake-home");
+  expect(r.stdout.toString()).toContain("/.claude/skills/defend/bin/defend-attack");
+});
