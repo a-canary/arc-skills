@@ -62,13 +62,9 @@ export const realDeps = (): Deps => ({
       // No env override: the review is the grant path's only gate, and a caller-set path could point at a stub that prints CLEAR.
       // ponytail: the reviewer reads text, so obfuscated commands can slip the human-only regexes; it is the backstop, not a proof.
       const defendPath = join(homedir(), ".claude", "skills", "defend", "bin", "defend-attack");
-      const r = Bun.spawnSync([defendPath, "--diff", tmp], { stderr: "pipe" });
-      const outLines = r.stdout.toString().split("\n");
-      const errLines = r.stderr.toString().split("\n");
-      const allLines = [...outLines, ...errLines];
-      const verdictLine = allLines.find((l) => l.startsWith("VERDICT: CLEAR"));
-      const lastNonEmpty = [...allLines].reverse().find((l) => l.trim());
-      return { clear: r.exitCode === 0 && !!verdictLine, line: verdictLine ?? lastNonEmpty ?? "" };
+      // A hung reviewer is killed and counts as not clear (exitCode null).
+      const r = Bun.spawnSync([defendPath, "--diff", tmp], { stdin: "ignore", stderr: "pipe", timeout: 20 * 60_000 });
+      return reviewVerdict(r.stdout.toString(), r.exitCode);
     } finally {
       try { unlinkSync(tmp); } catch {}
     }
@@ -111,7 +107,18 @@ export function plan(id: string, repo: string | undefined, d: Deps) {
   return { id, path, undo: undo!, hex, text };
 }
 
+// Only the reviewer's last non-empty stdout line counts: an earlier CLEAR (quoted, or prompted by the script) never does.
+export function reviewVerdict(stdout: string, exitCode: number | null): { clear: boolean; line: string } {
+  const line = stdout.split("\n").map((l) => l.trim()).filter(Boolean).at(-1) ?? "";
+  return { clear: exitCode === 0 && /^VERDICT: CLEAR by=\S+$/.test(line), line };
+}
+
+// One plain token, so it cannot forge lines in the changes log.
+// ponytail: any agent can still name any Lead; the log records the claim, not a proof. Upgrade: per-seat signing.
+export const LEAD = /^[a-z][a-z0-9-]{1,39}$/;
+
 export function grantRun(lead: string, path: string, d: Deps) {
+  if (!LEAD.test(lead)) refuse("--grant must be a seat name like agents-lead");
   const resolved = resolve(path);
   if (!resolved.startsWith(resolve(d.queueDir) + "/")) refuse(`script not under ${d.queueDir}`);
   const text = d.readFile(resolved);

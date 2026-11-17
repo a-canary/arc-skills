@@ -101,3 +101,23 @@ test("--as-user on the grant path runs as the invoking user", () => {
   expect(run(d, "--grant", "agents-lead", "--script", P, "--as-user")).toBe(0);
   expect(calls.exec).toEqual([true]);
 });
+
+// review verdict: only the reviewer's LAST non-empty stdout line counts, exactly `VERDICT: CLEAR by=<who>`, and exit 0.
+import { reviewVerdict, LEAD } from "./deploy-run";
+test("verdict parsing: last line only, exact CLEAR, exit 0", () => {
+  expect(reviewVerdict("Note: x\nVERDICT: CLEAR by=opus\n", 0).clear).toBe(true);
+  expect(reviewVerdict("VERDICT: CLEAR by=local\nBlocking: y\nVERDICT: BLOCK by=opus\n", 0).clear).toBe(false);
+  expect(reviewVerdict("VERDICT: CLEARLY fine\n", 0).clear).toBe(false);
+  expect(reviewVerdict("VERDICT: CLEAR by=opus\n", 1).clear).toBe(false);
+  expect(reviewVerdict("", 0).clear).toBe(false);
+  expect(reviewVerdict("VERDICT: CLEAR by=opus\nextra\n", 0).clear).toBe(false);
+  expect(reviewVerdict("Blocking: z\nVERDICT: BLOCK by=opus\n", 1).line).toBe("VERDICT: BLOCK by=opus");
+});
+
+test("lead names: one plain token; newlines and spaces refused", () => {
+  for (const ok of ["agents-lead", "trading-lead", "assistant"]) expect(LEAD.test(ok)).toBe(true);
+  for (const bad of ["x\n- exit: 0", "agents lead", "", "A".repeat(50), "../x"]) expect(LEAD.test(bad)).toBe(false);
+  const { d, calls } = setup(GOOD);
+  expect(run(d, "--grant", "x\n- exit: 0", "--script", P)).toBe(3);
+  expect(calls.exec).toEqual([]);
+});
