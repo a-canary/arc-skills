@@ -79,7 +79,7 @@ export const realDeps = (): Deps => ({
       // A hung reviewer is killed and counts as not clear (exitCode null).
       let r;
       try {
-        r = Bun.spawnSync([DEFEND_ATTACK, "--diff", tmp], { env: REVIEW_ENV, stdin: "ignore", stderr: "pipe", timeout: 20 * 60_000 });
+        r = Bun.spawnSync([DEFEND_ATTACK, "--diff", tmp], { env: REVIEW_ENV, cwd: dir, stdin: "ignore", stderr: "pipe", timeout: 20 * 60_000 });
       } catch (e) {
         return { clear: false, line: `reviewer did not start: ${(e as Error).message}` };
       }
