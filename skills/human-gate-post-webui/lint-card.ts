@@ -67,7 +67,8 @@ export function lintCard(title: string, body: string, isBead: (token: string) =>
   // repos-jedj (operator 2026-11-16 23:10Z): cards are for taste, not permissions; a Lead grants permission after a review CLEAR.
   // Hard lines (money, live orders, force push, visibility/access, deletion, rules/missions) stay with the operator.
   const ASKS_PERMISSION = /\b(?:may|can) (?:i|we)\b|\bok(?:ay)? to\b|\bpermission\b|\bapprove\b|\bgo-ahead\b/i;
-  const HARD_LINE = /\$\d|\b(?:money|spend|budget|live order|force[- ]push|public|private|visibility|access|delet\w*|global-rules|choices|mission)\b/i;
+  // ponytail: a readability lint, not a guard: an author can still name a hard line falsely, and the operator reads the card.
+  const HARD_LINE = /\$\d|\b(?:money|spend\w*|live orders?|force[- ]push\w*|(?:goes|go|make \w+) public|repo (?:visibility|access|deletion)|delete the repo|global-rules|choices\.md|mission change)\b/i;
   if (ASKS_PERMISSION.test(q) && !HARD_LINE.test(adds)) err.push("permission-only card: a Lead grants it (deploy-run --grant after a review CLEAR); a card carries direction, taste, priority or money");
   return err;
 }
