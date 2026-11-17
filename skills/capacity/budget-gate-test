@@ -1,0 +1,38 @@
+#!/bin/bash
+# budget-gate: a headless Fable/Opus batch loop calls it every N calls and stops on non-zero (repos-u9lwp).
+# 2026-11-17 08:16-08:46Z one batch took the 5h Claude window from 6% to 99%; every seat was dead until 12:30Z.
+#
+#   budget-gate [--ceiling F]     F = 5h util ceiling, 0..1 (default 0.70; env BUDGET_GATE_CEILING)
+#   meter: $BUDGET_METER (default ~/vault/director/.budget/meter.json), key "5h".util
+#   exit 0 = under ceiling; 1 = at/over ceiling (prints "budget-gate: 5h util U >= F"); 2 = meter missing/unreadable
+#   (fails closed: a batch must not run blind).
+G=${1:-$(dirname "$0")/budget-gate}
+T=$(mktemp -d); trap 'command rm -r "$T"' EXIT
+ok=0; bad=0
+check() { if eval "$2"; then ok=$((ok+1)); else bad=$((bad+1)); echo "FAIL: $1"; fi; }
+meter() { printf '{"5h":{"util":%s},"7d":{"util":0.1}}' "$1" > "$T/m.json"; }
+gate() { BUDGET_METER="$T/m.json" "$G" "$@" > "$T/out" 2>&1; echo $?; }
+
+[ -x "$G" ] || { echo "not executable: $G"; exit 1; }
+
+meter 0.10; check "under default ceiling -> 0" '[ "$(gate)" = 0 ]'
+meter 0.70; check "at default ceiling -> 1" '[ "$(gate)" = 1 ] && grep -q "5h util" "$T/out"'
+meter 0.99; check "over -> 1" '[ "$(gate)" = 1 ]'
+meter 0.50; check "--ceiling 0.4 -> 1" '[ "$(gate --ceiling 0.4)" = 1 ]'
+meter 0.50; check "env ceiling 0.9 -> 0" '[ "$(BUDGET_GATE_CEILING=0.9 gate)" = 0 ]'
+command rm -f "$T/m.json"; check "missing meter -> 2" '[ "$(gate)" = 2 ]'
+echo 'not json' > "$T/m.json"; check "garbage meter -> 2" '[ "$(gate)" = 2 ]'
+echo '{"7d":{"util":0.1}}' > "$T/m.json"; check "no 5h key -> 2" '[ "$(gate)" = 2 ]'
+
+# a bad ceiling must not fail open (jq error read as "under"): exit 2 like an unreadable meter.
+meter 0.99; check "garbage --ceiling -> 2" '[ "$(gate --ceiling abc)" = 2 ]'
+meter 0.99; check "--ceiling with no value -> 2" '[ "$(gate --ceiling)" = 2 ]'
+meter 0.99; check "garbage env ceiling -> 2" '[ "$(BUDGET_GATE_CEILING=x gate)" = 2 ]'
+
+# defend-attack f9f04d4: nan passes tonumber/type checks but compares false -> must not fail open.
+meter 0.99; check "nan --ceiling -> 2" '[ "$(gate --ceiling nan)" = 2 ]'
+meter nan; check "nan meter util -> 2" '[ "$(gate)" = 2 ]'
+
+echo "budget-gate-test: $ok ok, $bad failed"
+[ "$bad" = 0 ] && echo "budget-gate-test: PASS"
+[ "$bad" = 0 ]
