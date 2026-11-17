@@ -22,7 +22,7 @@ export type Deps = {
   exec: (p: { text: string; hex: string; path: string }, asUser: boolean) => number;
   logChange: (line: string) => void;
   humanOnlyFile?: string;
-  review?: (text: string) => { clear: boolean; line: string };
+  review?: (text: string) => { clear: boolean; line: string; reasons?: string[] };
 };
 
 function realBd(dir: string, ...args: string[]): string {
@@ -127,9 +127,10 @@ export function plan(id: string, repo: string | undefined, d: Deps) {
 }
 
 // Only the reviewer's last non-empty stdout line counts: an earlier CLEAR (quoted, or prompted by the script) never does.
-export function reviewVerdict(stdout: string, exitCode: number | null): { clear: boolean; line: string } {
-  const line = stdout.split("\n").map((l) => l.trim()).filter(Boolean).at(-1) ?? "";
-  return { clear: exitCode === 0 && /^VERDICT: CLEAR by=\S+$/.test(line), line };
+export function reviewVerdict(stdout: string, exitCode: number | null): { clear: boolean; line: string; reasons: string[] } {
+  const lines = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+  const line = lines.at(-1) ?? "";
+  return { clear: exitCode === 0 && /^VERDICT: CLEAR by=\S+$/.test(line), line, reasons: lines.filter((l) => l.startsWith("Blocking:")) };
 }
 
 // One plain token, so it cannot forge lines in the changes log.
@@ -155,7 +156,7 @@ export function grantRun(lead: string, path: string, d: Deps) {
   }
   if (!d.review) refuse("grant path requires review");
   const r = d.review(text);
-  if (!r.clear) refuse(`review not clear: ${r.line}`);
+  if (!r.clear) refuse([`review not clear: ${r.line}`, ...(r.reasons ?? [])].join("\n"));
   const hex = createHash("sha256").update(text).digest("hex");
   return { path: resolved, undo, hex, text, lead, review: r };
 }
