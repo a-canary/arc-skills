@@ -79,3 +79,10 @@ criticality tier), `record` after every provider response, and emit
 downgrade, outage, weekly-cap burst, cold start). `capacity.test.ts` holds the
 port-parity gate (≥90% cap recovery vs the seed-42 reference on both provider
 truths). Scorecard: `VALIDATION.md` after a round-5 green run.
+
+## budget-gate (hard stop, not advisory)
+
+A headless Fable/Opus batch loop calls `budget-gate || break` every N calls.
+It reads the 5h util from `$BUDGET_METER` and exits 1 at/over the ceiling (`--ceiling F`, `$BUDGET_GATE_CEILING`, default 0.70).
+It exits 2 when the meter is missing or unreadable, so it fails closed.
+Unlike the advisory, fail-open capacity router, it stops the batch.
