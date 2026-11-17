@@ -29,6 +29,17 @@ Upgrade path: webui signs card id + script sha256 on accept, and deploy-run.ts v
    The root fence list is a copy: a change to `fences.txt` here reaches root only when the operator reinstalls it.
    Before running it appends what will run and its undo to the week's changes log, then the exit code after.
 
+## Grant path: no card (repos-jedj, operator ruling 2026-11-16 23:10Z)
+
+`bun skills/deploy-agent/deploy-run.ts --grant <lead> --script <queue path> [--dry] [--as-user]`
+A Lead grants the run itself; no card is posted.
+deploy-run has defend-attack review the exact script bytes and runs only on CLEAR, so no receipt can be brought from elsewhere.
+Same queue-dir, undo-line and fence checks as a card run, plus `human-only.txt`: a script naming money, live trading, the order tool, force push, `--admin`, visibility/access or missions.md is refused and needs an operator card.
+The changes log records the granting Lead, the review verdict, the hash and the undo.
+The reviewer runs with a fixed environment (home from /etc/passwd, fixed PATH), and reads its diff from a fresh 0700 directory there, so caller variables cannot swap it or its input.
+Ceiling: these checks run as the agents' own user, so a process that rewrites `human-only.txt` or defend-attack, or calls `deploy-root` directly, skips them; the card path has the same ceiling.
+What holds then is deploy-root's root-owned fences and its log. Upgrade: a root-owned human-only list and a review receipt checked inside deploy-root (master seat, repos-oh6y).
+
 ## Checks (any failure: one-line reason, exit 3)
 
 - Card is not closed.
