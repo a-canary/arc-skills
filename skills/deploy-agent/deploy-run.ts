@@ -134,7 +134,7 @@ export function reviewVerdict(stdout: string, exitCode: number | null): { clear:
   // reasons reach the Lead with control characters removed, reasons capped in total.
   const strip = (l: string) => l.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
   const kept = lines.filter((l) => l.startsWith("Blocking:")).map(strip).join("\n").slice(0, 4000);
-  return { clear: exitCode === 0 && /^VERDICT: CLEAR by=[A-Za-z0-9_.-]+$/.test(last), line: strip(last), reasons: kept ? kept.split("\n") : [] };
+  return { clear: exitCode === 0 && /^VERDICT: CLEAR by=[A-Za-z0-9_.-]+$/.test(last), line: strip(last).slice(0, 200), reasons: kept ? kept.split("\n") : [] };
 }
 
 // One plain token, so it cannot forge lines in the changes log.

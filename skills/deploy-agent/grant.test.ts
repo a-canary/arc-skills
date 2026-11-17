@@ -172,4 +172,5 @@ test("verdict line carries no control characters and by= is a plain name", () =>
   expect(reviewVerdict("VERDICT: CLEAR by=op\x85us\n", 0).clear).toBe(false);
   expect(reviewVerdict("VERDICT: BLOCK by=\x1b[2Jopus\n", 0).line).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
   expect(reviewVerdict("VERDICT: CLEAR by=local-qwen_3.6\n", 0).clear).toBe(true);
+  expect(reviewVerdict(`VERDICT: BLOCK by=opus ${"x".repeat(10000)}\n`, 0).line.length).toBeLessThanOrEqual(200);
 });
