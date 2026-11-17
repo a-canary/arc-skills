@@ -153,3 +153,19 @@ test("reviewer env is an allow-list: no DEFEND_* override or caller PATH reaches
   expect(env.PATH).not.toContain("/tmp/evil");
   expect(env.HOME).not.toContain("/tmp/hb-fake-home");
 });
+
+// repos-f9azm: a BLOCK carries the reviewer's findings, so the Lead learns why without rerunning a 10-minute review.
+test("BLOCK refusal includes the reviewer's findings", () => {
+  const { d, calls } = setup(GOOD, "BLOCK");
+  d.review = (text) => { calls.review.push(text); return { clear: false, line: "VERDICT: BLOCK by=local", findings: "Blocking: deploy-script.sh:3 restarts foo\nVERDICT: BLOCK by=local" }; };
+  const errs: string[] = [];
+  const orig = console.error;
+  console.error = (...a: unknown[]) => { errs.push(a.join(" ")); };
+  try {
+    expect(run(d, "--grant", "agents-lead", "--script", P)).toBe(3);
+  } finally {
+    console.error = orig;
+  }
+  expect(errs.join("\n")).toContain("Blocking: deploy-script.sh:3 restarts foo");
+  expect(calls.exec).toEqual([]);
+});
