@@ -83,6 +83,9 @@ test("human-only scripts stay card-only: refused before review", () => {
     "bun ./tools/order buy SPY 1",
     "bun tools//order buy SPY 1",
     "bun ./order buy SPY 1",
+    "bun 'order' buy SPY 1",
+    'bun "order" buy SPY 1',
+    "bun tools/'order' buy SPY 1",
   ]) {
     const { d, calls } = setup(GOOD + line + "\n");
     expect(run(d, "--grant", "agents-lead", "--script", P)).toBe(3);
