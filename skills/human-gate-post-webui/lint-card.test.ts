@@ -72,3 +72,15 @@ test("meat-proxy cards are refused", () => {
 
 test("a Run card with real judgement passes", () =>
   expect(lintCard("[Deploy] Run the drop-folder installer", good.replace('title="Qwen only (V100)"', 'title="Run the installer"'))).toEqual([]));
+
+// repos-jedj (operator 2026-11-16 23:10Z): "cards be for taste, not for permissions". A Lead grants permission
+// (deploy-run --grant after a review CLEAR); a permission card passes only when it names an operator hard line.
+test("permission-only cards are refused, hard-line ones pass", () => {
+  const perm = (q: string, adds = "whether the agents may touch the shared box at all tonight.") =>
+    good.replace("Which model may the agent-pub container use?", q).replace(/^Operator adds:.*$/m, `Operator adds: ${adds}`);
+  for (const q of ["May I run the job-drop fix as root?", "OK to restart the proxy?", "Can I install the hook now?", "Do I have permission to pull main?", "Will you approve the root script?"])
+    expect(lintCard("[Deploy] Run the fix", perm(q)).join(" ")).toContain("permission-only");
+  for (const adds of ["whether to spend $40 of vast credit this week.", "whether the repo goes public.", "whether to place the live order before the open."])
+    expect(lintCard("[Deploy] Run the fix", perm("May I run the job-drop fix as root?", adds))).toEqual([]);
+  expect(lintCard("[Design] Keep Qwen", good)).toEqual([]);
+});
