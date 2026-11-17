@@ -59,6 +59,33 @@ test("human-only scripts stay card-only: refused before review", () => {
     "gh pr merge 3 --admin",
     "gh repo edit a-canary/x --visibility public",
     "vastai create instance 123",
+    // repos-kqylt: spellings that slipped the first patterns (defend-attack at be8ba2b).
+    "bun tools/order buy SPY 1",
+    "bun run tools/order buy SPY 1",
+    "gh api -X PATCH repos/a-canary/x -f visibility=public",
+    "gh api --method PATCH repos/a-canary/x -F private=false",
+    "gh api -X DELETE repos/a-canary/x",
+    "gh api --method=DELETE repos/a-canary/x",
+    // defend-attack at efac73e: gh api defaults to POST with -f/--input/graphql, and verbs can be quoted or
+    // held in a variable, so any gh api call on the grant path needs a card.
+    "gh api repos/a-canary/x/transfer -f new_owner=y",
+    "gh api --input body.json repos/a-canary/x",
+    "gh api graphql -f query='mutation { x }'",
+    'gh api -X "DELETE" repos/a-canary/x',
+    "M=DELETE; gh api -X $M repos/a-canary/x",
+    "gh api --method Delete repos/a-canary/x",
+    // defend-attack at 0484c91: cheap spellings the screen should still catch. Pure indirection
+    // ($GH api, cd tools && bun order) is left to the script review; see SKILL.md known limits.
+    "gh 'api' repos/a-canary/x",
+    'gh "api" repos/a-canary/x',
+    "gh --hostname github.com api repos/a-canary/x",
+    "command gh api repos/a-canary/x",
+    "bun ./tools/order buy SPY 1",
+    "bun tools//order buy SPY 1",
+    "bun ./order buy SPY 1",
+    "bun 'order' buy SPY 1",
+    'bun "order" buy SPY 1',
+    "bun tools/'order' buy SPY 1",
   ]) {
     const { d, calls } = setup(GOOD + line + "\n");
     expect(run(d, "--grant", "agents-lead", "--script", P)).toBe(3);
