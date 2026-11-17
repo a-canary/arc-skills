@@ -1,7 +1,9 @@
 // deploy-run.ts — Deploy Agent: runs an operator-accepted card's pinned script as root.
-//   bun deploy-run.ts <card-id> [--repo R] [--dry] [--as-user]   exit = script's code (0 with --dry), 3 = refused (one-line reason)
+//   bun deploy-run.ts <card-id> [--repo R] [--dry] [--as-user]
+//   bun deploy-run.ts --grant <lead> --script <path> [--dry] [--as-user]
+//   exit = script's code (0 with --dry), 3 = refused (one-line reason)
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseDecision, RUN_TITLE, repoDir } from "../human-gate-post-webui/decide";
@@ -19,6 +21,8 @@ export type Deps = {
   fencesFile: string;
   exec: (p: { text: string; hex: string; path: string }, asUser: boolean) => number;
   logChange: (line: string) => void;
+  humanOnlyFile?: string;
+  review?: (text: string) => { clear: boolean; line: string };
 };
 
 function realBd(dir: string, ...args: string[]): string {
@@ -41,12 +45,31 @@ export const realDeps = (): Deps => ({
   readFile: (p) => readFileSync(p, "utf8"),
   queueDir: QUEUE,
   fencesFile: FENCES,
+  humanOnlyFile: join(dirname(import.meta.path), "human-only.txt"),
   exec: (p, asUser) => Bun.spawnSync(execArgv(p, asUser), { stdin: "ignore", stdout: "inherit", stderr: "inherit" }).exitCode ?? 1,
   logChange: (line) => {
     const wk = Bun.spawnSync(["date", "-u", "+%G-W%V"]).stdout.toString().trim();
     const f = join(homedir(), "vault", "director", "changes", `${wk}.md`);
     mkdirSync(dirname(f), { recursive: true });
     appendFileSync(f, line);
+  },
+  review: (text) => {
+    const lines = text.split("\n");
+    const diff = [`--- /dev/null`, `+++ b/deploy-script.sh`, `@@ -0,0 +1,${lines.length} @@`, ...lines.map((l) => `+${l}`)].join("\n");
+    const tmp = join(homedir(), `.deploy-review-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.diff`);
+    writeFileSync(tmp, diff);
+    try {
+      const defendPath = process.env.DEFEND_ATTACK ?? join(homedir(), ".claude", "skills", "defend", "bin", "defend-attack");
+      const r = Bun.spawnSync([defendPath, "--diff", tmp], { stderr: "pipe" });
+      const outLines = r.stdout.toString().split("\n");
+      const errLines = r.stderr.toString().split("\n");
+      const allLines = [...outLines, ...errLines];
+      const verdictLine = allLines.find((l) => l.startsWith("VERDICT: CLEAR"));
+      const lastNonEmpty = [...allLines].reverse().find((l) => l.trim());
+      return { clear: r.exitCode === 0 && !!verdictLine, line: verdictLine ?? lastNonEmpty ?? "" };
+    } finally {
+      try { unlinkSync(tmp); } catch {}
+    }
   },
 });
 
@@ -86,21 +109,76 @@ export function plan(id: string, repo: string | undefined, d: Deps) {
   return { id, path, undo: undo!, hex, text };
 }
 
+export function grantRun(lead: string, path: string, d: Deps) {
+  const resolved = resolve(path);
+  if (!resolved.startsWith(resolve(d.queueDir) + "/")) refuse(`script not under ${d.queueDir}`);
+  const text = d.readFile(resolved);
+  const undo = /^#\s*undo:\s*(\S.*)$/m.exec(text)?.[1];
+  if (!undo) refuse("script has no '# undo: <cmd>' line");
+  for (const line of d.readFile(d.fencesFile).split("\n").filter((l) => l.trim())) {
+    if (new RegExp(line).test(text)) refuse(`fenced: matches /${line}/`);
+  }
+  if (!d.humanOnlyFile) refuse("grant path requires humanOnlyFile");
+  for (const line of d.readFile(d.humanOnlyFile).split("\n").filter((l) => l.trim())) {
+    if (new RegExp(line).test(text)) refuse(`human-only: matches /${line}/; this needs an operator card`);
+  }
+  if (!d.review) refuse("grant path requires review");
+  const r = d.review(text);
+  if (!r.clear) refuse(`review not clear: ${r.line}`);
+  const hex = createHash("sha256").update(text).digest("hex");
+  return { path: resolved, undo, hex, text, lead, review: r };
+}
+
 export function main(argv: string[], d: Deps, out: (s: string) => void = console.log): number {
-  const ri = argv.indexOf("--repo");
-  const id = argv.find((a, i) => !a.startsWith("-") && (ri < 0 || i !== ri + 1));
   try {
+    // Parse flags that take values: --repo, --grant, --script
+    const valueIndices = new Set<number>();
+    const flags: Record<string, string | undefined> = { "--repo": undefined, "--grant": undefined, "--script": undefined };
+    for (let i = 0; i < argv.length; i++) {
+      if (argv[i] === "--repo" || argv[i] === "--grant" || argv[i] === "--script") {
+        const val = argv[i + 1];
+        if (!val || val.startsWith("-")) {
+          refuse(`${argv[i]} requires a non-flag value`);
+        }
+        flags[argv[i]] = val;
+        valueIndices.add(i + 1);
+        i++;
+      }
+    }
+
     // A misspelled --dry must never fall through to a real run.
-    const bad = argv.filter((a) => a.startsWith("-") && !["--repo", "--dry", "--as-user"].includes(a));
+    const bad = argv.filter((a) => a.startsWith("-") && !["--repo", "--dry", "--as-user", "--grant", "--script"].includes(a));
     if (bad.length) refuse(`unknown flag ${bad[0]}`);
+
+    const hasGrant = flags["--grant"] !== undefined;
+    const hasScript = flags["--script"] !== undefined;
+    if (hasGrant !== hasScript) refuse("--grant and --script must both be present");
+
+    const dry = argv.includes("--dry");
+    const asUser = argv.includes("--as-user");
+
+    if (hasGrant) {
+      // Grant path: no card, independent model review of the exact script bytes
+      const p = grantRun(flags["--grant"]!, flags["--script"]!, d);
+      if (dry) {
+        out(`DRY RUN\nscript: ${p.path}\nhash: ${p.hex.slice(0, 12)}\nundo: ${p.undo}\ngrant: ${p.lead}\nreview: ${p.review.line}`);
+        return 0;
+      }
+      d.logChange(`\n## ${new Date().toISOString()}\n- what: running ${p.path} as ${asUser ? process.env.USER ?? "invoking user" : "root"}\n- grant: ${p.lead} (no card; repos-jedj)\n- review: ${p.review.line}\n- hash: ${p.hex.slice(0, 12)}\n- undo: ${p.undo}\n`);
+      const code = d.exec({ text: p.text, hex: p.hex, path: p.path }, asUser);
+      d.logChange(`- exit: ${code}\n`);
+      return code;
+    }
+
+    // Card path
+    const id = argv.find((a, i) => !a.startsWith("-") && !valueIndices.has(i));
     if (!id) refuse("usage: deploy-run.ts <card-id> [--repo R] [--dry]");
-    const p = plan(id!, ri >= 0 ? argv[ri + 1] : undefined, d)!;
-    if (argv.includes("--dry")) {
+    const p = plan(id, flags["--repo"], d)!;
+    if (dry) {
       out(`DRY RUN\nscript: ${p.path}\nhash: ok ${p.hex.slice(0, 12)}\nundo: ${p.undo}\nfence: clear`);
       return 0;
     }
     // Logged before the run, so a run killed partway still leaves its undo in the changes log.
-    const asUser = argv.includes("--as-user");
     d.logChange(`\n## ${new Date().toISOString()}\n- what: running ${p.path} as ${asUser ? process.env.USER ?? "invoking user" : "root"}\n- card: ${p.id}\n- undo: ${p.undo}\n`);
     const code = d.exec(p, asUser);
     d.logChange(`- exit: ${code}\n`);
