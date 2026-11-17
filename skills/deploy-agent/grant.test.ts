@@ -59,6 +59,13 @@ test("human-only scripts stay card-only: refused before review", () => {
     "gh pr merge 3 --admin",
     "gh repo edit a-canary/x --visibility public",
     "vastai create instance 123",
+    // repos-kqylt: spellings that slipped the first patterns (defend-attack at be8ba2b).
+    "bun tools/order buy SPY 1",
+    "bun run tools/order buy SPY 1",
+    "gh api -X PATCH repos/a-canary/x -f visibility=public",
+    "gh api --method PATCH repos/a-canary/x -F private=false",
+    "gh api -X DELETE repos/a-canary/x",
+    "gh api --method=DELETE repos/a-canary/x",
   ]) {
     const { d, calls } = setup(GOOD + line + "\n");
     expect(run(d, "--grant", "agents-lead", "--script", P)).toBe(3);
