@@ -3,7 +3,7 @@
 //   bun deploy-run.ts --grant <lead> --script <path> [--dry] [--as-user]
 //   exit = script's code (0 with --dry), 3 = refused (one-line reason)
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseDecision, RUN_TITLE, repoDir } from "../human-gate-post-webui/decide";
@@ -69,7 +69,9 @@ export const realDeps = (): Deps => ({
   review: (text) => {
     const lines = text.replace(/\n$/, "").split("\n");
     const diff = [`--- /dev/null`, `+++ b/deploy-script.sh`, `@@ -0,0 +1,${lines.length} @@`, ...lines.map((l) => `+${l}`)].join("\n");
-    const tmp = join(homedir(), `.deploy-review-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.diff`);
+    // Under the passwd home, not $HOME, in a fresh 0700 dir: the caller cannot choose where the reviewer reads from.
+    const dir = mkdtempSync(join(REVIEW_ENV.HOME, ".deploy-review-"));
+    const tmp = join(dir, "script.diff");
     writeFileSync(tmp, diff);
     try {
       // ponytail: the reviewer reads text, so obfuscated commands can slip the human-only regexes; it is the backstop, not a proof.
@@ -83,7 +85,7 @@ export const realDeps = (): Deps => ({
       }
       return reviewVerdict(r.stdout.toString(), r.exitCode);
     } finally {
-      try { unlinkSync(tmp); } catch {}
+      try { rmSync(dir, { recursive: true }); } catch {}
     }
   },
 });
