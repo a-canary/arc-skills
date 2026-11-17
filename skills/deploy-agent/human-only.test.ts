@@ -14,4 +14,12 @@ test("a real force push still hits", () => {
   expect(hit("git push --force origin main\n")).toBe(true);
   expect(hit("git push -f origin main\n")).toBe(true);
   expect(hit("git push origin +main\n")).toBe(true);
+  expect(hit("git push origin main --force\n")).toBe(true);
+});
+
+// defend 229 R1: a backslash continuation is one shell command, so the line must follow it
+test("a force push split by a backslash continuation still hits", () => {
+  expect(hit("git push \\\n  --force origin main\n")).toBe(true);
+  expect(hit("git push origin \\\n  +main\n")).toBe(true);
+  expect(hit("git push origin main \\\n -f\n")).toBe(true);
 });
