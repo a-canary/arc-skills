@@ -84,7 +84,9 @@ export const realDeps = (): Deps => ({
         return { clear: false, line: `reviewer did not start: ${(e as Error).message}` };
       }
       const out = r.stdout.toString();
-      return { ...reviewVerdict(out, r.exitCode), findings: out.trim() };
+      // Findings only travel with a refusal: a CLEAR result (returned and logged) never carries raw reviewer output.
+      const v = reviewVerdict(out, r.exitCode);
+      return v.clear ? v : { ...v, findings: out };
     } finally {
       try { rmSync(dir, { recursive: true }); } catch {}
     }
