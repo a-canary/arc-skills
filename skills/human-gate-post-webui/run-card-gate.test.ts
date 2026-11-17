@@ -23,7 +23,8 @@ test("a script crossing a hard line still needs a card", () => {
 const decide = join(import.meta.dir, "decide.ts");
 const ask = (run: string) => spawnSync("bun", [decide, "ask", "--kind", "deploy", "--title", "Install the hook",
   "--q", "Install the hook with a backup?", "--opt", "Run the install | hook live", "--opt", "Not now | stays off",
-  "--adds", "whether the hook goes live today", "--run", run, "--dry"], { encoding: "utf8" });
+  "--adds", "whether the hook goes live today", "--context", "The pre-push hook is missing, so pushes go unchecked.",
+  "--run", run, "--dry"], { encoding: "utf8" });
 
 test("decide refuses a --run card whose script a Lead can grant, and names the grant path", () => {
   const r = ask(script("benign.sh", "#!/bin/bash\ninstall -m 0755 a b\n"));
