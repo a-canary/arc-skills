@@ -59,7 +59,9 @@ export const realDeps = (): Deps => ({
     const tmp = join(homedir(), `.deploy-review-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.diff`);
     writeFileSync(tmp, diff);
     try {
-      const defendPath = process.env.DEFEND_ATTACK ?? join(homedir(), ".claude", "skills", "defend", "bin", "defend-attack");
+      // No env override: the review is the grant path's only gate, and a caller-set path could point at a stub that prints CLEAR.
+      // ponytail: the reviewer reads text, so obfuscated commands can slip the human-only regexes; it is the backstop, not a proof.
+      const defendPath = join(homedir(), ".claude", "skills", "defend", "bin", "defend-attack");
       const r = Bun.spawnSync([defendPath, "--diff", tmp], { stderr: "pipe" });
       const outLines = r.stdout.toString().split("\n");
       const errLines = r.stderr.toString().split("\n");
