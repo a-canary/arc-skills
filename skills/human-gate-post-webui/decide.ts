@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { ID_SHAPE, KINDS, lintCard } from "./lint-card";
 
 const REPOS = join(homedir(), "repos");
@@ -135,7 +135,7 @@ function ask(a: Args, card: { q: string; opts: string[]; kind?: string }) {
   const base = buildCard({ ...card, adds: s("adds"), context: s("context"), evidence: s("evidence"), latency: s("latency"), meanwhile: s("meanwhile"), replaces: s("replaces") });
   if (s("run") && !RUN_TITLE.test(card.opts[0] ?? "")) throw new Error('--run needs the first --opt titled "Run ..." (accept A runs the script)');
   if (s("run") && !runNeedsCard(readFileSync(s("run")!, "utf8"))) {
-    throw new Error("--run card refused: script crosses no human-only line, so no operator card is needed. Use `bun skills/deploy-agent/deploy-run.ts --grant <lead> --script <queue path>` after a review CLEAR (repos-jedj)");
+    throw new Error(`--run card refused: script crosses no human-only line, so no operator card is needed. Use: bun skills/deploy-agent/deploy-run.ts --grant <lead> --script ${resolve(s("run")!)} after a review CLEAR (repos-jedj)`);
   }
   const run = s("run") ? pinRun(s("run")!, undefined, !a.dry) : "";
   const body = run ? `${base}${base.endsWith("\n") ? "" : "\n"}\n${run}\n` : base;
