@@ -130,7 +130,9 @@ export function plan(id: string, repo: string | undefined, d: Deps) {
 export function reviewVerdict(stdout: string, exitCode: number | null): { clear: boolean; line: string; reasons: string[] } {
   const lines = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
   const line = lines.at(-1) ?? "";
-  return { clear: exitCode === 0 && /^VERDICT: CLEAR by=\S+$/.test(line), line, reasons: lines.filter((l) => l.startsWith("Blocking:")) };
+  // reasons echo text the untrusted script shaped, so control characters are removed and the total is capped.
+  const kept = lines.filter((l) => l.startsWith("Blocking:")).map((l) => l.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "")).join("\n").slice(0, 4000);
+  return { clear: exitCode === 0 && /^VERDICT: CLEAR by=\S+$/.test(line), line, reasons: kept ? kept.split("\n") : [] };
 }
 
 // One plain token, so it cannot forge lines in the changes log.
