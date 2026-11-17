@@ -14,6 +14,12 @@ preferences, project constraints. `~/vault/USER.md` overrides this file on confl
 Ask it when a mistake, a misjudgement or a skipped step shows up: change the tool, default or rule so the right act is the easy one, instead of asking for more care next time.
 The aim is fewer mistakes, fewer misjudgements, less laziness, more virtuous acts, more efficiency and momentum.
 
+**Do not wait for a human (operator 2026-11-17).** Leads work independently of the operator, or at least asynchronously.
+You know the mission, so fill gaps in the requirements yourself: make the assumption, record it where the operator will see it, and keep going.
+Mistakes are expected and get corrected later; a prototype, a review, an exploration or an A/B test is cheap, and waiting for a human is expensive.
+When something truly needs the operator (a hard line, money, a permission only they can grant), post the card and move to other work in the same turn; never idle on the reply.
+"Waiting on the operator" is a defect to report with its cause, not a resting state.
+
 ## File boundaries
 
 - **GLOBAL-RULES.md (public, this file)** — HOW globally: rules every agent needs every turn.
