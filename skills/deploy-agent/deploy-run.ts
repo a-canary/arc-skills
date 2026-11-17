@@ -22,7 +22,7 @@ export type Deps = {
   exec: (p: { text: string; hex: string; path: string }, asUser: boolean) => number;
   logChange: (line: string) => void;
   humanOnlyFile?: string;
-  review?: (text: string) => { clear: boolean; line: string };
+  review?: (text: string) => { clear: boolean; line: string; findings?: string };
 };
 
 function realBd(dir: string, ...args: string[]): string {
@@ -83,7 +83,8 @@ export const realDeps = (): Deps => ({
       } catch (e) {
         return { clear: false, line: `reviewer did not start: ${(e as Error).message}` };
       }
-      return reviewVerdict(r.stdout.toString(), r.exitCode);
+      const out = r.stdout.toString();
+      return { ...reviewVerdict(out, r.exitCode), findings: out.trim() };
     } finally {
       try { rmSync(dir, { recursive: true }); } catch {}
     }
@@ -155,7 +156,7 @@ export function grantRun(lead: string, path: string, d: Deps) {
   }
   if (!d.review) refuse("grant path requires review");
   const r = d.review(text);
-  if (!r.clear) refuse(`review not clear: ${r.line}`);
+  if (!r.clear) refuse(`review not clear: ${r.line}${r.findings ? `\n--- reviewer findings ---\n${r.findings}` : ""}`);
   const hex = createHash("sha256").update(text).digest("hex");
   return { path: resolved, undo, hex, text, lead, review: r };
 }
