@@ -165,3 +165,11 @@ test("BLOCK reasons carry no control characters and are capped", () => {
   expect(r.reasons[0]).toBe("Blocking: a [31mred[0m 2J b");
   expect(r.reasons.join("\n").length).toBeLessThanOrEqual(4000);
 });
+
+// PR 222 review: the verdict line and its by= token are untrusted-shaped too.
+test("verdict line carries no control characters and by= is a plain name", () => {
+  expect(reviewVerdict("VERDICT: CLEAR by=\x1b[2Jopus\n", 0).clear).toBe(false);
+  expect(reviewVerdict("VERDICT: CLEAR by=op\x85us\n", 0).clear).toBe(false);
+  expect(reviewVerdict("VERDICT: BLOCK by=\x1b[2Jopus\n", 0).line).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
+  expect(reviewVerdict("VERDICT: CLEAR by=local-qwen_3.6\n", 0).clear).toBe(true);
+});

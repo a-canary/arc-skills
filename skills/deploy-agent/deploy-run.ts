@@ -129,10 +129,12 @@ export function plan(id: string, repo: string | undefined, d: Deps) {
 // Only the reviewer's last non-empty stdout line counts: an earlier CLEAR (quoted, or prompted by the script) never does.
 export function reviewVerdict(stdout: string, exitCode: number | null): { clear: boolean; line: string; reasons: string[] } {
   const lines = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
-  const line = lines.at(-1) ?? "";
-  // reasons echo text the untrusted script shaped, so control characters are removed and the total is capped.
-  const kept = lines.filter((l) => l.startsWith("Blocking:")).map((l) => l.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "")).join("\n").slice(0, 4000);
-  return { clear: exitCode === 0 && /^VERDICT: CLEAR by=\S+$/.test(line), line, reasons: kept ? kept.split("\n") : [] };
+  const last = lines.at(-1) ?? "";
+  // Reviewer output echoes text the untrusted script shaped: CLEAR needs a plain by= name, and the verdict line and
+  // reasons reach the Lead with control characters removed, reasons capped in total.
+  const strip = (l: string) => l.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
+  const kept = lines.filter((l) => l.startsWith("Blocking:")).map(strip).join("\n").slice(0, 4000);
+  return { clear: exitCode === 0 && /^VERDICT: CLEAR by=[A-Za-z0-9_.-]+$/.test(last), line: strip(last), reasons: kept ? kept.split("\n") : [] };
 }
 
 // One plain token, so it cannot forge lines in the changes log.
