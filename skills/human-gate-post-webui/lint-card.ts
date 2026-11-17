@@ -64,6 +64,11 @@ export function lintCard(title: string, body: string, isBead: (token: string) =>
   const PROXY = /\bre-?(?:accept|approve|run)\b|\brun (?:this|the|it) (?:reviewed|approved|cleared)\b|\b(?:type|paste) (?:this|the|that) (?:line|command)\b|\b(?:type|paste) (?:it|this) for me\b/i;
   const all = [title, q, adds, ...opts.flatMap((o) => [o.title, o.body])].join("\n");
   if (PROXY.test(all)) err.push("meat-proxy card: running or re-approving reviewed work adds nothing; fix the guard so the reviewed path runs by itself");
+  // repos-jedj (operator 2026-11-16 23:10Z): cards are for taste, not permissions; a Lead grants permission after a review CLEAR.
+  // Hard lines (money, live orders, force push, visibility/access, deletion, rules/missions) stay with the operator.
+  const ASKS_PERMISSION = /\b(?:may|can) (?:i|we)\b|\bok(?:ay)? to\b|\bpermission\b|\bapprove\b|\bgo-ahead\b/i;
+  const HARD_LINE = /\$\d|\b(?:money|spend|budget|live order|force[- ]push|public|private|visibility|access|delet\w*|global-rules|choices|mission)\b/i;
+  if (ASKS_PERMISSION.test(q) && !HARD_LINE.test(adds)) err.push("permission-only card: a Lead grants it (deploy-run --grant after a review CLEAR); a card carries direction, taste, priority or money");
   return err;
 }
 
