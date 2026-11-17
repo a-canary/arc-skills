@@ -59,6 +59,12 @@ At session start, load these files into the system prompt:
 - **Model routing (operator ruling 2026-11-13).** Claude sessions run Opus at low effort.
   Advisor and attacker steps (counsel, defend-attack, ask-claude) go to the local qwen first, then Fable at low effort; never Opus.
   Research, code and tests go to pi-qwen workers when possible; fallback is Sonnet workers at high effort.
+- **Lane overflow (operator ruling 2026-11-17).** When the laneproxy queue is longer than 4, a seat or worker that would use laneproxy may use another model in its place.
+  Queue length is the number of `waiting` entries in `curl -s 127.0.0.1:8099/__lanes`; read it before each switch.
+  Queue longer than 4: Ollama Cloud `gemma4:31b` is allowed (`worker-sandbox --lane ollama` with `WORKER_OLLAMA_MODEL=gemma4:31b`; the pi provider `ollamacloud`).
+  Queue longer than 4 and Claude usage below 0.9 (`util` in the budget hook line): Sonnet at medium effort is also allowed.
+  Name the model in `Worker-Model:`, and go back to laneproxy once the queue is 4 or shorter.
+  Not yet verified by the seat bench (repos-zgb9t); results there may narrow which seats may switch.
 - **Delegate in ≤10-minute subagents (operator 2026-10-31).** The main session orchestrates; each investigation or implementation chunk runs as a subagent timeboxed to ~10 minutes, for context management.
 - **Subagents return distilled findings only** — conclusion + refs, under
   ~500 tokens.
