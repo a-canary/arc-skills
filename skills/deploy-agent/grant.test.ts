@@ -66,6 +66,14 @@ test("human-only scripts stay card-only: refused before review", () => {
     "gh api --method PATCH repos/a-canary/x -F private=false",
     "gh api -X DELETE repos/a-canary/x",
     "gh api --method=DELETE repos/a-canary/x",
+    // defend-attack at efac73e: gh api defaults to POST with -f/--input/graphql, and verbs can be quoted or
+    // held in a variable, so any gh api call on the grant path needs a card.
+    "gh api repos/a-canary/x/transfer -f new_owner=y",
+    "gh api --input body.json repos/a-canary/x",
+    "gh api graphql -f query='mutation { x }'",
+    'gh api -X "DELETE" repos/a-canary/x',
+    "M=DELETE; gh api -X $M repos/a-canary/x",
+    "gh api --method Delete repos/a-canary/x",
   ]) {
     const { d, calls } = setup(GOOD + line + "\n");
     expect(run(d, "--grant", "agents-lead", "--script", P)).toBe(3);
