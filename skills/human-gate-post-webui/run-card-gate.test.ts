@@ -1,0 +1,37 @@
+import { expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { runNeedsCard } from "./decide";
+
+// repos-jedj: a --run card is a permission ask. The Lead grants it (deploy-run --grant) unless the script
+// crosses an operator hard line, which deploy-agent/human-only.txt lists. On 11-17 two permission-only
+// --run cards ("Run a read-only listing ...?", "Install ... hook?") passed the question-wording lint.
+const dir = mkdtempSync(join(tmpdir(), "run-card-"));
+const script = (name: string, text: string) => { const p = join(dir, name); writeFileSync(p, text); return p; };
+
+test("a benign root script does not need a card", () => {
+  expect(runNeedsCard("#!/bin/bash\ninstall -m 0755 src /home/aaron/.git-hooks/pre-push\n")).toBe(false);
+});
+
+test("a script crossing a hard line still needs a card", () => {
+  expect(runNeedsCard("#!/bin/bash\ngit push --force origin main\n")).toBe(true);
+  expect(runNeedsCard("#!/bin/bash\ngh repo edit a-canary/x --visibility public\n")).toBe(true);
+});
+
+const decide = join(import.meta.dir, "decide.ts");
+const ask = (run: string) => spawnSync("bun", [decide, "ask", "--kind", "deploy", "--title", "Install the hook",
+  "--q", "Install the hook with a backup?", "--opt", "Run the install | hook live", "--opt", "Not now | stays off",
+  "--adds", "whether the hook goes live today", "--run", run, "--dry"], { encoding: "utf8" });
+
+test("decide refuses a --run card whose script a Lead can grant, and names the grant path", () => {
+  const r = ask(script("benign.sh", "#!/bin/bash\ninstall -m 0755 a b\n"));
+  expect(r.status).not.toBe(0);
+  expect(r.stderr + r.stdout).toMatch(/deploy-run[^\n]*--grant/);
+});
+
+test("decide still accepts a --run card whose script crosses a hard line", () => {
+  const r = ask(script("hard.sh", "#!/bin/bash\ngit push --force origin main\n"));
+  expect(r.stderr + r.stdout).not.toMatch(/--grant/);
+});
