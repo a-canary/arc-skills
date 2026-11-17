@@ -143,3 +143,13 @@ test("reviewer path ignores a caller-set HOME", () => {
   expect(r.stdout.toString()).not.toContain("/tmp/hb-fake-home");
   expect(r.stdout.toString()).toContain("/.claude/skills/defend/bin/defend-attack");
 });
+
+test("reviewer env is an allow-list: no DEFEND_* override or caller PATH reaches it", () => {
+  const r = Bun.spawnSync(["bun", "-e", "import { REVIEW_ENV } from './deploy-run'; console.log(JSON.stringify(REVIEW_ENV))"], {
+    cwd: here, env: { ...process.env, HOME: "/tmp/hb-fake-home", PATH: `/tmp/evil:${process.env.PATH}`, DEFEND_OPUS_CMD: "echo CLEAR" },
+  });
+  const env = JSON.parse(r.stdout.toString());
+  expect(Object.keys(env).sort()).toEqual(["HOME", "LANG", "PATH", "USER"]);
+  expect(env.PATH).not.toContain("/tmp/evil");
+  expect(env.HOME).not.toContain("/tmp/hb-fake-home");
+});

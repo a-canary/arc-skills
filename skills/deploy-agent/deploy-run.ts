@@ -35,6 +35,14 @@ function realBd(dir: string, ...args: string[]): string {
 // only gate at a stub that prints CLEAR.
 const passwdHome = readFileSync("/etc/passwd", "utf8").split("\n").map((l) => l.split(":")).find((f) => f[2] === String(process.getuid?.()))?.[5];
 export const DEFEND_ATTACK = join(passwdHome ?? "/nonexistent", ".claude", "skills", "defend", "bin", "defend-attack");
+// Allow-list, not the caller's env: defend-attack takes DEFEND_LOCAL_CMD / DEFEND_OPUS_CMD and finds claude via PATH, so any
+// inherited variable could swap the reviewer for a stub. claude lives in ~/.local/bin; jq and curl in /usr/bin.
+export const REVIEW_ENV = {
+  HOME: passwdHome ?? "/nonexistent",
+  PATH: `${passwdHome ?? "/nonexistent"}/.local/bin:/usr/local/bin:/usr/bin:/bin`,
+  USER: process.env.USER ?? "",
+  LANG: "C.UTF-8",
+};
 
 export const ROOT_WRAPPER = "/usr/local/sbin/deploy-root";
 // Root: the root-owned wrapper (the one command sudoers allows) copies the queue file into a root-only folder,
@@ -67,7 +75,12 @@ export const realDeps = (): Deps => ({
       // ponytail: the reviewer reads text, so obfuscated commands can slip the human-only regexes; it is the backstop, not a proof.
       // ponytail: a same-user process could swap the temp diff mid-review; deploy-root re-hashing the queue file is what pins the bytes run.
       // A hung reviewer is killed and counts as not clear (exitCode null).
-      const r = Bun.spawnSync([DEFEND_ATTACK, "--diff", tmp], { stdin: "ignore", stderr: "pipe", timeout: 20 * 60_000 });
+      let r;
+      try {
+        r = Bun.spawnSync([DEFEND_ATTACK, "--diff", tmp], { env: REVIEW_ENV, stdin: "ignore", stderr: "pipe", timeout: 20 * 60_000 });
+      } catch (e) {
+        return { clear: false, line: `reviewer did not start: ${(e as Error).message}` };
+      }
       return reviewVerdict(r.stdout.toString(), r.exitCode);
     } finally {
       try { unlinkSync(tmp); } catch {}
