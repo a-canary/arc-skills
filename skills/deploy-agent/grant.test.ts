@@ -74,6 +74,15 @@ test("human-only scripts stay card-only: refused before review", () => {
     'gh api -X "DELETE" repos/a-canary/x',
     "M=DELETE; gh api -X $M repos/a-canary/x",
     "gh api --method Delete repos/a-canary/x",
+    // defend-attack at 0484c91: cheap spellings the screen should still catch. Pure indirection
+    // ($GH api, cd tools && bun order) is left to the script review; see SKILL.md known limits.
+    "gh 'api' repos/a-canary/x",
+    'gh "api" repos/a-canary/x',
+    "gh --hostname github.com api repos/a-canary/x",
+    "command gh api repos/a-canary/x",
+    "bun ./tools/order buy SPY 1",
+    "bun tools//order buy SPY 1",
+    "bun ./order buy SPY 1",
   ]) {
     const { d, calls } = setup(GOOD + line + "\n");
     expect(run(d, "--grant", "agents-lead", "--script", P)).toBe(3);
