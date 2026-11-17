@@ -34,7 +34,7 @@ Upgrade path: webui signs card id + script sha256 on accept, and deploy-run.ts v
 `bun skills/deploy-agent/deploy-run.ts --grant <lead> --script <queue path> [--dry] [--as-user]`
 A Lead grants the run itself; no card is posted.
 deploy-run has defend-attack review the exact script bytes and runs only on CLEAR, so no receipt can be brought from elsewhere.
-Same queue-dir, undo-line and fence checks as a card run, plus `human-only.txt`: a script naming money, live trading, the order tool, force push, `--admin`, visibility/access or missions.md is refused and needs an operator card.
+Same queue-dir, undo-line and fence checks as a card run, plus `human-only.txt`: a script naming live trading, the order tool, force push, `--admin`, visibility/access or missions.md is refused and needs an operator card.
 The changes log records the granting Lead, the review verdict, the hash and the undo.
 The reviewer runs with a fixed environment (home from /etc/passwd, fixed PATH), and reads its diff from a fresh 0700 directory there, so caller variables cannot swap it or its input.
 Ceiling: these checks run as the agents' own user, so a process that rewrites `human-only.txt` or defend-attack, or calls `deploy-root` directly, skips them; the card path has the same ceiling.
