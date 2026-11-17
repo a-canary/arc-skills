@@ -1,12 +1,12 @@
 ---
 name: hard-merge
-description: Adversarial pre-merge review gate for merge-on-clear — the author drives it but runs defend-attack (local model, then Opus) as the independent reviewer (never reviews own work inline). Use before merging any PR you own, or when the user says "hard-merge", "merge-on-clear", or "adversarial review before merge".
+description: Adversarial pre-merge review gate for merge-on-clear — the author drives it but runs defend-attack (screener, then Opus) as the independent reviewer (never reviews own work inline). Use before merging any PR you own, or when the user says "hard-merge", "merge-on-clear", or "adversarial review before merge".
 ---
 
 # hard-merge — DefendMerge
 
 This gate **is DefendMerge**, gate 2 of the Defend* family (see the `defend`
-skill, merge.md): Worker(qwen|bonsai) → git merge. The reviewer is `defend-attack` (the local model scouts first, then Opus attacks every diff).
+skill, merge.md): Worker(qwen|bonsai) → git merge. The reviewer is `defend-attack` (a cheap screener flags first, then Opus attacks every diff at high effort).
 
 Adversarial review before a merge-on-clear. **Assume the diff is wrong; try to prove it; merge only when you fail.**
 
