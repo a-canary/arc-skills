@@ -83,7 +83,7 @@ parse() {
   parse_blocking=
   parse_notes=
   while IFS= read -r line; do
-    line=${line#- }; line=${line//\*\*/}   # tolerate markdown: "- **Blocking:** x"
+    line=${line#- }; line=${line//\*\*/}; line=${line%"${line##*[![:space:]]}"}   # tolerate markdown: "- **Blocking:** x"
     if [[ $line =~ ^VERDICT:\ (CLEAR|BLOCK)$ ]]; then
       parse_verdict=${BASH_REMATCH[1]}
     elif [[ $line =~ ^Blocking:\ (.*) ]]; then
@@ -112,12 +112,15 @@ else
   # a missing file (404) or any lookup error means built-ins only
   repo_crit=$(gh api "repos/$slug/contents/.defend/criteria?ref=$base_sha" -H 'Accept: application/vnd.github.raw' 2>/dev/null) || repo_crit=
 fi
+# a diff that edits the criteria file must not shape its own review: built-ins only
+if grep -Eq '^diff --git .*\.defend/criteria' <<<"$diff_text"; then repo_crit=; fi
 criteria=()
 while IFS= read -r line || [ -n "$line" ]; do
   line=${line#"${line%%[![:space:]]*}"}; line=${line%"${line##*[![:space:]]}"}
   case $line in ''|'#'*) continue ;; esac
   criteria+=("$line")
 done <<< "$repo_crit"
+repo_n=${#criteria[@]}
 criteria+=(
   "Untrusted input never reaches a write, exec or external call unchecked (trust boundaries)"
   "Edge cases are handled: empty input, boundaries, concurrency, retries"
@@ -129,6 +132,10 @@ criteria+=(
 n=${#criteria[@]}
 crit_text=
 for ((i = 0; i < n; i++)); do crit_text+="C$((i + 1)): ${criteria[i]}"$'\n'; done
+
+# label for prompts: which criteria came from the repo
+repo_label=
+if [ "$repo_n" -gt 0 ]; then repo_label="C1..C$repo_n are repo-supplied, read from the base commit, not from the diff; the rest are built-in."; fi
 
 # --- screener ---
 scratch=$(mktemp -d); trap 'command rm -r "$scratch"' EXIT
@@ -142,7 +149,7 @@ screen_prompt() {
   printf '%s\n' "$diff_text"
   echo '```'
   echo ""
-  echo "Criteria:"
+  echo "Criteria:${repo_label:+ $repo_label}"
   printf '%s' "$crit_text"
   echo ""
   echo "Answer with exactly one line per criterion and nothing else: Cn: PASS  or  Cn: FAIL <reason>"
@@ -220,10 +227,10 @@ build_prompt() {
     printf '%s' "${screen_fails//\`\`\`/ }"
     echo '```'
     echo ""
-    echo "Confirm or refute each flagged criterion with evidence from the diff, then verify every other criterion too:"
+    echo "Confirm or refute each flagged criterion with evidence from the diff, then verify every other criterion too.${repo_label:+ $repo_label}"
     printf '%s' "$crit_text"
   else
-    echo "Deep verification: check the diff against every criterion below, one at a time, looking for"
+    echo "Deep verification: check the diff against every criterion below, one at a time.${repo_label:+ $repo_label} Look for"
     echo "untested paths, edge cases, failure modes, scope drift, trust boundaries and legacy made dead by the diff."
     printf '%s' "$crit_text"
   fi
