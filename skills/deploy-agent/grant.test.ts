@@ -112,6 +112,9 @@ test("verdict parsing: last line only, exact CLEAR, exit 0", () => {
   expect(reviewVerdict("", 0).clear).toBe(false);
   expect(reviewVerdict("VERDICT: CLEAR by=opus\nextra\n", 0).clear).toBe(false);
   expect(reviewVerdict("Blocking: z\nVERDICT: BLOCK by=opus\n", 1).line).toBe("VERDICT: BLOCK by=opus");
+  // A BLOCK keeps its reasons so the caller does not have to rerun a full review to learn why.
+  expect(reviewVerdict("Note: n\nBlocking: a\nBlocking: b\nVERDICT: BLOCK by=opus\n", 0).reasons).toEqual(["Blocking: a", "Blocking: b"]);
+  expect(reviewVerdict("VERDICT: CLEAR by=opus\n", 0).reasons).toEqual([]);
 });
 
 test("lead names: one plain token; newlines and spaces refused", () => {
