@@ -1,0 +1,104 @@
+#!/bin/bash
+# RED contract for the JEV screener -> Opus high review (defend-attack). Stubbed models, no network.
+# Usage: defend-screen-test [path-to-defend-attack]
+A=${1:-$(dirname "$0")/defend-attack}
+A=$(cd "$(dirname "$A")" && pwd)/$(basename "$A")
+T=$(mktemp -d); trap 'command rm -r "$T"' EXIT
+ok=0; bad=0
+check() { if eval "$2"; then ok=$((ok+1)); else bad=$((bad+1)); echo "FAIL: $1"; fi; }
+
+# stub <dir> <name> [sleep]: saves prompt as <name>.<n>.prompt, prints reply file <name>.<n> (exit 1 if missing)
+cat > "$T/stub" <<'EOF'
+#!/bin/bash
+d=$1; n=$2; c=$(( $(cat "$d/$n.count" 2>/dev/null || echo 0) + 1 )); echo $c > "$d/$n.count"
+cat > "$d/$n.$c.prompt"; [ -n "$3" ] && sleep "$3"; [ -f "$d/$n.$c" ] || exit 1; cat "$d/$n.$c"
+EOF
+chmod +x "$T/stub"
+
+# a repo that defines its own reviewer criteria
+R=$T/repo; mkdir -p "$R/.defend"; git -C "$R" init -q
+printf '# criteria, one per line\nNo secret or credential is added\nEvery new branch has a test\nThe deliverable matches the PR title\n' > "$R/.defend/criteria"
+printf 'diff --git a/src/util.ts b/src/util.ts\n+export const x = 1;\n' > "$T/plain.diff"
+
+run() { local c=$1; shift
+  (cd "$R" && env DEFEND_JEV_CMD="$T/stub $T/$c jev ${JS:-}" DEFEND_HAIKU_CMD="$T/stub $T/$c haiku" \
+    DEFEND_OPUS_CMD="$T/stub $T/$c opus" "$@" "$A" --diff "$T/plain.diff") > "$T/$c/out" 2>"$T/$c/err"
+  echo $? > "$T/$c/rc"; }
+seed() { mkdir -p "$T/$1"; printf '%s\n' "$3" > "$T/$1/$2"; }
+calls() { cat "$T/$1/$2.count" 2>/dev/null || echo 0; }
+rc() { cat "$T/$1/rc"; }
+ALLPASS=$'C1: PASS\nC2: PASS\nC3: PASS'
+
+# s1. screener gets every repo criterion, numbered, plus the diff
+seed s1 jev.1 "$ALLPASS"; seed s1 opus.1 'VERDICT: CLEAR'
+run s1
+check "s1 criteria numbered in screener prompt" 'grep -q "C1: No secret or credential is added" "$T/s1/jev.1.prompt" && grep -q "C3: The deliverable matches the PR title" "$T/s1/jev.1.prompt"'
+check "s1 comment line not a criterion" '! grep -q "C[0-9]*: # criteria" "$T/s1/jev.1.prompt"'
+check "s1 diff in screener prompt" 'grep -q "export const x = 1" "$T/s1/jev.1.prompt"'
+
+# s2. all pass: Opus gets a deep verify of every criterion and NO screener signal
+check "s2 one Opus call" '[ "$(calls s1 opus)" = 1 ]'
+check "s2 Opus prompt has all criteria" 'grep -q "Every new branch has a test" "$T/s1/opus.1.prompt"'
+check "s2 Opus prompt carries no screener verdicts" '! grep -qi "screener" "$T/s1/opus.1.prompt" && ! grep -q "PASS" "$T/s1/opus.1.prompt"'
+check "s2 Opus asked to verify deeply" 'grep -qi "deep" "$T/s1/opus.1.prompt"'
+check "s2 CLEAR by opus" '[ "$(rc s1)" = 0 ] && tail -n1 "$T/s1/out" | grep -qx "VERDICT: CLEAR by=opus"'
+check "s2 haiku unused" '[ "$(calls s1 haiku)" = 0 ]'
+check "s2 screener line" 'grep -qx "Screener: jev fails=0" "$T/s1/out"'
+
+# s3. screener flags C2: Opus gets the failure to clarify; Opus confirms -> BLOCK
+seed s3 jev.1 $'C1: PASS\nC2: FAIL no test for the new export\nC3: PASS'
+seed s3 opus.1 $'Blocking: C2 confirmed, util.ts has no test\nVERDICT: BLOCK'
+run s3
+check "s3 Opus sees flagged criterion and reason" 'grep -qi "screener flagged" "$T/s3/opus.1.prompt" && grep -q "C2: Every new branch has a test" "$T/s3/opus.1.prompt" && grep -q "no test for the new export" "$T/s3/opus.1.prompt"'
+check "s3 Opus asked to confirm or refute each" 'grep -qi "confirm or refute" "$T/s3/opus.1.prompt"'
+check "s3 BLOCK by opus, exit 1" '[ "$(rc s3)" = 1 ] && tail -n1 "$T/s3/out" | grep -qx "VERDICT: BLOCK by=opus"'
+check "s3 blocking listed" 'grep -q "^Blocking: C2 confirmed" "$T/s3/out"'
+check "s3 screener line" 'grep -qx "Screener: jev fails=1" "$T/s3/out"'
+
+# s4. screener flag refuted by Opus -> CLEAR (screener never decides)
+seed s4 jev.1 $'C1: FAIL looks like a key\nC2: PASS\nC3: PASS'
+seed s4 opus.1 $'Note: C1 refuted, x = 1 is not a secret\nVERDICT: CLEAR'
+run s4
+check "s4 refuted flag -> CLEAR by opus" '[ "$(rc s4)" = 0 ] && tail -n1 "$T/s4/out" | grep -qx "VERDICT: CLEAR by=opus"'
+
+# s5. JEV stalls past the timeout -> Haiku screens instead (DEFEND_JEV_TIMEOUT, default 30s)
+seed s5 jev.1 "$ALLPASS"; seed s5 haiku.1 $'C1: PASS\nC2: FAIL untested\nC3: PASS'; seed s5 opus.1 'VERDICT: BLOCK'
+JS=4 run s5 DEFEND_JEV_TIMEOUT=1
+check "s5 haiku called once" '[ "$(calls s5 haiku)" = 1 ]'
+check "s5 haiku got the criteria" 'grep -q "C2: Every new branch has a test" "$T/s5/haiku.1.prompt"'
+check "s5 haiku flag reaches Opus" 'grep -q "untested" "$T/s5/opus.1.prompt"'
+check "s5 screener line names haiku" 'grep -qx "Screener: haiku fails=1" "$T/s5/out"'
+check "s5 default timeout is 30" 'grep -q "DEFEND_JEV_TIMEOUT:-30" "$A"'
+
+# s6. JEV down (exit 1) or unparseable (missing a criterion) -> Haiku
+mkdir -p "$T/s6"; seed s6 haiku.1 "$ALLPASS"; seed s6 opus.1 'VERDICT: CLEAR'
+run s6
+check "s6 JEV down -> haiku" '[ "$(calls s6 haiku)" = 1 ] && grep -qx "Screener: haiku fails=0" "$T/s6/out"'
+seed s7 jev.1 $'C1: PASS\nC2: PASS'; seed s7 haiku.1 "$ALLPASS"; seed s7 opus.1 'VERDICT: CLEAR'
+run s7
+check "s7 JEV missing C3 -> haiku" '[ "$(calls s7 haiku)" = 1 ]'
+
+# s8. both screeners down: Opus still deep-verifies, never CLEAR without Opus
+mkdir -p "$T/s8"; seed s8 opus.1 'VERDICT: CLEAR'
+run s8
+check "s8 Opus deep verify without screener" '[ "$(calls s8 opus)" = 1 ] && grep -qi "deep" "$T/s8/opus.1.prompt"'
+check "s8 screener none" 'grep -qx "Screener: none fails=0" "$T/s8/out"'
+
+# s9. Opus fails -> exit 2, never CLEAR on a screener pass alone
+seed s9 jev.1 "$ALLPASS"
+run s9
+check "s9 Opus failure exit 2" '[ "$(rc s9)" = 2 ] && ! grep -q "VERDICT: CLEAR" "$T/s9/out"'
+
+# s10. default Opus command is Opus at high effort; repo without .defend/criteria gets built-in criteria
+check "s10 default opus high" 'grep -q -- "--model opus --effort high" "$A"'
+mkdir -p "$T/bare"; git -C "$T/bare" init -q; seed s10 jev.1 "$ALLPASS"; seed s10 opus.1 'VERDICT: CLEAR'
+(cd "$T/bare" && env DEFEND_JEV_CMD="$T/stub $T/s10 jev" DEFEND_HAIKU_CMD="$T/stub $T/s10 haiku" DEFEND_OPUS_CMD="$T/stub $T/s10 opus" "$A" --diff "$T/plain.diff") >/dev/null 2>&1
+check "s10 built-in criteria used" 'grep -q "^C1: " "$T/s10/jev.1.prompt"'
+
+# s11. Opus markdown (bold, bullets) on Blocking/Note/VERDICT lines is read and normalized to plain lines
+seed s11 jev.1 "$ALLPASS"; seed s11 opus.1 $'- **Blocking:** C2 no test\n**Note:** C1 fine\n**VERDICT: BLOCK**'
+run s11
+check "s11 markdown reply parsed, normalized" '[ "$(rc s11)" = 1 ] && grep -qx "Blocking: C2 no test" "$T/s11/out" && grep -qx "Note: C1 fine" "$T/s11/out" && tail -n1 "$T/s11/out" | grep -qx "VERDICT: BLOCK by=opus"'
+
+echo "defend-screen-test: $ok ok, $bad failed"
+[ $bad -eq 0 ]

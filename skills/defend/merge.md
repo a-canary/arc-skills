@@ -1,4 +1,4 @@
-# DefendMerge — worker diff → git merge (defend-attack: local model, then Opus)
+# DefendMerge — worker diff → git merge (defend-attack: screener, then Opus high)
 
 DefendMerge **is** /hard-merge. Same procedure, named here so the family is
 complete: the gate is between Worker and `git merge`, run by `defend-attack`.
@@ -7,10 +7,9 @@ complete: the gate is between Worker and `git merge`, run by `defend-attack`.
 
 - The reviewer is `defend-attack` (`~/.claude/skills/defend/bin/defend-attack`). Run it with `defend-attack <pr> -R owner/repo` or `defend-attack --diff <file>`.
 - Independence: `defend-attack` is a separate model call with no author context.
-- Opus scope is set by DEFEND_OPUS_SCOPE. The default is `all` (operator ruling 2026-11-09: every gate goes through Opus; the local model scouts ahead). The scopes are `all`, `risk`, and `flags`.
-- `risk` means Opus attacks the local model's flags, any diff touching DEFEND_RISK_PATHS, and after three local failures.
-- `flags` means Opus attacks only local flags or after three local failures.
-- `all` means Opus attacks every diff.
+- Flow: criteria come from `<git toplevel>/.defend/criteria` (one per line, blank and `#` lines skipped; built-in lenses if absent), numbered C1..Cn.
+- A screener checks the diff against them: JEV (`DEFEND_JEV_CMD`, default laneproxy `/v1/systemone`, timeout `DEFEND_JEV_TIMEOUT`, default 30s), else Haiku (`DEFEND_HAIKU_CMD`), else none. Output line: `Screener: <jev|haiku|none> fails=<N>`.
+- Opus (`DEFEND_OPUS_CMD`, default `claude -p --model opus --effort high`) always decides. It confirms or refutes each screener flag, or deep-verifies every criterion when nothing was flagged. The screener never clears a diff.
 - Exit 2 means no verdict. Do not post a receipt. Do not merge. Fix the cause and re-run.
 - Known gap: the Opus leg runs a headless `claude -p` (DEFEND_OPUS_CMD) and needs a working headless login on the host. Until the GateKeeper (repos-v6m7) takes the Opus tier over, a failed Opus call exits 2 and blocks the merge.
 

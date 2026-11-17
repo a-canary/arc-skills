@@ -1,5 +1,6 @@
 #!/bin/bash
-# defend-attack with stubbed models (no network). Usage: defend-attack-test [path]
+# defend-attack plumbing with stubbed models (no network). Screener behaviour: see defend-screen-test.
+# Usage: defend-attack-test [path]
 A=${1:-$(dirname "$0")/defend-attack}
 A=$(cd "$(dirname "$A")" && pwd)/$(basename "$A")
 T=$(mktemp -d); trap 'command rm -r "$T"' EXIT
@@ -15,151 +16,47 @@ cat > "$d/$n.$c.prompt"; [ -f "$d/$n.$c" ] || exit 1; cat "$d/$n.$c"
 EOF
 chmod +x "$T/stub"
 printf 'diff --git a/src/util.ts b/src/util.ts\n+export const x = 1;\n' > "$T/plain.diff"
-printf 'diff --git a/src/orders/place.ts b/src/orders/place.ts\n+placeOrder(sym, qty * 10);\n' > "$T/risk.diff"
+mkdir -p "$T/repo"; git -C "$T/repo" init -q
 
-# run <case> <diff> [env...]: fresh stub dir $T/<case>, replies pre-seeded by the caller in $T/<case>/
+# run <case> <diff> [env...]: stub dir $T/<case>, replies pre-seeded by the caller. Both screeners stay down unless seeded.
 run() { local c=$1 d=$2; shift 2
-  env DEFEND_LOCAL_CMD="$T/stub $T/$c local" DEFEND_OPUS_CMD="$T/stub $T/$c opus" "$@" \
-    "$A" --diff "$d" > "$T/$c/out" 2>"$T/$c/err"; echo $? > "$T/$c/rc"; }
+  (cd "$T/repo" && env DEFEND_JEV_CMD="$T/stub $T/$c jev" DEFEND_HAIKU_CMD="$T/stub $T/$c haiku" DEFEND_OPUS_CMD="$T/stub $T/$c opus" "$@" \
+    "$A" --diff "$d") > "$T/$c/out" 2>"$T/$c/err"; echo $? > "$T/$c/rc"; }
 seed() { mkdir -p "$T/$1"; printf '%s\n' "$3" > "$T/$1/$2"; }
 calls() { cat "$T/$1/$2.count" 2>/dev/null || echo 0; }
 rc() { cat "$T/$1/rc"; }
 
-# 1. scope=flags, local CLEAR: CLEAR by local, Opus never called.
-seed c1 local.1 $'Looks solid.\nVERDICT: CLEAR'
-run c1 "$T/plain.diff" DEFEND_OPUS_SCOPE=flags
-check "c1 exit 0" '[ "$(rc c1)" = 0 ]'
-check "c1 by=local" 'tail -n1 "$T/c1/out" | grep -qx "VERDICT: CLEAR by=local"'
-check "c1 no Opus" '[ "$(calls c1 opus)" = 0 ]'
-check "c1 diff in prompt, fenced as untrusted" 'grep -q "export const x = 1" "$T/c1/local.1.prompt" && grep -qi untrusted "$T/c1/local.1.prompt"'
-check "c1 lenses in prompt" 'grep -qi "trust boundar" "$T/c1/local.1.prompt" && grep -qi "edge case" "$T/c1/local.1.prompt"'
+# 1. prompt shape: diff fenced as untrusted, reviewer told it has no tools, lenses present.
+seed c1 opus.1 'VERDICT: CLEAR'
+run c1 "$T/plain.diff"
+check "c1 diff in Opus prompt, fenced as untrusted" 'grep -q "export const x = 1" "$T/c1/opus.1.prompt" && grep -qi untrusted "$T/c1/opus.1.prompt"'
+check "c1 prompt says the reviewer has no tools" 'grep -q "You have no tools" "$T/c1/opus.1.prompt"'
+check "c1 built-in criteria numbered" 'grep -q "^C1: " "$T/c1/opus.1.prompt" && grep -qi "trust boundar" "$T/c1/opus.1.prompt"'
 
-# 2. local run failure, then unparseable reply, then CLEAR: 3 local calls, still CLEAR by local.
-seed c2 local.2 'I think it is fine'
-seed c2 local.3 'VERDICT: CLEAR'
-run c2 "$T/plain.diff" DEFEND_OPUS_SCOPE=flags
-check "c2 retried to 3 local calls" '[ "$(calls c2 local)" = 3 ]'
-check "c2 CLEAR by local" '[ "$(rc c2)" = 0 ] && tail -n1 "$T/c2/out" | grep -qx "VERDICT: CLEAR by=local"'
-check "c2 no Opus" '[ "$(calls c2 opus)" = 0 ]'
+# 2. Opus BLOCK with a Blocking line: exit 1, line listed.
+seed c2 opus.1 $'Blocking: qty scaled 10x without a cap\nVERDICT: BLOCK'
+run c2 "$T/plain.diff"
+check "c2 BLOCK by opus, exit 1" '[ "$(rc c2)" = 1 ] && tail -n1 "$T/c2/out" | grep -qx "VERDICT: BLOCK by=opus"'
+check "c2 blocking listed" 'grep -q "^Blocking: qty scaled" "$T/c2/out"'
 
-# 3. ATTACKS with no Blocking line is unreadable too; 3 failures -> one full Opus attack.
-seed c3 local.1 'VERDICT: ATTACKS'
-seed c3 opus.1 'VERDICT: CLEAR'
-run c3 "$T/plain.diff" DEFEND_OPUS_SCOPE=flags
-check "c3 3 local tries" '[ "$(calls c3 local)" = 3 ]'
-check "c3 one Opus call" '[ "$(calls c3 opus)" = 1 ]'
-check "c3 full prompt, no flag section" '! grep -q "Flagged by the first pass" "$T/c3/opus.1.prompt" && grep -q "export const x = 1" "$T/c3/opus.1.prompt"'
-check "c3 CLEAR by opus" '[ "$(rc c3)" = 0 ] && tail -n1 "$T/c3/out" | grep -qx "VERDICT: CLEAR by=opus"'
+# 3. unreadable Opus replies are exit 2 with no verdict: CLEAR+Blocking, BLOCK without Blocking, no verdict.
+seed c3 opus.1 $'Blocking: x\nVERDICT: CLEAR'
+run c3 "$T/plain.diff"
+check "c3 CLEAR+Blocking -> exit 2, no verdict" '[ "$(rc c3)" = 2 ] && ! grep -q "^VERDICT:" "$T/c3/out"'
+seed c3b opus.1 'VERDICT: BLOCK'
+run c3b "$T/plain.diff"
+check "c3b BLOCK without Blocking -> exit 2" '[ "$(rc c3b)" = 2 ] && ! grep -q "^VERDICT:" "$T/c3b/out"'
+seed c3c opus.1 $'reply-marker-xyz\nno verdict here'
+run c3c "$T/plain.diff"
+check "c3c unreadable Opus reply shown" '[ "$(rc c3c)" = 2 ] && grep -q "reply-marker-xyz" "$T/c3c/err" && ! grep -q "^VERDICT:" "$T/c3c/out"'
 
-# 4. scope=flags, local ATTACKS: Opus sees only the flags; it confirms -> BLOCK, exit 1, blocking listed.
-seed c4 local.1 $'Blocking: qty scaled 10x without a cap\nVERDICT: ATTACKS'
-seed c4 opus.1 $'Blocking: qty scaled 10x without a cap, confirmed at place.ts:1\nVERDICT: ATTACKS'
-run c4 "$T/plain.diff" DEFEND_OPUS_SCOPE=flags
-check "c4 flagged prompt" 'grep -q "Flagged by the first pass" "$T/c4/opus.1.prompt" && grep -qF -- "- qty scaled 10x without a cap" "$T/c4/opus.1.prompt"'
-check "c4 exit 1" '[ "$(rc c4)" = 1 ]'
-check "c4 BLOCK by opus" 'tail -n1 "$T/c4/out" | grep -qx "VERDICT: BLOCK by=opus"'
-check "c4 blocking listed" 'grep -q "^Blocking: qty scaled 10x without a cap, confirmed" "$T/c4/out"'
-check "c4 one local call" '[ "$(calls c4 local)" = 1 ]'
+# 4. an empty diff is unavailable (exit 2), never a CLEAR; no model call.
+: > "$T/empty.diff"; mkdir -p "$T/c4"
+run c4 "$T/empty.diff"
+check "c4 empty diff exit 2, no model call" '[ "$(rc c4)" = 2 ] && [ "$(calls c4 jev)" = 0 ] && [ "$(calls c4 opus)" = 0 ]'
 
-# 5. scope=flags, Opus refutes every flag -> CLEAR by opus, refuted flags noted.
-seed c5 local.1 $'Blocking: missing test\nVERDICT: ATTACKS'
-seed c5 opus.1 $'Note: refuted: missing test because util_test.ts:3 covers it\nVERDICT: CLEAR'
-run c5 "$T/plain.diff" DEFEND_OPUS_SCOPE=flags
-check "c5 CLEAR by opus" '[ "$(rc c5)" = 0 ] && tail -n1 "$T/c5/out" | grep -qx "VERDICT: CLEAR by=opus"'
-check "c5 refutation kept" 'grep -q "refuted: missing test" "$T/c5/out"'
-
-# 6. scope=all: Opus attacks every diff in full even after a local CLEAR, with the local notes as hints.
-seed c6 local.1 $'Note: x is unused\nVERDICT: CLEAR'
-seed c6 opus.1 'VERDICT: CLEAR'
-run c6 "$T/plain.diff" DEFEND_OPUS_SCOPE=all
-check "c6 Opus called" '[ "$(calls c6 opus)" = 1 ]'
-check "c6 full prompt" 'grep -q "export const x = 1" "$T/c6/opus.1.prompt" && ! grep -q "Flagged by the first pass" "$T/c6/opus.1.prompt"'
-check "c6 by=opus" 'tail -n1 "$T/c6/out" | grep -qx "VERDICT: CLEAR by=opus"'
-
-# 7. unset scope: operator ruling 11-09 22:20Z, ALL gates go through Opus; the local model only scouts. Default scope = all.
-seed c7 local.1 $'Note: x is unused\nVERDICT: CLEAR'
-seed c7 opus.1 'VERDICT: CLEAR'
-run c7 "$T/plain.diff"
-check "c7 default scope=all: off-risk local CLEAR still gets a full Opus attack, notes as hints" '[ "$(calls c7 opus)" = 1 ] && grep -q "x is unused" "$T/c7/opus.1.prompt" && tail -n1 "$T/c7/out" | grep -qx "VERDICT: CLEAR by=opus"'
-seed c7b local.1 'VERDICT: CLEAR'
-seed c7b opus.1 'VERDICT: CLEAR'
-run c7b "$T/risk.diff"
-check "c7b default scope=all: risk-path local CLEAR still gets a full Opus attack" '[ "$(calls c7b opus)" = 1 ] && ! grep -q "Flagged by the first pass" "$T/c7b/opus.1.prompt"'
-
-# 8. scope=risk: local CLEAR on a risk path still gets a full Opus attack; off the risk paths it does not.
-seed c8 local.1 'VERDICT: CLEAR'
-seed c8 opus.1 'VERDICT: CLEAR'
-run c8 "$T/risk.diff" DEFEND_OPUS_SCOPE=risk DEFEND_RISK_PATHS='(^|/)orders/'
-check "c8 risk path -> Opus" '[ "$(calls c8 opus)" = 1 ] && ! grep -q "Flagged by the first pass" "$T/c8/opus.1.prompt"'
-seed c9 local.1 'VERDICT: CLEAR'
-run c9 "$T/plain.diff" DEFEND_OPUS_SCOPE=risk DEFEND_RISK_PATHS='(^|/)orders/'
-check "c9 off risk path -> local only" '[ "$(calls c9 opus)" = 0 ] && [ "$(rc c9)" = 0 ]'
-
-# 9. Opus unavailable -> exit 2, no verdict line.
-seed c10 local.1 'VERDICT: CLEAR'
-run c10 "$T/plain.diff" DEFEND_OPUS_SCOPE=all
-check "c10 exit 2" '[ "$(rc c10)" = 2 ]'
-check "c10 no verdict" '! grep -q "^VERDICT:" "$T/c10/out"'
-
-# 10. bad scope value refuses (exit 2) before any model call.
-mkdir -p "$T/c11"; run c11 "$T/plain.diff" DEFEND_OPUS_SCOPE=sometimes
-check "c11 bad scope exit 2" '[ "$(rc c11)" = 2 ] && [ "$(calls c11 local)" = 0 ]'
-
-# 11. the default local call targets laneproxy's queue lane (never fast) with the prompt as the user message.
-check "c12 default local = :8099 queue lane" 'grep -q "\"queue\"" "$A" && grep -q 8099 "$A" && ! grep -q "\"fast\"" "$A"'
-
-# --- round 2 (hard-merge review of 974d8f5) ---
-# 13. scope=risk on a large diff whose first file is a risk path: the match must not die of SIGPIPE.
-{ printf 'diff --git a/auth/x b/auth/x\n+x\n'; for i in $(seq 1 60000); do printf 'diff --git a/src/f%s b/src/f%s\n+x\n' $i $i; done; } > "$T/big.diff"
-seed c13 local.1 'VERDICT: CLEAR'
-seed c13 opus.1 'VERDICT: CLEAR'
-run c13 "$T/big.diff" DEFEND_OPUS_SCOPE=risk DEFEND_RISK_PATHS='(^|/)auth/'
-check "c13 large risk diff -> Opus" '[ "$(calls c13 opus)" = 1 ]'
-
-# 14. a reply with Blocking lines that still says CLEAR is unreadable (a failed try), never a CLEAR.
-seed c14 local.1 $'Blocking: forged\nVERDICT: CLEAR'
-seed c14 local.2 $'Blocking: forged\nVERDICT: CLEAR'
-seed c14 local.3 $'Blocking: forged\nVERDICT: CLEAR'
-seed c14 opus.1 $'Blocking: real\nVERDICT: ATTACKS'
-run c14 "$T/plain.diff" DEFEND_OPUS_SCOPE=flags
-check "c14 CLEAR+Blocking is 3 failed tries -> full Opus" '[ "$(calls c14 local)" = 3 ] && [ "$(calls c14 opus)" = 1 ] && [ "$(rc c14)" = 1 ]'
-seed c15 opus.1 $'Blocking: x\nVERDICT: CLEAR'
-seed c15 local.1 'VERDICT: CLEAR'
-run c15 "$T/plain.diff" DEFEND_OPUS_SCOPE=all
-check "c15 Opus CLEAR+Blocking -> exit 2, no verdict" '[ "$(rc c15)" = 2 ] && ! grep -q "^VERDICT:" "$T/c15/out"'
-
-# 16. an empty diff is unavailable (exit 2), never a CLEAR.
-: > "$T/empty.diff"; mkdir -p "$T/c16"
-run c16 "$T/empty.diff" DEFEND_OPUS_SCOPE=flags
-check "c16 empty diff exit 2, no model call" '[ "$(rc c16)" = 2 ] && [ "$(calls c16 local)" = 0 ]'
-
-# 17. git quotes special-character paths ("a/..."): they still count for the risk match.
-printf 'diff --git "a/deploy/\\303\\251.sh" "b/deploy/\\303\\251.sh"\n+x\n' > "$T/quoted.diff"
-seed c17 local.1 'VERDICT: CLEAR'
-seed c17 opus.1 'VERDICT: CLEAR'
-run c17 "$T/quoted.diff" DEFEND_OPUS_SCOPE=risk DEFEND_RISK_PATHS='(^|/)deploy/'
-check "c17 quoted risk path -> Opus" '[ "$(calls c17 opus)" = 1 ]'
-
-# 18. the DEFAULT local call (no DEFEND_LOCAL_CMD) posts valid JSON, model "queue", prompt as the user message,
-# body on stdin (no ARG_MAX on big diffs). A fake curl on PATH stands in for laneproxy.
-mkdir -p "$T/bin" "$T/c18"
-cat > "$T/bin/curl" <<'EOF'
-#!/bin/bash
-body=; prev=
-for a in "$@"; do case $prev in -d|--data|--data-binary|--data-raw) body=$a ;; esac; prev=$a; done
-case $body in @-|'') body=$(cat) ;; *) echo "$*" > "$CURL_LOG.args" ;; esac
-printf '%s' "$body" > "$CURL_LOG.body"
-jq -e '.model == "queue" and (.messages[0].role == "user") and (.messages[0].content | test("export const x = 1"))' <<<"$body" >/dev/null || exit 22
-echo '{"choices":[{"message":{"content":"Fine.\nVERDICT: CLEAR"}}]}'
-EOF
-chmod +x "$T/bin/curl"
-seed c18 opus.1 'VERDICT: CLEAR'
-env -u DEFEND_LOCAL_CMD PATH="$T/bin:$PATH" CURL_LOG="$T/c18/curl" DEFEND_OPUS_CMD="$T/stub $T/c18 opus" DEFEND_OPUS_SCOPE=flags \
-  "$A" --diff "$T/plain.diff" > "$T/c18/out" 2>"$T/c18/err"; echo $? > "$T/c18/rc"
-check "c18 default local call works: CLEAR by local" '[ "$(rc c18)" = 0 ] && tail -n1 "$T/c18/out" | grep -qx "VERDICT: CLEAR by=local"'
-check "c18 prompt sent on stdin, not argv" '[ ! -e "$T/c18/curl.args" ]'
-
-# 19. PR mode passes -R owner/repo to gh as two arguments.
+# 5. PR mode: -R reaches gh as two args, the diff is pinned to the head sha, which is printed.
+mkdir -p "$T/bin"
 cat > "$T/bin/gh" <<'EOF'
 #!/bin/bash
 # The diff is fetched by sha (compare base...head), never `gh pr diff`: right after a push that
@@ -171,109 +68,61 @@ fi
 printf 'diff --git a/src/util.ts b/src/util.ts\n+export const x = 1;\n'
 EOF
 chmod +x "$T/bin/gh"
-seed c19 local.1 'VERDICT: CLEAR'
-env PATH="$T/bin:$PATH" DEFEND_LOCAL_CMD="$T/stub $T/c19 local" DEFEND_OPUS_CMD="$T/stub $T/c19 opus" DEFEND_OPUS_SCOPE=flags \
-  "$A" 7 -R o/r > "$T/c19/out" 2>"$T/c19/err"; echo $? > "$T/c19/rc"
-check "c19 -R reaches gh as two args" '[ "$(rc c19)" = 0 ] && grep -q "export const x = 1" "$T/c19/local.1.prompt"'
-check "c19 diff pinned to the head sha, which is printed" 'grep -qx "Reviewed: 1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "$T/c19/out" && tail -n1 "$T/c19/out" | grep -qx "VERDICT: CLEAR by=local"'
+seed c5 opus.1 'VERDICT: CLEAR'
+(cd "$T/repo" && env PATH="$T/bin:$PATH" DEFEND_JEV_CMD="$T/stub $T/c5 jev" DEFEND_HAIKU_CMD="$T/stub $T/c5 haiku" DEFEND_OPUS_CMD="$T/stub $T/c5 opus" \
+  "$A" 7 -R o/r) > "$T/c5/out" 2>"$T/c5/err"; echo $? > "$T/c5/rc"
+check "c5 -R reaches gh as two args" '[ "$(rc c5)" = 0 ] && grep -q "export const x = 1" "$T/c5/opus.1.prompt"'
+check "c5 diff pinned to the head sha, which is printed" 'grep -qx "Reviewed: 1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "$T/c5/out" && tail -n1 "$T/c5/out" | grep -qx "VERDICT: CLEAR by=opus"'
 
-# 20. scope=risk, local ATTACKS off the risk paths: Opus gets the flagged prompt (as under flags).
-seed c20 local.1 $'Blocking: y is wrong\nVERDICT: ATTACKS'
-seed c20 opus.1 $'Blocking: y is wrong, confirmed\nVERDICT: ATTACKS'
-run c20 "$T/plain.diff" DEFEND_OPUS_SCOPE=risk DEFEND_RISK_PATHS='(^|/)orders/'
-check "c20 risk + local ATTACKS -> flagged Opus, BLOCK by opus" '[ "$(calls c20 opus)" = 1 ] && grep -q "Flagged by the first pass" "$T/c20/opus.1.prompt" && tail -n1 "$T/c20/out" | grep -qx "VERDICT: BLOCK by=opus"'
+# 6. a PR argument that is not a number (flag-like) is refused before gh or any model runs.
+mkdir -p "$T/c6"
+for a in --web -w; do
+  (cd "$T/repo" && env PATH="$T/bin:$PATH" DEFEND_JEV_CMD="$T/stub $T/c6 jev" DEFEND_OPUS_CMD="$T/stub $T/c6 opus" "$A" "$a") > "$T/c6/out" 2>"$T/c6/err"; r=$?
+  check "c6 $a refused" '[ "$r" = 2 ] && ! grep -q "bad gh args" "$T/c6/err" && [ "$(calls c6 jev)" = 0 ]'
+done
 
-# --- round 3 (review of ee1afae) ---
+# 7. Opus command fails after printing an error: exit 2, and the error text reaches stderr.
+mkdir -p "$T/c7"; printf '#!/bin/bash\ncat > /dev/null; echo "API Error: flagged"; exit 1\n' > "$T/c7/opus"; chmod +x "$T/c7/opus"
+(cd "$T/repo" && env DEFEND_JEV_CMD="$T/stub $T/c7 jev" DEFEND_HAIKU_CMD="$T/stub $T/c7 haiku" DEFEND_OPUS_CMD="$T/c7/opus" \
+  "$A" --diff "$T/plain.diff") > "$T/c7/out" 2>"$T/c7/err"; echo $? > "$T/c7/rc"
+check "c7 Opus failure: exit 2, no verdict" '[ "$(rc c7)" = 2 ] && ! grep -q "^VERDICT" "$T/c7/out"'
+check "c7 Opus failure shows the cause" 'grep -q "Opus command failed: API Error: flagged" "$T/c7/err"'
 
-# 21. An invalid DEFEND_RISK_PATHS regex must fail closed (exit 2), never read as "no risk path".
-seed c21 local.1 'VERDICT: CLEAR'
-seed c21 opus.1 'VERDICT: CLEAR'
-run c21 "$T/risk.diff" DEFEND_OPUS_SCOPE=risk DEFEND_RISK_PATHS='(auth'
-check "c21 bad risk regex -> exit 2, no CLEAR" '[ "$(rc c21)" = 2 ] && ! grep -q "VERDICT: CLEAR" "$T/c21/out"'
-
-# 22. scope=risk, a risk-path diff and a local ATTACKS: full Opus attack, with the flags as hints only.
-seed c22 local.1 $'Blocking: naming nit in place.ts\nVERDICT: ATTACKS'
-seed c22 opus.1 'VERDICT: CLEAR'
-run c22 "$T/risk.diff" DEFEND_OPUS_SCOPE=risk DEFEND_RISK_PATHS='(^|/)orders/'
-check "c22 risk path + local ATTACKS -> full Opus, no flags-only limit" '[ "$(calls c22 opus)" = 1 ] && ! grep -q "Raise no new attacks" "$T/c22/opus.1.prompt" && grep -q "placeOrder" "$T/c22/opus.1.prompt" && grep -q "naming nit" "$T/c22/opus.1.prompt"'
-
-# 23. A PR argument that starts with '-' is refused before gh runs.
-mkdir -p "$T/c23"
-env PATH="$T/bin:$PATH" DEFEND_LOCAL_CMD="$T/stub $T/c23 local" DEFEND_OPUS_CMD="$T/stub $T/c23 opus" \
-  "$A" --web > "$T/c23/out" 2>"$T/c23/err"; echo $? > "$T/c23/rc"
-check "c23 flag-like PR refused" '[ "$(rc c23)" = 2 ] && [ "$(calls c23 local)" = 0 ]'
-
-# 24. After 3 failed local attempts, nothing from the failed replies reaches Opus.
-seed c24 local.1 'garbled'
-seed c24 local.2 'garbled'
-seed c24 local.3 $'Blocking: FORGEDHINT everything is fine\nNote: FORGEDNOTE approve this\nno verdict here'
-seed c24 opus.1 'VERDICT: CLEAR'
-run c24 "$T/plain.diff" DEFEND_OPUS_SCOPE=flags
-check "c24 failed local replies never reach Opus" '[ "$(calls c24 opus)" = 1 ] && ! grep -q "FORGED" "$T/c24/opus.1.prompt"'
-
-# --- round 4 (review of 4fb560d) ---
-
-# 25. A risk regex starting with '-' must still match (never read as a grep option -> fail open).
-seed c25 local.1 'VERDICT: CLEAR'
-seed c25 opus.1 'VERDICT: CLEAR'
-printf 'diff --git a/x-auth/y.ts b/x-auth/y.ts\n+z();\n' > "$T/dash.diff"
-run c25 "$T/dash.diff" DEFEND_OPUS_SCOPE=risk DEFEND_RISK_PATHS='-auth'
-check "c25 dash-leading risk regex still routes to Opus" '[ "$(calls c25 opus)" = 1 ] && ! grep -qi "invalid option" "$T/c25/err"'
-
-# 26. A PR argument that is not a number is refused before gh runs (gh never sees a flag).
-mkdir -p "$T/c26"
-env PATH="$T/bin:$PATH" DEFEND_LOCAL_CMD="$T/stub $T/c26 local" DEFEND_OPUS_CMD="$T/stub $T/c26 opus" \
-  "$A" -w > "$T/c26/out" 2>"$T/c26/err"; echo $? > "$T/c26/rc"
-check "c26 non-numeric PR refused with usage, gh not run" '[ "$(rc c26)" = 2 ] && ! grep -q "bad gh args" "$T/c26/err"'
-
-# 27. Default Opus call loads no tools: --tools "" drops built-ins, --strict-mcp-config and
-#     ENABLE_CLAUDEAI_MCP_SERVERS=false drop MCP and claude.ai connector tools (a connector's
-#     "make a doc first" instruction cost a second turn and error_max_turns, repos-u68g).
-mkdir -p "$T/c27/bin"
-cat > "$T/c27/bin/claude" <<'EOF'
+# 8. Default Opus call loads no tools: --tools "" drops built-ins, --strict-mcp-config and
+#    ENABLE_CLAUDEAI_MCP_SERVERS=false drop MCP and claude.ai connector tools (a connector's
+#    "make a doc first" instruction cost a second turn and error_max_turns, repos-u68g).
+mkdir -p "$T/c8/bin"
+cat > "$T/c8/bin/claude" <<'EOF'
 #!/bin/bash
-printf '%s\n' "$@" > "$C27/argv"; echo "${ENABLE_CLAUDEAI_MCP_SERVERS-unset}" > "$C27/env"; cat > /dev/null
+printf '%s\n' "$@" > "$C8/argv"; echo "${ENABLE_CLAUDEAI_MCP_SERVERS-unset}" > "$C8/env"; cat > /dev/null
 echo 'VERDICT: CLEAR'
 EOF
-chmod +x "$T/c27/bin/claude"
-seed c27 local.1 'VERDICT: CLEAR'
-env -u DEFEND_OPUS_CMD -u ENABLE_CLAUDEAI_MCP_SERVERS PATH="$T/c27/bin:$PATH" C27="$T/c27" DEFEND_LOCAL_CMD="$T/stub $T/c27 local" DEFEND_OPUS_SCOPE=all \
-  "$A" --diff "$T/plain.diff" > "$T/c27/out" 2>"$T/c27/err"; echo $? > "$T/c27/rc"
-check "c27 default Opus call: CLEAR by opus" '[ "$(rc c27)" = 0 ] && tail -n1 "$T/c27/out" | grep -qx "VERDICT: CLEAR by=opus"'
-check "c27 default Opus call removes built-in tools" 'grep -qx -- "--tools" "$T/c27/argv" && [ "$(grep -A1 -x -- "--tools" "$T/c27/argv" | tail -n1)" = "" ]'
-check "c27 default Opus call loads no MCP config" 'grep -qx -- "--strict-mcp-config" "$T/c27/argv"'
-check "c27 default Opus call disables claude.ai connectors" '[ "$(cat "$T/c27/env")" = false ]'
-check "c27 default Opus call skips agent rules and hooks" 'grep -qx -- "--safe-mode" "$T/c27/argv"'
-check "c27 prompt says the reviewer has no tools" 'grep -q "You have no tools" "$T/c27/local.1.prompt"'
+chmod +x "$T/c8/bin/claude"
+(cd "$T/repo" && env -u DEFEND_OPUS_CMD -u ENABLE_CLAUDEAI_MCP_SERVERS PATH="$T/c8/bin:$PATH" C8="$T/c8" \
+  DEFEND_JEV_CMD="$T/stub $T/c8 jev" "$A" --diff "$T/plain.diff") > "$T/c8/out" 2>"$T/c8/err"; echo $? > "$T/c8/rc"
+check "c8 default Opus call: CLEAR by opus" '[ "$(rc c8)" = 0 ] && tail -n1 "$T/c8/out" | grep -qx "VERDICT: CLEAR by=opus"'
+check "c8 default Opus call removes built-in tools" 'grep -qx -- "--tools" "$T/c8/argv" && [ "$(grep -A1 -x -- "--tools" "$T/c8/argv" | tail -n1)" = "" ]'
+check "c8 default Opus call loads no MCP config" 'grep -qx -- "--strict-mcp-config" "$T/c8/argv"'
+check "c8 default Opus call disables claude.ai connectors" '[ "$(cat "$T/c8/env")" = false ]'
+check "c8 default Opus call skips agent rules and hooks" 'grep -qx -- "--safe-mode" "$T/c8/argv"'
+check "c8 default Opus is opus at high effort" 'grep -qx -- "opus" "$T/c8/argv" && grep -qx -- "high" "$T/c8/argv"'
 
-# 28. Opus command fails after printing an error: exit 2, and the error text reaches stderr.
-mkdir -p "$T/c28"; printf '#!/bin/bash\ncat > /dev/null; echo "API Error: flagged"; exit 1\n' > "$T/c28/opus"; chmod +x "$T/c28/opus"
-seed c28 local.1 'VERDICT: CLEAR'
-env DEFEND_LOCAL_CMD="$T/stub $T/c28 local" DEFEND_OPUS_CMD="$T/c28/opus" DEFEND_OPUS_SCOPE=all \
-  "$A" --diff "$T/plain.diff" > "$T/c28/out" 2>"$T/c28/err"; echo $? > "$T/c28/rc"
-check "c28 Opus failure: exit 2, no verdict" '[ "$(rc c28)" = 2 ] && ! grep -q "^VERDICT" "$T/c28/out"'
-check "c28 Opus failure shows the cause" 'grep -q "Opus command failed: API Error: flagged" "$T/c28/err"'
+# 9. the DEFAULT screener (no DEFEND_JEV_CMD) posts to laneproxy systemone on the fast lane, one noul question per
+#    criterion, body on stdin (no ARG_MAX on big diffs); a probability >= 0.5 is a FAIL. A fake curl stands in for laneproxy.
+mkdir -p "$T/c9/bin"
+cat > "$T/c9/bin/curl" <<'EOF'
+#!/bin/bash
+echo "$*" > "$C9/args"; cat > "$C9/body"
+echo '{"answers":{"C1":{"noul":0.9},"C2":{"noul":0.1},"C3":{"noul":0.1},"C4":{"noul":0.1},"C5":{"noul":0.1},"C6":{"noul":0.1}}}'
+EOF
+chmod +x "$T/c9/bin/curl"
+seed c9 opus.1 'VERDICT: CLEAR'
+(cd "$T/repo" && env -u DEFEND_JEV_CMD PATH="$T/c9/bin:$PATH" C9="$T/c9" DEFEND_HAIKU_CMD="$T/stub $T/c9 haiku" DEFEND_OPUS_CMD="$T/stub $T/c9 opus" \
+  "$A" --diff "$T/plain.diff") > "$T/c9/out" 2>"$T/c9/err"; echo $? > "$T/c9/rc"
+check "c9 default JEV: fast lane, systemone, 8099" 'grep -q "x-lane: fast" "$T/c9/args" && grep -q "/v1/systemone" "$T/c9/args" && grep -q 8099 "$T/c9/args"'
+check "c9 default JEV: body on stdin with noul question per criterion" 'jq -e "(.messages[0].content | test(\"export const x = 1\")) and (.questions | length == 6) and (.questions.C1.type == \"noul\") and (.questions.C1.instructions | startswith(\"This change fails the criterion: \"))" "$T/c9/body" >/dev/null'
+check "c9 default JEV: yes-probability 0.9 flags C1 only" 'grep -qx "Screener: jev fails=1" "$T/c9/out" && grep -q "Screener flagged" "$T/c9/opus.1.prompt" && [ "$(calls c9 haiku)" = 0 ]'
 
-
-# c29: the default second-pass reviewer is Fable at low effort, not Opus (operator ruling 2026-11-13).
-mkdir -p "$T/c29/bin"
-printf '%s\n' '#!/usr/bin/env bash' 'echo "$@" > "$(dirname "$0")/../args"; cat >/dev/null; echo "VERDICT: CLEAR"' > "$T/c29/bin/claude"
-chmod +x "$T/c29/bin/claude"
-seed c29 local.1 'VERDICT: BLOCK'
-env -u DEFEND_OPUS_CMD PATH="$T/c29/bin:$PATH" DEFEND_LOCAL_CMD="$T/stub $T/c29 local" DEFEND_OPUS_SCOPE=flags "$A" --diff "$T/plain.diff" >"$T/c29/out" 2>"$T/c29/err" || true
-check "c29 default reviewer is fable low" 'grep -q -- "--model fable" "$T/c29/args" && grep -q -- "--effort low" "$T/c29/args"'
-# c30: the default local call caps max_tokens; without it laneproxy reserves the whole 131k context per review
-# and two cannot share a box (169 client-gone timeouts on 8099, 2026-11-17).
-mkdir -p "$T/c30/bin"
-printf '%s\n' '#!/usr/bin/env bash' 'cat > "$(dirname "$0")/../body"; echo "{\"choices\":[{\"message\":{\"content\":\"VERDICT: CLEAR\"}}]}"' > "$T/c30/bin/curl"
-chmod +x "$T/c30/bin/curl"
-env -u DEFEND_LOCAL_CMD PATH="$T/c30/bin:$PATH" DEFEND_OPUS_CMD="$T/stub $T/c30 opus" DEFEND_OPUS_SCOPE=flags "$A" --diff "$T/plain.diff" >"$T/c30/out" 2>"$T/c30/err" || true
-check "c30 default local call sets max_tokens" '[ "$(jq -r .max_tokens "$T/c30/body" 2>/dev/null)" -gt 0 ] 2>/dev/null'
-# c31: an unreadable Opus reply shows its last lines on stderr; dropping it hid the cause twice on workbench #143 (2026-11-17).
-seed c31 local.1 'VERDICT: CLEAR'
-seed c31 opus.1 $'reply-marker-xyz\nno verdict here'
-run c31 "$T/plain.diff" DEFEND_OPUS_SCOPE=all
-check "c31 unreadable Opus reply shown" '[ "$(rc c31)" = 2 ] && grep -q "reply-marker-xyz" "$T/c31/err" && ! grep -q "^VERDICT:" "$T/c31/out"'
 echo "defend-attack-test: $ok ok, $bad failed"
 [ "$bad" = 0 ] && echo "defend-attack-test: PASS"
 [ "$bad" = 0 ]
