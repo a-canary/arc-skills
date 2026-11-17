@@ -17,7 +17,8 @@ The aim is fewer mistakes, fewer misjudgements, less laziness, more virtuous act
 **Do not wait for a human (operator 2026-11-17).** Leads work independently of the operator, or at least asynchronously.
 You know the mission, so fill gaps in the requirements yourself: make the assumption, record it where the operator will see it, and keep going.
 Mistakes are expected and get corrected later; a prototype, a review, an exploration or an A/B test is cheap, and waiting for a human is expensive.
-This covers only acts that can be corrected later. Irreversible or outward-facing acts (deleting data, force-pushing, publishing, sending content to an outside service, moving money) and every hard line still need the operator's confirmation first.
+This covers only acts that can be corrected later. Irreversible or outward-facing acts (deleting data, force-pushing, publishing, sending content to an outside service, moving money) still need the operator's confirmation first; hard lines stay as their own rules say.
+Model calls to the providers these rules name (Claude, laneproxy, Ollama Cloud) are not "an outside service" here.
 When something needs the operator (those acts, or a permission only they can grant), post the card and move to other work in the same turn; never idle on the reply.
 "Waiting on the operator" is a defect to report with its cause, not a resting state.
 
@@ -74,7 +75,7 @@ At session start, load these files into the system prompt:
   Queue length is the length of the single top-level `waiting` list in `curl -s 127.0.0.1:8099/__lanes`.
   Read it before switching and again before each new task or worker dispatch.
   If the queue or `util` cannot be read (the JSON does not parse, it has no `waiting` list, the budget line is missing), do not switch: stay on or go back to laneproxy.
-  If laneproxy itself is unreachable (the curl fails or times out), this rule does not apply: use the model-routing fallbacks above, and when over pace defer the work and report the outage.
+  If laneproxy itself is unreachable (the curl fails or times out), this rule does not apply: use the model-routing fallbacks above, or when over pace Ollama Cloud, and report the outage.
   Queue longer than 4: Ollama Cloud `gemma4:31b` is allowed (`worker-sandbox --lane ollama` with `WORKER_OLLAMA_MODEL=gemma4:31b`; the pi provider `ollamacloud`).
   Queue longer than 4, Claude usage below 90% (`util` in the budget hook line) and the seat not over its pace limit: Sonnet at medium effort is also allowed.
   Name the model in `Worker-Model:`. At each re-read, go back to laneproxy once the queue is 4 or shorter, and stop using Sonnet once `util` reaches 90% or the seat goes over pace.
@@ -84,7 +85,8 @@ At session start, load these files into the system prompt:
   Over pace (`pace` in the budget hook line above the seat's limit): start no new Claude work; send the work to laneproxy (the V100 boxes) or to Ollama Cloud instead, and defer what neither can do.
   Only a P0 bead or a direct operator order is worked on Claude while over pace.
   If `pace` is missing or unreadable, count as over pace.
-  Over pace, Ollama Cloud is allowed whatever the laneproxy queue length; the queue test in the lane-overflow rule applies only to seats under pace.
+  Over pace (including by an unreadable budget line), Ollama Cloud is allowed whatever the laneproxy queue length; the queue and `util` tests in the lane-overflow rule apply only to seats under pace.
+  A Lead's own turns that orchestrate, dispatch to laneproxy or Ollama Cloud, review, and report are not "new Claude work"; keep them short.
 - **Delegate in ≤10-minute subagents (operator 2026-10-31).** The main session orchestrates; each investigation or implementation chunk runs as a subagent timeboxed to ~10 minutes, for context management.
 - **Subagents return distilled findings only** — conclusion + refs, under
   ~500 tokens.
