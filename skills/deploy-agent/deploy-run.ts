@@ -35,7 +35,7 @@ function realBd(dir: string, ...args: string[]): string {
 // only gate at a stub that prints CLEAR.
 const passwdHome = readFileSync("/etc/passwd", "utf8").split("\n").map((l) => l.split(":")).find((f) => f[2] === String(process.getuid?.()))?.[5];
 export const DEFEND_ATTACK = join(passwdHome ?? "/nonexistent", ".claude", "skills", "defend", "bin", "defend-attack");
-// Allow-list, not the caller's env: defend-attack takes DEFEND_LOCAL_CMD / DEFEND_OPUS_CMD and finds claude via PATH, so any
+// Allow-list, not the caller's env: defend-attack takes DEFEND_JEV_CMD / DEFEND_HAIKU_CMD / DEFEND_OPUS_CMD and finds claude via PATH, so any
 // inherited variable could swap the reviewer for a stub. claude lives in ~/.local/bin; jq and curl in /usr/bin.
 export const REVIEW_ENV = {
   HOME: passwdHome ?? "/nonexistent",
@@ -79,7 +79,7 @@ export const realDeps = (): Deps => ({
       // A hung reviewer is killed and counts as not clear (exitCode null).
       let r;
       try {
-        r = Bun.spawnSync([DEFEND_ATTACK, "--diff", tmp], { env: REVIEW_ENV, stdin: "ignore", stderr: "pipe", timeout: 20 * 60_000 });
+        r = Bun.spawnSync([DEFEND_ATTACK, "--diff", tmp], { env: REVIEW_ENV, cwd: dir, stdin: "ignore", stderr: "pipe", timeout: 20 * 60_000 });
       } catch (e) {
         return { clear: false, line: `reviewer did not start: ${(e as Error).message}` };
       }

@@ -1,4 +1,4 @@
-# DefendMerge — worker diff → git merge (defend-attack: local model, then Opus)
+# DefendMerge — worker diff → git merge (defend-attack: screener, then Opus high)
 
 DefendMerge **is** /hard-merge. Same procedure, named here so the family is
 complete: the gate is between Worker and `git merge`, run by `defend-attack`.
@@ -7,10 +7,9 @@ complete: the gate is between Worker and `git merge`, run by `defend-attack`.
 
 - The reviewer is `defend-attack` (`~/.claude/skills/defend/bin/defend-attack`). Run it with `defend-attack <pr> -R owner/repo` or `defend-attack --diff <file>`.
 - Independence: `defend-attack` is a separate model call with no author context.
-- Opus scope is set by DEFEND_OPUS_SCOPE. The default is `all` (operator ruling 2026-11-09: every gate goes through Opus; the local model scouts ahead). The scopes are `all`, `risk`, and `flags`.
-- `risk` means Opus attacks the local model's flags, any diff touching DEFEND_RISK_PATHS, and after three local failures.
-- `flags` means Opus attacks only local flags or after three local failures.
-- `all` means Opus attacks every diff.
+- Flow: criteria are numbered C1..Cn. Repo criteria (`.defend/criteria`, one per line, blank and `#` lines skipped) come first, then the built-in lenses, which are always included so a diff author cannot drop one. In PR mode the repo file is read from the PR base commit via the GitHub API, never from the head; a missing file means built-ins only. With `--diff` the working tree file is used.
+- A screener checks the diff against them: JEV (`DEFEND_JEV_CMD`, default laneproxy `/v1/systemone`, timeout `DEFEND_JEV_TIMEOUT`, default 30s), else Haiku (`DEFEND_HAIKU_CMD`), else none. Output line: `Screener: <jev|haiku|none> fails=<N>`. The screener uses `x-lane: fast` on purpose: its calls are short, one per diff.
+- Opus (`DEFEND_OPUS_CMD`, default `claude -p --model opus --effort high`) always decides. It confirms or refutes each screener flag, or deep-verifies every criterion when nothing was flagged. The screener never clears a diff. Screener reasons are passed to Opus fenced and labelled untrusted. Rulings: the default reviewer is Opus at high effort (operator ruling 2026-11-17, feeds into opus/high). History: 2026-11-09 sent every gate through Opus; 2026-11-13 moved the default to Fable at low effort.
 - Exit 2 means no verdict. Do not post a receipt. Do not merge. Fix the cause and re-run.
 - Known gap: the Opus leg runs a headless `claude -p` (DEFEND_OPUS_CMD) and needs a working headless login on the host. Until the GateKeeper (repos-v6m7) takes the Opus tier over, a failed Opus call exits 2 and blocks the merge.
 
