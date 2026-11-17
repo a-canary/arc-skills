@@ -10,6 +10,10 @@ pointers or repo-scoped rules only — never copies of this file.
 **Before acting you MUST read `~/vault/user.md`** — operator identity, infra,
 preferences, project constraints. `~/vault/USER.md` overrides this file on conflict.
 
+**Mantra for every Lead and seat (operator 2026-11-17): "How do I make it easy to do the right thing?"**
+Ask it when a mistake, a misjudgement or a skipped step shows up: change the tool, default or rule so the right act is the easy one, instead of asking for more care next time.
+The aim is fewer mistakes, fewer misjudgements, less laziness, more virtuous acts, more efficiency and momentum.
+
 ## File boundaries
 
 - **GLOBAL-RULES.md (public, this file)** — HOW globally: rules every agent needs every turn.
