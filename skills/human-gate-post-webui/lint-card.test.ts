@@ -83,7 +83,7 @@ test("permission-only cards are refused, hard-line ones pass", () => {
   for (const adds of ["whether to spend $40 of vast credit this week.", "whether the repo goes public.", "whether to place the live order before the open."])
     expect(lintCard("[Deploy] Run the fix", perm("May I run the job-drop fix as root?", adds))).toEqual([]);
   expect(lintCard("[Deploy] Run the fix", perm("May I spend $40 of vast credit on this run?"))).toEqual([]);
-  for (const q of ["Which model can we use for agent-pub?", "How can we split the shards?", "Should the bot auto-approve reviews?"])
+  for (const q of ["Which model can we use for agent-pub?", "How can we split the shards?", "Should the bot auto-approve reviews?", "What permission model should the hook use?", "Which go-ahead signal should the bot wait for?"])
     expect(lintCard("[Design] Keep Qwen", perm(q))).toEqual([]);
   expect(lintCard("[Design] Keep Qwen", good)).toEqual([]);
 });
