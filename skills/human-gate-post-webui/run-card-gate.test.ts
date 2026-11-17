@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runNeedsCard } from "./decide";
@@ -32,6 +32,17 @@ test("decide refuses a --run card whose script a Lead can grant, and names the g
 });
 
 test("decide still accepts a --run card whose script crosses a hard line", () => {
-  const r = ask(script("hard.sh", "#!/bin/bash\ngit push --force origin main\n"));
+  const r = ask(script("hard.sh", "#!/bin/bash\n# undo: none\ngit push --force origin main\n"));
   expect(r.stderr + r.stdout).not.toMatch(/--grant/);
+  // defend 228 R1: a crash or unrelated refusal must not pass as "accepted"
+  expect(r.status).toBe(0);
+  expect(r.stdout).toMatch(/^Run: \S+ sha256: [0-9a-f]{64}$/m);
+});
+
+// defend 228 R1: the refusal names a script path that exists, not an unpinned queue path
+test("the refusal points at a grant command whose --script path exists", () => {
+  const r = ask(script("benign2.sh", "#!/bin/bash\n# undo: none\ninstall -m 0755 a b\n"));
+  const m = /--script (\S+)/.exec(r.stderr + r.stdout);
+  expect(m).not.toBeNull();
+  expect(existsSync(m![1])).toBe(true);
 });
