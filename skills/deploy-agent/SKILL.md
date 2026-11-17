@@ -38,6 +38,7 @@ Same queue-dir, undo-line and fence checks as a card run, plus `human-only.txt`,
 
 Known limits of the screen:
 - Shell indirection is not caught: a variable holding `gh` or `api`, `cd tools && bun order`, backslash line continuations, eval.
+- Broad by design: any line with `gh` then `api`, or `bun` then `order`, is refused even when benign (e.g. `bun test order.test.ts`); such a script goes through an operator card. False refusals cost a card; false passes cost the screen.
 - Backstop: defend-attack review of the exact script bytes.
 - Real ceiling: the judge gate (repos-oh6y).
 The changes log records the granting Lead, the review verdict, the hash and the undo.
