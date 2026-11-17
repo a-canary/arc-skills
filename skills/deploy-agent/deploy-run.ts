@@ -133,6 +133,13 @@ export function reviewVerdict(stdout: string, exitCode: number | null): { clear:
   return { clear: exitCode === 0 && /^VERDICT: CLEAR by=\S+$/.test(line), line };
 }
 
+// Reviewer output can echo the untrusted script: only its Blocking:/Note: lines reach the Lead, control characters removed, capped.
+export function findingsText(out: string): string {
+  const kept = out.split("\n").map((l) => l.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "").trim()).filter((l) => /^(Blocking|Note):/.test(l));
+  const s = kept.join("\n");
+  return s.length > 4000 ? `${s.slice(0, 4000)}\n[findings truncated]` : s;
+}
+
 // One plain token, so it cannot forge lines in the changes log.
 // ponytail: any agent can still name any Lead; the log records the claim, not a proof. Upgrade: per-seat signing.
 export const LEAD = /^[a-z][a-z0-9-]{1,39}$/;
@@ -156,7 +163,8 @@ export function grantRun(lead: string, path: string, d: Deps) {
   }
   if (!d.review) refuse("grant path requires review");
   const r = d.review(text);
-  if (!r.clear) refuse(`review not clear: ${r.line}${r.findings ? `\n--- reviewer findings ---\n${r.findings}` : ""}`);
+  const f = r.findings ? findingsText(r.findings) : "";
+  if (!r.clear) refuse(`review not clear: ${r.line}${f ? `\n--- reviewer findings ---\n${f}` : ""}`);
   const hex = createHash("sha256").update(text).digest("hex");
   return { path: resolved, undo, hex, text, lead, review: r };
 }
