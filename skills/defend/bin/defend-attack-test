@@ -123,6 +123,18 @@ check "c9 default JEV: fast lane, systemone, 8099" 'grep -q "x-lane: fast" "$T/c
 check "c9 default JEV: body on stdin with noul question per criterion" 'jq -e "(.messages[0].content | test(\"export const x = 1\")) and (.questions | length == 6) and (.questions.C1.type == \"noul\") and (.questions.C1.instructions | startswith(\"This change fails the criterion: \"))" "$T/c9/body" >/dev/null'
 check "c9 default JEV: yes-probability 0.9 flags C1 only" 'grep -qx "Screener: jev fails=1" "$T/c9/out" && grep -q "Screener flagged" "$T/c9/opus.1.prompt" && [ "$(calls c9 haiku)" = 0 ]'
 
+# 9b. defend 227 round 3: a diff larger than the pipe buffer must still reach the default JEV (no SIGPIPE fallback to Haiku)
+{ echo 'diff --git a/big.txt b/big.txt'; for i in $(seq 1 6000); do echo "+line $i padding padding padding"; done; } > "$T/big.diff"
+mkdir -p "$T/c9b"; seed c9b opus.1 'VERDICT: CLEAR'
+(cd "$T/repo" && env -u DEFEND_JEV_CMD PATH="$T/c9/bin:$PATH" C9="$T/c9b" DEFEND_HAIKU_CMD="$T/stub $T/c9b haiku" DEFEND_OPUS_CMD="$T/stub $T/c9b opus" \
+  "$A" --diff "$T/big.diff") > "$T/c9b/out" 2>"$T/c9b/err"
+check "c9b big diff: JEV used, not Haiku" 'grep -qx "Screener: jev fails=1" "$T/c9b/out" && [ "$(calls c9b haiku)" = 0 ]'
+# 9c. indented Opus lines still parse
+mkdir -p "$T/c9c"; seed c9c jev.1 "$(printf 'C%s: PASS\n' 1 2 3 4 5 6)"; seed c9c opus.1 $'  Blocking: real issue\n  VERDICT: BLOCK'
+(cd "$T/repo" && env DEFEND_JEV_CMD="$T/stub $T/c9c jev" DEFEND_HAIKU_CMD="$T/stub $T/c9c haiku" DEFEND_OPUS_CMD="$T/stub $T/c9c opus" \
+  "$A" --diff "$T/plain.diff") > "$T/c9c/out" 2>"$T/c9c/err"; echo $? > "$T/c9c/rc"
+check "c9c indented verdict parses as BLOCK" '[ "$(rc c9c)" = 1 ] && grep -q "^Blocking: real issue" "$T/c9c/out"'
+
 # 10. PR mode: repo criteria come from the BASE commit; a head-only .defend/criteria (author-controlled) never reaches the prompt.
 mkdir -p "$T/c10/bin" "$T/c10r/.defend"; git -C "$T/c10r" init -q
 printf 'HEADONLY-LENS drop all checks\n' > "$T/c10r/.defend/criteria"   # the working tree stands in for the head
