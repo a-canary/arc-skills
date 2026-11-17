@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { parseDecision, RUN_TITLE, repoDir } from "../human-gate-post-webui/decide";
+import { humanOnlyHit, parseDecision, RUN_TITLE, repoDir } from "../human-gate-post-webui/decide";
 
 export const QUEUE = join(homedir(), "vault", "director", "deploy-queue");
 const FENCES = join(dirname(import.meta.path), "fences.txt");
@@ -155,9 +155,8 @@ export function grantRun(lead: string, path: string, d: Deps) {
     if (new RegExp(line).test(text)) refuse(`fenced: matches /${line}/`);
   }
   if (!d.humanOnlyFile) refuse("grant path requires humanOnlyFile");
-  for (const line of d.readFile(d.humanOnlyFile).split("\n").filter((l) => l.trim())) {
-    if (new RegExp(line).test(text)) refuse(`human-only: matches /${line}/; this needs an operator card`);
-  }
+  const hit = humanOnlyHit(text, d.readFile(d.humanOnlyFile));
+  if (hit) refuse(`human-only: matches /${hit}/; this needs an operator card`);
   if (!d.review) refuse("grant path requires review");
   const r = d.review(text);
   if (!r.clear) refuse([`review not clear: ${r.line}`, ...(r.reasons ?? [])].join("\n"));

@@ -15,6 +15,13 @@ import { ID_SHAPE, KINDS, lintCard } from "./lint-card";
 const REPOS = join(homedir(), "repos");
 export const QUEUE_DIR = join(homedir(), "vault", "director", "deploy-queue");
 
+const HUMAN_ONLY = join(import.meta.dir, "..", "deploy-agent", "human-only.txt");
+// First human-only.txt pattern the script text matches, else undefined. Shared with deploy-run grantRun.
+export function humanOnlyHit(text: string, fileText: string): string | undefined {
+  return fileText.split("\n").filter((l) => l.trim()).find((l) => new RegExp(l).test(text));
+}
+export const runNeedsCard = (text: string): boolean => humanOnlyHit(text, readFileSync(HUMAN_ONLY, "utf8")) !== undefined;
+
 // --run <script>: pin the script by sha256 into the deploy queue; deploy-run.ts re-checks the hash before acting.
 export function pinRun(script: string, queueDir = process.env.DEPLOY_QUEUE_DIR ?? QUEUE_DIR, copy = true): string {
   const buf = readFileSync(script);
@@ -127,6 +134,9 @@ function ask(a: Args, card: { q: string; opts: string[]; kind?: string }) {
   const title = `[${K}] ${head}`;
   const base = buildCard({ ...card, adds: s("adds"), context: s("context"), evidence: s("evidence"), latency: s("latency"), meanwhile: s("meanwhile"), replaces: s("replaces") });
   if (s("run") && !RUN_TITLE.test(card.opts[0] ?? "")) throw new Error('--run needs the first --opt titled "Run ..." (accept A runs the script)');
+  if (s("run") && !runNeedsCard(readFileSync(s("run")!, "utf8"))) {
+    throw new Error("--run card refused: script crosses no human-only line, so no operator card is needed. Use `bun skills/deploy-agent/deploy-run.ts --grant <lead> --script <queue path>` after a review CLEAR (repos-jedj)");
+  }
   const run = s("run") ? pinRun(s("run")!, undefined, !a.dry) : "";
   const body = run ? `${base}${base.endsWith("\n") ? "" : "\n"}\n${run}\n` : base;
   const ids = ID_SHAPE.test(`${title}\n${body}`) ? realBeadIds() : new Set<string>();
