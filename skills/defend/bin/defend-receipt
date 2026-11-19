@@ -36,6 +36,21 @@ p=${url#https://github.com/}; p=${p%/pull/*}
 [ "${head#"$sha"}" != "$head" ] || die "head ${head:0:7} != reviewed ${sha:0:7}; the branch moved after review — re-review the new head"
 
 if [ "$verdict" = CLEAR ]; then
+  # Lead lifecycle gate check (repos-iduk7.10): PR body must reference a closed gate bead.
+  # The gate bead is created by decide.ts when the human gate is raised. When the human
+  # approves, the bead is closed. This check ensures the human gate cleared before merge.
+  gate_line=$(grep -iE '^Gate:[[:space:]]*' <<<"$body" | head -1) || true
+  if [ -n "$gate_line" ]; then
+    gate_id=$(echo "$gate_line" | sed -E 's/^[Gg]ate:[[:space:]]*//' | awk '{print $1}')
+    if [ -n "$gate_id" ]; then
+      # Check if the gate bead is closed
+      gate_status=$(bd show "$gate_id" 2>/dev/null | grep -iE 'status' | head -1 || true)
+      if ! echo "$gate_status" | grep -qiE 'closed'; then
+        die "CLEAR requires gate bead $gate_id to be closed (human gate not yet approved)"
+      fi
+    fi
+  fi
+
   grep -qiE '^Rollback:[[:space:]]*\S' <<<"$body" || die "CLEAR requires a Rollback: line in the PR body"
   top=$(git rev-parse --show-toplevel 2>/dev/null) || top=
   # bench repo = bench/CHAMPION on the PR's base or its head, per GitHub — never a local ref or
