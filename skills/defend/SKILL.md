@@ -1,6 +1,13 @@
 ---
 name: defend
-description: The Defend* gate family — named critical junctions where an independent model attacks the artifact before it crosses the seam. DefendPlan (counsel panel, wayfinder→build), DefendMerge (defend-attack: JEV/Haiku screener, then Opus high effort; worker→git merge = /hard-merge), DefendDeploy (counsel panel, QA+visual passed→production deploy), DefendConviction (counsel panel, conviction change touching a held position → apply). Use when a plan is about to be dispatched to build, a diff is about to merge, anything is about to go public, or a conviction change is about to move/exit a held position.
+description: >-
+  The Defend* gate family — named critical junctions where an independent model attacks the
+  artifact before it crosses the seam. DefendPlan (counsel panel, wayfinder→build),
+  DefendMerge (defend-attack: JEV/Haiku screener, then Opus high effort; worker→git merge =
+  /hard-merge), DefendDeploy (counsel panel, QA+visual passed→production deploy),
+  DefendConviction (counsel panel, conviction change touching a held position → apply). Use
+  when a plan is about to be dispatched to build, a diff is about to merge, anything is about
+  to go public, or a conviction change is about to move/exit a held position.
 ---
 
 # defend — critical-junction gate family
