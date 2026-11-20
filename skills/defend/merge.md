@@ -47,6 +47,15 @@ Not a command-text hook: those leak and over-block (repos-76u counsel, 2026-10-2
 The status is self-attested: anyone with write access can post it, so it stops careless
 skips, not deliberate forgery.
 
+**Merge (mechanical).** After the receipt, merge with the helper, not with a hand-typed
+`gh pr merge`: `~/.claude/skills/defend/bin/defended-merge <pr> -R owner/repo`. It re-reads the
+PR head, refuses unless that head is OPEN and every status on it is `success` with
+`defend/merge` among them, then runs `gh pr merge --squash --match-head-commit <head>` — the one
+merge shape the session guard allows (never `--admin`). Two shapes are refused by the guard and
+end up with the operator holding a reviewed PR: a bare `gh pr merge` with no
+`--match-head-commit`, and a receipt chained into the same call. `defend-receipt` prints the
+exact command on a CLEAR, so the next line is copy-paste either way.
+
 **Champion check (repos with a bench).** A CLEAR also runs `bin/champion-check <PR base>` when
 the PR's base or head has `bench/CHAMPION` per the GitHub API (never a possibly-stale local ref or
 checkout); the checkout must then be at the reviewed SHA. A lookup error other than 404 refuses. Deleting `scripts/merge-gate.sh` or

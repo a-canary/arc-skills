@@ -21,7 +21,7 @@ RELEASE  Driver(prototype) ⇄ QA.qwen ► User(webui review)
 | Gate | Seam | Tier | File |
 | --- | --- | --- | --- |
 | **DefendPlan** | wayfinder result → build dispatch | counsel (5-expert panel) | [plan.md](plan.md) |
-| **DefendMerge** | worker diff → git merge | defend-attack: JEV screener, then Opus high (= /hard-merge) | [merge.md](merge.md) |
+| **DefendMerge** | worker diff → git merge | defend-attack: JEV screener, then Opus high (= /hard-merge), merged by `defended-merge` | [merge.md](merge.md) |
 | **DefendDeploy** | QA+visual passed → production deploy | counsel (5-expert panel) | [deploy.md](deploy.md) |
 | **DefendConviction** | conviction change touching a held position → apply | counsel (5-expert panel) | [conviction.md](conviction.md) |
 
@@ -52,7 +52,9 @@ checkable claims against source.
 ## Wiring points
 
 - DefendPlan: director/wayfinder flow, before build dispatch (see plan.md).
-- DefendMerge: /hard-merge IS this gate — same procedure, named here.
+- DefendMerge: /hard-merge IS this gate — same procedure, named here. The merge itself is
+  `defended-merge <pr> -R owner/repo`: it checks the head still carries `defend/merge=success`
+  and merges pinned to that head, so a push after review cannot ride in.
 - DefendDeploy: after QA pass + human webui review, before public deploy
   (app version, YT video, X post, website content) — see release.md.
 - DefendConviction: trading nightly grade → apply seam — when a conviction change
