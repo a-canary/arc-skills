@@ -24,7 +24,7 @@ point — never drop `--allowedTools ""`.
 - **Auth**: the machine's normal `claude` login. The pass OAuth token is org-blocked; do not load it.
 - **No tools**: `--tools ""` drops built-ins only; `--strict-mcp-config` and `ENABLE_CLAUDEAI_MCP_SERVERS=false` drop MCP and claude.ai connector tools, which otherwise cost a second turn and fail `--max-turns 1`.
 - **Model tier per gate**: DefendPlan = counsel panel, DefendMerge = `defend-attack` (see
-  defend/merge.md — a screener flags, then Opus at high effort decides every diff), DefendDeploy = counsel panel.
+  defend/merge.md — a screener flags, then Opus at xhigh effort decides every diff), DefendDeploy = counsel panel.
 
 ## Verdict contract (all callers)
 
