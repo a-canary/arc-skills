@@ -1,0 +1,113 @@
+{
+ "approach": "clustered-panel",
+ "case": "deploy-03",
+ "rep": 1,
+ "wallMs": 196943,
+ "verdict": "ATTACKS",
+ "confidence": 0.82,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The backend rollback to 2.14 is not shown to leave users' streaks intact. Events written by 2.15 (cross-device completions, saver repairs) live in streak_events, and the artifact does not say dual-write covers saver repairs or that streak_count is complete. Rolling back to 2.14 can silently revert streaks, and no reconciliation step is defined. The staging check does not show data written under 2.15 being read back under 2.14.",
+   "evidence": "schema is additive and `streak_count` remains authoritative-compatible, so 2.14 runs against the migrated database unchanged (verified in staging). ABSENT: reconciliation of streak_events vs streak_count after rollback, and evidence that saver repairs are dual-written."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The dual-write semantics are unspecified. The artifact does not say whether streak_count is recomputed from events or incremented per event. It also does not say which store is authoritative during the dual-write period. Offline replay or duplicate syncs from watch or tablet could double-count if streak_count is incremented.",
+   "evidence": "streak is computed from events, idempotent on `(user_id, habit_id, day)` ... `habits.streak_count` is **kept** and dual-written by 2.15"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The idempotency key depends on `day`, but the artifact does not define whose timezone computes it. A device-local day and a server day can disagree around the UTC-8 to UTC+9 change, so one completion can map to different days, or two completions can collapse into one. The QA pass does not establish which rule is used.",
+   "evidence": "idempotent on `(user_id, habit_id, day)` ... Timezone change mid-streak (UTC−8 → UTC+9), DST boundary | staging | Pass"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The backfill runs in production alongside live device writes, and the artifact gives no conflict rule for them. Completions arriving while backfill rows are being written can collide with or be overwritten by backfill rows. The 0-mismatch result comes from a static snapshot and does not cover this case.",
+   "evidence": "run as a resumable job (batches of 5k, checkpointed) ... dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches ... Backfill job starts after full deploy."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The backfill has no operational guards. There is no throttle, write-rate cap, or replica-lag check for an 18.4M-row write on the live database, and no abort or alert condition. The mismatch gate compares server against client recompute, not streak_events against streak_count after the live backfill. The p95 gate is not tied to the backfill window, so a latency regression could be missed or misattributed.",
+   "evidence": "\"`streak_mismatch_total` (server vs client recompute) < 0.1% of synced users\" and \"streaks-svc p95 < 250ms\" ... Backfill job starts after full deploy. (no throttle, abort, or post-backfill verification stated)"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "streak_events is a per-day, per-habit, per-device event log, and the artifact states no retention period, purge path, or account-deletion behavior for it. Storage growth is also unquantified for steady state.",
+   "evidence": "New table `streak_events (user_id, habit_id, day, source_device, created_at)` ... ABSENT: retention policy, deletion on account deletion, or storage budget for streak_events."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The reminder feature has no delivery or scheduling observability, and no gate covers it. The iOS provisional-authorization path is also absent from every QA row, so silent reminder failures would not be detected during the staged rollout.",
+   "evidence": "ABSENT: metric or alert for reminder scheduling or delivery failures; gates list only crash-free, streak_mismatch_total, p95, and support tickets. \"iOS: if the user taps \\\"Remind me\\\" we request provisional authorization first\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Client-side state diverges during a rollback and has no defined recovery. When 3.2 clients run against 2.14, they show local-only streaks, and the artifact gives no reconciliation when sync returns. A client that cached sync-on state and then loses a rolled-back backend has undefined behavior.",
+   "evidence": "3.2 client against 2.14 API (server rollback scenario) | staging | Pass (sync silently disabled, local streak shown)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "Remote-config parity is asserted from one export. The gating flag streak_sync_v2 is the only key that differs, and the artifact does not verify its prod value or targeting rules. Staging results for the flag path may therefore not represent prod.",
+   "evidence": "Staging remote config was exported from prod and only `streak_sync_v2` differed (on in staging)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The crash-free evidence is an internal beta of 1,900 users over 6 days. The artifact gives no minimum sample or per-step measurement window for the 1% and 10% steps, so the 99.5% gate has limited statistical power early in the rollout.",
+   "evidence": "Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87% ... crash-free sessions ≥ 99.5%"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The saver's re-enable date is a rolling 30-day window, but the artifact does not say whether the displayed date is computed server-side or from device time, or how timezone is handled. The date could be wrong near boundaries, and this is untested.",
+   "evidence": "\"Streak saver available again on Nov 28\" and \"Streak saver: limit 1 per 30 days enforced server-side | staging | Pass\""
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "The disabled state of the 'Repair yesterday' control is conveyed only by copy, with no accessibility state specified. The Android deep link to system settings is not in the device-lab QA rows.",
+   "evidence": "Saver button: \"Repair yesterday\" (disabled state label: \"Streak saver available again on Nov 28\") ... \"VoiceOver / TalkBack on streak screen and pre-prompt | device lab | Pass\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Reminder opt-out is not specified across synced devices. The artifact does not say whether disabling reminders on one device applies to the others.",
+   "evidence": "Optional streak reminder notification at the user's chosen time. ABSENT: cross-device reminder opt-out behavior."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Dual-writing streak_count depends on a 3.4 drop that is tied to a ticket with no stated deadline or owner. If the minimum supported version is not raised, both stores would be maintained indefinitely.",
+   "evidence": "Dropping `streak_count` is **not** part of this release. It is scheduled for 3.4, after the minimum supported app version is raised past 3.1 (tracked in STR-1244)."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The claim that 3.2 with the flag off is functionally equivalent to 3.1 is asserted without a test. Store builds that have already reached users are not removed by halting a phased rollout, so this equivalence is the only safety net for them.",
+   "evidence": "3.2 with flag off is functionally equivalent to 3.1 plus copy changes."
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "The privacy section says the nutrition label and data-safety form are unchanged, but new cross-device streak processing and reminder notifications are not explicitly reconciled against the existing data categories.",
+   "evidence": "Privacy nutrition label and Play data-safety form unchanged (verified against the updated data inventory)."
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 21967,
+  "tokOut": 13816,
+  "usd": 0.0113004,
+  "critMs": 39747
+ }
+}

@@ -1,0 +1,83 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "deploy-08",
+ "rep": 2,
+ "wallMs": 270398,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "SEND_WORKERS=48 at the measured ~25 msg/s per worker implies ~1,200 msg/s demand, four times the 300 msg/s SES production limit. No rate limiter or concurrency cap exists, so production sends will be throttled from day one.",
+   "evidence": "\"SEND_WORKERS=48\" with \"SES production account limits (us-east-1): 300 messages/second\" and \"Per-worker throughput | 1 worker, batch 50 | ~25 msg/s sustained\""
+  },
+  {
+   "lens": "failure modes",
+   "severity": "blocker",
+   "claim": "On a whole-batch SendBulkEmail error (including throttling or timeouts), every recipient is permanently recorded as failed, excluded from the issue's remaining sends, and shown to publishers as 'Not delivered'. There is no retry or backoff. The error path also skips q.Ack, so redelivery state is inconsistent. A partially accepted or lost-response call would also mislabel recipients who did receive the issue.",
+   "evidence": "if err != nil { for _, r := range batch.Recipients { failures.Record(ctx, batch.IssueID, r.SubscriberID, errCode(err)) } metrics.Inc(\"send.batch_failed\") continue }; \"those recipients are excluded from the issue's remaining sends\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Per-entry failure attribution assumes BulkEmailEntryResults aligns positionally with batch.Recipients. Any count or order mismatch blames the wrong subscribers, who are then excluded and reported to publishers. Per-entry failures are also Acked and never retried, so transient entry-level failures are lost permanently.",
+   "evidence": "for i, res := range out.BulkEmailEntryResults { ... batch.Recipients[i].SubscriberID ... } q.Ack(ctx, batch)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "blocker",
+   "claim": "QA does not validate the production configuration. The staging run used 4 workers with SES throttling simulated off through a mock, so the 0-failure result and the error path under real throttling were never exercised. The 11-minute result also misses the stated under-3-minute goal.",
+   "evidence": "\"4 workers were throttled intermittently, so QA ran with SES throttling simulated off via the sandbox mock\"; \"Pass, 0 failures, 11 min\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The public launch post contradicts the artifact's own rollout. It says Smart Send Time is live for every publication today, while the plan ramps 5%, 25%, then 100% over three weeks, gated on evidence not yet collected. The post is an irreversible public announcement, and it also claims 'up to 5× faster' where QA measured 11 min against a 14 min baseline.",
+   "evidence": "\"Smart Send Time is live for every publication today\" vs \"5% (week 1), 25% (week 2), 100% (week 3)\"; \"up to 5× faster\" vs \"11 min\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "major",
+   "claim": "Smart Send Time holds issues up to 18 hours and is on by default for all publications, including the 40% that are time-sensitive news outlets (breaking news, election results, weather alerts). There is no exemption or per-issue bypass. Prediction accuracy was only 71% within ±1h, and the only guard is a lagging support-ticket count.",
+   "evidence": "\"Issues are held for at most 18 hours. Enabled by default for all publications\"; \"4,480 of them (40%) are news or local-news outlets whose issues are time-sensitive\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Smart Send Time builds a per-subscriber behavioral profile from 90 days of open history, on by default. The artifact gives no consent or lawful basis, no subscriber notice, and no retention or deletion rules for the predictions. It also has no legal or compliance review.",
+   "evidence": "\"predicts each subscriber's most likely open hour from their last 90 days of opens\"; \"Nothing to set up; it's already on.\"; ABSENT: consent, notice, retention, or legal review"
+  },
+  {
+   "lens": "observability",
+   "severity": "major",
+   "claim": "Monitoring has no alarm or pager on send.batch_failed, SES throttling, send_failures growth, or the Smart Send hold backlog. A failure storm that silently drops subscribers would not page on-call.",
+   "evidence": "\"On-call pager: queue lag > 10 min, complaint rate > 0.1%.\"; `send.batch_failed` listed only as a dashboard item"
+  },
+  {
+   "lens": "failure modes",
+   "severity": "major",
+   "claim": "The Smart Send rollback releases all held issues at once, which bursts against the 300 msg/s SES ceiling and into the throttle-and-drop error path. The artifact has no pacing plan. It also does not address how a pipeline rollback to Sidekiq interacts with issues currently held, or whether send_failures rows and exclusions written under v2 are reconciled on rollback.",
+   "evidence": "\"Rollback (Smart Send): set `SMART_SEND_DEFAULT=off`; held issues are released immediately.\"; ABSENT: handling of send_failures rows or held issues on pipeline rollback"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Smart Send Time concentrates sends into popular predicted hours across 11,240 publications. No peak-load test or daily-volume check against the 25M/day quota was done, and the launch post would trigger default-on for everyone at once.",
+   "evidence": "\"delivers each issue at that hour\"; ABSENT: peak-rate or 25M/day volume analysis; \"SMART_SEND_DEFAULT=on\""
+  },
+  {
+   "lens": "scope drift",
+   "severity": "major",
+   "claim": "Two independent high-blast-radius changes ship on the same morning: the sender goes to 100% of sends immediately and Smart Send is on by default. Problems in either cannot be attributed or rolled back cleanly in isolation. The artifact also does not say how Smart Send interacts with publisher-scheduled sends and time-zone scheduling.",
+   "evidence": "\"deploy Monday 09:00 UTC to 100% of sends\"; ABSENT: interaction of Smart Send with scheduled sends"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 62836,
+  "tokOut": 28588,
+  "usd": 0.11507062,
+  "critMs": 36985
+ }
+}

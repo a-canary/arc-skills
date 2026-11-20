@@ -1,0 +1,119 @@
+{
+ "approach": "counsel-5x2",
+ "case": "plan-09",
+ "rep": 1,
+ "wallMs": 594804,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The dedup-equivalence evidence is tautological. fct_page_events is already globally deduplicated on event_id, so it cannot contain an event_id spanning two event_dates. The real check must run on raw.events. The plan's own clamp also means a replay older than 30 days gets a different event_date than the original, so per-partition dedup would keep both copies and double count, which breaks the never-double-count constraint.",
+   "evidence": "'Checked over all 4.2B rows: 0 such `event_id`s (query linked in DATA-412).' and 'clamps `event_time` to [`ingested_at` − 30 d, `ingested_at`]' and 'after the change it is per rebuilt partition.'"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Rows that become visible more than 2 hours after their ingested_at are never reselected, and the only visibility measurement is p99.9 at 4 minutes. The tail beyond that is unmeasured, so a silent permanent gap is possible. After legacy is dropped, no completeness check against raw remains.",
+   "evidence": "'The 2 h overlap covers streaming-insert visibility delay (p99.9 measured at 4 min in September)' and 'After 30 clean parity nights: drop the legacy model and table (DATA-431).' ABSENT: any per-date reconciliation against raw.events after the drop."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The high-water mark source is unspecified. The plan reads max ingested_at from the table, but never says whether fct_page_events carries ingested_at or whether the mark is stored in dbt state, so the selection predicate cannot be written as stated.",
+   "evidence": "'(max `ingested_at` already in the table − 2 h)' ABSENT: where the watermark is stored or which column holds ingested_at."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The rollback does not preserve the no-gap constraint. Legacy is rebuilt by a separate job after the main job, so after bq cp -f restores it, events ingested since its last run are absent until the next full refresh. The 'no gap' wording is overstated.",
+   "evidence": "'No gap, no lost events.' with 'It runs as a separate dbt Cloud job after the main job.'"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "v2 is backfilled once and then rebuilt only for selected partitions, but it is not in any erasure or retention list before the swap. Rows erased after the backfill stay in untouched v2 partitions, and step 3 copies v2 over production. The parity test may flag the mismatch, but the plan does not say so or define the response.",
+   "evidence": "'For those 30 days the retention and erasure jobs include `fct_page_events_legacy` in their table lists.' ABSENT: fct_page_events_v2 in any erasure list, or a rule for parity mismatches caused by erasure."
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Erasure is two non-atomic deletes with no stated retry, tracking, or alert for the second delete. If the fact-table delete fails after raw.events is purged, the erased rows persist in partitions that incremental rebuilds never touch, and the full-refresh self-healing is lost.",
+   "evidence": "'privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`.' ABSENT: failure handling for the second delete."
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Legacy erasure and retention coverage ends at a fixed 30-day date, but legacy is dropped only after 30 clean parity nights. Any parity mismatch extends legacy's life beyond its coverage, leaving personal data in a table outside the erasure lists.",
+   "evidence": "'For those 30 days the retention and erasure jobs include `fct_page_events_legacy`' and 'After 30 clean parity nights: drop the legacy model and table (DATA-431).'"
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The nightly fingerprint parity scan over both 1.9 TiB tables costs about $24 per night, roughly $720 over the 30 post-swap days, and is not in the budget. With it, month 1 is about $2,680, above today's $2,143, so the 'below today' claim is false.",
+   "evidence": "'The nightly parity test keeps running (new vs legacy) and alerts #data-oncall on any mismatch.' and 'Month 1 is ~$1,960, still below today.'"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Alerting covers only job failure. A run that succeeds but selects zero partitions, or a stalled high-water mark, shows green while dashboards go stale. No freshness or row-count assertion on the table is proposed, and the 05:00 SLA already missed 9 nights in September.",
+   "evidence": "'Failure alerting is the existing dbt Cloud job alert to #data-oncall.' ABSENT: freshness check on max event_date or row count."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The unique_event_id test and nightly parity check run after the overwrite and only alert. Bad partitions are already live in dashboards and the customer export when the alert fires, and nothing halts the write.",
+   "evidence": "'alerts #data-oncall on failure' and 'alerts #data-oncall on any mismatch.'"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "No bytes-billed cap is set on the incremental job. A selection bug reading all raw costs about $59 per run, and repeated nightly that approaches the whole savings target.",
+   "evidence": "'We therefore budget for the worst case every night: ~390 GiB ≈ $2.40/run.' ABSENT: maximum_bytes_billed or equivalent guard."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The three-step swap (bq cp to legacy, bq cp -f over production, PR merge) is manual and is not stated to hold analytics_write. The PR merge is a separate change, so a failure between steps leaves production on v2 with the old full-refresh SQL in the repo.",
+   "evidence": "'so all three steps land with no build in between' ABSENT: lock acquisition for steps 3a–3c and PR merge timing."
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Per-user erasure from fct_page_events filters on a column the table is not clustered or partitioned by, so each erasure request scans the full table. The per-request cost (about $12) and the pruning behaviour are not stated.",
+   "evidence": "'clustered by `account_id, event_name`' ABSENT: user-level clustering or erasure scan cost."
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The Looker savings come from dry runs of the top 20 queries only, and the plan does not clarify whether the 61.2 TiB baseline is the full month or that subset. The free, atomic same-region copy is asserted without a source.",
+   "evidence": "'dry runs of September's top 20 queries by bytes against v2: 61.2 → 8.7 TiB' and 'A same-region copy job is free and replaces the table atomically for readers.'"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "One engineer owns the build, backfill, parity harness, privacy test, customer-facing cutover, and 30 days of three-model operation, with no second reviewer named for the cutover.",
+   "evidence": "'Owner: analytics engineering (1 engineer) · 2 weeks · Ticket DATA-412'"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The rewrite cost of up to 31 clustered partitions per night is measured on one snapshot prototype. Growth beyond current daily volume is not modelled.",
+   "evidence": "'a 31-day rebuild took 11 min and billed 388 GiB.'"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The new v2 and legacy tables hold customer event data, and the plan states no access controls for either. The legacy table persists for 30 days beyond the swap.",
+   "evidence": "'keeps the old full-refresh SQL as model `fct_page_events_legacy`' ABSENT: IAM or access settings for v2 and legacy."
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 124453,
+  "tokOut": 98746,
+  "usd": 0.07250029,
+  "critMs": 185612
+ }
+}

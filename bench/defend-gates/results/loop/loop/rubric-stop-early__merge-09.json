@@ -1,0 +1,46 @@
+{
+ "approach": "rubric-stop-early",
+ "case": "merge-09",
+ "rounds": [
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The PR says deliveries \"in the future\" are rejected, but the check uses abs(), so timestamps up to 300s ahead are accepted. The test also pins this edge as accepted. The behaviour is internally consistent but reads differently from the description.",
+     "evidence": "if abs(current - int(timestamp)) > TOLERANCE_SECONDS:"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The PR claims startup fails when the secret is missing or short, but the artifact never shows Settings being built eagerly. If get_settings is a lazy dependency, the failure happens on the first request instead.",
+     "evidence": "ABSENT: get_settings implementation or app startup code. Only `settings: Settings = Depends(get_settings)` is shown."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The `v1=` prefix is stripped optionally, so a signature header with no version prefix is still accepted. Signature hex case is also not normalised, so an uppercase vendor signature would be rejected.",
+     "evidence": "signature.removeprefix(\"v1=\").encode()"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4423,
+    "tokOut": 2084,
+    "usd": 0.0017544499999999998,
+    "critMs": 9736
+   },
+   "wallMs": 59491
+  }
+ ],
+ "artifact": "PR #57: webhooks: verify PlugCloud signatures before ingesting readings\n\nPlugCloud signs every delivery with X-PC-Timestamp and X-PC-Signature: v1=<hex HMAC-SHA256 of \"<timestamp>.<raw body>\">.\nUntil now /webhooks/plugcloud accepted any POST, so anyone who found the URL could inject fake readings.\nThis PR verifies the signature over the raw request bytes before the body is parsed, rejects deliveries more than 5 minutes old or in the future, and returns a bare 401 on any failure.\nThe signing secret is a new required setting (VOLTLOG_PLUGCLOUD_SECRET, min 32 chars); startup fails if it is missing or short.\n\ndiff --git a/voltlog/settings.py b/voltlog/settings.py\n--- a/voltlog/settings.py\n+++ b/voltlog/settings.py\n@@ -1,1 +1,1 @@\n-from pydantic import Field\n+from pydantic import Field, SecretStr, field_validator\n@@ -9,3 +9,11 @@ class Settings(BaseSettings):\n     database_url: str\n     retention_days: int = Field(default=400, ge=30)\n+    plugcloud_secret: SecretStr\n+\n+    @field_validator(\"plugcloud_secret\")\n+    @classmethod\n+    def _secret_long_enough(cls, v: SecretStr) -> SecretStr:\n+        if len(v.get_secret_value()) < 32:\n+            raise ValueError(\"must be at least 32 characters\")\n+        return v\ndiff --git a/voltlog/webhooks/signing.py b/voltlog/webhooks/signing.py\n--- /dev/null\n+++ b/voltlog/webhooks/signing.py\n@@ -0,0 +1,22 @@\n+import hashlib\n+import hmac\n+import re\n+import time\n+\n+TOLERANCE_SECONDS = 300\n+_TIMESTAMP_RE = re.compile(r\"[0-9]{1,12}\")\n+\n+\n+class SignatureError(Exception):\n+    \"\"\"Delivery is unsigned, stale, or signed with a different secret.\"\"\"\n+\n+\n+def verify(secret: bytes, body: bytes, timestamp: str | None, signature: str | None, now: float | None = None) -> None:\n+    if not timestamp or not signature:\n+        raise SignatureError(\"missing signature headers\")\n+    if not _TIMESTAMP_RE.fullmatch(timestamp):\n+        raise SignatureError(\"malformed timestamp\")\n+    current = time.time() if now is None else now\n+    if abs(current - int(timestamp)) > TOLERANCE_SECONDS:\n+        raise SignatureError(\"timestamp outside tolerance\")\n+    expected = hmac.new(secret, timestamp.encode() + b\".\" + body, hashlib.sha256).hexdigest()\n+    if not hmac.compare_digest(expected.encode(), signature.removeprefix(\"v1=\").encode()):\n+        raise SignatureError(\"signature mismatch\")\ndiff --git a/voltlog/webhooks/routes.py b/voltlog/webhooks/routes.py\n--- a/voltlog/webhooks/routes.py\n+++ b/voltlog/webhooks/routes.py\n@@ -2,6 +2,9 @@\n-from fastapi import APIRouter, Depends\n+from fastapi import APIRouter, Depends, HTTPException, Request\n+from pydantic import ValidationError\n\n from voltlog.db import Database, get_db\n from voltlog.ingest import ingest\n+from voltlog.settings import Settings, get_settings\n+from voltlog.webhooks import signing\n from voltlog.webhooks.models import PlugCloudBatch\n@@ -21,5 +24,20 @@ log = logging.getLogger(__name__)\n @router.post(\"/webhooks/plugcloud\", status_code=202)\n-async def plugcloud_webhook(batch: PlugCloudBatch, db: Database = Depends(get_db)):\n+async def plugcloud_webhook(request: Request, db: Database = Depends(get_db), settings: Settings = Depends(get_settings)):\n+    body = await request.body()\n+    secret = settings.plugcloud_secret.get_secret_value().encode()\n+    try:\n+        signing.verify(secret, body, request.headers.get(\"x-pc-timestamp\"), request.headers.get(\"x-pc-signature\"))\n+    except signing.SignatureError as exc:\n+        log.warning(\"plugcloud webhook rejected: %s\", exc)\n+        raise HTTPException(status_code=401, detail=\"invalid signature\") from None\n+    try:\n+        batch = PlugCloudBatch.model_validate_json(body)\n+    except ValidationError:\n+        raise HTTPException(status_code=422, detail=\"invalid payload\") from None\n     await ingest.upsert_readings(db, batch.readings)\n     return {\"accepted\": len(batch.readings)}\ndiff --git a/tests/conftest.py b/tests/conftest.py\n--- a/tests/conftest.py\n+++ b/tests/conftest.py\n@@ -15,2 +15,2 @@ def settings() -> Settings:\n-    return Settings(database_url=TEST_DB_URL)\n+    return Settings(database_url=TEST_DB_URL, plugcloud_secret=\"t\" * 32)\ndiff --git a/tests/webhooks/test_signing.py b/tests/webhooks/test_signing.py\n--- /dev/null\n+++ b/tests/webhooks/test_signing.py\n@@ -0,0 +1,38 @@\n+import hashlib, hmac, time\n+import pytest\n+from voltlog.webhooks import signing\n+\n+SECRET = b\"k\" * 32\n+BODY = b'{\"readings\":[{\"device_id\":\"plug-7\",\"measured_at\":1700000000,\"watts\":412.5}]}'\n+TS = \"1700000000\"\n+\n+def sign(ts: str, body: bytes = BODY, secret: bytes = SECRET) -> str:\n+    return \"v1=\" + hmac.new(secret, ts.encode() + b\".\" + body, hashlib.sha256).hexdigest()\n+\n+def test_accepts_valid_signature_at_tolerance_edge():\n+    signing.verify(SECRET, BODY, TS, sign(TS), now=1700000300)\n+\n+@pytest.mark.parametrize(\"body,ts,sig,now\", [\n+    (BODY + b\" \", TS, sign(TS), 1700000000),                 # tampered body\n+    (BODY, TS, sign(TS, secret=b\"x\" * 32), 1700000000),      # wrong secret\n+    (BODY, TS, sign(TS), 1700000301),                        # stale\n+    (BODY, TS, sign(TS), 1699999699),                        # from the future\n+    (BODY, None, sign(TS), 1700000000),\n+    (BODY, TS, None, 1700000000),\n+    (BODY, \"17e8\", sign(\"17e8\"), 1700000000),\n+    (BODY, \"9\" * 5000, \"v1=00\", 1700000000),                 # would overflow int() digit limit\n+    (BODY, TS, \"v1=éé\", 1700000000),               # non-ASCII header value\n+])\n+def test_rejects(body, ts, sig, now):\n+    with pytest.raises(signing.SignatureError):\n+        signing.verify(SECRET, body, ts, sig, now=now)\n+\n+def test_route_rejects_unsigned_and_accepts_signed(client, settings, ingest_spy):\n+    assert client.post(\"/webhooks/plugcloud\", content=BODY).status_code == 401\n+    assert ingest_spy.calls == []\n+    ts = str(int(time.time()))\n+    secret = settings.plugcloud_secret.get_secret_value().encode()\n+    headers = {\"X-PC-Timestamp\": ts, \"X-PC-Signature\": sign(ts, secret=secret)}\n+    resp = client.post(\"/webhooks/plugcloud\", content=BODY, headers=headers)\n+    assert resp.status_code == 202\n+    assert len(ingest_spy.calls) == 1",
+ "fixerUsage": {
+  "calls": 0,
+  "tokIn": 0,
+  "tokOut": 0,
+  "usd": 0,
+  "critMs": 0
+ },
+ "status": "cleared"
+}

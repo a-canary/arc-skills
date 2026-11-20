@@ -1,0 +1,155 @@
+{
+ "approach": "rubric-calibrated",
+ "case": "deploy-08",
+ "rep": 2,
+ "wallMs": 183745,
+ "verdict": "ATTACKS",
+ "confidence": 0.92,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "At production concurrency, SES throttling will fail whole batches. Any batch error is recorded as a permanent per-recipient failure, excluded from the issue, and shown as 'Not delivered', with no retry. Throttled subscribers will never receive the issue.",
+   "evidence": "\"if err != nil { for _, r := range batch.Recipients { failures.Record(ctx, batch.IssueID, r.SubscriberID, errCode(err)) } ... continue }\" and \"those recipients are excluded from the issue's remaining sends\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The production config oversubscribes the SES account quota. 48 workers at the measured ~25 msg/s each is ~1,200 msg/s against a 300 msg/s limit, so the throttling failure above is guaranteed on deploy day, not intermittent. The '<3 min' goal also assumes exclusive use of the account quota, and concurrent issues across publications share the same 300 msg/s.",
+   "evidence": "\"SEND_WORKERS=48\" with \"Per-worker throughput | 1 worker, batch 50 | ~25 msg/s sustained\" and \"SES production account limits (us-east-1): 300 messages/second\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The QA evidence does not test the production failure mode. The 50k pass ran with SES throttling simulated off, and the staging SES limit (14 msg/s) was never exercised with the real limiter. The throughput, zero-failure, and '<3 min' claims are therefore unverified against real SES behaviour.",
+   "evidence": "\"QA ran with SES throttling simulated off via the sandbox mock\" and \"Pass, 0 failures, 11 min\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The error path does not Ack and marks the whole batch as failed. An ambiguous SES failure (for example a timeout after SES accepted the request) will record delivered recipients as 'Not delivered' and may redeliver the batch, causing duplicate sends.",
+   "evidence": "\"if err != nil { ... metrics.Inc(\"send.batch_failed\"); continue }\" with no q.Ack on that path"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Per-entry results are mapped to recipients by index with no length check. If the response length differs from the batch, the code panics or attributes failures to the wrong subscribers.",
+   "evidence": "\"for i, res := range out.BulkEmailEntryResults { ... batch.Recipients[i].SubscriberID ...\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "major",
+   "claim": "Smart Send defaults on for all publications and can hold issues up to 18 hours. For the 40% of publishers who are news or local-news outlets with time-sensitive content (breaking news, election results, weather alerts), this will delay critical issues by hours, to readers who never asked for it.",
+   "evidence": "\"Issues are held for at most 18 hours. Enabled by default for all publications\" and \"4,480 of them (40%) are news or local-news outlets whose issues are time-sensitive\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "major",
+   "claim": "Smart Send will override publishers' explicit scheduled send times, which is the top customer request shipped in 2026.08. The artifact does not exempt scheduled sends, so a publisher who schedules 09:00 may get a send up to 18 hours later.",
+   "evidence": "\"Top customer request in Q3: scheduled sends with time zone support (shipped in 2026.08)\" vs ABSENT: any exemption for scheduled sends from Smart Send holds"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The launch copy makes claims the artifact contradicts. 'Up to 5× faster' conflicts with 18-hour holds, and 'deliver when each reader is most likely to open it' overstates a model that hit ±1h accuracy for 71% of subscribers.",
+   "evidence": "\"every Inkwell issue reaches inboxes up to 5× faster\" and \"Smart Send Time: predicted hour within ±1h of actual top open hour... | 71%\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The rollout plan contradicts the shipped config. The config sets Smart Send to fully on, but the plan ramps 5% → 25% → 100% by cohort. No cohort gate appears in the config, so the 100% default is live at deploy and the ramp gates do nothing.",
+   "evidence": "\"SMART_SEND_DEFAULT=on\" in deploy/prod/send-worker.env vs \"ramp SMART_SEND_DEFAULT by publication cohort: 5% (week 1), 25% (week 2), 100% (week 3)\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The public launch post goes to all publishers on deploy day and says Smart Send is live for everyone. That is irreversible once sent and is made before the week 1–3 ramp gates can produce any evidence. Rolling back the flag will not retract the announcement, and publishers will experience the holds as a broken promise.",
+   "evidence": "\"Launch post (blog + newsletter to all publishers, Monday 16:00 UTC)\" and \"Smart Send Time is live for every publication today\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Alerting misses the failure mode. The throttling/failure counter is dashboarded but not paged, and the queue-lag pager (>10 min) will fire constantly under intentional 18-hour holds, so real lag and throttling are either missed or drowned in noise.",
+   "evidence": "\"metrics.Inc(\"send.batch_failed\")\" listed under Dashboards only; \"On-call pager: queue lag > 10 min\" vs \"SMART_SEND_MAX_HOLD_HOURS=18\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The pipeline rollback does not recover the damage. Recipients already recorded in send_failures stay excluded, so switching to Sidekiq will not resend them. The SENDER key is not in the prod env file, and the '<2 min drain' is untested.",
+   "evidence": "\"set SENDER=sidekiq in the dispatcher; in-flight batches drain in < 2 min\" vs \"those recipients are excluded from the issue's remaining sends\" and the prod env file contains no SENDER key"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Smart Send's rollback releases every held issue immediately. Across 11,240 publications this creates a burst that exceeds the 300 msg/s SES limit and triggers the throttling-based silent failures above.",
+   "evidence": "\"Rollback (Smart Send): set SMART_SEND_DEFAULT=off; held issues are released immediately.\""
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "The 'Not delivered' report will show publishers throttling-induced failures as if subscribers never received the issue, which is misleading.",
+   "evidence": "\"shown to publishers in the issue report under 'Not delivered'\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Per-subscriber predicted send hours are a new derived profile built from 90 days of open history. The artifact states no retention, disclosure, or consent treatment for it.",
+   "evidence": "ABSENT: retention, disclosure, or consent treatment for per-subscriber predicted open hours"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "The worker is hard-wired to SES in us-east-1 with no alternate provider or failover, so a regional SES outage halts all sends.",
+   "evidence": "\"SES_REGION=us-east-1\" and \"calls SES SendBulkEmail\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "There is no SES spend or compute budget math for 11,240 publications, and retry or re-send costs from the failure path are not estimated.",
+   "evidence": "ABSENT: SES cost or compute estimate at aggregate volume"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "nothing",
+   "evidence": "nothing"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "nothing beyond the minor finding above",
+   "evidence": "nothing"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "nothing",
+   "evidence": "nothing"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "nothing",
+   "evidence": "nothing"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "nothing",
+   "evidence": "nothing"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "nothing",
+   "evidence": "nothing"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3333,
+  "tokOut": 9963,
+  "usd": 0.005015009999999999,
+  "critMs": 46173
+ }
+}

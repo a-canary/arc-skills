@@ -1,0 +1,77 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "plan-01",
+ "rep": 1,
+ "wallMs": 234698,
+ "verdict": "ATTACKS",
+ "confidence": 0.96,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The design needs real-time quotes at 160+ req/min (two expiries per underlying may double it), but the plan stays on Optiq Starter: 5 req/min and 15-minute delayed quotes. The poller would be throttled almost immediately and triggers would fire on stale data, so the intraday engine cannot work as designed. Even Growth (100 req/min) is insufficient.",
+   "evidence": "\"40 underlyings => 160 requests/min during RTH\" vs. \"| Starter | $79 | 5 req/min | 15-min delayed |\" and \"We stay on Starter.\""
+  },
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "The $139 monthly cost is computed on a tier that cannot support the design. Growth ($199 + $60 VPS = $259) already breaches the $250 cap, and Pro ($499 + $60) breaches it far more. The agreed spend constraint cannot be met with this architecture as written.",
+   "evidence": "\"Monthly run cost: Optiq Starter $79 + existing VPS $60 = $139, comfortably inside the $250 cap.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "Migration 0042 drops positions.roll_history in the same transaction as a 90-day-only backfill, against prod. The full since-inception history is destroyed irreversibly, with no backup, archive, or down-migration. The history may be needed for tax or books-and-records.",
+   "evidence": "\"Backfill copies roll_history entries from the last 90 days into rolls; older entries are not needed by roll_engine.\" / \"In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The advertised fallback (roll_eod.py behind ROLLER_V2=false) is likely broken by the migration, since the plan never establishes that roll_eod.py doesn't read the dropped column. The rollback path is therefore unverified and probably non-functional from week 1.",
+   "evidence": "\"roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4.\" alongside \"ALTER TABLE positions DROP COLUMN roll_history\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "No freshness or integrity guard on market-data snapshots feeding roll_engine. Only broker heartbeat age is checked, so a stalled, rate-limited, or delayed poller silently drives real-money orders with stale data. The poller also has no retry/backoff or budget policy.",
+   "evidence": "\"roll_engine stops emitting intents when the last successful broker heartbeat is > 60 s old.\" (ABSENT: snapshot timestamp check, poller health, retry/backoff)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Order lifecycle gaps. There is no defined behavior after the third reprice cancel, on cancel failure, or for in-flight orders on kill or broker outage, and no reconciliation against broker positions. The counters' persistence and atomicity are unspecified, so restarts or concurrent evaluations could exceed the caps. No alerting is described.",
+   "evidence": "\"re-priced every 20 s up to 3 times, then cancelled.\" and \"both are hard limits checked before submit\" (ABSENT: cancel-failure handling, reconciliation, counter persistence, alerts)"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The roll_engine has no deduplication or idempotency key. A trigger that stays true across 15 s snapshots would emit a RollIntent each time, creating duplicate intents and unbounded table growth. The cap of 8 orders per account per day against 40 underlyings is also unspecified for intents above the cap.",
+   "evidence": "\"emits RollIntent rows\" / \"max 8 roll orders per account per day\" (ABSENT: dedupe key, behavior for capped intents)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The headline +3.8% net APR is asserted without a backtest, derivation, or cost model (commissions, spread crossing, re-prices). The rationale rests on anecdotes and unsourced claims about industry practice. The 30-live-day success criterion is too short to separate the effect from noise and falls after the 4-week build. Paper mode compares intents only, so fills and slippage go untested before live. Drawdown, the stated mission, is not measured.",
+   "evidence": "\"Expected impact: +3.8% net APR vs. EOD rolling (see §2).\" / \"Intraday rolling is also standard practice among the option-income funds we follow.\" / \"paper mode (RollIntent written, no orders)\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Intraday rolling changes the timing and frequency of rolls, but the plan has no tax or qualified-covered-call review. Together with the destruction of older roll records, this creates reporting risk.",
+   "evidence": "ABSENT: any tax or qualified-covered-call review; \"unchanged semantics, new timing\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "Credential scoping and storage for broker and Optiq keys are unspecified. The ROLLER_KILL env switch has no access control, and there is no integrity validation of vendor data.",
+   "evidence": "ABSENT: credential storage, scoping, or rotation; \"ROLLER_KILL env switch read on every loop\""
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 58723,
+  "tokOut": 27680,
+  "usd": 0.10844666,
+  "critMs": 29279
+ }
+}

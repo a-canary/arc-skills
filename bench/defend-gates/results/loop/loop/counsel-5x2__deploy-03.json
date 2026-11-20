@@ -1,0 +1,935 @@
+{
+ "approach": "counsel-5x2",
+ "case": "deploy-03",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Dual-write atomicity between habits.streak_count and streak_events is unstated. A partial failure or a cross-device completion mid-write can leave the two representations divergent, and 3.1 clients read streak_count silently.",
+     "evidence": "\"habits.streak_count is kept and dual-written by 2.15 so 3.1 clients (which read streak_count from /v2/habits) keep working unchanged.\" ABSENT: transaction boundary, retry semantics, and reconciliation for the dual-write."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Rollback to 2.14 leaves streak_events rows written during the 2.15 flag-on window invisible to 2.14. Completions recorded only as events would not reach streak_count, and no reconciliation or cleanup path is defined. The staging rollback test only covers the 3.2-against-2.14 sync-disabled case.",
+     "evidence": "\"schema is additive and streak_count remains authoritative-compatible, so 2.14 runs against the migrated database unchanged (verified in staging).\" ABSENT: handling of streak_events written after the 2.15 deploy when rollback occurs."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The 0-mismatch backfill result comes from a static prod snapshot. Live writes during the 22-minute backfill, and concurrent backfill/live-path upserts on the same (user_id, habit_id, day), are untested.",
+     "evidence": "\"dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches vs streak_count\" ABSENT: live-traffic backfill test and backfill upsert/conflict semantics."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "No gate checks the live invariant that protects 3.1 clients: streak_events-derived streak versus habits.streak_count on production. streak_mismatch_total only measures 3.2 server-vs-client recompute.",
+     "evidence": "\"streak_mismatch_total (server vs client recompute) < 0.1% of synced users\" ABSENT: a live streak_events vs streak_count drift metric."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "No gate requires backfill completion or verification before the flag is raised. A partial backfill would make event-derived streaks diverge from streak_count, and the mismatch gate only fires after users are already on the feature. Backfill also has no stated throttling, failure alerting, or completion check.",
+     "evidence": "\"Backfill job starts after full deploy.\" ABSENT: backfill-complete precondition, rate limit, completion verification, or failure alerting before the flag advances."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The p95 < 250ms gate that advances rollout is measured in the same window as the 18.4M-row backfill, so backfill load can move the serving-latency signal. The 22-minute figure also comes from a snapshot with no live write traffic.",
+     "evidence": "\"Backfill job starts after full deploy.\" and \"streaks-svc p95 < 250ms\" with \"dry-run on prod snapshot: 18.4M rows, 22 min\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The sync write path accepts completion and saver events from client devices with no stated server-side check that the device belongs to the user or that the habit belongs to the user. Forged writes could inflate streaks, and saver repairs replayed or raced across devices could bypass the 1-per-30-days limit.",
+     "evidence": "\"A habit completed on the watch or tablet counts toward the same streak\" and \"idempotent on (user_id, habit_id, day)\" ABSENT: authn/authz on event ingestion, device-to-user validation, and concurrency tests for saver repairs."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The definition of 'day' (user-local vs UTC) is missing. The idempotency key and the saver's 'yesterday' both depend on it, and a timezone change or cross-zone completions can double-count or drop a day.",
+     "evidence": "\"idempotent on (user_id, habit_id, day)\" and \"Repair yesterday\" ABSENT: definition of day and its timezone basis."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The 3.2 client against 2.14 case shows a local streak that may diverge from server state. The artifact does not define what pending local completions do on reconnect to 2.14 or how state reconciles after re-enable.",
+     "evidence": "\"3.2 client against 2.14 API (server rollback scenario) | staging | Pass (sync silently disabled, local streak shown)\" ABSENT: reconnect and re-enable reconciliation behaviour."
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "streak_events is a per-user, per-habit, per-day timeline linked to a persistent per-install ID. The artifact gives no retention period and no account-deletion path for it, and the privacy label and data-safety form are asserted unchanged without a shown diff.",
+     "evidence": "\"source_device stores a per-install random ID, not a hardware identifier.\" and \"Privacy nutrition label and Play data-safety form unchanged (verified against the updated data inventory).\" ABSENT: retention period, deletion on account removal, and data-inventory diff."
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "streak_events grows by one row per habit per completed day with no retention, partitioning, index plan, or growth projection. The p95 gate is measured at current size, not at projected 100% rollout write load.",
+     "evidence": "\"18.4M rows, 22 min\" ABSENT: sustained write QPS at full rollout, table growth projection, index plan, and load test beyond current scale."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The backend (10:00 UTC deploy), the iOS 7-day phased release, the Play staged rollout, and the remote-config flag move on different clocks with no single go/no-go owner or joint stop condition. Store submission is the same day as the backend deploy.",
+     "evidence": "\"the flag gates the feature independently of store rollout\" and \"Store submission: Mon 2026-11-02\" with \"Backend deploy: Mon 2026-11-02 10:00 UTC\" ABSENT: coordinated abort owner and trigger across backend, flag, and store tracks."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The QA matrix ran against streaks-svc 2.15.0-rc2, but the release ships 2.15 final. The rc-to-final delta is not covered, and the rollback and N-1 results are tied to the rc.",
+     "evidence": "\"build 3.2.0 (4410), streaks-svc 2.15.0-rc2\" vs \"Backend changes (streaks-svc 2.14 → 2.15)\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The dual-write of streak_count persists until 3.4, which is gated on STR-1244 with no stated owner, date, or enforced adoption threshold. The dual-write could become effectively permanent for the life of 2.15.",
+     "evidence": "\"It is scheduled for 3.4, after the minimum supported app version is raised past 3.1 (tracked in STR-1244).\" ABSENT: owner, date, or enforced precondition for the drop."
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 126945,
+    "tokOut": 45869,
+    "usd": 0.04656019,
+    "critMs": 80813
+   },
+   "wallMs": 95399
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The 10:00 UTC prod deploy is gated on N-1 and rollback behavior that has only been verified on rc2. The rc2-to-final diff review is unrecorded, so the rollback path has not been shown on the artifact being shipped.",
+     "evidence": "\"Re-run of N-1 (3.1 vs 2.15) and rollback (3.2 vs 2.14) cases on the final 2.15.0 tag ... QA ran on rc2\" required before \"Prod deploy (10:00 UTC)\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The backfill starts automatically after the full deploy, but its rehearsal under replayed live write traffic is required only before \"Prod backfill start\". The rollout does not enforce that ordering, so 18.4M production writes could begin before the rehearsal exists.",
+     "evidence": "\"The backfill starts after full deploy and runs throttled\" vs \"Backfill rehearsal under replayed live write traffic ... Prod backfill start\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The drift metric is emitted by the same reconciliation job that repairs drift. The artifact does not say the metric is read before repair, so the hard-stop drift gate could report zero after real drift was silently fixed.",
+     "evidence": "\"A reconciliation job compares event-derived streaks with `streak_count` and repairs drift ... it emits the drift metric used in the gates below.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Authority between streak_count and event-derived state is unclear. Reconciliation treats streak_count as the value 3.1 clients see, so it may repair events toward a count that is stale during the backfill window. The roll-forward after a 2.14 rollback also does not say which side wins for completions written only to streak_count.",
+     "evidence": "\"with `streak_count` treated as the value 3.1 clients see\" and \"completions made via 3.1 clients while 2.14 was live update only `streak_count`\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Reconciliation runs daily while flag steps are 24h apart, so the drift gate can advance on a reading up to a day old. The artifact defines alerts for backfill stalls but none for reconciliation stalls or failures, so the hard-stop gate could read missing or stale data without notice.",
+     "evidence": "\"It runs after the backfill and then daily, and it emits the drift metric\" and \"It alerts the on-call if the checkpoint stalls or a batch fails\" (backfill only)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The backfill auto-pauses at serving p95 above 200ms, but the flag gate uses 250ms and is measured after backfill load ends. The gate therefore never observes backfill load. \"Complete\" is also undefined after pauses or retried batches, so the backfill precondition for the flag is underspecified.",
+     "evidence": "\"auto-pauses if serving p95 exceeds 200ms\" vs \"streaks-svc p95 < 250ms\" and \"the serving-latency gate is measured after backfill load has ended\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Re-enabling the flag after a rollback requires backfill and reconciliation to reach zero drift, but no time bound or owner is given. An abort at 1% could leave the flag off for an unbounded period.",
+     "evidence": "\"Before re-enabling the flag, rerun the backfill (insert-only, idempotent) and the reconciliation job until drift is 0\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The artifact does not say whether the event and saver endpoints are gated by the flag server-side. If they accept writes at deploy time, the forged user_id/habit_id and replay tests are not run until flag 1%, so the write-path trust boundary is untested while exposed.",
+     "evidence": "\"Event and saver endpoints authenticate with the user's session token\" vs \"Concurrency and replay tests ... forged or mismatched `user_id`/`habit_id` on ingestion\" required before \"Flag 1%\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The day definition is ambiguous. It is defined in the profile timezone, but the client sends its own local date and IANA timezone. \"Yesterday\" for saver repair uses the profile timezone. When device and profile zones differ, completion days and repair targets can be off by one.",
+     "evidence": "\"A `day` is the user's local calendar date in their profile timezone\" vs \"The client sends the local date and its IANA timezone\" and \"using the same profile timezone\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Store submission is scheduled for the same day as the backend deploy, but the privacy label and Play data-safety re-check for the new streak_events inventory is still pending. The artifact says the labels are \"believed unchanged\", which is not verified.",
+     "evidence": "\"believed unchanged; the updated data inventory diff (adding `streak_events`) is to be attached to STR-1190 and re-checked against both forms before store submission\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Partitioning and the growth projection are deferred until after the 18.4M-row backfill and the load test. The table has only the unique key index during the largest write, so the sizing decision comes after the heaviest load.",
+     "evidence": "\"Monthly partitioning by `day` will be applied if the load test (below) shows the need.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "Fault-injection, concurrency, and cross-device tests for the dual-write and saver repair are not yet run. They are gated before flag 1%, not before deploy, so they are sequencing items rather than deploy blockers.",
+     "evidence": "\"Fault-injection test on the dual-write ... | Flag 1%\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The 3.4 drop of streak_count depends on proposed, unsigned thresholds. The dual-write could persist indefinitely if the 3.3 review is not owned.",
+     "evidence": "\"These dates and thresholds are proposed and need sign-off in STR-1244.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 99.87% crash-free figure comes from a 1,900-user internal beta over 6 days. It is not the basis for the 1% gate, which relies on live production rates, so it adds little evidence.",
+     "evidence": "\"Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "No compute or storage budget is given for the backfill, daily reconciliation across all habits, the 2× load test, or streak_events retention.",
+     "evidence": "ABSENT: no cost or compute budget for backfill, reconciliation, or streak_events retention."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The release captain owns abort authority, and the streaks-svc on-call is the deputy who may execute the backend rollback. No tie-break defines who acts first during a breach.",
+     "evidence": "\"single go/no-go and abort owner across backend, flag, and both stores ... with the streaks-svc on-call as deputy\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The artifact does not say whether the per-install source_device ID resets on reinstall or whether it is linkable across the 90-day retention window.",
+     "evidence": "\"`source_device` stores a per-install random ID, not a hardware identifier; it is nulled after 90 days.\""
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The disabled saver label hardcodes a calendar date in localized copy. If availability is computed server-side, the displayed date may not match actual eligibility, and the artifact does not say how the date is formatted per locale.",
+     "evidence": "\"Streak saver available again on Nov 28\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 140246,
+    "tokOut": 44914,
+    "usd": 0.048742890000000004,
+    "critMs": 79590
+   },
+   "wallMs": 96053
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The 10:00 UTC deploy depends on evidence that does not yet exist. The final 2.15.0 tag has no N-1 or rollback re-run, and the rc2→final diff has no named reviewer or criteria for 'non-behavioral'. The artifact holds the deploy in that case, but the gate cannot cross on rc2 evidence.",
+     "evidence": "\"QA ran on rc2, so rc2→final diff must also be reviewed and shown to be non-schema, non-behavioral, or the full matrix is re-run\" / \"If they are not recorded by 10:00 UTC, the deploy is held rather than shipped on rc2 evidence.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The drift gate reads the pre-repair value, but no coverage requirement says the run scanned every habit before a zero counts. A partial or timed-out scan that emits zero would pass the hard-stop gate.",
+     "evidence": "\"The gate reads only the pre-repair drift reading, so a repaired drift cannot appear as zero.\" / ABSENT: a coverage check (habits scanned vs. habits total) required before a reading is valid"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Client day assignment does not define behavior when the cached profile timezone is stale or missing (e.g., after travel or a failed profile refresh). Completions could be rejected by the server or land on the wrong day, and the outbox replays stored local days that may no longer match.",
+     "evidence": "\"The client computes the date in the cached profile timezone, so the timezone it sends is the profile timezone.\" / ABSENT: stale-cache behavior; \"3.2 completions are kept in a local outbox with their local `day`\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The authority rules are internally inconsistent. Events are declared the source of truth, yet 'streak_count wins' for rollback-era completions. The tie-break relies only on backfill ordering, and the artifact does not say what happens if an event conflicts with an existing streak_count value.",
+     "evidence": "\"Events are the source of truth for 3.2 state.\" / \"For those days, `streak_count` wins in the sense that the insert-only backfill adds the missing events.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Store submission on 2026-11-02 is blocked on a privacy-label and Play data-safety re-check that has not been performed, and the artifact gives no owner or date for it. This is a store-track gate and does not block the backend deploy.",
+     "evidence": "\"**Store submission on Mon 2026-11-02 is blocked until that re-check is recorded.**\" / \"The privacy nutrition label and Play data-safety form have **not yet been verified**\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The critical path to the 1% step is not scheduled. Fault injection, backfill rehearsal under live load, reconnect, rollback after flag-on writes, alerting tests, backfill completion, and a clean reconcile all gate 1%, and none has an owner or date inside the week that also contains the deploy and store submission.",
+     "evidence": "\"Fault-injection test on the dual-write ... | Flag 1%\" / \"Backfill rehearsal under replayed live write traffic ... | Prod backfill start\" / \"24h between steps\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Re-enable after rollback has no hard bound. The 48h review is proposed, and if drift stays nonzero the flag stays off with a new target date. 3.2 users' outboxes accumulate with no end condition, and the artifact does not say who decides when drift is nonzero but stable.",
+     "evidence": "\"re-enable readiness is reviewed within 48h of the abort. If drift is not 0 by then, the flag stays off\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The saver's one-per-30-days limit depends on a uniqueness constraint and per-user lock, but the constraint key and lock scope are not written out. The per-user reading is likely but should be pinned in the schema before the replay tests run.",
+     "evidence": "\"Saver repairs are enforced in a single transaction with a per-user lock and a uniqueness constraint on the 30-day window\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The per-user cohort gate for the new endpoints is not described as enforced server-side independently of remote config, or who can change the cohort. The default-off design limits exposure, but the enforcement path is undocumented.",
+     "evidence": "\"enabled only per user for the flag cohort\" / ABSENT: how the cohort check is enforced server-side and who can change it"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The backfill has no expected end-to-end duration and no pause-budget alert. The 22-minute figure is an unthrottled no-write snapshot, so repeated auto-pauses could push completion past the planned 1% date without an alert.",
+     "evidence": "\"dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches vs `streak_count`\" / \"auto-pauses if serving p95 exceeds 200ms\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The completion verification is not independent. It compares event-derived streak against streak_count, and reconciliation then resolves mismatches by recomputing streak_count from events, so a systematic error in event derivation would pass both checks.",
+     "evidence": "\"the completion verification (event-derived vs `streak_count` over all habits) shows 0 mismatches\" / \"Otherwise it recomputes `streak_count` from events.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The events table grows per habit per completed day for the life of each account, with only the unique index. Partitioning is deferred to a load test before 50%, and the 6-hourly full-table reconcile is not sized against that growth.",
+     "evidence": "\"Monthly partitioning by `day` will be applied if the load test (below) shows the need.\" / \"Rows are otherwise retained for the life of the account.\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The dual-write, outbox flush, backfill, and reconciliation are multiple writers to one streak invariant with no single component owning it. The 3.4 sunset that would end the dual-write is unsigned, so the second write authority could persist.",
+     "evidence": "\"These dates and thresholds are proposed and need sign-off in STR-1244.\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The release captain owns go/no-go and abort across backend, flag, and both stores and also the privacy re-check, with on-call as deputy only. The artifact gives no tie-break if captain and on-call disagree about whether a precondition is recorded.",
+     "evidence": "\"Release captain (single go/no-go and abort owner across backend, flag, and both stores): mobile squad B lead, with the streaks-svc on-call as deputy.\""
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "When the outbox flush replaces a local streak with a lower server-derived value, no user-facing explanation is specified, so a visible streak drop looks like data loss.",
+     "evidence": "\"the server-derived streak then replaces the local one.\""
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The disabled-state copy hard-codes the English date 'Nov 28' in a string the artifact calls final across five locales. The date format and its timezone basis are not specified.",
+     "evidence": "\"Streak saver available again on Nov 28\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "Accessibility QA covers only the streak screen and pre-prompt. The 'Turn on in system settings' state and its deep link are not in the test set.",
+     "evidence": "\"VoiceOver / TalkBack on streak screen and pre-prompt | device lab | Pass\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The EU/UK consent posture for the in-app reminder pre-prompt and compliance review of the localized copy are not recorded.",
+     "evidence": "\"Want a nudge at 8:00 PM so you don't lose your streak?\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The 90-day null applies to source_device only, and the artifact does not say whether backups, replicas, or the backfill snapshot follow the same deletion and retention rules as the primary table.",
+     "evidence": "\"`source_device` is nulled after 90 days. Rows are otherwise retained for the life of the account.\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "No compute or database cost is estimated for the 18.4M-row backfill, the 6-hourly reconciliation over the full table, the locked write path, or the 2× load test.",
+     "evidence": "ABSENT: cost estimate for backfill, reconciliation, and load test"
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 174275,
+    "tokOut": 46277,
+    "usd": 0.056230190000000006,
+    "critMs": 74723
+   },
+   "wallMs": 78122
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The backfill reconstructs event days from a streak_count integer, which records a run length, not a set of completion days. The artifact never says how the run maps to specific calendar days, or how saver repairs and timezone changes are counted. Those inserts are permanent because events are never deleted, so a wrong reconstruction becomes a user-visible, irreversible error.",
+     "evidence": "\"one `streak_events` row per day of each habit's current streak\" and \"If `streak_count` implies a day that has no event, the backfill adds the event.\" vs \"Reconciliation never deletes or rewrites events.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The authority rule is inconsistent. Events are declared the source of truth, yet backfill derives events from a streak_count snapshot while live writes continue, and recomputation then rewrites streak_count. The 'live write wins' rule covers only same-key conflicts, not a snapshot-derived day that a later live write supersedes. The artifact also says unresolved habits exist, which contradicts the claim that additive cases 'cannot conflict on a value'.",
+     "evidence": "\"Because the unit is a day keyed on `(user_id, habit_id, day)`, these cases are additive and cannot conflict on a value.\" vs \"If a habit's state cannot be reconciled by union ... it leaves the habit unchanged, counts it in `streak_reconcile_unresolved_total`\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The backfill rehearsal under replayed live write load is a required precondition for the prod backfill and is not recorded. The only backfill evidence is a no-write snapshot dry-run. The schedule also allows a prod-snapshot rerun on deploy day as a substitute, with no criterion for 'representative'.",
+     "evidence": "\"The snapshot dry-run had no live write traffic. A rehearsal of the backfill under replayed production write load is a required precondition\" and \"prod-snapshot rerun by Mon 11-02 if staging scale is not representative\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The App Store privacy label and Play data-safety form are unverified against streak_events and source_device. The artifact blocks store submission on a Fri 10-30 re-check, but it names no criterion for a passing re-check, so it is not yet a must-fix that has been satisfied.",
+     "evidence": "\"The privacy nutrition label and Play data-safety form have **not yet been verified** against the new `streak_events` inventory.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The Fri 10-30 critical path bundles about a dozen gate-relevant suites (fault injection, concurrency and replay, forged-ID, timezone cases, reconciliation alerting, reconnect, final-tag re-run, rc2→final review, rollback after flag-on writes) into about two working days before a Mon 10:00 UTC deploy. A failed diff review triggers a full matrix re-run that the schedule does not accommodate.",
+     "evidence": "\"If the diff fails the criteria, the full matrix is re-run\" and \"Fri 10-30 (staging)\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The device-timezone-differs-from-profile case and the stale or missing timezone cache path govern day assignment and the 'Repair yesterday' target. Both are untested and are gated only before Flag 1%, though the copy and day rules are final now.",
+     "evidence": "\"The case where the device timezone differs from the profile timezone ... and the stale or missing cache behavior above, are listed under 'Not yet covered' below.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The holding path is not bounded. The 7-day hard stop allows option (a), continuing to hold with a new target date, so the outbox and the stale-flag window can extend indefinitely. The 'holding with flag off is a safe state' claim is untested over a long hold, and the time bounds are marked proposed.",
+     "evidence": "\"(a) continuing to hold with a new target date and cause\" and \"Holding with the flag off is a safe state.\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "Flag 1% is earliest on Wed 11-04, the same day backfill must be complete, verified, and followed by a clean on-demand reconcile. That leaves no slack between backfill verification and the first flag step, and a slip there moves flag timing.",
+     "evidence": "\"Start Tue 11-03; complete and verified by Wed 11-04\" and \"Flag 1% (earliest) | release captain | Wed 11-04\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The 'Repair yesterday' and saver repair days are not specified as events, so it is unclear whether a repair counts toward the streak that the backfill and reconcile recompute.",
+     "evidence": "\"one missed day per 30 days can be repaired from the streak screen\" vs \"`streak_events (user_id, habit_id, day, source_device, created_at)`\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The iOS provisional-then-full authorization path and the 30-day re-prompt suppression are not recorded as checked against App Store and Play notification policy.",
+     "evidence": "\"full authorization is requested only if they enable sound in reminder settings\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Per-user enablement of the new write endpoints has no stated owner, authenticated control, or audit trail. The forged-ID test is a precondition for enabling, not an enforced control.",
+     "evidence": "\"Enabling them for any user requires the forged/mismatched `user_id`/`habit_id` and replay tests below to be recorded as passed.\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The rc2→final diff review is owned by the streaks-svc tech lead, who also owns the server code under review, with only a countersignature from the captain. The check is weakly independent, and the CI and build metadata exemption adds a path that is not separately verified.",
+     "evidence": "\"The reviewer is the streaks-svc tech lead, with the release captain countersigning in STR-1190.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The dual-write is labelled temporary, but its removal is tied to proposed thresholds and a review at 3.3 planning, with no forcing date. Without sign-off it can persist as a second authority.",
+     "evidence": "\"These dates and thresholds are proposed and need sign-off in STR-1244.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The table has only a unique index and no retention bound. Partitioning is deferred to a load test, and the growth projection is not due until before the 50% step, so the scale decision is made after the rollout has begun.",
+     "evidence": "\"Monthly partitioning by `day` will be applied if the load test (below) shows the need.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 0-mismatch backfill result came from a snapshot with no live writes, and the 99.87% crash-free figure comes from a 1,900-user beta, not the 400k MAU population. Neither validates the production behaviour directly.",
+     "evidence": "\"Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "No data residency or region statement is given for streak_events or its backups, which hold per-user behavioural data.",
+     "evidence": "ABSENT: data residency or region for streak_events and its backups"
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The header '12-day streak' and its accessibility label have no stated plural handling for other counts across the five locales.",
+     "evidence": "\"Streak screen header: \"12-day streak\"\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 191938,
+    "tokOut": 43167,
+    "usd": 0.05820779000000001,
+    "critMs": 106839
+   },
+   "wallMs": 115812
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The dual-write recomputes streak_count from the events table on every 2.15 write, but the historical events are added only by the backfill, which starts after deploy. From the Monday 10:00 UTC deploy, a completion by a 3.1 client could recompute streak_count from a nearly empty event set and undercount live streaks. The artifact does not gate the recompute until backfill completes, and a rollback would keep the wrong value.",
+     "evidence": "\"`streak_count` is recomputed from events inside that transaction\" / \"Reconciliation does not run before the backfill completes\" / backfill \"only after full deploy\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The backfill reconstructs N consecutive days ending at a stored 3.1 date D, but the column and its day basis (UTC, local, or profile timezone) are unconfirmed. The only dry-run compares row counts derived from streak_count and cannot detect wrong days. The independent mapping check is unrecorded. Once the flag is above 0%, the deletion path is closed and events are never removed, so an undetected mapping error becomes permanent.",
+     "evidence": "\"the column and its day basis are to be confirmed against the 3.1 schema in STR-1190\" / \"this check compares counts derived from `streak_count` itself, so it validates row counts, not the correctness of which days were chosen\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Client day assignment for device timezone differing from profile timezone, offline completion, stale or missing cache, and server-rejection re-derivation has no test evidence. The logic ships in the 11-02 store binary, and a wrong day is written once per completion. The replay rule is stated only in prose.",
+     "evidence": "\"Because this client logic ships in the binary submitted on Mon 11-02, those cases are required before store submission, not only before the flag\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The deploy precondition is not met as of today. The final-tag N-1 and rollback re-run and the rc2→final diff review are scheduled for Wed through Fri. If they are not recorded by 10:00 UTC Monday, the deploy must be held, so the Monday deploy cannot cross on the artifact's own terms yet.",
+     "evidence": "\"If they are not recorded by 10:00 UTC, the deploy is held rather than shipped on rc2 evidence.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The privacy nutrition label and Play data-safety form have not been verified against the new streak_events inventory, including the per-install source_device identifier. Store submission on 11-02 is blocked until the re-check is recorded against the listed pass criteria.",
+     "evidence": "\"Store submission on Mon 2026-11-02 is blocked until that re-check is recorded against these criteria.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The notification permission flows (iOS provisional then full authorization, Android POST_NOTIFICATIONS denial with a settings deep link) ship in the store binary but have no QA row and no entry in the required-before-step table.",
+     "evidence": "ABSENT: no QA row or required-before item for iOS provisional/full authorization or the Android POST_NOTIFICATIONS denial and deep-link path"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The flag-to-0% kill switch is the primary abort mechanism, and the artifact says it was verified in QA. The QA table has no row for the flag-off path, so the claim is unsupported by the listed evidence.",
+     "evidence": "\"Feature: set `streak_sync_v2` to 0%; 3.2 clients revert to local-only streaks within one config fetch (≤ 15 min). Verified in QA.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "A rolling 30-day saver limit is not expressible as a plain uniqueness constraint on a calendar window, and the mechanism is unspecified. Saver repairs also have no origin value in the stated enum.",
+     "evidence": "\"uniqueness constraint on the 30-day window\" / \"`origin` is `live` or `backfill`\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Each write recomputes streak_count from the full event history under a row lock, and partitioning is deferred to a load test before the 50% step. The growth projection and sustained QPS are unrecorded, so table sizing at full rollout is not yet evidenced.",
+     "evidence": "\"Monthly partitioning by `day` will be applied if the load test (below) shows the need.\""
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The localized pre-prompt names a fixed 8:00 PM time, while the reminder is described as set at the user's chosen time. If 8:00 PM is only a default example, the copy should say so.",
+     "evidence": "\"Want a nudge at 8:00 PM so you don't lose your streak?\""
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The final localized saver disabled-state label contains a literal calendar date, which will be wrong for any repair date other than the one shown. It needs to be a dynamic value or a clearly marked placeholder.",
+     "evidence": "\"Streak saver available again on Nov 28\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The 14-day hold is bounded, but the behavior of outbox entries (including pending-timezone entries) on 3.2 devices still held after day 14 is unspecified.",
+     "evidence": "\"Beyond 14 days, the fix build path applies.\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The dual-write exit has no committed date. It is only reviewed at 3.3 planning, and its thresholds still need sign-off in STR-1244.",
+     "evidence": "\"The dual-write is reviewed at 3.3 planning so it does not persist indefinitely.\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "No data-residency or region constraint is stated for the streak_events table or the backfill job, which matters for exit planning over the retention period.",
+     "evidence": "ABSENT: no residency or region statement for streak_events or the backfill job"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 99.5% crash-free gate is supported by a 6-day internal beta of 1,900 users, which is a small sample against roughly 400k MAU.",
+     "evidence": "\"Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The rc2→final diff reviewer is the streaks-svc tech lead, who also owns the schema. Independence is limited, and the release captain's countersignature is the only second check.",
+     "evidence": "\"The reviewer is the streaks-svc tech lead, with the release captain countersigning in STR-1190.\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 195884,
+    "tokOut": 50392,
+    "usd": 0.06260949,
+    "critMs": 134295
+   },
+   "wallMs": 138165
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The Monday 10:00 UTC deploy is conditional on prerequisites that are not recorded as of Tue 10-27: the final-tag N-1 and rollback re-run, the rc2→final diff review, and the pre-backfill dual-write test. The artifact says the deploy is held if they are missing, so the gate cannot be crossed on current evidence.",
+     "evidence": "\"As of Tue 10-27 none of these is recorded; they are scheduled for Wed through Fri, and the Monday deploy is conditional on them.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The backfill maps every historical run from a stored 3.1 date D whose column and day basis (UTC, local, or profile timezone) are unconfirmed. If the basis is not the user's local date, every backfilled day for affected users is shifted, and the rollback roll-forward re-runs the same rule, so it reproduces the error.",
+     "evidence": "\"the column and its day basis (UTC, local, or profile timezone) are **not yet confirmed** and must be confirmed against the 3.1 schema and code\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Wrong backfill rows can be deleted only by a manual path that closes once the flag is above 0%. Recompute keeps wrong events, so mapping verification is the only control after Flag 1%, and it is scheduled for the deploy window.",
+     "evidence": "\"This verification, together with the confirmed day basis, is the only control that catches a wrong mapping once the flag is above 0%, because the deletion path below is closed at that point.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The 0-mismatch dry-run compares counts derived from streak_count against itself, so it does not validate which days were chosen. The mapping verification that would check day correctness has no defined sample size, and mismatches can be excluded once explained.",
+     "evidence": "\"this check compares counts derived from `streak_count` itself, so it validates row counts, not the correctness of which days were chosen\" / \"The prod backfill does not start unless the rate is 0 on the sample or each mismatch is explained and excluded from the backfill.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Events are never removed, and a 2.14 reset is not recorded as events. The union rule can therefore recompute a streak from old events and re-grow a run that legacy logic reset, and the artifact does not define how that conflict is detected or handled.",
+     "evidence": "\"If events contain a day that `streak_count` does not reflect, events win and `streak_count` is recomputed.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The privacy nutrition label and Play data-safety form have not been checked against the new streak_events inventory, including the classification of source_device. Store submission on 11-02 is blocked on this re-check, which is not yet recorded.",
+     "evidence": "\"The privacy nutrition label and Play data-safety form have **not yet been verified** against the new `streak_events` inventory.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Client day assignment for device-versus-profile timezone differences, stale or missing cache, and the replay rule ship in the store binary on 11-02, but QA covers only the mid-streak timezone change and DST cases. These cases must pass before submission and are not yet recorded.",
+     "evidence": "\"Because this client logic ships in the binary submitted on Mon 11-02, those cases are required before store submission, not only before the flag.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The drift reading is taken from the pre-repair state, but the artifact does not say how the scan stays consistent with live writes that land during the run. Drift can therefore read higher or lower depending on timing.",
+     "evidence": "\"Each run first computes and emits the drift metric from the pre-repair state. It then repairs\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "habits_total is fixed at run start, so habits created mid-run are never scanned, and habits deleted mid-run make scanned fall below total. Coverage logic does not define how either case is handled.",
+     "evidence": "\"each run also emits `habits_scanned` and `habits_total` (the total taken at run start)\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The iOS provisional-authorization flow and the Android 13+ POST_NOTIFICATIONS flow ship in the binary and are not yet device-tested or checked against platform policy. These are required before store submission.",
+     "evidence": "\"These flows ship in the store binary and are not yet covered by QA.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The backfill rehearsal under replayed live write load is not recorded, so the 200ms auto-pause has not been shown to work under contention before the backfill starts.",
+     "evidence": "\"This rehearsal is not yet recorded.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The outbox is bounded to one entry per habit per day, but entries store the timezone captured at completion. Completions in one local day under different captured timezones can map to different days, so the bound and the idempotency key can disagree.",
+     "evidence": "\"Outbox entries store the instant and the timezone used at capture.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The streak_events table has only the unique key as an index, retains rows for the life of the account, and defers partitioning to a load test before the 50% step. Growth is therefore unplanned during the early rollout steps.",
+     "evidence": "\"Monthly partitioning by `day` will be applied if the load test (below) shows the need.\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "No storage or compute budget is stated for the 18.4M-row backfill, the replayed rehearsal load, the 2× load test, or the 100% steady-state growth of streak_events.",
+     "evidence": "ABSENT: no storage or compute budget for the backfill rehearsal, replayed write load, or streak_events growth at 100% rollout."
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "The prod snapshot used for the dry run, mapping verification, and rehearsal contains user behavior data, and the artifact states no residency or access-control constraint for those copies.",
+     "evidence": "ABSENT: no residency or access-control statement for the prod snapshot used in the dry-run, the mapping verification, or the rehearsal."
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "The saver disabled label hard-codes 'Nov 28', but the 30-day window is computed per user from their last repair, so the date is wrong for users who repaired on other days.",
+     "evidence": "\"Streak saver available again on Nov 28\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "No accessibility label is specified for the provisional pending-timezone streak state, which is shown to users.",
+     "evidence": "ABSENT: accessibility label for the provisional pending-timezone streak state."
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The header copy '12-day streak' uses a dynamic count, but plural handling for en, es, de, fr, and pt-BR is not described or checked.",
+     "evidence": "\"Streak screen header: \\\"12-day streak\\\"\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The legacy, dual-write, backfill, and reconcile paths all write streak_count, and no single oracle or property test asserts that they agree.",
+     "evidence": "ABSENT: a single oracle or property test that asserts streak_count equals the legacy rule across legacy, dual-write, backfill, and reconcile paths."
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The release captain holds the single go/no-go across backend, flag, and both stores, and the streaks-svc tech lead owns the diff review, the day-basis confirmation, the mapping verification, and the backfill. Gate evidence depends heavily on two people.",
+     "evidence": "\"Release captain (single go/no-go and abort owner across backend, flag, and both stores)\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 244210,
+    "tokOut": 35777,
+    "usd": 0.06496719,
+    "critMs": 69708
+   },
+   "wallMs": 75539
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The deploy precondition is unrecorded. The final-tag N-1 and rollback re-run, the rc2→final diff review, and the pre-backfill dual-write test all have to be recorded before the Monday 10:00 UTC deploy, and none is recorded yet.",
+     "evidence": "\"As of Tue 10-27 none of these is recorded; they are scheduled for Wed through Fri, and the Monday deploy is conditional on them.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The backfill day-mapping rule depends on the 3.1 last-completion date column, and its day basis (UTC, local, or profile timezone) is unconfirmed. If the basis is not the user's local date, every backfilled day for the affected habits is shifted. The artifact gates the backfill start on confirmation, but the outcome is not recorded.",
+     "evidence": "\"the column and its day basis (UTC, local, or profile timezone) are **not yet confirmed** and must be confirmed against the 3.1 schema and code\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The backfill rehearsal under replayed live write load and the independent day-mapping sample are both unrecorded. The 22-minute dry-run validated only row counts derived from streak_count, not which days were chosen. The number of habits without an independent source is not yet known, so the 0-mismatch bound does not cover the full population.",
+     "evidence": "\"**This rehearsal is not yet recorded.**\" and \"this check compares counts derived from `streak_count` itself, so it validates row counts, not the correctness of which days were chosen\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The App Store privacy label and Play data-safety re-check has not been performed. The streak_events fields and the source_device classification are not yet mapped to categories. Store submission on 11-02 is blocked until the re-check is recorded. The backend deploy and flag steps are not blocked by it.",
+     "evidence": "\"The privacy nutrition label and Play data-safety form have **not yet been verified** against the new `streak_events` inventory.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The notification permission flows (iOS provisional then full authorization, Android 13+ POST_NOTIFICATIONS deferred to 'Remind me', settings deep link) ship in the store binary with no device-lab or QA evidence. They must be recorded before store submission.",
+     "evidence": "\"These flows ship in the store binary and are not yet covered by QA.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The client timezone model is ambiguous. Provisional streak display with a missing or stale cache uses the device timezone, but the same artifact says the UI follows the profile timezone when the two differ. A traveler with a stale cache could see a streak that is later reclassified. The client day-assignment and replay-rule tests are not yet run.",
+     "evidence": "\"The UI shows the local streak provisionally, using the device timezone for display only\" vs \"the UI follows the profile timezone, so completion days and the repair target stay consistent\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The manual deletion path for wrong backfill rows is available only while the flag is at 0%. Once the flag rises, a mapping error can only be handled by a flag-off stop. Users may already have seen and synced derived streaks by then, so recovery is partial and manual.",
+     "evidence": "\"While the flag is above 0% a mapping error is handled by the Joint stop condition (flag to 0%), which reopens the path.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Every write takes a per-habit row lock (SELECT … FOR UPDATE) on the hot path. Latency under concurrent cross-device writes is unmeasured. The load test is scheduled only before the 50% step, so the 1% and 10% steps add this write load without a load measurement.",
+     "evidence": "\"Load test at 2× projected 100%-rollout write QPS, with table growth projection | Flag 50%\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "The schedule has no slack. If the Wed diff review fails, the full matrix re-run consumes Wed and leaves only Thu–Fri for every other Friday gate, so the Monday 10:00 UTC date is not credible without a possible move.",
+     "evidence": "\"a failed review starts the full matrix re-run on Wed, leaving Thu–Fri\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The rc2→final diff review is performed by the streaks-svc tech lead, who owns the change, with a release captain countersign. The criteria do not require an artifact hash or reproducibility check to confirm that the tested build matches the shipped tag.",
+     "evidence": "\"The reviewer is the streaks-svc tech lead, with the release captain countersigning in STR-1190.\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "No rate limit or per-user write quota is stated for the event and saver endpoints. The authorization and audit trail for per-user cohort enablement are not described.",
+     "evidence": "ABSENT: rate limits or per-user write quotas for event and saver endpoints; authorization and audit of per-user cohort enablement."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The dual-write persists until 3.4 (STR-1244). Its preconditions depend on adoption thresholds and dates that are proposed and not signed off, so two sources of streak truth could remain indefinitely.",
+     "evidence": "\"These dates and thresholds are proposed and need sign-off in STR-1244.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "streak_events grows one row per habit per completed day and is retained for the life of the account. Partitioning and the growth projection are deferred until before the 50% step, so long-term storage and write cost are not bounded in the plan.",
+     "evidence": "\"Rows are otherwise retained for the life of the account.\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "The artifact does not state data residency or region handling for streak_events or for the backfill job's data movement.",
+     "evidence": "ABSENT: residency or region statement for streak_events or for backfill data movement."
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "No compute, storage, or budget estimate is given for the backfill, the replayed-load rehearsal, or ongoing table growth.",
+     "evidence": "ABSENT: compute, storage, or budget estimate for backfill, rehearsal, and table growth."
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 99.87% crash-free result comes from a 1,900-user, 6-day internal beta, about 0.5% of MAU. The artifact does not state whether the beta exercised the new sync endpoints.",
+     "evidence": "\"Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Reconciliation alerting (missed, failed, stale, or incomplete runs) is tested only before Flag 1%. Until then, a silent reconciliation outage would not be caught by a gate.",
+     "evidence": "\"Reconciliation alerting test (missed run, failed run, stale reading, incomplete-coverage reading each page the on-call and block gate advancement) | Flag 1%\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Server timezone validation relies on the effective-from history, but the artifact does not say how gaps, out-of-order updates, or clock skew at effective-from boundaries are resolved. Those boundary cases are where wrong days are written.",
+     "evidence": "\"It keeps a history of profile timezone changes (effective-from instants) for this purpose.\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The disabled saver label gives a fixed unlock date (Nov 28) with no derivation. It does not say how the date behaves across a timezone change or when the 30-day window straddles the backfill.",
+     "evidence": "\"Streak saver available again on Nov 28\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "The disabled saver state is conveyed only through its label. The artifact does not say whether the control stays focusable or how its unavailability is announced to assistive technology.",
+     "evidence": "\"Saver button: \"Repair yesterday\" (disabled state label: \"Streak saver available again on Nov 28\")\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The release captain is the single go/no-go and abort owner across backend, flag, and both stores. The same on-call executes the deploy, backfill, reconcile, and rollback, which concentrates decision authority and operational load on one team around the Monday deploy.",
+     "evidence": "\"Release captain (single go/no-go and abort owner across backend, flag, and both stores): mobile squad B lead, with the streaks-svc on-call as deputy.\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 241736,
+    "tokOut": 37647,
+    "usd": 0.06540739,
+    "critMs": 70599
+   },
+   "wallMs": 84588
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "The Monday 10:00 UTC backend deploy and store submission are conditional on evidence that is not recorded as of Tue 10-27 (final-tag N-1/rollback re-run, rc2→final diff review, pre-backfill dual-write test, client day-assignment and replay tests, notification device-lab flows, privacy re-check). The go/no-go depends on Fri 10-30 judgment against unproduced evidence, and a failed Wed diff review forces a seven-day move.",
+     "evidence": "\"As of Tue 10-27 none of these is recorded; they are scheduled for Wed through Fri, and the Monday deploy is conditional on them.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The backfill day-mapping rule reconstructs historical days from streak_count and a stored 3.1 date D whose column and timezone basis are unconfirmed. If D is UTC or device-local, every backfilled run is shifted. The 18.4M-row dry run validated only row counts derived from streak_count itself, not which days were chosen. The rule is also reused by the rollback roll-forward.",
+     "evidence": "\"the column and its day basis (UTC, local, or profile timezone) are **not yet confirmed**\" and \"this check compares counts derived from `streak_count` itself, so it validates row counts, not the correctness of which days were chosen\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "The prod backfill, which writes irreversible history rows, is gated on a replayed-live-write rehearsal that is explicitly unrecorded. The only dry run had no write traffic, so concurrent backfill/live upserts on the same key are unverified before the backfill starts.",
+     "evidence": "\"**This rehearsal is not yet recorded.** That is the intended state of a proposal written before the evidence exists.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Client day-assignment code ships in the store binary on Mon 11-02, but the device-vs-profile timezone, stale-cache, pending-timezone, and replay-rule tests are unrecorded. The server protects stored data, but displayed streaks and outbox behavior users see are not covered.",
+     "evidence": "\"Because this client logic ships in the binary submitted on Mon 11-02, those cases are required before store submission... They are open by design at this stage of the proposal and are gates, not claims of coverage.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Every write takes a per-habit SELECT FOR UPDATE from deploy onward, but the contention test at prod peak QPS is scheduled only on staging for Tue 11-03, after the deploy. The 250ms p95 gate for Flag 1% is unmeasured on the hot path, and the 1% step becomes the first real production measurement.",
+     "evidence": "\"Row-lock contention test (p95/p99 at observed prod peak QPS) | streaks-svc tech lead | Tue 11-03 (staging), before Flag 1%\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Once the flag is above 0%, a wrong backfill mapping can only be recovered partially and manually via the audit table, and only for habits without later live events. Users in the cohort may already have seen or synced derived streaks, and the full deletion path is closed.",
+     "evidence": "\"Recovery for them is therefore partial and manual: for affected habits with no live events since the backfill, `streak_count` is restored from the audit table.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Store submission is blocked on privacy label and Play data-safety forms that have not been checked against the new streak_events inventory, including the per-install source_device identifier. The re-check is due Fri 10-30, and the only fallback is moving the submission date.",
+     "evidence": "\"The privacy nutrition label and Play data-safety form have **not yet been verified** against the new `streak_events` inventory.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Ownership is concentrated in the streaks-svc tech lead, who is also the reviewer of the rc2→final diff, owner of the mapping verification, contention and fault-injection tests, drift classification, and unresolved-habit handling, with no named backup. One absence can stall both deploy-side reviews and the backfill.",
+     "evidence": "\"The tech lead owns the root-cause call, and the release captain countersigns it in STR-1190.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The client falls back to device timezone when no profile timezone has ever been cached, which appears to conflict with the rule that device timezone is never used to assign a day. The artifact limits this to provisional display, but the stored-day consequence for a new-install client is not stated explicitly.",
+     "evidence": "\"It uses the device timezone only if no profile timezone has ever been cached (for example, a new install before its first successful refresh).\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The drift thresholds are inconsistent: the advancement gate allows drift below 0.01% of active habits, while re-enable after abort requires drift 0. A reading that passes the gate would still block re-enable without a stated reconciliation rule.",
+     "evidence": "\"`streak_events_vs_count_drift` ... < 0.01% of active habits\" and \"Re-enable requires drift 0 and unresolved 0.\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 242068,
+    "tokOut": 32105,
+    "usd": 0.06270279000000001,
+    "critMs": 48670
+   },
+   "wallMs": 55303
+  }
+ ],
+ "artifact": "# Release proposal: Stride 3.2 — Streak Sync\n\nOwner: mobile squad B · Store submission: Mon 2026-11-02 · Backend deploy: Mon 2026-11-02 10:00 UTC · Epic: STR-1190\nRelease captain (single go/no-go and abort owner across backend, flag, and both stores): mobile squad B lead, with the streaks-svc on-call as deputy.\n\n## What ships\n\n- Streaks now sync across devices. A habit completed on the watch or tablet counts toward the same streak on the phone.\n- \"Streak saver\": one missed day per 30 days can be repaired from the streak screen.\n- Optional streak reminder notification at the user's chosen time.\n\n## UI copy (final, localized en/es/de/fr/pt-BR)\n\n- Streak screen header: \"12-day streak\" (VoiceOver/TalkBack label: \"Current streak, 12 days\").\n- Saver button: \"Repair yesterday\" (disabled state label: \"Streak saver available again on Nov 28\").\n- Reminder pre-prompt sheet: \"Want a nudge at 8:00 PM so you don't lose your streak?\" Buttons: \"Remind me\" / \"Not now\".\n\n## Definition of \"day\"\n\n- A `day` is the calendar date of the completion instant in the user's **profile timezone**. The profile timezone is the single source of truth. The device timezone is never used to assign a day.\n- The client sends the completion timestamp, the local date, and the IANA timezone. The client computes the date in the cached profile timezone, so the timezone it sends is the profile timezone. The server converts the completion instant to the profile timezone itself and rejects the request if the client-supplied date or timezone does not match. The server stores the date it derived.\n- The server validates against the profile timezone that was in effect at the completion instant. It keeps a history of profile timezone changes (effective-from instants) for this purpose. A completion made before a timezone change but flushed after it is therefore validated against the old timezone, not the new one.\n- The server also rejects a completion instant that is not plausible for the server's UTC time (the implied local date must fall within the UTC−12 to UTC+14 window). Once written, a `day` is never recomputed. A later timezone change affects only future completions.\n- **Stale or missing profile timezone cache (client):**\n  - The client refreshes the profile timezone on launch and before each sync attempt. The cache is treated as fresh for 24h after a successful refresh.\n  - If the cache is missing, or is older than 24h and the refresh fails, the client does not assign a `day`. It stores the completion instant in the outbox as pending-timezone. The UI shows the local streak provisionally. For display only, it uses the last cached profile timezone if one exists, even if stale, so a traveler sees the same day boundaries the profile timezone would give. It uses the device timezone only if no profile timezone has ever been cached (for example, a new install before its first successful refresh). Provisional display is labeled as provisional and is never sent to the server. It may be reclassified once a refresh succeeds (for example, if the profile timezone changed while the cache was stale), and the server-derived streak then replaces it.\n  - Pending entries get their day assigned and are flushed only after a successful profile refresh. Outbox entries store the instant and the timezone used at capture. They are re-validated on flush, and the server applies the timezone-history rule above.\n  - If the server rejects a request for a timezone mismatch, the response carries the current profile timezone and its history. The client refreshes its cache and re-derives the day from the stored instant. It never edits a stored instant, and never replays a stored local day that does not match the server's derivation.\n- \"Yesterday\" in \"Repair yesterday\" means the day before the user's current local day in the profile timezone, using the same conversion as above. When the device timezone differs from the profile timezone (for example while traveling), the UI follows the profile timezone, so completion days and the repair target stay consistent.\n- QA covered a mid-streak timezone change (UTC−8 → UTC+9) and a DST boundary (see QA table). The case where the device timezone differs from the profile timezone, and the stale or missing cache behavior above, are listed under \"Not yet covered\" below. Because this client logic ships in the binary submitted on Mon 11-02, those cases are required before store submission, not only before the flag. They are open by design at this stage of the proposal and are gates, not claims of coverage. The server derivation is the backstop: a client that computes a wrong day is rejected and the server never stores the client-supplied date, so a client bug cannot write a wrong day. The replay rule (never replay a stored local day that disagrees with the server's derivation) must be covered by an automated client test as well as the manual cases.\n\n## Notifications permission\n\n- We do not request OS notification permission on launch or on upgrade.\n- The in-app pre-prompt sheet is shown only after the user reaches a 3-day streak, and only once per 30 days if they choose \"Not now\".\n- iOS: if the user taps \"Remind me\" we request provisional authorization first; full authorization is requested only if they enable sound in reminder settings.\n- Android 13+: POST_NOTIFICATIONS is requested only after \"Remind me\". Denial is stored and the reminder toggle shows \"Turn on in system settings\" with a deep link.\n- These flows ship in the store binary and are not yet covered by QA. They are listed as a required item before store submission in the table below. Store submission is held if the device-lab evidence is not recorded (see the schedule).\n\n## Backend changes (streaks-svc 2.14 → 2.15)\n\n- New table `streak_events (user_id, habit_id, day, source_device, origin, created_at)`; `origin` is `live` or `backfill`. Streak is computed from events, idempotent on `(user_id, habit_id, day)`. The event-derived streak is the run of consecutive event days ending at the habit's latest event day (subject to the usual alive-through-yesterday rule). A day with no event is a gap that ends a run.\n- New nullable column `habits.events_authoritative_at` (additive; ignored by 2.14 and 3.1). It is set by the backfill, in the same transaction that completes a habit's backfill, and marks that the habit's event set is complete.\n- `habits.streak_count` is **kept** and dual-written by 2.15 so 3.1 clients (which read `streak_count` from `/v2/habits`) keep working unchanged.\n- **Dual-write semantics:**\n  - The event insert and the `streak_count` update happen in one database transaction. The habit row is locked (`SELECT … FOR UPDATE`), so concurrent cross-device completions serialize.\n  - **Before a habit's backfill has completed** (`events_authoritative_at` is null), the event set is incomplete, so 2.15 does not recompute `streak_count` from events. It inserts the live event and updates `streak_count` with the same legacy increment/reset rule 2.14 and 3.1 use. From the moment of the deploy, a completion by a 3.1 client therefore cannot undercount a live streak.\n  - **After a habit's backfill has completed** (`events_authoritative_at` is set), `streak_count` is recomputed from events inside the same transaction.\n  - A failed transaction rolls back both writes. The client retries, and the idempotency key makes the retry safe.\n- **Authority between events and `streak_count`:**\n  - One rule applies throughout: the set of events is the union of all completion days ever recorded, and `streak_count` is always a value derived from that set once the set is complete. For a habit with `events_authoritative_at` set, events are the source of truth while 2.15 is serving. `streak_count` is a derived compatibility value that 3.1 clients read. For a habit not yet backfilled, `streak_count` remains the source of truth and is never recomputed from partial events.\n  - The only time `streak_count` is written without events is while 2.14 is serving after a rollback (and, before backfill, via the legacy path above). That is a source of missing events, not a competing value. The insert-only backfill converts those completions into events, after which `streak_count` is recomputed from events. This is the single tie-break: events are added, never removed, and the derived value follows.\n  - **Resets are represented by gaps.** A legacy reset (2.14 or 3.1 resetting `streak_count` after a missed day) is not recorded as an event, but it corresponds to a day with no completion, and therefore no event. Old events before that gap cannot extend a run across it, so recompute does not re-grow a run that legacy logic reset. The case where this could fail is an event set that bridges the gap (for example an event on the missed day that legacy logic never counted). That case is detected, not assumed away: before a habit's `events_authoritative_at` is set (first backfill or roll-forward re-backfill), the backfill computes the event-derived run after its inserts. If it is longer than `streak_count`, the marker is not set. The habit stays on the legacy path, is counted in `streak_reconcile_unresolved_total`, and is handled individually by the streaks-svc tech lead. After the marker is set, the same comparison runs in reconciliation, and an event-derived run longer than a legacy-written `streak_count` that is not explained by a completion after the last verified state is also counted as unresolved rather than recomputed.\n  - If events contain a day that `streak_count` does not reflect, events win and `streak_count` is recomputed, except in the bridging case above, which is unresolved. If `streak_count` implies a day that has no event, the backfill adds the event (using the day-mapping rule below). Additions on the same `(user_id, habit_id, day)` key cannot conflict, because the key is the unit. Conflicts at the level of a run, not a key, are possible and are handled as unresolved below.\n  - If a habit's state cannot be reconciled by union (for example, `streak_count` implies a run that contradicts existing events), reconciliation does not guess. It leaves the habit unchanged, counts it in `streak_reconcile_unresolved_total`, and pages the streaks-svc tech lead. Any unresolved count above 0 is a gate failure and blocks re-enable.\n  - Reconciliation never deletes or rewrites events. The only way it adds events is the insert-only backfill path below. Otherwise it recomputes `streak_count` from events.\n  - Reconciliation does not run before the backfill completes, so it cannot repair events toward a `streak_count` that is stale during the backfill window.\n- **Reconciliation job:**\n  - Each run first computes and emits the drift metric from the pre-repair state. It then repairs, and emits repairs separately as `streak_reconcile_repaired_total`. The gate reads only the pre-repair drift reading, so a repaired drift cannot appear as zero.\n  - **Coverage requirement:** each run also emits `habits_scanned` and `habits_total` (the total taken at run start). A reading is valid only if the run completed without timeout or error and `habits_scanned` = `habits_total`. A partial, timed-out, or errored scan is invalid even if its drift value is 0, and an invalid reading counts as a gate failure.\n  - It runs after the backfill completes, then every 6h during the rollout, plus an on-demand run immediately before each flag step. After 100% plus 7 days it moves to daily.\n  - It alerts the on-call if a run is missed, fails, times out, has incomplete coverage, or exceeds its expected duration. A gate decision must use a valid reading from a run completed within the previous 6h. A missing, stale, or invalid reading counts as a gate failure.\n- **Ingestion authorization:**\n  - Event and saver endpoints authenticate with the user's session token. `user_id` is taken from the token, never from the request body.\n  - The server verifies that `habit_id` belongs to that user. `source_device` is informational only and is never used for authorization.\n  - Saver repairs are enforced in a single transaction with a per-user lock and a uniqueness constraint on the 30-day window, so replays and races across devices cannot exceed 1 per 30 days.\n  - **Server-side gating:** the new event and saver endpoints are disabled server-side at deploy (default off, returning feature-off) and are enabled only per user for the flag cohort. Enabling them for any user requires the forged/mismatched `user_id`/`habit_id` and replay tests below to be recorded as passed. The write-path trust boundary is therefore not exposed before it is tested.\n- Backfill: one `streak_events` row per day of each habit's current streak, run as a resumable job (batches of 5k, checkpointed), dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches vs `streak_count`. Note that this check compares counts derived from `streak_count` itself, so it validates row counts, not the correctness of which days were chosen. The day-mapping rule and its separate verification are below.\n  - **Day-mapping rule.** `streak_count` records a run length, not a set of days, so the backfill reconstructs days as follows. For a habit with `streak_count` = N > 0 and a stored last-completion date D (the date 3.1 stored for the habit's most recent completion; the column and its day basis (UTC, local, or profile timezone) are **not yet confirmed** and must be confirmed against the 3.1 schema and code and recorded in STR-1190 before the prod backfill starts, see the schedule), the backfill inserts the N consecutive calendar dates ending at D (D−N+1 … D), with `origin = 'backfill'`. It does not re-derive or convert dates with the profile timezone: the stored 3.1 date is used as is, and 3.2 timezone rules apply only to completions made from 3.2 on. If the confirmed basis is not the user's local date, this rule is revised and re-verified before any prod backfill. The rollback roll-forward backfill uses the same rule, so it is run only with the rule as confirmed and verified here; any later revision of the rule requires the mapping verification below to be repeated before a re-run. Habits with `streak_count` = 0 get no rows. A habit whose D is missing, in the future, or older than the date that would keep the streak alive is not backfilled. It is counted in `streak_reconcile_unresolved_total` and handled individually by the tech lead. Saver repairs are new in 3.2, so no saver-repaired days exist at backfill time.\n  - **Mapping verification before the prod backfill.** The mapping is checked against an independent source (3.1 completion history or logs, where they exist) on the prod snapshot. The sample is a random draw of at least 5,000 habits that have an independent source, which includes at least 500 habits that straddled a timezone change in 3.1 and at least 500 whose D falls in a DST-transition week. (Proposed sizes; 0 mismatches in 5,000 bounds the mismatch rate below about 0.06% at 95% confidence. The tech lead and release captain sign off or change the sizes in STR-1190.) That bound applies only to habits that have an independent source. The tech lead also records the number of habits with no independent source, since those are unverified by this check, and the mismatch rate and any systematic cause, in STR-1190. If the unverified share exceeds a threshold the tech lead and release captain set in STR-1190 before the prod backfill starts, they record an explicit decision on how that population is handled (for example, backfilling it last, or excluding it until a further check exists). The prod backfill does not start unless the sample shows 0 mismatches, or every mismatch has an identified cause and that cause is turned into a query selecting the whole affected population (not just the sampled habits). All habits matched by that query are excluded from the backfill and handled individually, and the verification is repeated on a fresh sample after the exclusion. A mismatch cannot be excluded by explanation alone. Together with the confirmed day basis, this verification is the control before any user sees backfilled events. The deletion path below is the control if a mapping error is found later.\n  - **Containment of a wrong mapping.** Backfilled rows stay invisible to users: no 3.2 client reads events until `streak_sync_v2` is above 0%. Before it marks a habit authoritative, the backfill writes that habit's pre-backfill `streak_count` and D to a side table (`streak_backfill_audit`, additive, retained until the 3.4 drop in STR-1244), so a wrong mapping can be undone for that habit. If a mapping error is found while the flag is at 0%, whether before first enablement or after an abort, the tech lead may delete the affected `origin = 'backfill'` rows through a ticketed manual operation recorded in STR-1190, clear `events_authoritative_at` on the affected habits, re-run the backfill with the corrected rule, and run reconciliation. This is the only deletion path. It is manual, restricted to backfill-origin rows (live-origin events are never touched), and available only while the flag is at 0%. While the flag is above 0% a mapping error is handled by the Joint stop condition (flag to 0%), which reopens the path. Exposure before that point is bounded by the staged flag (1% first, 24h per step), and users in the flag cohort may already have seen or synced a derived streak. Recovery for them is therefore partial and manual: for affected habits with no live events since the backfill, `streak_count` is restored from the audit table. Habits with later live events are handled individually by the tech lead and recorded in STR-1190. The \"never deletes\" rule for reconciliation is unchanged.\n  - Conflict semantics: backfill uses `INSERT … ON CONFLICT (user_id, habit_id, day) DO NOTHING` and never updates existing rows, so a live write for the same key always wins.\n  - **Consistency with live writes:** per habit, the backfill takes the same row lock (`SELECT … FOR UPDATE`) used by the dual-write, and reads `streak_count` and D inside that transaction. It inserts the events and sets `events_authoritative_at` in that same transaction (subject to the bridging check above). Its snapshot is therefore consistent with any completed live write for that habit. Live writes before the marker used the legacy path, so `streak_count` already reflects them, and their events are kept by the insert-only conflict rule. A live write after the transaction is an ordinary recompute-from-events write. A snapshot-derived day is never inserted from a stale read.\n  - Throttling and monitoring: the job is rate-limited and auto-pauses if serving p95 exceeds 200ms. The pause threshold is deliberately stricter than the 250ms flag gate, so backfill load can never push serving latency to the gate threshold. It alerts the on-call if the checkpoint stalls or a batch fails.\n  - **Definition of \"complete\":** the checkpoint has passed the last habit, every batch has succeeded (including paused or retried batches, with no batch left in a failed state), every habit has `events_authoritative_at` set, and the completion verification (event-derived vs `streak_count` over all habits) shows 0 mismatches. Pauses and retries do not count as completion until this holds.\n  - The snapshot dry-run had no live write traffic. A rehearsal of the backfill under replayed production write load is a required precondition for starting the prod backfill (see below), and the prod backfill is started manually only after it is recorded. **This rehearsal is not yet recorded.** That is the intended state of a proposal written before the evidence exists. The prod backfill does not start until it is recorded.\n- Dropping `streak_count` is **not** part of this release. It is scheduled for 3.4 (STR-1244). Owner: streaks-svc tech lead. Preconditions: the minimum supported app version is raised past 3.1, and 3.1 is below 2% of MAU for 4 consecutive weeks. The dual-write is reviewed at 3.3 planning so it does not persist indefinitely. These dates and thresholds are proposed and need sign-off in STR-1244.\n- **Data lifecycle:** `streak_events` rows are deleted by the existing account-deletion job when an account is removed. `source_device` is nulled after 90 days. Rows are otherwise retained for the life of the account.\n- **Scale:** the table's only index is the unique `(user_id, habit_id, day)` key. Monthly partitioning by `day` will be applied if the load test (below) shows the need. The growth projection (rows per habit per completed day, plus the 18.4M backfill) and the sustained write QPS at 100% rollout will be recorded in STR-1190 before the 50% step. Because every write takes the per-habit row lock, a targeted contention test (p95/p99 write latency under concurrent cross-device completions on the same habit, at observed prod peak QPS) is required before Flag 1%, so the 1% and 10% steps are not the first measurement of that path. The full 2× load test stays before the 50% step.\n\n## QA report summary (build 3.2.0 (4410), streaks-svc 2.15.0-rc2)\n\n| Area | Env | Result |\n|---|---|---|\n| Multi-device sync (phone + watch + tablet), offline completion then reconnect | staging | Pass |\n| Timezone change mid-streak (UTC−8 → UTC+9), DST boundary | staging | Pass |\n| 3.1 client against 2.15 API (N-1 compatibility) | staging | Pass |\n| 3.2 client against 2.14 API (server rollback scenario) | staging | Pass (sync silently disabled, local streak shown) |\n| Streak saver: limit 1 per 30 days enforced server-side | staging | Pass |\n| VoiceOver / TalkBack on streak screen and pre-prompt | device lab | Pass |\n| Dynamic Type XXL / Android font scale 200% | device lab | Pass, no truncation |\n| Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87% |\n\nStaging remote config was exported from prod and only `streak_sync_v2` differed (on in staging); prod values for every other key were identical during QA.\n\n### Not yet covered by the QA above (required before the stated step)\n\nEach item below must pass and be recorded in STR-1190 before the step shown. Owners and target dates are in the schedule that follows the table.\n\n| Item | Required before |\n|---|---|\n| Re-run of N-1 (3.1 vs 2.15) and rollback (3.2 vs 2.14) cases on the final 2.15.0 tag, plus review of the rc2→final diff against the criteria below. If the diff fails the criteria, the full matrix is re-run | Prod deploy (10:00 UTC) |\n| Pre-backfill dual-write test: with a populated habit that has no backfilled events, a 3.1 client completion against 2.15 updates `streak_count` by the legacy rule (no undercount), inserts the live event, and leaves `events_authoritative_at` null; after backfill of the same habit, completions recompute from events and match the legacy result | Prod deploy (10:00 UTC) |\n| Day-assignment cases where device timezone differs from profile timezone (completion day, offline completion, \"Repair yesterday\" target, server rejection of mismatched date/timezone), and stale or missing profile timezone cache (pending-timezone outbox, provisional display using the last cached profile timezone and its reclassification after refresh, flush after refresh, validation against timezone history), plus an automated client test of the replay rule (stored local day that disagrees with the server derivation is never replayed; the day is re-derived from the stored instant) | Store submission, and Flag 1% |\n| Notification permission flows on device lab (iOS and Android 13+): no permission request on launch or upgrade; pre-prompt only after a 3-day streak and at most once per 30 days after \"Not now\"; iOS provisional authorization on \"Remind me\" and full authorization only when sound is enabled; Android POST_NOTIFICATIONS requested only after \"Remind me\", denial stored, and the \"Turn on in system settings\" deep link opens the correct settings screen | Store submission |\n| 3.2 client reconnect and re-enable behavior against 2.14, including a simulated 14-day hold with the outbox growing at one entry per habit per day, then flush on re-enable (see Rollback) | Store submission, and Flag 1% |\n| Flag-off kill switch: set `streak_sync_v2` to 0% with sync active, and confirm 3.2 clients revert to local-only streaks within one config fetch (≤ 15 min) without data loss | Flag 1% |\n| Fault-injection test on the dual-write (failure between event insert and `streak_count` update; concurrent cross-device completions), covering both the pre-backfill legacy path and the post-backfill recompute path | Flag 1% |\n| Row-lock contention test: concurrent cross-device completions on the same habit at observed prod peak write QPS, recording p95/p99 write latency against the 250ms gate | Flag 1% |\n| Concurrency and replay tests for saver repairs and for forged or mismatched `user_id`/`habit_id` on ingestion | Enabling the new endpoints for any user, and Flag 1% |\n| Confirmation of the 3.1 last-completion date column and its day basis against the 3.1 schema and code, recorded in STR-1190 (and the day-mapping rule revised if the basis is not the user's local date) | Prod backfill start |\n| Backfill day-mapping verification on the prod snapshot, with the sample sizes and exclusion rule defined under Backend changes | Prod backfill start |\n| Backfill rehearsal under replayed live write traffic, including concurrent backfill/live upserts on the same key. Counts only if it meets the representativeness criteria below | Prod backfill start |\n| Rollback test after flag-on writes: roll back to 2.14, complete habits via 3.1 clients (including a missed day and a reset), clear `events_authoritative_at`, roll forward to 2.15, run backfill and reconciliation, confirm no drift and that no reset run is re-grown from old events (a bridging case must be counted unresolved and left on the legacy path) | Flag 1% |\n| Reconciliation alerting test (missed run, failed run, stale reading, incomplete-coverage reading each page the on-call and block gate advancement) | Flag 1% |\n| Load test at 2× projected 100%-rollout write QPS, with table growth projection | Flag 50% |\n\n**Representativeness criteria for the backfill rehearsal.** The rehearsal counts only if (a) the dataset has at least the prod row count (18.4M `streak_events` rows' worth of habits, or a prod snapshot), (b) the replayed write rate is at least the observed prod peak write QPS (recorded from prod metrics in STR-1190), (c) it includes concurrent backfill and live writes on the same `(user_id, habit_id, day)` keys, and (d) serving p95 during the run is recorded and shows the 200ms auto-pause behaves as designed. If staging does not meet (a) or (b), the rehearsal is run on a prod snapshot instead.\n\n**rc2→final diff criteria and reviewer.** The reviewer is the streaks-svc tech lead, with the release captain countersigning in STR-1190. The diff counts as non-schema and non-behavioral only if all of the following hold: it contains no migration or DDL files; it changes no SQL, transaction, locking, or handler/validation code; it changes no remote-config keys or defaults; and the only changes are version strings, comments or docs, test code, or build and CI metadata. Any other change fails the criteria and triggers the full matrix re-run.\n\n### Schedule for the pre-flag critical path (proposed; owners confirm in STR-1190)\n\nToday is Tue 2026-10-27. Dates are targets. A slip moves every later step, and no step is taken without its prerequisites recorded. Only the items that gate the deploy, the store submission, or the choice of backfill rule are due by Fri 10-30. Server-side items that gate only the endpoints, the backfill, or the flag are scheduled after the deploy, so a failed diff review does not collide with them.\n\n| Item | Owner | Target |\n|---|---|---|\n| Cut final 2.15.0 tag; rc2→final diff review (decision point: if the review fails, the full matrix re-run takes Wed and leaves only Thu–Fri for the other Friday items, so the release captain records the move decision in STR-1190 on Wed, see below) | streaks-svc tech lead | Tag and diff review recorded by Wed 10-28 |\n| N-1 and rollback re-run on the final tag (full matrix re-run if the diff review failed) | streaks-svc on-call | Done and recorded by Fri 10-30 |\n| Pre-backfill dual-write test (legacy path before backfill, recompute after) | streaks-svc tech lead | Recorded by Fri 10-30 (staging), before the prod deploy |\n| Confirm 3.1 last-completion date column and day basis (day-mapping rule input) | streaks-svc tech lead | Recorded by Fri 10-30 |\n| Client cases: day-assignment (device ≠ profile timezone), stale or missing cache, replay-rule automated test, 3.2 reconnect against 2.14 with the simulated 14-day outbox | mobile squad B lead | Recorded by Fri 10-30 (staging), before store submission |\n| Notification permission flows on device lab (iOS and Android 13+) | mobile squad B lead | Recorded by Fri 10-30, before store submission |\n| Privacy label and data-safety re-check (see Privacy) | release captain | Recorded by Fri 10-30 |\n| Prod deploy (canary 1h, then full) | streaks-svc on-call | Mon 11-02, 10:00 UTC |\n| Backfill day-mapping verification on the prod snapshot | streaks-svc tech lead | Mon 11-02 |\n| Backfill rehearsal under replayed live write load (criteria above) | streaks-svc on-call | Mon 11-02 (staging if it meets the criteria, otherwise prod snapshot) |\n| Fault-injection test; concurrency, replay and forged-ID tests; reconciliation alerting test (server cases) | streaks-svc tech lead | Tue 11-03 (staging), before enabling endpoints for any user |\n| Row-lock contention test (p95/p99 at observed prod peak QPS) | streaks-svc tech lead | Tue 11-03 (staging), before Flag 1% |\n| Rollback test after flag-on writes | streaks-svc on-call | Tue 11-03 (staging) |\n| Flag-off kill switch test | mobile squad B lead | Tue 11-03 (staging), before Flag 1% |\n| Prod backfill start, completion verification, clean on-demand reconcile | streaks-svc on-call | Start Tue 11-03; complete and verified by Wed 11-04 |\n| Flag 1% (earliest) | release captain | Thu 11-05, then 24h per step. The day between verification and the first step is slack for backfill pauses or a failed reading |\n| Load test and growth projection | streaks-svc tech lead | Before 50%; target Fri 11-06 |\n\n**Slack and the Wednesday decision.** The Mon 11-02 date has no slack if the Wed diff review fails. In that case the default is to move the deploy and store submission to Mon 11-09, with every later date shifting by the same seven days. The release captain records this decision in STR-1190 on Wed 10-28 rather than compressing Thu–Fri. The captain may instead keep Mon 11-02 only by recording on Wed that the remaining Friday items are still achievable in Thu–Fri. If the Fri 10-30 items are not all recorded, the release captain moves the deploy and store submission rather than shipping on partial evidence. If the backfill rehearsal or mapping verification is not recorded by Mon 11-02, the backfill start moves, and so does Flag 1%. Items needed only for later steps (load test) may slip without moving the deploy.\n\nThe unrecorded items above (final-tag re-run, diff review, dual-write test, client day-assignment cases, notification flows, privacy re-check) are open gates by design. The same holds for the backfill-gating items (day-basis confirmation, mapping verification, replayed-load rehearsal), which block only the backfill start. This is a proposal written on Tue 10-27, before the evidence exists, and the go/no-go for the deploy and the store submission is taken on Fri 10-30 against what is recorded. Nothing in this proposal claims they have passed.\n\n## Rollout plan\n\n1. **Deploy precondition:** the final-tag re-run of the N-1 and rollback cases, the rc2→final diff review (judged against the criteria above by the named reviewer, first row of the table above), and the pre-backfill dual-write test are recorded in STR-1190 before the deploy starts. As of Tue 10-27 none of these is recorded; they are scheduled for Wed through Fri, and the Monday deploy is conditional on them. This is the intended gate, not a defect: the release captain confirms on Fri 10-30 whether they are recorded and moves the deploy if not. If they are not recorded by 10:00 UTC, the deploy is held rather than shipped on rc2 evidence. Then 10:00 UTC deploy streaks-svc 2.15 (canary 10% of pods for 1h, then full). The new event and saver endpoints stay disabled server-side (see Ingestion authorization).\n2. **Backfill start:** the backfill is started manually by the streaks-svc on-call, only after full deploy and only after the day-basis confirmation, the day-mapping verification, and the replayed-load rehearsal are recorded in STR-1190. It runs throttled, as above. It does not start automatically on deploy. Until each habit's backfill completes, that habit's `streak_count` follows the legacy path (see Dual-write semantics).\n3. **Precondition for raising `streak_sync_v2` above 0%:** the backfill is complete as defined above, the reconciliation job has run at least once after completion with a valid, clean pre-repair reading (full coverage, drift 0, unresolved 0), and backfill alerts are quiet. The backfill is not expected to overlap with any flag step. The serving-latency gate therefore measures load from flag-enabled traffic, which is the new load. p95 during the backfill is recorded in STR-1190 for the record.\n4. Remote config `streak_sync_v2`: 1% → 10% → 50% → 100% of 3.2 users, 24h between steps. The earliest first step is Thu 11-05.\n5. iOS phased release (7 days, manual release only after backend is fully deployed and the backfill precondition is met) and Play staged rollout 10% → 50% → 100% in parallel; the flag gates the feature independently of store rollout.\n6. Gates to advance each step: crash-free sessions ≥ 99.5%, `streak_mismatch_total` (server vs client recompute) < 0.1% of synced users, `streak_events_vs_count_drift` (pre-repair reading of the latest valid reconciliation run with full habit coverage, at most 6h old, comparing event-derived streak vs `habits.streak_count`) < 0.01% of active habits, `streak_reconcile_unresolved_total` = 0, streaks-svc p95 < 250ms, support tickets tagged `streak` < 2× 4-week baseline.\n\n### Joint stop condition\n\nThe release captain owns advance/hold/abort decisions for all tracks. Any gate breach triggers: flag to 0%, halt of the iOS phased release and the Play staged rollout, and a backend rollback if the cause is in streaks-svc. A breach of the drift gate is a hard stop for flag advancement even if every other gate is green. If the cause is a wrong backfill mapping, setting the flag to 0% reopens the manual backfill-row deletion path described under Backend changes.\n\n## Rollback\n\n- Feature: set `streak_sync_v2` to 0%; 3.2 clients revert to local-only streaks within one config fetch (≤ 15 min). The 3.2-vs-2.14 case in QA covers sync being unavailable, but the flag-off path itself is **not yet covered by QA**. A dedicated kill-switch test is required before Flag 1% (see the table above).\n- Backend: redeploy streaks-svc 2.14; schema is additive, so 2.14 runs against the migrated database unchanged (verified in staging on rc2; re-verified on the final tag before the prod deploy, per the table above). Because every event write also updates `streak_count` in the same transaction, and `streak_count` is never recomputed from an incomplete event set (see Dual-write semantics), `streak_count` is current and correct at the moment of rollback, and 2.14 ignores `streak_events`.\n- Roll-forward after a rollback: completions made via 3.1 clients while 2.14 was live update only `streak_count`. Before re-enabling the flag, clear `events_authoritative_at` on all habits (a column reset only, no events are touched), so 2.15 returns to the legacy `streak_count` path for every habit until it is backfilled again. Then rerun the backfill (insert-only, idempotent, using the day-mapping rule above, setting the marker again only if the bridging check passes) so the missing events are added from `streak_count`, then run reconciliation, which recomputes `streak_count` from events, until the pre-repair drift reading is 0 with full coverage and `streak_reconcile_unresolved_total` is 0. A habit where a legacy reset happened during the rollback is protected by the gap rule and the bridging check (see Authority between events and `streak_count`): its old events cannot re-grow the reset run, and any habit where they would is left unresolved for the tech lead. Reconciliation never deletes events. The only deletion is the manual backfill-row path, available while the flag is at 0% (including after an abort), as described under Backend changes.\n  - Owner: the release captain, with the streaks-svc on-call executing. **Time bounds (proposed, to be signed off by the release captain and streaks-svc tech lead in STR-1190 before Flag 1%):**\n    - Within 48h of the abort, the streaks-svc tech lead classifies any nonzero drift as transient (still falling across consecutive runs), stable-nonzero, or unresolved. A drift that is nonzero but unchanged across two consecutive valid runs is stable-nonzero. The tech lead owns the root-cause call, and the release captain countersigns it in STR-1190.\n    - Re-enable requires drift 0 and unresolved 0. A stable-nonzero state is never accepted as is. It is either fixed (root cause found and reconciled to 0) or the affected habits are named in STR-1190 and handled individually by the tech lead.\n    - Day-7 decision: if drift is still not 0 at 7 days from the abort, the release captain must record a decision in STR-1190 between (a) one extension of the hold, with a new target date no later than day 14 and a stated cause, or (b) removing sync from the 3.2 rollout (flag held at 0% and the store rollout stays halted until a fix build) and opening a fix ticket. The decision cannot be deferred past day 7.\n    - Day-14 hard stop: the hold cannot be extended a second time. If drift is still not 0 at day 14, option (b) is mandatory. There is no automatic re-enable. Holding with the flag off for up to 14 days is the maximum supported state, and the simulated 14-day outbox test (see the table) covers it. Beyond 14 days, the fix build path applies.\n    - The rollback test above covers this path.\n- Client behavior against 2.14: while sync is disabled, 3.2 completions are kept in a local outbox with their instant and captured timezone (day assignment follows the rules in \"Definition of day\"). The outbox holds at most one entry per habit per day, so growth is bounded by the length of the hold and by the 14-day hard stop above. When sync is re-enabled, the outbox is flushed idempotently on `(user_id, habit_id, day)`, and the server-derived streak then replaces the local one. Pending-completion handling is part of the reconnect test above.\n- Store builds: halt phased/staged rollout; 3.2 with flag off is functionally equivalent to 3.1 plus copy changes.\n\n## Privacy\n\n- `source_device` stores a per-install random ID, not a hardware identifier; it is nulled after 90 days. `streak_events` is deleted with the account (see Data lifecycle). No new data shared with third parties.\n- The privacy nutrition label and Play data-safety form have **not yet been verified** against the new `streak_events` inventory. Until the check is done, assume they may need updating. This is an open gate as of Tue 10-27, not an assumption that the forms are correct; it is scheduled and blocks store submission (below), so it needs no other change to the plan. Owner: release captain, with the streaks-svc tech lead as second reviewer. **Date: the updated data inventory diff (adding `streak_events` and `source_device`) is attached to STR-1190, and both forms are re-checked and updated if needed, by Fri 2026-10-30.**\n  - **Pass criteria for the re-check.** The re-check passes only if all of the following are recorded in STR-1190: (a) the inventory diff lists every `streak_events` field (`user_id`, `habit_id`, `day`, `source_device`, `origin`, `created_at`) with its data type, whether it is linked to the user, its purpose, and whether it is used for tracking; (b) each field is mapped to a specific category in the App Store privacy label and the Play data-safety form (for example, identifiers and product interaction or app activity), and the per-install random `source_device` ID is classified explicitly; (c) the retention and deletion statements in both forms match the Data lifecycle above (90-day null of `source_device`, deletion with the account); (d) the forms either already match or are updated, and the updated drafts are saved in the store consoles; and (e) the second reviewer signs off.\n  - **Store submission on Mon 2026-11-02 is blocked until that re-check is recorded against these criteria.** If it is not recorded by Fri 10-30, the release captain moves the submission date. The backend deploy and flag steps are unaffected because they are independent of store submission, but note that the flag cannot reach store-delivered 3.2 users until the store build ships.",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 70194,
+  "tokOut": 85803,
+  "usd": 1.138778,
+  "critMs": 500730
+ },
+ "status": "cap"
+}

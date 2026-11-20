@@ -1,0 +1,893 @@
+{
+ "approach": "rubric-single",
+ "case": "deploy-02",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "compliance",
+     "severity": "blocker",
+     "claim": "The launch announcement says options are zero-commission and fee-free with 'no catches', but the release notes say options are $0.50 per contract and regulatory fees still apply to sells. The public claim is false and misleading under FINRA Rule 2210 (fair and balanced), and posting it on the blog and X at 09:00 ET cannot be undone.",
+     "evidence": "\"trade stocks, ETFs **and options** with zero commissions and zero fees. No catches, no fine print.\" vs. \"options contract fee lowered to $0.50 per contract ... Regulatory fees (SEC, FINRA TAF) still apply to sells.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "Migration 0148 irreversibly drops `legacy_legs` and the conversion function. Rolling back to v4.18.2 cannot restore working template endpoints, so the agreed 30-minute backend rollback-to-previous-version requirement is not met. The 15-minute rollback claim assumes a working v4.18.2 that this migration removes.",
+     "evidence": "\"ALTER TABLE order_templates DROP COLUMN legacy_legs;\" and \"Migrations are forward-only; no down migrations are needed for this release.\" (Rollback target: \"complete within 15 min, well inside the 30-minute rollback SLO\")"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Multi-leg templates exist only in `legs_json`. Once `legacy_legs` is dropped, a rollback to 4.x cannot represent them, so user template data is lost or corrupted on rollback. There is no backup or point-in-time recovery step before the drop.",
+     "evidence": "\"Saved templates move from `order_templates.legacy_legs` ... to `order_templates.legs_json` (jsonb), which is what enables multi-leg templates.\" ABSENT: pre-drop backup or restore point for 0148."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Migrations 0147 and 0148 run at 06:00, before the v5 deploy at 06:10. During that window and the 12-pod rolling deploy, live v4.18.2 pods and 4.18.2 app clients still read `legacy_legs`, which is already gone, so template endpoints fail.",
+     "evidence": "\"1. 06:00 ET apply migrations 0147, 0148.\" \"2. 06:10 ET deploy orders-svc v5.0.0 (rolling, 12 pods).\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "`legs_json` is added as NOT NULL with no default, and 4.x code does not write it. Template inserts from 4.18.2 pods and clients fail during rollout and after any rollback. The ALTER ... SET NOT NULL and the single-transaction 2.9M-row UPDATE also take long exclusive locks on a live pre-market table, and the artifact does not analyze write blocking or order-flow impact.",
+     "evidence": "\"ALTER TABLE order_templates ALTER COLUMN legs_json SET NOT NULL;\" inside a single BEGIN/COMMIT with the UPDATE. ABSENT: lock-impact analysis or downtime assessment for production writes."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The 41s, zero-error migration result comes from a static snapshot, not a live table under concurrent order and template writes. The 15-minute rollback duration is asserted without a rehearsal, and the rollback scenario itself is not tested.",
+     "evidence": "\"Migration 0147 dry run against a prod snapshot (2.9M templates): 41s, 0 conversion errors.\" ABSENT: rollback rehearsal or timing evidence."
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The announcement and fee change lack any recorded principal approval or legal/compliance sign-off, which FINRA 2210 requires before first use of a retail communication. The fee change may also require customer notice under the account agreement, and none is shown.",
+     "evidence": "ABSENT: approval or sign-off for the announcement or the options fee change in CHG-30551; ABSENT: customer notice of fee change."
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "'Rebuy your winners in one tap' promotes repeat trading based on past gains through one-tap reorder and slide-to-submit. It contains no risk or balance language, which conflicts with fair-and-balanced standards.",
+     "evidence": "\"Rebuy your winners in one tap with Quick Reorder.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Reorder from History copies side and quantity from a filled order with no stated check against the current position. A reorder of a past sell could attempt to sell shares no longer held, which risks an oversell or short-sale attempt.",
+     "evidence": "\"open any filled order in History and tap \\\"Reorder\\\" to prefill a new ticket with the same symbol, side, quantity and order type.\" ABSENT: current-position validation for sell reorders."
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The release notes promise a live quote on every Reorder, but the closed-market behavior changes the price basis to last close and shows a queued banner. The copy overstates what users will see.",
+     "evidence": "\"You always land on the review sheet with the live quote and estimated cost\" vs. \"If the market is closed, Reorder prefills but the review sheet shows the existing 'Queued for open' banner and defaults market orders to limit at last close\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The announcement says 'is here' and 'update today', but the Play rollout starts at 5% and App Store phases over 7 days. Most users will not have the features when the post goes live.",
+     "evidence": "\"BrokerLite 5.0 is here.\" / \"Play staged rollout 5% → 20% → 50% → 100% over 6 days\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The rollback trigger's '+50% over baseline' reject rate has no stated baseline or alert definition, so detection of the rollback condition is not guaranteed in the window.",
+     "evidence": "\"order reject rate +50% over baseline\" ABSENT: baseline value, alert name, or on-call owner."
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "The accessibility pass covers History and the Reorder review sheet only. The new multi-leg options template UI, which is a headline feature, is not covered.",
+     "evidence": "\"Accessibility: VoiceOver/TalkBack pass on History and Reorder review sheet.\" ABSENT: a11y coverage of multi-leg template creation."
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The release bundles an options fee change, multi-leg templates, and Quick Reorder into one gate, which makes any single rollback harder to scope.",
+     "evidence": "\"Release notes\" lists fee change, multi-leg templates, Quick Reorder and two bug fixes in a single release."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3085,
+    "tokOut": 7682,
+    "usd": 0.00428832,
+    "critMs": 34585
+   },
+   "wallMs": 69555
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The fee reduction ships to customers in App Store/Play release notes with the binary at 06:00 ET, but the proposal only gates the blog/X announcement on approvals. The fee schedule must be updated before the notes go live, yet nothing holds the notes back if compliance approval is missing.",
+     "evidence": "\"If any approval is missing at 08:30 ET, the announcement is not published. The technical release is unaffected.\" and \"The published fee schedule must be updated before the release notes go live.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The X post text is not provided, yet the proposal asserts it keeps the fee, regulatory-fee and risk disclosures. Rule 2210 review cannot confirm a version that has not been shown, and the principal approval is pending.",
+     "evidence": "\"The shortened X text keeps the $0.50 fee, the regulatory-fee statement, and the risk line.\" (no X text appears in the artifact; ABSENT: X copy for review)"
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Whether the options fee change requires customer notice under the account agreement or fee schedule is unresolved, but the fee change is already in the release plan.",
+     "evidence": "\"including confirmation of whether the account agreement or fee schedule requires customer notice\" listed as pending"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The trigger recomputes legs_json from legacy_legs on any 4.x update that leaves legs_json unchanged. A 4.x edit to a 5.0-created multi-leg template during rollback can therefore overwrite the richer legs_json with a lossy conversion, which contradicts the 'never deleted' guarantee. The artifact also never says how 3+ legs are encoded in pipe-delimited legacy_legs.",
+     "evidence": "\"A trigger populates legs_json from legacy_legs for any write that comes from 4.x code.\" and \"Multi-leg templates created on 5.0 live in legs_json. They are never deleted on rollback.\" (ABSENT: legacy_legs encoding for multi-leg templates and protection against 4.x overwrite)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The backfill loop terminates on '0 rows updated', but FOR UPDATE SKIP LOCKED will return 0 rows while NULL rows remain locked by live writers. The loop can stop early, so the 06:25 gate ('zero rows with legs_json IS NULL') may be falsely met or never reached.",
+     "evidence": "\"Run in a loop by the migration job until it reports 0 rows updated.\" with \"FOR UPDATE SKIP LOCKED\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The backfill must finish within a 20-minute window (06:05 to 06:25), but its duration is unmeasured. At 2.9M templates and 10k rows per batch that is roughly 290 batches, and the rehearsal that would measure this is not done.",
+     "evidence": "\"Gate: zero rows with legs_json IS NULL by 06:25. If not met, hold the deploy\" and \"Record lock waits, write latency, and total backfill duration.\" (pre-release gate, not yet done)"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The rollout asserts that mixed v4/v5 pods coexist safely, but the mixed-version test is an unfinished pre-release gate. The claim is unprototyped.",
+     "evidence": "\"During the roll, v4 and v5 pods coexist safely against the dual-compatible schema.\" vs \"Mixed-version test: v4.18.2 and v5.0.0 pods serving concurrently against the migrated schema.\" (listed as not yet done)"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The release says it will not proceed without a measured rollback time, but the rehearsal gates are not among the required approvals in CHG-30551. Nothing in the go checklist enforces them.",
+     "evidence": "\"the release does not proceed without a measured time\" vs \"Approvals required before go\" listing only FINRA principal approval, legal/compliance sign-off and compliance review"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "QA reports the reorder cases as passing, but the sell-reorder tests (position zero, reduced position, server-side oversell rejection) are not written yet. Server-side oversell rejection is the control that protects against selling shares not held, and it is unverified.",
+     "evidence": "\"Reorder: equities, ETFs, single-leg and 2/3/4-leg options, fractional shares, closed-market queueing: pass.\" vs \"Add and pass tests for sell reorders: position now zero, position smaller than the original quantity, and server-side rejection of an oversell at submit.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "'Available position' is undefined. It is unclear whether pending or open sell orders reduce the clamp, so a user could prefill a sell that exceeds shares actually free to sell.",
+     "evidence": "\"the client clamps quantity to the current available position\" (ABSENT: definition of available position net of open orders)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The v5.0.0 orders-svc deploy at 06:30 precedes a 7-day App Store ramp, so 4.18.2 clients will keep calling the 5.0 backend. The artifact addresses DB compatibility but never states that the v5 API stays compatible with 4.18.2 clients.",
+     "evidence": "\"deploy orders-svc v5.0.0 (rolling, 12 pods)\" alongside \"App Store phased release (7-day ramp)\" (ABSENT: v5 API backward-compatibility test with 4.18.2 clients)"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "At rollback, 4.x writes pass through legacy_legs_to_json. The conversion was only checked on a static snapshot, so 5.0-written content could raise errors and fail 4.x writes after rollback.",
+     "evidence": "\"0 conversion errors. This used a static snapshot with no concurrent writes\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The lock analysis depends on pre-market order flow being low, but no measurement supports that assumption.",
+     "evidence": "\"Pre-market order flow is low\" (ABSENT: measured pre-market write rate)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A logical backup of order_templates must finish before 06:00 under a 05:45 start, but its duration at 2.9M rows is not estimated.",
+     "evidence": "\"05:45 ET confirm point-in-time recovery is healthy and take a logical backup of order_templates.\" (ABSENT: backup duration estimate)"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The logical backup contains customer order and template data, but retention, encryption and access controls for that backup are not stated.",
+     "evidence": "\"take a logical backup of order_templates\" (ABSENT: retention, encryption, access policy)"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The trigger runs on every write to order_templates for at least 14 days until 0149, and the ACCESS EXCLUSIVE lock queue on ADD COLUMN can stall readers. Neither cost is quantified.",
+     "evidence": "\"After at least 14 days on 5.0 with no rollback\" and \"ALTER TABLE order_templates ADD COLUMN legs_json jsonb;\" (ABSENT: write-path overhead and lock-queue impact estimate)"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The trigger and backfill call legacy_legs_to_json, which is not defined in this artifact. The proposal only implies it exists because 0149 later drops it.",
+     "evidence": "\"NEW.legs_json := legacy_legs_to_json(NEW.legacy_legs);\" (ABSENT: function definition or existence check in 0147)"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5534,
+    "tokOut": 10908,
+    "usd": 0.006391119999999999,
+    "critMs": 48569
+   },
+   "wallMs": 58162
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Roll-forward silently discards 4.x edits made during a rollback. A 4.x edit to a 5.0-created multi-leg template updates legacy_legs but not legs_json, because the trigger skips authoritative rows. 5.0 then reads legs_json, which is authoritative, so the edit is lost with no reconciliation rule.",
+     "evidence": "'A 4.x update to a 5.0-created multi-leg template therefore cannot overwrite its `legs_json`'; 5.0 'falls back to converting `legacy_legs` if `legs_json` is NULL' (no rule for a non-NULL legs_json that disagrees with legacy_legs)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The legacy_legs encoding for 3+ leg templates is undefined, yet 4.x template endpoints read legacy_legs. It is unknown whether 4.x can parse 3/4-leg rows. That could produce 5xx errors in the 4.x template list, contrary to the claim that 4.x simply does not display them.",
+     "evidence": "'The `legacy_legs` encoding for multi-leg (3+ leg) templates is defined by `legacy_legs_to_json`. Its exact format and round-trip behavior for 2/3/4 legs must be documented and tested'; '4.x does not display them until we roll forward again'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The trigger calls legacy_legs_to_json on every 4.x INSERT/UPDATE. A conversion error on malformed legacy text would abort the user's write, creating a new failure mode in the live write path. The 0-error result predates the revised trigger and does not cover this.",
+     "evidence": "'NEW.legs_json := legacy_legs_to_json(NEW.legacy_legs);'; the dry run '41s, 0 conversion errors' 'predates the `legs_authoritative` column and revised trigger'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The backfill may never terminate. Rows where legacy_legs_to_json returns NULL (e.g., NULL legacy_legs) stay NULL, so the loop never reaches zero and the 06:25 gate cannot be met. The artifact has no handling for unconvertible rows.",
+     "evidence": "'The job loops until the verification query below returns 0, retrying skipped rows on later passes.'; no handling is specified for rows where the conversion yields NULL"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Backfill duration is unmeasured against a 20-minute window. About 290 batches plus retries under live writes implies roughly 4 seconds per batch on average, and the rehearsal result is not in hand. The fallback is rescheduling, not a validated plan.",
+     "evidence": "'about 290 batches at 10k rows for 2.9M templates, plus any retry passes'; 'Gate: the verification query returns zero rows with `legs_json IS NULL` by 06:25'"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The fee change has no rollback path. The published fee schedule and release notes go live, and the rollback plan covers only orders-svc and halting the phased release. No mechanism or effective-date control for the fee is described, so a $0.50 fee cannot be reverted by the stated plan.",
+     "evidence": "'The published fee schedule is updated before the release notes go live.'; Rollback mobile: 'halt phased release'"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Installed 5.0 binaries cannot be rolled back. Halting the phased release stops only new installs. Existing 5.0 clients depend on a 404 fallback that is not part of the rollback trigger or the 30-minute SLO measurement.",
+     "evidence": "'5.0 clients fall back to hiding Reorder if `/v5/templates` returns 404.'"
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The draft blog and X copy state the fee reduction as already in effect and tell users to update today. Go criteria A says the fee takes effect only after any required notice period, and no material may state the new fee as in effect before then. The draft conflicts with the gate as written.",
+     "evidence": "'We've also lowered our options contract fee to $0.50 per contract (was $0.65).' ... 'Update the app today.'; X: 'Options contract fee now $0.50 (was $0.65)'"
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Release notes promise order-type parity for Reorder, but the closed-market behavior changes market orders to limit. That is a misleading customer-facing statement under compliance review.",
+     "evidence": "'prefill a new ticket with the same symbol, side, quantity and order type'; 'defaults market orders to limit at last close (unchanged behavior from 4.x)'"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The sell-quantity limit is shipped as a customer-facing guarantee, but the server-side oversell check is unverified and client-only clamping is the only control today. The mobile store gate covers only Go criteria A, not the backend sell-reorder tests, so the mobile release can proceed without the server check.",
+     "evidence": "'The server-side oversell check is therefore unverified.'; 'App Store and Play releases ... are not started (step 7) until all four items are recorded' (the four items are A only)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Gate timing is inconsistent. Go criteria A says the announcement is withheld if approvals are missing at 08:30 ET, but step 6 checks at 09:00. Step 7 (store release) has no time and no ordering relative to the backend smoke test at 07:00.",
+     "evidence": "'If any approval is missing at 08:30 ET, the announcement is also not published.' vs '09:00 ET launch announcement'; '7. Mobile: App Store phased release ...' (no time)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The rollback SLO clock start is undefined, and detection latency is excluded. Rollback triggers are based on 5xx and reject rate, so silent legs_json/legacy_legs divergence would not trip a rollback.",
+     "evidence": "'The target is completion within 15 min, inside the 30-minute rollback SLO.'; 'orders-svc 5xx > 1% for 5 min, or order reject rate +50% over baseline'"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The trigger runs plpgsql on every insert and update of order_templates for the life of the table. Backfill cost scales linearly, so at 10x data (~2,900 batches) the 20-minute window fails outright. The plan has no design answer beyond rescheduling.",
+     "evidence": "'about 290 batches at 10k rows for 2.9M templates'; 'BEFORE INSERT OR UPDATE ON order_templates FOR EACH ROW'"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "A logical backup of order_templates holds customer trading data. Retention, encryption, and access controls for that backup are not stated.",
+     "evidence": "'take a logical backup of `order_templates`'; 'Take a verified logical backup and restore point of `order_templates`' (no retention or access controls given)"
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "No material finding. Deployment relies on App Store, Play, and the cluster, which are normal dependencies for this release.",
+     "evidence": "nothing material in the artifact"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "No material finding. The backfill and trigger compute are bounded by the batch size and gated by rehearsal.",
+     "evidence": "nothing material in the artifact"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "No material finding. The Reorder feature addresses a stated user workflow.",
+     "evidence": "nothing material in the artifact"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "No material finding. The Reorder flow keeps the review and slide-to-submit steps.",
+     "evidence": "nothing material in the artifact"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "No material finding. VoiceOver and TalkBack passes are recorded for the affected screens.",
+     "evidence": "'Accessibility: VoiceOver/TalkBack pass on History and Reorder review sheet.'"
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "No material finding in the release-note layout or copy beyond the content issues already raised.",
+     "evidence": "nothing material in the artifact"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Migration 0149 is deferred with no owner or date. The DB trigger duplicates conversion logic that also lives in the application, which increases coupling.",
+     "evidence": "'It moves to a separate change (migration 0149, own ticket) after the 5.0 soak period'; 'legacy_legs_to_json' used in both the trigger and the 5.0 fallback path"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "Compatibility is asserted as fact before the gating rehearsals have run. The rollback section says v4.18.2 'continues to work' while also saying the rollback time is unverified.",
+     "evidence": "'v4.18.2 continues to work against the current schema.' vs 'This is unverified until the rollback rehearsal gate above is met'"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The X post paraphrases the required options risk statement as 'Options aren't for all investors' and drops 'involve risk', and it removes the stock/ETF commission-free claim, which leaves the fee headline less balanced.",
+     "evidence": "'Options aren't for all investors.'; 'Options involve risk and are not suitable for all investors.' (blog)"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "No additional gate-worthy issue beyond those listed above.",
+     "evidence": "nothing additional in the artifact"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 7441,
+    "tokOut": 14396,
+    "usd": 0.00851652,
+    "critMs": 62646
+   },
+   "wallMs": 70212
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The 0148 backfill SQL never writes to order_templates_backfill_exceptions and has no error handling. A conversion that errors aborts the whole 10k-row batch, and a conversion that returns NULL leaves legs_json NULL with legacy_legs NOT NULL, so the row is never excluded and the termination check never reaches 0. The per-row retry and quarantine logic the comments describe is not in the shown code.",
+     "evidence": "Rows whose conversion errors or returns NULL are written to order_templates_backfill_exceptions (the job retries a failing batch row by row to find them) ... but the UPDATE only sets legs_json = legacy_legs_to_json(legacy_legs) with no insert into the exceptions table or handler."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Protection against rollback overwrite covers only templates 5.0 creates. A 5.0 edit that turns an existing 4.x template multi-leg leaves legs_authoritative false, so a later 4.x edit during rollback can regenerate legs_json lossily. The claim that multi-leg templates are never overwritten also conflicts with the reconciliation rule, which regenerates legs_json from legacy_legs.",
+     "evidence": "legs_authoritative ... marks rows whose legs_json was written by 5.0 ... v5.0.0 ... sets legs_authoritative = true on multi-leg templates it creates ... Multi-leg templates created on 5.0 live in legs_json. They are never deleted or overwritten on rollback. versus: if legacy_legs converts losslessly, legs_json is regenerated from it"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Each backfill pass selects with NOT EXISTS and a legs_json IS NULL predicate, and the verification count scans the table, with no partial index shown. Across roughly 290 passes over 2.9M rows this is repeated near-full scans, and the 15-minute threshold for moving the backfill earlier is not based on any measurement.",
+     "evidence": "Record lock waits, write latency, and total backfill duration (about 290 batches at 10k rows for 2.9M templates, plus any retry passes for skipped rows)"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Load-bearing claims are unmeasured. The 30-minute rollback SLO and the 15-minute rollback target, the backfill duration against the 06:25 gate, and trigger overhead under load are all pending. The only dry run (41s) used a static snapshot with no concurrent writes and predates the revised trigger and legs_authoritative column, so it does not support the timeline.",
+     "evidence": "This is unverified until the rollback rehearsal gate above is met; the release does not proceed without a measured time. ... This used a static snapshot with no concurrent writes and predates the legs_authoritative column and the revised, failure-isolated trigger"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Conversion failures and quarantined rows are only logged as RAISE WARNING. Monitoring has no quarantine count or conversion-failure alert, so quarantined customer templates can accumulate silently after release. Deferred migration 0149 depends on that count being zero.",
+     "evidence": "Monitoring: order reject rate, template endpoint 5xx (including from 4.18.2 clients), crash-free sessions ≥ 99.6%."
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "legacy_legs is client-written text that the server converts and, on 5.0, uses as the fallback source for template legs used in order prefill. No length, format or validation step before conversion is described, and conversion errors are silently turned into NULL.",
+     "evidence": "v5.0.0 ... falls back to converting legacy_legs if legs_json is NULL ... EXCEPTION WHEN others THEN NEW.legs_json := NULL;"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "A logical backup of order_templates, which holds customer trading legs, is taken on production with no stated retention period, access control or deletion plan.",
+     "evidence": "take a logical backup of order_templates"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The 09:00 announcement tells users to update to get Quick Reorder, but the App Store and Play releases ramp over 6 to 7 days. Most users will not have the feature when the announcement goes out, which risks a misleading promotional claim under FINRA Rule 2210.",
+     "evidence": "Update the app to get Quick Reorder."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Legs conversion now exists in two places, a PL/pgSQL legacy_legs_to_json and the 5.0 Go fallback, and the documented encoding the reconciliation relies on has not been written. The two implementations can diverge without a shared test.",
+     "evidence": "Document the legacy_legs encoding for multi-leg templates and test round-trip conversion for 2/3/4 legs."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The text says Reorder adds no new order-entry behavior, but sell submissions gain a new server-side position re-validation whose tests are not yet written.",
+     "evidence": "Reorder from History reuses the template prefill path; no new order-entry endpoint. ... orders-svc re-validates sufficient position at submit. The tests covering this are not yet written"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "Reorder is disabled when a position is zero or reduced, but the flow gives no reason, so users can't tell why the action is unavailable.",
+     "evidence": "Reorder is unavailable if you no longer hold the position."
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "Nothing gate-worthy found in this lens.",
+     "evidence": "ABSENT: no vendor-lock or data-residency concern is stated or implied in the artifact."
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Nothing gate-worthy found in this lens beyond the unmeasured backfill and trigger cost already noted under scale and evidence.",
+     "evidence": "ABSENT: no budget or spend figures are stated, and none appear to be load-bearing."
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "Nothing gate-worthy found in this lens.",
+     "evidence": "Accessibility: VoiceOver/TalkBack pass on History and Reorder review sheet."
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "Nothing gate-worthy found in this lens.",
+     "evidence": "ABSENT: no rendering or layout defect is described; release notes contain no display-specific claim."
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "Nothing gate-worthy found in this lens.",
+     "evidence": "ABSENT: no value-mismatch concern is stated; Quick Reorder is described as a feature users request-compatible with existing prefill."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Nothing gate-worthy beyond the already-acknowledged fact that a shipped binary and an in-effect fee cannot be recalled by backend rollback.",
+     "evidence": "Once the fee is in effect, reverting to $0.65 is a separate compliance-approved change with customer notice"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "Nothing additional gate-worthy found.",
+     "evidence": "ABSENT: no further gate-worthy issue identified outside the lenses above."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 9773,
+    "tokOut": 14883,
+    "usd": 0.009226419999999999,
+    "critMs": 66322
+   },
+   "wallMs": 77566
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The launch copy advertises an options fee reduction but never references the Options Disclosure Document or its availability, which FINRA Rule 2220 (options communications) generally requires. The artifact only states generic options risk language, and Rule 2210 approval is pending.",
+     "evidence": "\"Options involve risk and are not suitable for all investors.\" / ABSENT: any reference to the Options Disclosure Document or how to obtain it."
+    },
+    {
+     "lens": "ui",
+     "severity": "major",
+     "claim": "The X post as drafted exceeds 280 characters once the date placeholder is replaced. My count is roughly 285-290 including the 23-character link, so the approved text cannot be scheduled as written.",
+     "evidence": "\"Options contract fee drops to $0.50 (from $0.65) on [EFFECTIVE DATE]; regulatory fees apply.\" ... \"[link to blog post]\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The per-row quarantine is described as running in its own transaction per row, but it is one DO block, which is a single transaction. It holds FOR UPDATE locks on up to 10,000 rows until it finishes, contradicting the claim that order and template writes are never blocked for more than a short interval.",
+     "evidence": "\"Runs per row, in its own transaction\" vs \"LIMIT 10000 ... FOR UPDATE SKIP LOCKED LOOP\" inside one DO $$ block; \"never blocked for more than a short row-lock interval\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Termination of the backfill loop is underspecified. The batch UPDATE does not quarantine conversion-returns-NULL rows, so they stay legs_json IS NULL and are reselected on every pass. The text says quarantine runs 'after every batch' but the loop definition does not include that step, so the loop may never reach 0.",
+     "evidence": "\"The job loops until the verification query below returns 0\" vs \"and after every batch to catch conversions that returned NULL\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Behavior of v5.0.0 reads on quarantined or unconvertible rows is undefined. Rows are left with legs_json NULL and are excluded from the verification gate, but v5.0.0 falls back to converting legacy_legs when legs_json is NULL, which will hit the same unconvertible value.",
+     "evidence": "\"It falls back to converting `legacy_legs` if `legs_json` is NULL.\" vs \"excluding quarantined rows\" in the 06:25 gate"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "During a partial or mixed rollback, 4.x edits to authoritative rows leave legs_json stale because the trigger skips them, while 5.0 pods can still be serving. The reconciliation check is only required before re-deploying 5.x, so 5.0 reads of stale multi-leg templates during the mixed state are not covered.",
+     "evidence": "\"ELSIF NOT OLD.legs_authoritative AND ...\" and \"Before re-deploying 5.x after any rollback, run the reconciliation check\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The server-side sell-position check is stated as an existing control, but QA says the oversell tests are unwritten and the check is unverified. Treating an unverified check as in place is a risk for a financial control that prevents overselling.",
+     "evidence": "\"orders-svc re-validates sufficient position at submit.\" vs \"The server-side oversell check is therefore unverified\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The mobile store release gate omits the multi-leg template gates. The release notes advertise multi-leg templates, but the store gate lists only the sell tests, backend deploy and smoke test. The artifact also says the server may run with the 3+ leg flag off until the 4.x-safe encoding is approved, so the shipped claim may not be backed.",
+     "evidence": "\"Saved order templates now support multi-leg options strategies.\" vs store gate: \"sell-reorder tests ... v5.0.0 being deployed ... step 5 smoke test\"; \"v5.0.0 does not write 3+ leg templates (server-side flag off)\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The rollback plan states as fact that v4.18.2 continues to work against the migrated schema, but the artifact separately says 4.x tolerance of 3/4-leg legacy_legs is not assumed and has not been tested. The rollback safety claim is therefore unsupported at this point.",
+     "evidence": "\"Because this release's migrations are additive and `legacy_legs` is intact, v4.18.2 continues to work against the current schema.\" vs \"We do not assume 4.x tolerates 3/4-leg `legacy_legs` values.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The 06:25 backfill gate has no measured duration, and the decision threshold that would move the migration to an earlier window is an unresolved placeholder. The 20-minute window and roughly 290 passes of 10k rows at 2.9M templates are unmeasured, so whether the gate can pass is unknown.",
+     "evidence": "\"the 15-minute threshold below is a placeholder to be replaced by the measured rehearsal duration\" and \"No timing in this proposal (backfill duration ... ) is measured yet\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The trigger runs on every 4.x template write and adds a conversion and exception subtransaction on that path. Its overhead under live load is unmeasured, and the artifact does not set a threshold for it.",
+     "evidence": "\"its cost under load is measured in the rehearsal\" with no recorded result or acceptance threshold"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Logical backups of order_templates contain customer order data, but storage location, encryption, retention and access controls are not stated. The warning messages and exceptions table also store SQLERRM text, which may echo legacy_legs contents into logs.",
+     "evidence": "\"take a logical backup of `order_templates`\" with no storage or retention terms; \"RAISE WARNING 'legs conversion failed on insert: %', SQLERRM\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The rollback trigger uses only API 5xx and reject rate. It has no database-side signals such as trigger WARNING rate, growth of the exceptions table, backfill failures or lock waits, so backfill or trigger faults would not trigger rollback.",
+     "evidence": "\"Trigger: orders-svc 5xx > 1% for 5 min, or order reject rate +50% over baseline.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The 05:45 logical backup of a 2.9M-row table has no stated duration, so completion before the 06:00 migration step is not guaranteed.",
+     "evidence": "\"05:45 ET confirm point-in-time recovery is healthy and take a logical backup of `order_templates`.\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The 09:00 announcement tells users to update to get Quick Reorder, but the mobile release is a 7-day phased or staged ramp, so the feature may not be available to many users when the post goes live.",
+     "evidence": "\"Update the app to get Quick Reorder.\" vs \"App Store phased release (7-day ramp) and Play staged rollout 5% → 20% → 50% → 100% over 6 days.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 10954,
+    "tokOut": 18624,
+    "usd": 0.011333120000000002,
+    "critMs": 83974
+   },
+   "wallMs": 98011
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "The 30-minute rollback SLO is unverified, and the rollback path depends on v4.18.2 compatibility that has not been tested. Rollback cannot be relied on as a control.",
+     "evidence": "\"The 15-minute completion figure is a target, not a measurement, and the 30-minute rollback SLO is unverified until the rollback rehearsal gate above is met\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The agreed rule that any backend release must roll back within 30 minutes has no measured evidence. The release is scheduled and the rollback rehearsal is not yet done, so the precondition for crossing the gate is missing.",
+     "evidence": "\"Rollback rehearsal completed with a measured time inside the 30-minute SLO.\" / \"Pre-release gates ... (not yet done ...)\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Sell-side oversell protection is not in place. The server-side check that backs the customer-facing reduced-quantity statement is unwritten and unverified, yet the client clamp is the only current control.",
+     "evidence": "\"that server-side check is unverified until the sell-reorder tests (not yet written, see QA) pass\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "blocker",
+     "claim": "The options fee change ($0.65 to $0.50) and its customer-notice determination are unresolved. Under the account agreement, the fee change, release notes, blog, and X post cannot be published or treated as effective until notice is determined, so the launch as scheduled is not compliant to cross.",
+     "evidence": "\"This must include a determination of whether the account agreement or fee schedule requires customer notice\" / \"All items are **pending** as of this proposal.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The launch announcement and release notes have not received principal approval under FINRA Rule 2210 or Rule 2220 review. The ODD link and delivery mechanism are not yet confirmed.",
+     "evidence": "\"Registered principal approval of the launch announcement ... before first use.\" / \"[link to ODD]\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The backfill and quarantine design has unverified termination and locking behaviour. The batch UPDATE with RETURNING and the per-row quarantine calls may not converge, and the 1.5x decision rule depends on a duration that has not been measured.",
+     "evidence": "\"Backfill termination test ... Rehearsal includes NULL, unconvertible ... rows\" / \"No timing in this proposal ... is measured yet\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The mixed-version state has a 5-minute window in which 5.0 pods can serve stale multi-leg legs_json after a 4.x edit. The design accepts this window without a measured bound, and the reconciliation job is a new operational dependency with no alerting described beyond a mismatch count.",
+     "evidence": "\"This window is at most 5 minutes and is accepted only because a Reorder always lands on the review sheet showing the legs; the mixed-version test measures it.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The v4.18.2 handling of 3+ leg legacy_legs values, which the rollback and compatibility claims rely on, is asserted but not established. The release-notes bullet and the rollback expectation both depend on this untested behaviour.",
+     "evidence": "\"We do not assume 4.x tolerates 3/4-leg `legacy_legs` values.\" / \"Whether 4.x displays these templates is determined by that test, not assumed.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The 290-pass backfill with per-row quarantine autocommit calls at 2.9M rows may exceed the 20-minute window, and the window estimate is inconsistent with the rehearsal target.",
+     "evidence": "\"about 290 batches at 10k rows for 2.9M templates, plus any retry passes for skipped rows and per-row quarantine calls\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "Users on 4.18.2 who are still in the field during the 7-day ramp will see templates that 5.0 wrote as multi-leg, and their experience of those templates is unverified.",
+     "evidence": "\"4.18.2 clients remain in the field throughout the ramp\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "The 'unavailable (needs review)' state for quarantined templates has no stated accessible label or announcement, and VoiceOver/TalkBack coverage in QA is limited to History and the review sheet.",
+     "evidence": "\"Accessibility: VoiceOver/TalkBack pass on History and Reorder review sheet.\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "The release is gated on more than twenty pending items that are scheduled for a fixed window two weeks away. Crossing the deploy gate now would mean proceeding with an artifact whose own text says the backend does not proceed without them.",
+     "evidence": "\"the backend release does not proceed without them\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 12895,
+    "tokOut": 1737,
+    "usd": 0.00327782,
+    "critMs": 7478
+   },
+   "wallMs": 97768
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The backfill driver loop's termination argument is unsound as written. Batch UPDATE uses SKIP LOCKED and the quarantine function also uses SKIP LOCKED, so rows locked by live writers are skipped, and the termination count can stay non-zero if writers continuously hold locks; the loop is only proven by an unrun test.",
+     "evidence": "\"A batch returning 0 rows does NOT mean the backfill is done, because SKIP LOCKED skips rows locked by live writers. Skipped rows are retried on later passes.\" and \"This convergence argument is a design claim\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The trigger's update branch only fires when legs_json is unchanged, so a 4.x edit that changes legacy_legs while a row has a stale legs_json is handled, but the INSERT branch and the quarantine/backfill UPDATE do not consistently respect legs_authoritative; the backfill UPDATE writes legs_json directly and can race with a 5.0 dual-write that sets legs_authoritative=true.",
+     "evidence": "\"UPDATE order_templates SET legs_json = v_json WHERE id = p_id;\" and \"v5.0.0 dual-writes legacy_legs and legs_json, and sets legs_authoritative = true\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The trigger's exception handler sets NEW.legs_json := NULL on a 4.x update, which can clear a previously valid legs_json on a non-authoritative row, and the NOT OLD.legs_authoritative guard does not cover the case where legs_json was already populated with a value.",
+     "evidence": "\"ELSE NEW.legs_json := NULL; RAISE WARNING 'legs conversion failed on update of %: %'\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The 30-minute rollback SLO is unmeasured and the rollback path depends on v4.18.2 tolerating 3/4-leg legacy_legs values, which is unestablished. The release cannot proceed on the stated plan without a measured rollback time.",
+     "evidence": "\"The 15-minute completion figure is a target, not a measurement, and the 30-minute rollback SLO is unverified until the rollback rehearsal gate above is met\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The backfill timing gate at 06:25 is not supported by any measurement. About 290 passes at 10k rows plus retries and per-row quarantine calls against 2.9M rows is an unmeasured estimate, and the 20-minute window is explicitly not assumed sufficient, yet the plan still schedules it on 11-10.",
+     "evidence": "\"The 20-minute window is not assumed to be sufficient.\" and \"No timing in this proposal (backfill duration, 06:25 gate, rollback time, trigger overhead) is measured yet\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "v5.0.0 and orders-svc re-validation of sell position at submit is unverified, so an oversell path to the broker's live order flow is not ruled out; the only current control is client-side clamping, which is not a security control.",
+     "evidence": "\"that server-side check is unverified until the sell-reorder tests (not yet written, see QA) pass. It is not treated as an established control.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "blocker",
+     "claim": "The fee change, release notes, and launch announcement have no determination of customer-notice requirements recorded; publishing the $0.50 fee and 09:00 announcement before the account-agreement notice determination is recorded risks an unnoticed adverse change under the account agreement and FINRA communication rules.",
+     "evidence": "\"This must include a determination of whether the account agreement or fee schedule requires customer notice, and of any required notice period.\" with \"[EFFECTIVE DATE]\" still unfilled in the blog and X drafts"
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The ODD link is still a placeholder and the in-app Legal & Disclosures location and on-request process are not confirmed, so the Rule 2220 disclosure content cannot currently be approved as written.",
+     "evidence": "\"[link to ODD]\" and \"The live ODD URL and the in-app Legal & Disclosures location are confirmed working, and the on-request delivery process is confirmed, before the principal approves\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The X post omits the 'Stock and ETF trades remain commission-free' qualifier yet still leads with the fee reduction, and the 280-character count is estimated, not measured. Fair-and-balanced under Rule 2210 is not demonstrated for the abbreviated post.",
+     "evidence": "\"counted at about 274 characters ... re-count with the final date before scheduling\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The artifact's own QA states the only migration dry run predates the revised trigger and the legs_authoritative column, so the schema under review has no load-tested evidence at all.",
+     "evidence": "\"predates the legs_authoritative column and the revised, failure-isolated trigger, so it does not establish behavior under live load\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The 4.x compatibility with 3/4-leg legacy_legs encodings is assumed in the rollback expectation and multi-leg release note, but it is explicitly not established; the artifact contradicts itself on whether 4.x can read these rows.",
+     "evidence": "\"v4.18.2 is **expected** to continue to work against the current schema. That expectation is not established until the v4.18.2 compatibility tests\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The periodic reconciliation check runs every 5 minutes over the whole table during mixed-version operation; its cost at 2.9M rows is not bounded or measured.",
+     "evidence": "\"compare legacy_legs with the documented legacy encoding of legs_json\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The release is gated on many items (multi-leg bullet, fee bullet, sell reorder) that may each be removed independently, so the shipped release may not match the announced feature set without a re-review.",
+     "evidence": "\"the app is held or submitted with that bullet removed\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "The go/no-go checkpoint on 11-06 and the 11-05 evidence deadline are already ahead of the proposal's completion state; all Go criteria are pending with the proposal dated 10-27, so the release window is not viable as scheduled and approving the gate would be premature.",
+     "evidence": "\"All items are **pending** as of this proposal.\" and \"(not yet done; these are Go criteria B, and the backend release does not proceed without them)\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 13545,
+    "tokOut": 2317,
+    "usd": 0.00369782,
+    "critMs": 10481
+   },
+   "wallMs": 44649
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The trigger's UPDATE branch can set legs_json to NULL for a row where a 4.x write changed legacy_legs, but the proposal's own argument that NULL is safe relies on 5.0 never leaving a multi-leg row with legs_authoritative=false. Any 5.0 write that stores single-leg legs_json while dual-writing still leaves authoritative false, so a subsequent 4.x legacy_legs edit that fails conversion nulls out a valid 5.0-written definition, and the claim that NULL 'cannot clear a 5.0-written value' does not hold for that path.",
+     "evidence": "\"It cannot clear a 5.0-written value: every 5.0 write that stores multi-leg `legs_json` sets `legs_authoritative = true`, so the branch does not apply to those rows, and 5.0 single-leg writes dual-write both columns so they stay consistent.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The backfill batch UPDATE re-checks legs_json IS NULL and NOT legs_authoritative only in the subquery, and the outer UPDATE's WHERE clause does not re-check after locking under READ COMMITTED; the proposal claims a concurrent 5.0 write is 're-checked and dropped', but the single-statement batch with SKIP LOCKED and an outer predicate re-evaluation is asserted rather than shown, and the termination argument is explicitly still a design claim.",
+     "evidence": "\"under READ COMMITTED a row changed by a concurrent 5.0 write between the snapshot and the lock is re-checked against those predicates and dropped.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The 06:25 backfill gate is not achievable with the stated cost model: the rollout plan itself says the rehearsal has not been run, the 20-minute window is not assumed sufficient, and the decision rule defers to an earlier window if no duration is recorded. Step 3 at 06:05 is therefore scheduled ahead of evidence that the migration fits, risking a half-migrated production state in the pre-market window.",
+     "evidence": "\"The 20-minute window is not assumed to be sufficient.\" and \"If no measured duration is recorded, the same earlier-window path is used\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback SLO of 30 minutes is unmeasured and the rollback plan states the 15-minute figure is only a target; the rollback rehearsal gate is not recorded, yet the proposal still schedules the backend deploy on 11-10 contingent only on evidence not yet produced.",
+     "evidence": "\"The 15-minute completion figure is a target, not a measurement, and the 30-minute rollback SLO is unverified\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The sell-side oversell control is entirely unverified: orders-svc server-side position re-validation at submit does not exist as tested code, and the client clamp is explicitly not a control. A live sell can reach production with no enforced position check, and the smoke test attempts an oversell but only after deploy at 07:00.",
+     "evidence": "\"that server-side check is unverified until the sell-reorder tests (not yet written, see QA) pass\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "blocker",
+     "claim": "The announcement and release notes state the $0.50 fee and Reorder/options content while the customer-notice determination (which may require a notice period before the fee takes effect) is unrecorded; the drafts are not compliant to publish until the determination and principal approval exist, and the blog body's stock/ETF commission-free claim is an unqualified promotional statement pending principal review under 2210.",
+     "evidence": "\"Stock and ETF trades remain commission-free; regulatory fees (SEC, FINRA TAF) still apply to sells.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The X post text is presented as the principal-review text but the proposal itself asserts it may not be fair and balanced; the X character count relies on an assumed date length and the link placeholder, so the final post is not fixed and cannot be approved as written.",
+     "evidence": "\"counted at 273 characters including the 23-character link, assuming a date of 17 characters\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Load-bearing claims are unmeasured: the 41s dry run predates the revised schema and is explicitly not evidence, trigger overhead, backfill duration, and rollback time are all unmeasured, and the 4.x compatibility with 3/4-leg legacy_legs is untested, yet the release notes and multi-leg bullet assert the feature.",
+     "evidence": "\"No timing in this proposal (backfill duration, 06:25 gate, rollback time, trigger overhead) is measured yet\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The reconciliation window of up to 5 minutes lets a 5.0 pod serve stale multi-leg legs_json after a 4.x edit, and the acceptance depends on a mixed-version measurement not yet taken; the alerting covers missed runs but not the stale-read window itself.",
+     "evidence": "\"This window is at most 5 minutes by design (the check interval) and is accepted only because a Reorder always lands on the review sheet showing the legs; the mixed-version test measures the actual bound\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The batch at LIMIT 10000 with ~290 passes over 2.9M rows, plus a partial index scan per pass, has no stated bound on total runtime beyond the rehearsal, and the residual-pass cap of 20 is an arbitrary number unrelated to measured lock behavior.",
+     "evidence": "\"with a hard cap of 20 residual passes\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Quarantine and backfill exception rows and RAISE WARNING logs include the template id and SQLERRM text, which may include parts of the customer's legacy_legs (trade leg data) in logs and an exceptions table with no retention or access policy stated.",
+     "evidence": "\"RAISE WARNING 'legs conversion failed on update of %: %', OLD.id, SQLERRM\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "No vendor, residency, or exit-cost analysis is given for the new trigger/plpgsql and PITR dependency; the proposal is specific to one managed database engine and no self-host or alternative is discussed.",
+     "evidence": "ABSENT: any statement on database vendor dependency or residency of the backup copies"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "Accessibility is claimed only as VoiceOver/TalkBack pass on two screens; the release-note copy and the 'unavailable (needs review)' state have no stated accessibility check.",
+     "evidence": "\"Accessibility: VoiceOver/TalkBack pass on History and Reorder review sheet.\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "Quick Reorder's market-closed behavior converts a market order to a limit at last close, which may not match user expectation of a market order and is not validated with users.",
+     "evidence": "\"a market order is prefilled as a limit order at the last close and queued for the open\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "The proposal is a conditional window request with every gate pending and a 11-05 evidence deadline nine days out; the artifact is not a deployable artifact, so it cannot be cleared for deploy as a gate artifact.",
+     "evidence": "\"This is a request for a conditional window, not authorization to deploy. Every Go criterion below is pending\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 15821,
+    "tokOut": 2597,
+    "usd": 0.00429302,
+    "critMs": 11989
+   },
+   "wallMs": 74014
+  }
+ ],
+ "artifact": "# Release proposal: BrokerLite 5.0 — Quick Reorder\n\nRelease manager: M. Okafor · Window: Tue 2026-11-10, 06:00–07:30 ET (pre-market) · Change ticket: CHG-30551\n\n**Status of this proposal.** This is a request for a conditional window, not authorization to deploy. Every Go criterion below is pending, and none of the gates is waived by scheduling the window. A go/no-go review is held on Fri 2026-11-06 against CHG-30551. If any Go criterion A or B item is not recorded by then, the window is rescheduled, and nothing in this proposal (backend deploy, store release, fee change, announcement) proceeds on the 11-10 date. This proposal is dated 2026-10-27, so the evidence has roughly nine days to be produced before the 11-05 deadline. The 11-10 date is only a placeholder that holds if that evidence is recorded. If it is not, the window moves, and approving the proposal does not approve the deploy.\n\n## Components\n\n| Component | From | To |\n|---|---|---|\n| iOS app | 4.18.2 | 5.0.0 (App Store phased release) |\n| Android app | 4.18.2 | 5.0.0 (Play staged rollout) |\n| api (orders-svc) | v4.18.2 | v5.0.0 |\n| DB migrations | 0146 | 0147 (additive), 0148 (batched backfill) |\n\nThe destructive \"contract\" step (NOT NULL, dropping `legacy_legs` and `legacy_legs_to_json`) is **not part of this release**. It moves to a separate change (migration 0149, own ticket) after the 5.0 soak period; see \"Deferred: migration 0149\".\n\n## Go criteria (all must be recorded in CHG-30551 before the relevant step proceeds)\n\nAll items are **pending** as of this proposal.\n\n**A. Compliance approvals (gate the fee change, the release notes, and the announcement)**\n\n- Registered principal approval of the launch announcement (blog + X, final text of both shown below, with the fee effective date filled in) under FINRA Rule 2210, before first use. Because the announcement discusses options, the review also covers FINRA Rule 2220 (options communications), including the Options Disclosure Document (ODD, \"Characteristics and Risks of Standardized Options\") reference and how customers obtain it. The live ODD URL and the in-app Legal & Disclosures location are confirmed working, and the on-request delivery process is confirmed, before the principal approves; the `[link to ODD]` placeholder is replaced with the confirmed link in the approved text. (The placeholder is deliberate in this draft and the approval is gated on its replacement, so no unconfirmed link can be published.)\n- Legal/compliance sign-off on the options fee change ($0.65 → $0.50). This must include a **determination of whether the account agreement or fee schedule requires customer notice**, and of any required notice period. If notice is required, the fee change takes effect only after the notice period ends, and no customer-facing material (release notes, blog, X) states the new fee as in effect before that date. The drafts below are therefore written with an effective date (\"effective [EFFECTIVE DATE]\") rather than as an accomplished change. The date is filled in from the determination and the final text is approved. (Nothing is published while the determination is unrecorded; the unfilled `[EFFECTIVE DATE]` in the drafts is the intended pre-approval state.)\n- Compliance review of the release notes text below (including the ODD reference).\n- The published fee schedule is updated before the release notes go live.\n\nEnforcement for the mobile release notes: the notes ship with the binary, so the store release is gated on the items above. App Store and Play releases are set to manual/held release and are not started (step 7) until all four items are recorded. If any item is missing, the app is either held or submitted with the \"Options pricing update\" bullet removed, and the fee change is not put into effect. If any approval is missing at 08:30 ET, the announcement is also not published.\n\nThe store release is additionally gated on the **sell-reorder tests in Go criteria B (including server-side oversell rejection)** being recorded, on v5.0.0 being deployed, and on the step 5 smoke test (including the reduced-position sell Reorder) passing. The Reorder quantity limit is a customer-facing statement, so the mobile release must not ship ahead of the server-side check that backs it.\n\nThe \"Saved order templates now support multi-leg options strategies\" release-note bullet is likewise a customer-facing claim. The store release is gated on the multi-leg template gates in Go criteria B (4.x `legacy_legs` compatibility, round-trip, and the quarantined-row read test) being recorded **and** on the server-side 3+ leg flag being on in production. If any of these is missing, the app is held or submitted with that bullet removed.\n\n**B. Technical gates (gate the backend release; evidence attached by Thu 2026-11-05)**\n\n- Rollback rehearsal completed with a measured time inside the 30-minute SLO. This is the precondition for the agreed rule that any backend release be rollback-able within 30 minutes; without a recorded measurement, the backend release does not proceed.\n- Mixed-version test (v4.18.2 and v5.0.0 pods) passed, including a 4.x edit to a `legs_authoritative` row while 5.0 pods are serving, and the periodic reconciliation check detecting and handling it.\n- Backfill/migration rehearsal under concurrent write load completed, with measured duration (see the backfill-duration rule in the rollout plan), including the query plans and per-pass timings for the backfill select and verification query. The rehearsal runs against the revised schema (with `legs_authoritative` and the failure-isolated trigger), which the earlier dry run did not cover.\n- Sell-reorder tests written and passing, including server-side oversell rejection.\n- v4.18.2 client compatibility test against the v5.0.0 API passed.\n- Legacy-legs round-trip test for 2/3/4-leg templates passed, including the 4.x-edit-during-rollback case (for templates 5.0 created and for existing templates 5.0 converted to multi-leg) and the roll-forward reconciliation rule below.\n- v4.18.2 template endpoints (list, read, update) tested against rows containing 3- and 4-leg `legacy_legs` values written by v5.0.0: no errors or 5xx.\n- Trigger failure-isolation test passed: a 4.x INSERT/UPDATE with malformed or unconvertible `legacy_legs` succeeds, with `legs_json` left NULL (including an UPDATE on a non-authoritative row that already had a valid `legs_json`).\n- Backfill termination test passed: rehearsal includes NULL, unconvertible, and conversion-returns-NULL `legacy_legs` rows, **and rows held locked by concurrent writers for the duration of several passes**, and the job terminates with those rows quarantined (or, for locked rows, handled by the residual blocking pass).\n- Quarantined-row read test passed: v5.0.0 list/read/update against rows with `legs_json` NULL and unconvertible `legacy_legs` returns no 5xx and handles them as specified in the engineering notes.\n\nIf any technical gate is not recorded by 2026-11-05 (or before any step it covers), the backend release does not proceed and the window is rescheduled. The count of pending items is a reason for the 11-06 checkpoint, not a reason to proceed on the date regardless.\n\n## Release notes (customer-facing, App Store / Play)\n\n- **Quick Reorder**: open any filled order in History and tap \"Reorder\" to prefill a new ticket with the same symbol, side, quantity and order type. When the market is closed, a market order is prefilled as a limit order at the last close and queued for the open. For sell orders, quantity is limited to the shares you currently hold, and Reorder is unavailable if you no longer hold the position. You always land on the review sheet with the live quote and estimated cost, and you still slide to submit.\n- **Options pricing update**: starting [EFFECTIVE DATE], the options contract fee will be $0.50 per contract (currently $0.65). Stock and ETF trades remain commission-free. Regulatory fees (SEC, FINRA TAF) still apply to sells. Options involve risk and are not suitable for all investors; read the Options Disclosure Document (\"Characteristics and Risks of Standardized Options\"), available in the app under Legal & Disclosures or on request, before trading options. *(Held or removed unless Go criteria A are met; see above. The date is set from the customer-notice determination.)*\n- Saved order templates now support multi-leg options strategies. *(Held or removed unless the multi-leg gates above are met.)*\n- Fixes: watchlist sort order persists across restarts; dark mode chart axis labels.\n\n## Engineering notes\n\n- Saved templates gain `order_templates.legs_json` (jsonb), which enables multi-leg templates, and `order_templates.legs_authoritative` (boolean, default false), which marks rows whose `legs_json` was written by 5.0 and must not be regenerated from `legacy_legs` by the trigger. `legacy_legs` (pipe-delimited text, read by the 4.x orders-svc template endpoints) is **kept** in this release.\n- Compatibility during rollout and after any rollback:\n  - `legs_json` is added nullable and `legs_authoritative` has a constant default, so 4.18.2 inserts keep working.\n  - A trigger populates `legs_json` from `legacy_legs` for writes from 4.x code, but **only for rows where `legs_authoritative` is false**. A 4.x update to a 5.0-written multi-leg template therefore cannot overwrite its `legs_json` with a lossy conversion.\n  - The trigger is failure-isolated: a conversion error is caught, `legs_json` is left NULL with a warning logged, and the customer's write still succeeds. Such rows are picked up by the backfill/quarantine process below. The trigger never aborts a live 4.x write.\n  - **Why the update-path failure sets `legs_json` to NULL rather than keeping the old value.** The update branch fires only when a 4.x write changed `legacy_legs` while leaving `legs_json` untouched, on a non-authoritative row. In that case the existing `legs_json` was derived from the *old* `legacy_legs` and is already stale relative to the customer's edit. Leaving a stale definition in place would let v5.0.0 prefill an order with legs the customer just changed, which is worse than \"unavailable (needs review)\". NULL is the deliberate quarantine signal. It cannot clear a 5.0-written value: every 5.0 write that stores multi-leg `legs_json` sets `legs_authoritative = true`, so the branch does not apply to those rows, and 5.0 single-leg writes dual-write both columns so they stay consistent. The failure-isolation test in Go criteria B covers this case.\n  - v5.0.0 dual-writes `legacy_legs` and `legs_json`, and sets `legs_authoritative = true` on **every** write that stores multi-leg `legs_json`: templates it creates and also existing templates (including ones created by 4.x) that a 5.0 edit turns multi-leg. It falls back to converting `legacy_legs` if `legs_json` is NULL. This is covered by the round-trip test in Go criteria B.\n  - **Backfill vs. 5.0 dual-write race.** The backfill and quarantine updates only touch rows with `legs_json IS NULL AND NOT legs_authoritative`. They take the row lock (`FOR UPDATE`) before writing, and under READ COMMITTED a row changed by a concurrent 5.0 write between the snapshot and the lock is re-checked against those predicates and dropped. A backfill write therefore cannot overwrite a 5.0-written `legs_json`, and the lock prevents a 5.0 write from interleaving with a backfill write on the same row. An authoritative row with NULL `legs_json` should not exist; an anomaly query (below) must return 0 and a non-zero result is dispositioned in CHG-30551.\n  - **Quarantined or unconvertible rows on v5.0.0.** If the fallback conversion errors or returns NULL (the same rows the backfill quarantines), v5.0.0 does not retry or 5xx. The template is returned in list/read as \"unavailable (needs review)\" with no Reorder or submit path, a metric and log line are emitted, and it can still be deleted or overwritten by a customer edit that supplies a valid definition. Quarantined rows are dispositioned in CHG-30551 (repaired or confirmed as intentionally unavailable) before step 4. This is covered by the quarantined-row read test in Go criteria B.\n  - Multi-leg templates written on 5.0 live in `legs_json`. They are never deleted on rollback, and the trigger never overwrites them. The only path that regenerates their `legs_json` is the reviewed reconciliation script below, which applies only when a 4.x edit to such a row is detected.\n  - **We do not assume 4.x tolerates 3/4-leg `legacy_legs` values.** The `legacy_legs` encoding for multi-leg (3+ leg) templates is defined by `legacy_legs_to_json`. Its exact format and round-trip behavior for 2/3/4 legs must be documented, and the 4.x template endpoints must be shown to read such rows without error (Go criteria B) before go. If 4.x errors on any such row, v5.0.0 does not write 3+ leg templates (server-side flag off) until a 4.x-safe encoding is approved, and the multi-leg release-note bullet is removed (see Go criteria A). Whether 4.x displays these templates is determined by that test, not assumed. The rollback expectation and the multi-leg bullet both depend on this result, which is why both are gated on it rather than asserted. (The proposal is consistent on this point: everywhere it says 4.x is \"expected\" to work, that expectation is explicitly conditional on the test, and no step proceeds without it.)\n  - **Reconciliation rule (4.x edits to authoritative rows are never silently discarded or left stale).** The reconciliation check: for rows with `legs_authoritative = true`, compare `legacy_legs` with the documented legacy encoding of `legs_json`. A mismatch means 4.x edited the row. The 4.x edit is the later customer action and wins: if `legacy_legs` converts losslessly, `legs_json` is regenerated from it in a reviewed script. Rows that do not convert losslessly are listed for manual review and customer support follow-up. The check runs (a) **every 5 minutes for as long as any 4.x and 5.x pods serve concurrently**, i.e. during the step 4 roll and during any partial or in-progress rollback, so 5.0 pods do not keep reading stale multi-leg `legs_json`, and (b) before re-deploying 5.x after any rollback, where roll-forward proceeds only when the mismatch count is zero or every remaining row is dispositioned in the change ticket. Between a 4.x edit and the next run, a 5.0 pod may read the pre-edit `legs_json`. This window is at most 5 minutes by design (the check interval) and is accepted only because a Reorder always lands on the review sheet showing the legs; the mixed-version test measures the actual bound, and the window is not accepted if the measured bound exceeds 5 minutes. **Alerting:** the check emits a heartbeat metric each run. On-call is paged if a run is missed or fails (no heartbeat for 10 minutes while 4.x and 5.x pods coexist), if any run finds a lossy-conversion row needing manual review, or if the mismatch count does not return to zero within two consecutive runs after the reconciliation script is applied.\n- v5.0.0 API backward compatibility: the v5.0.0 backend deploys at 06:30 ET while 4.18.2 clients stay in the field for the full 7-day App Store ramp. The v5 API is intended to be additive (new endpoints such as `/v5/templates`; existing 4.x endpoint request/response shapes unchanged). This is **verified by the 4.18.2 client contract test** in Go criteria B, not assumed.\n- Reorder from History reuses the template prefill path; no new order-entry endpoint.\n- Sell reorders: the client clamps quantity to the current available position and disables Reorder when the position is zero. orders-svc is required to re-validate sufficient position at submit, but **that server-side check is unverified until the sell-reorder tests (not yet written, see QA) pass**. It is not treated as an established control. The client clamp alone is not the control either: the store release is gated on the server-side tests passing, and the backend/store release does not proceed if they are not recorded. This is a release gate rather than an accepted risk: with the tests unrecorded, no v5.0.0 code or mobile build reaches live order flow.\n- If the market is closed, Reorder prefills but the review sheet shows the existing \"Queued for open\" banner and defaults market orders to limit at last close (unchanged behavior from 4.x). The release notes disclose this.\n\n### Migration 0147_template_legs_json.sql (additive, metadata-only)\n\n```sql\nBEGIN;\nSET LOCAL lock_timeout = '3s';  -- fail fast rather than queue behind live order-flow writes\nALTER TABLE order_templates ADD COLUMN legs_json jsonb;  -- nullable, no default: no table rewrite\nALTER TABLE order_templates\n  ADD COLUMN legs_authoritative boolean NOT NULL DEFAULT false;  -- constant default: catalog-only on PG11+\n\nCREATE TABLE order_templates_backfill_exceptions (\n  template_id bigint PRIMARY KEY,\n  reason text NOT NULL,\n  recorded_at timestamptz NOT NULL DEFAULT now()\n);\n\n-- Failure-isolated: a conversion error must never abort a live 4.x write.\nCREATE FUNCTION order_templates_sync_legs() RETURNS trigger AS $$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.legs_json IS NULL THEN\n      BEGIN\n        NEW.legs_json := legacy_legs_to_json(NEW.legacy_legs);\n      EXCEPTION WHEN others THEN\n        NEW.legs_json := NULL;  -- picked up by backfill / quarantine\n        RAISE WARNING 'legs conversion failed on insert: %', SQLERRM;\n      END;\n    END IF;\n  ELSIF NOT OLD.legs_authoritative\n        AND NEW.legacy_legs IS DISTINCT FROM OLD.legacy_legs\n        AND NEW.legs_json IS NOT DISTINCT FROM OLD.legs_json THEN\n    -- Only reached when a 4.x write changed legacy_legs and left legs_json\n    -- alone on a non-authoritative row, so the old legs_json is stale.\n    BEGIN\n      NEW.legs_json := legacy_legs_to_json(NEW.legacy_legs);\n    EXCEPTION WHEN others THEN\n      NEW.legs_json := NULL;  -- deliberate: stale value must not survive; row is quarantined\n      RAISE WARNING 'legs conversion failed on update of %: %', OLD.id, SQLERRM;\n    END;\n  END IF;\n  RETURN NEW;\nEND $$ LANGUAGE plpgsql;\n\nCREATE TRIGGER order_templates_sync_legs_trg\n  BEFORE INSERT OR UPDATE ON order_templates\n  FOR EACH ROW EXECUTE FUNCTION order_templates_sync_legs();\nCOMMIT;\n```\n\n### Migration 0148_backfill_legs_json.sql (batched job, not one transaction)\n\nThe job runs outside a single SQL statement: a driver loop executes the batch below, then the per-row quarantine function for specific ids, each call in its own autocommit transaction. Both are what the rehearsal exercises.\n\n```sql\n-- Partial index supporting the select and verification query (created\n-- CONCURRENTLY, outside a transaction, before the first pass). It covers only\n-- unconverted rows, so it is small and shrinks as the backfill progresses,\n-- which avoids repeated near-full table scans across ~290 passes.\nCREATE INDEX CONCURRENTLY order_templates_legs_todo_idx\n  ON order_templates (id)\n  WHERE legs_json IS NULL AND legacy_legs IS NOT NULL;\n\n-- Per-row quarantine function. One call = one row = one transaction (the\n-- driver calls it in autocommit), so it holds at most one row lock briefly.\n-- p_wait = false: skip the row if a live writer holds it (normal passes).\n-- p_wait = true:  wait for the row lock, bounded by the driver's session\n-- lock_timeout (residual pass); a lock timeout propagates to the driver,\n-- which leaves the row for the next residual attempt.\nCREATE FUNCTION order_templates_quarantine_one(p_id bigint, p_wait boolean DEFAULT false)\nRETURNS void AS $$\nDECLARE v_legacy text; v_json jsonb;\nBEGIN\n  IF p_wait THEN\n    SELECT legacy_legs INTO v_legacy FROM order_templates\n     WHERE id = p_id AND legs_json IS NULL AND NOT legs_authoritative\n       AND legacy_legs IS NOT NULL\n     FOR UPDATE;\n  ELSE\n    SELECT legacy_legs INTO v_legacy FROM order_templates\n     WHERE id = p_id AND legs_json IS NULL AND NOT legs_authoritative\n       AND legacy_legs IS NOT NULL\n     FOR UPDATE SKIP LOCKED;\n  END IF;\n  IF NOT FOUND THEN RETURN; END IF;  -- converted meanwhile, locked, authoritative, or nothing to convert\n  BEGIN\n    v_json := legacy_legs_to_json(v_legacy);\n    IF v_json IS NULL THEN\n      INSERT INTO order_templates_backfill_exceptions (template_id, reason)\n      VALUES (p_id, 'conversion returned NULL') ON CONFLICT DO NOTHING;\n    ELSE\n      UPDATE order_templates SET legs_json = v_json\n       WHERE id = p_id AND legs_json IS NULL AND NOT legs_authoritative;  -- row is locked above\n    END IF;\n  EXCEPTION WHEN others THEN\n    INSERT INTO order_templates_backfill_exceptions (template_id, reason)\n    VALUES (p_id, 'conversion error: ' || SQLERRM) ON CONFLICT DO NOTHING;\n  END;\nEND $$ LANGUAGE plpgsql;\n\n-- Batch (its own short transaction; SKIP LOCKED avoids blocking live writers).\n-- RETURNING tells the driver which rows converted to NULL. Rows with NULL\n-- legacy_legs have nothing to convert and are excluded. Rows already marked\n-- authoritative are never touched.\nUPDATE order_templates\n   SET legs_json = legacy_legs_to_json(legacy_legs)\n WHERE legs_json IS NULL\n   AND NOT legs_authoritative\n   AND id IN (\n   SELECT id FROM order_templates t\n    WHERE legs_json IS NULL\n      AND NOT legs_authoritative\n      AND legacy_legs IS NOT NULL\n      AND NOT EXISTS (SELECT 1 FROM order_templates_backfill_exceptions e\n                       WHERE e.template_id = t.id)\n    ORDER BY id\n    LIMIT 10000\n    FOR UPDATE SKIP LOCKED)\nRETURNING id, (legs_json IS NULL) AS still_null;\n\n-- Candidate ids for the failed-batch path (read-only, no locks):\nSELECT id FROM order_templates t\n WHERE legs_json IS NULL\n   AND NOT legs_authoritative\n   AND legacy_legs IS NOT NULL\n   AND NOT EXISTS (SELECT 1 FROM order_templates_backfill_exceptions e\n                    WHERE e.template_id = t.id)\n ORDER BY id\n LIMIT 10000;\n\n-- Termination / gate check (run after each pass; the job stops only when this is 0):\nSELECT count(*) FROM order_templates t\n WHERE legs_json IS NULL\n   AND NOT legs_authoritative\n   AND legacy_legs IS NOT NULL\n   AND NOT EXISTS (SELECT 1 FROM order_templates_backfill_exceptions e\n                    WHERE e.template_id = t.id);\n\n-- Anomaly check (must return 0; authoritative rows should always have legs_json):\nSELECT count(*) FROM order_templates\n WHERE legs_authoritative AND legs_json IS NULL;\n\n-- Quarantine report (must be reviewed and dispositioned in CHG-30551 before step 4):\nSELECT count(*) FROM order_templates_backfill_exceptions;\n```\n\n**Driver loop (one pass = steps 1–3; repeat until step 4 returns 0):**\n1. Run the batch UPDATE. If it succeeds, for each returned row with `still_null = true`, call `order_templates_quarantine_one(id)` (autocommit, one transaction per row). This is what keeps conversion-returns-NULL rows from being reselected on every pass.\n2. If the batch raises a conversion error, the whole batch has rolled back. Run the candidate-id query and call `order_templates_quarantine_one(id)` for each id in autocommit; this converts the good rows and quarantines the bad ones.\n3. A batch returning 0 rows does NOT mean the backfill is done, because SKIP LOCKED skips rows locked by live writers. Skipped rows are retried on later passes.\n4. Run the termination query. The job stops only when it returns 0 (and the anomaly query returns 0). Every pass either converts or quarantines each unlocked candidate row, so the count is non-increasing apart from newly written rows, which the trigger converts or leaves for a later pass.\n5. **Residual blocking pass (locked rows cannot stall termination).** SKIP LOCKED alone cannot guarantee termination if live writers keep re-locking the same rows. If the termination count is non-zero and unchanged across 3 consecutive passes, or fewer than 10,000 candidates remain, the driver switches to a residual pass: with session `lock_timeout = '1s'`, it calls `order_templates_quarantine_one(id, true)` for each remaining candidate id (autocommit, one row per transaction, so each wait is bounded and holds a single row lock). Rows that hit a lock timeout are retried on the next residual pass, with a hard cap of 20 residual passes. If the count is still non-zero at the cap, or at 06:25 ET on the day, the gate in the rollout plan fails: the deploy is held and the residual rows are listed in CHG-30551. The loop never declares success on a non-zero count. The convergence argument is still a design claim; the backfill termination test (Go criteria B, which now includes rows held locked across passes) is what verifies it, and the backend release does not proceed without that test recorded.\n\n**Lock and write-impact analysis:**\n- `ADD COLUMN` without a default (and with a constant default) is catalog-only. It needs a brief ACCESS EXCLUSIVE lock, bounded by `lock_timeout`; if it can't acquire the lock in 3s it aborts and we retry.\n- Creating the exceptions table and the trigger takes brief locks, covered by the same timeout (trigger creation takes SHARE ROW EXCLUSIVE).\n- The partial index is built with `CREATE CONCURRENTLY`, which does not block writes but adds I/O; its build time is recorded in the rehearsal. It is dropped with the other scaffolding (including `order_templates_quarantine_one`) after the backfill soak.\n- The trigger's exception block adds a subtransaction only on the conversion path; its cost under load is measured in the rehearsal.\n- The batch touches at most 10k rows per transaction, and the quarantine function locks one row per transaction (waiting at most the 1s `lock_timeout` in the residual pass), so order and template writes are never blocked for more than a short row-lock interval.\n- Pre-market order flow is low, but this is validated under concurrent writes in the pre-release rehearsal (see QA).\n\n### Deferred: migration 0149 (separate change, not in CHG-30551)\n\nAfter at least 14 days on 5.0 with no rollback, and after full-table verification that every `legs_json` is non-NULL and valid (including disposition of every quarantined row):\n1. Add `CHECK (legs_json IS NOT NULL) NOT VALID`, then `VALIDATE CONSTRAINT`, then `SET NOT NULL`.\n2. Take a verified logical backup and restore point of `order_templates`.\n3. Only then drop `legacy_legs`, the trigger, and `legacy_legs_to_json`.\n\nRolling back past 0149 would require a restore, so it gets its own approval, ticket, and rollback analysis.\n\n## QA summary\n\n- Regression suite (1,284 cases) on staging: pass.\n- Reorder: equities, ETFs, single-leg and 2/3/4-leg options, fractional shares, closed-market queueing: pass for **buy** reorders. **Sell reorders are not yet tested**: the position-zero, reduced-position and server-side oversell-rejection cases are not written (see gates). The server-side oversell check is therefore unverified, and the mobile store release is gated on it.\n- Migration 0147 dry run against a prod snapshot (2.9M templates): 41s, 0 conversion errors. This used a static snapshot with no concurrent writes and predates the `legs_authoritative` column and the revised, failure-isolated trigger, so it does not establish behavior under live load or for malformed `legacy_legs` written through the trigger. It is not offered as evidence for the revised schema; the pre-release rehearsal below (Go criteria B) is the evidence that must be recorded, and the backend release does not proceed without it. **No timing in this proposal (backfill duration, 06:25 gate, rollback time, trigger overhead) is measured yet; all are targets or estimates until the pre-release gates below are recorded.**\n- Accessibility: VoiceOver/TalkBack pass on History and Reorder review sheet.\n\n**Pre-release gates, to be completed and attached to CHG-30551 by Thu 2026-11-05 (not yet done; these are Go criteria B, and the backend release does not proceed without them):**\n- Rehearse 0147 (revised) and 0148 on a restored prod copy under replayed concurrent order and template write load. Record lock waits, write latency, partial-index build time, per-pass query plans and timings for the select and verification query, trigger overhead under load, and total backfill duration (about 290 batches at 10k rows for 2.9M templates, plus any retry passes for skipped rows, residual blocking passes, and per-row quarantine calls). Include NULL, unconvertible, and conversion-returns-NULL `legacy_legs` rows, plus rows held locked by concurrent writers across several passes, and confirm the loop terminates with those rows quarantined, excluded, or handled by the residual pass.\n- Trigger failure isolation: issue 4.x-style INSERT/UPDATE with malformed `legacy_legs` (including an update to a non-authoritative row with a valid `legs_json`) and confirm the write succeeds with `legs_json` NULL.\n- Backfill vs. 5.0 dual-write: run backfill while 5.0 pods write multi-leg templates and set `legs_authoritative`, and confirm no authoritative row's `legs_json` is overwritten and the anomaly query returns 0.\n- Quarantined-row reads: exercise v5.0.0 list/read/update against quarantined and unconvertible rows and confirm no 5xx and the \"unavailable (needs review)\" behavior.\n- Rehearse the full rollback (`kubectl rollout undo` to v4.18.2 mid-rollout and after completion) on staging against the migrated schema. Confirm v4.18.2 template endpoints (including list) read and write correctly, including with 5.0-written 2/3/4-leg templates present (both 5.0-created and existing templates converted to multi-leg by a 5.0 edit), and that a 4.x update to such a template leaves `legs_json` intact. Then run the reconciliation check, both the periodic run during the mixed state and the pre-roll-forward run, and confirm it detects and handles the 4.x edit. Record the measured time against the 30-minute SLO.\n- Document the `legacy_legs` encoding for multi-leg templates and test round-trip conversion for 2/3/4 legs.\n- Add and pass tests for sell reorders: position now zero, position smaller than the original quantity, and server-side rejection of an oversell at submit.\n- Mixed-version test: v4.18.2 and v5.0.0 pods serving concurrently against the migrated schema, including a 4.x edit to an authoritative row while v5 pods serve; record the measured stale-read window and confirm the reconciliation alerting fires as specified.\n- Contract test: 4.18.2 iOS/Android clients against the v5.0.0 API, covering all endpoints 4.x calls.\n\n## Rollout plan\n\n1. 05:45 ET confirm point-in-time recovery is healthy and take a logical backup of `order_templates`.\n2. 06:00 ET apply migration 0147 (additive; v4.18.2 pods and 4.18.2 clients are unaffected).\n3. 06:05 ET run the 0148 backfill. Gate: the verification query returns 0 by 06:25 (rows with `legs_json IS NULL`, not authoritative, and non-NULL `legacy_legs`, excluding quarantined rows), the anomaly query returns 0, and the quarantine report is empty or every quarantined row is dispositioned in CHG-30551. A batch returning 0 rows is not treated as completion. If the gate is not met, hold the deploy; v4.18.2 remains fully functional. The 20-minute window is not assumed to be sufficient. **Decision rule (fixed now, applied to the measured number):** if the rehearsed total backfill duration under load (with the partial index in place, including retry, residual and quarantine passes) multiplied by 1.5 exceeds 20 minutes (i.e. the rehearsal took longer than about 13 minutes), 0147 and 0148 are applied in an earlier approved window and only the verification query is run on 11-10. If no measured duration is recorded, the same earlier-window path is used, so the rule does not depend on an unmeasured number. (The 06:25 gate is therefore a conditional schedule, not a claim that the backfill fits; an unmeasured or slow rehearsal moves the migration out of the 11-10 window.)\n4. 06:30 ET deploy orders-svc v5.0.0 (rolling, 12 pods), only if the mixed-version and 4.18.2 client contract gates are recorded. During the roll, v4 and v5 pods are expected to coexist against the dual-compatible schema, as confirmed by the mixed-version gate. The 5-minute reconciliation check runs from the first v5 pod until the last 4.x pod is gone.\n5. 07:00 ET smoke test with house accounts in the paper environment and one live house account, including a sell Reorder with a reduced position and an attempted oversell rejected by orders-svc.\n6. 09:00 ET launch announcement, only if all Go criteria A are recorded and the smoke test passed.\n7. Mobile: App Store phased release (7-day ramp) and Play staged rollout 5% → 20% → 50% → 100% over 6 days. The store release is started only after Go criteria A are recorded (otherwise held, or released without the fee bullet and without the fee change in effect) **and** the sell-reorder tests (Go criteria B), v5.0.0 deployment and the step 5 smoke test are recorded, **and** the multi-leg template gates are recorded with the 3+ leg flag on (otherwise held, or released without the multi-leg bullet). 4.18.2 clients remain in the field throughout the ramp and rely on v5 API backward compatibility.\n8. Monitoring: order reject rate, template endpoint 5xx (including from 4.18.2 clients), reconciliation mismatch count and reconciliation heartbeat (paging per the alerting rule in the engineering notes), crash-free sessions ≥ 99.6%.\n\n## Rollback plan\n\n- Trigger: orders-svc 5xx > 1% for 5 min, or order reject rate +50% over baseline.\n- Action: `kubectl rollout undo deploy/orders-svc` to v4.18.2. Because this release's migrations are additive and `legacy_legs` is retained, v4.18.2 is **expected** to continue to work against the current schema. That expectation is not established until the v4.18.2 compatibility tests for 3/4-leg `legacy_legs` values (Go criteria B) are recorded, and the release does not proceed without them. The 15-minute completion figure is a target, not a measurement, and the 30-minute rollback SLO is unverified until the rollback rehearsal gate above is met; the release does not proceed without a measured time inside the SLO. These are hard preconditions of the release, not accepted residual risks: with either unrecorded, the backend deploy does not happen. If a rollback is paused part-way, so that 4.x and 5.x pods serve concurrently, the 5-minute reconciliation check stays on until the rollback completes (no v5 pods) or the roll-forward is completed.\n- Migrations 0147 and 0148 need no down migration. The extra columns, exceptions table, partial index and trigger are expected to be harmless to 4.x (per the compatibility tests). Multi-leg templates written on 5.0 are retained in `legs_json` and protected from trigger overwrite by `legs_authoritative`. Whether 4.x displays them is established by the 4.x compatibility test, and the reconciliation rule applies to any 4.x edits made while rolled back or in a mixed state.\n- Data protection: the pre-deploy logical backup and PITR restore point from step 1 cover the template table.\n- Mobile: halt phased release; 5.0 clients fall back to hiding Reorder if `/v5/templates` returns 404.\n- **Fee change.** The options fee is controlled by the published fee schedule's effective date, which is decoupled from the binaries and the orders-svc deploy, so an app or backend rollback neither applies nor reverts the fee. Before the effective date, the fee change is withdrawn by removing or postponing the effective date. Compliance pulls or corrects the release-note bullet, blog and X post, and the schedule update is reverted. Once the fee is in effect, reverting to $0.65 is a separate compliance-approved change with customer notice (it is adverse to customers) and is not part of the technical rollback. Because that path is costly, the fee effective date is not earlier than the later of the notice end date and completion of the step 5 smoke test.\n- The destructive migration 0149 is not applied in this release, so rollback never depends on it.\n\n## Launch announcement (blog + X, scheduled 09:00 ET, pending principal approval)\n\nThe fee sentence is written with an effective date, not as already in effect. [EFFECTIVE DATE] is filled in from the Go criteria A notice determination, and the final text with the date is what the principal approves. The texts include the Options Disclosure Document reference reviewed under FINRA Rule 2220.\n\n**Blog:**\n\n> **BrokerLite 5.0 is here.** Quick Reorder lets you prefill a new order from your order history. You review the live quote and estimated cost before you submit. Starting [EFFECTIVE DATE], our options contract fee will be $0.50 per contract (currently $0.65). Stock and ETF trades remain commission-free; regulatory fees (SEC, FINRA TAF) still apply to sells. Investing involves risk, including possible loss of principal. Options involve risk and are not suitable for all investors. Before trading options, read the Options Disclosure Document, \"Characteristics and Risks of Standardized Options\" [link to ODD], which is also available in the app under Legal & Disclosures or by request from BrokerLite. Update the app to get Quick Reorder.\n\n**X post (full text for principal review; counted at 273 characters including the 23-character link, assuming a date of 17 characters such as \"December 15, 2026\"; re-count with the final date before scheduling, and if over 280 shorten the Reorder clause, never the disclosures):**\n\n> BrokerLite 5.0: Quick Reorder prefills a new order from your history. Options fee drops to $0.50/contract (from $0.65) on [EFFECTIVE DATE]. Regulatory fees apply. Investing involves risk. Read the options disclosure document before trading options: [link to blog post]\n\nThe X post links to the blog post, which carries the full text, the disclosures, and the link to the ODD. The X text keeps the $0.50 fee with its effective date, the regulatory-fee statement, the investing-risk line, and the pointer to the options disclosure document. It deliberately omits the stock/ETF commission-free claim: that claim is a promotional statement, and dropping it removes it rather than leaving it without its regulatory-fee qualifier, so the abbreviated post makes no unqualified cost claim. Whether the abbreviated post is fair and balanced under Rule 2210 is the registered principal's determination on the final text, not something this proposal asserts. Both texts are subject to principal approval before scheduling, and neither is published until Go criteria A (including the customer-notice determination for the fee change) are recorded. No material states the new fee as in effect before the effective date.",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 68041,
+  "tokOut": 84373,
+  "usd": 1.115866,
+  "critMs": 479684
+ },
+ "status": "cap"
+}

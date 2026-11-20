@@ -1,0 +1,107 @@
+{
+ "approach": "single-strong",
+ "case": "plan-01",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The plan stays on Starter (5 req/min, 15-min delayed quotes) but the architecture requires 160 real-time requests/min. Starter cannot supply real-time data and is 32x over its rate limit. Intraday roll triggers (delta, extrinsic, gap) and mid-based limit pricing would run on 15-minute-stale quotes, producing wrong trades with real money.",
+     "evidence": "\"We stay on Starter.\" vs. \"every 15 s ... 160 requests/min during RTH\" and Starter \"5 req/min | 15-min delayed\""
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The budget math is invalid. The architecture needs at least Growth (100 req/min is still below 160/min, so effectively Pro at $499). Pro plus the $60 VPS is $559, over the $250 cap. Growth at $199 + $60 = $259 also breaches the cap and can't even meet the rate. The agreed cost constraint cannot be met as designed.",
+     "evidence": "\"Optiq Starter $79 + existing VPS $60 = $139, comfortably inside the $250 cap\"; Growth $199 / 100 req/min, Pro $499"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "Migration 0042 drops positions.roll_history in the same transaction as the backfill, in-place on prod. It backfills only 90 days, so history since account inception is permanently destroyed. No backup, dry run, or restore path is mentioned. Keeping roll_eod.py as a fallback is also undermined, since the fallback may read roll_history, which no longer exists.",
+     "evidence": "\"ALTER TABLE positions DROP COLUMN roll_history\"; \"older entries are not needed by roll_engine\"; \"runs in-place against prod Monday 08:00 ET\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The headline +3.8% net APR is unsupported. The rationale rests on anecdotal desk notes ('several days') and the claim that other funds do this. There is no backtest, no data, no derivation of the 3.8% figure, and no accounting for added transaction costs, slippage or more rolls. The success criterion is built on this figure.",
+     "evidence": "\"Expected impact: +3.8% net APR vs. EOD rolling (see §2)\"; \"Desk notes ... list several days where a mid-session roll 'would have been better'\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Fallback and safety design has gaps. The fallback roll_eod.py runs alongside v2 with no stated mutual exclusion, risking double rolls on the same contract. The 60 s broker heartbeat guard doesn't cover market-data staleness or poller failure. Rate-limit (429) handling, retries and alerting for the poller are unspecified. The migration is scheduled before the engine is proven.",
+     "evidence": "ABSENT: data-staleness guard, poller failure/429 handling, coordination between roll_eod.py and v2 at ROLLER_V2 cutover"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The roll target rule is ambiguous and may change risk. 'Same strike +1 expiry, or next strike up if the credit is >= $0.05' does not say which credit is measured, what happens when the credit is below the threshold or negative, or how a debit roll is handled. The 'gap >4% through strike' trigger is also underspecified for intraday. Also, the 'max 8 roll orders per account per day' limit vs. 40 underlyings may block legitimate rolls on volatile days, and nothing says what happens then.",
+     "evidence": "\"same strike +1 expiry, or next strike up if the credit is >= $0.05\"; \"max 8 roll orders per account per day\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The success criterion (30 live days ≥ EOD baseline + 3.8%) has no defined baseline measurement, no variance or significance handling, and the live window falls after the week-4 full rollout to all 40 names, so there's little room to abort on evidence.",
+     "evidence": "\"realized net APR over the first 30 live days >= EOD baseline + 3.8%\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The plan extends order-placing broker client code but says nothing about credential handling, whether API keys for orders are scoped, or auditing of intents. The kill switch is an env var, which likely needs a process restart or re-read semantics to be reliable.",
+     "evidence": "\"ROLLER_KILL env switch read on every loop\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2970,
+    "tokOut": 1583,
+    "usd": 0.024227200000000004,
+    "critMs": 11675
+   },
+   "wallMs": 13374
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The roll_eod.py wording is self-contradictory: it 'exits at startup if ROLLER_V2=true' but also 'processes only contracts v2 has flagged deferred_to_eod'. Engineers could implement either reading.",
+     "evidence": "roll_eod.py exits at startup if ROLLER_V2=true and processes only contracts v2 has flagged `deferred_to_eod`."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The backfill of full roll_history into rolls must satisfy UNIQUE (contract_id, trade_date). Historical data with multiple same-day rolls of one contract would violate it. The dry-run would catch this, but the plan does not say how such rows are handled.",
+     "evidence": "create rolls, roll_intents and the UNIQUE claim constraint; backfill the complete roll_history (since account inception) into rolls"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The dual-write to rolls and roll_history during the transition is not stated to be atomic. A failure between the two writes could leave them inconsistent while roll_eod.py reads roll_history as its fallback.",
+     "evidence": "v2 writes to rolls and, during the transition, also appends to roll_history so both stay consistent."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4969,
+    "tokOut": 1278,
+    "usd": 0.029173199999999996,
+    "critMs": 9709
+   },
+   "wallMs": 10709
+  }
+ ],
+ "artifact": "# Plan: Auto-Roller v2: intraday roll decisions\n\nOwner: trading-infra | Build: 4 weeks, 2 engineers (after Week 0 gate) | Status: **not ready for dispatch. Blocked on the §4 data-source decision**\n\n## Summary\nReplace the end-of-day roll script (roll_eod.py) with an intraday engine that rolls short calls when a roll trigger fires, instead of waiting for the 15:45 ET batch.\nExpected impact: **unquantified**. The earlier +3.8% net APR figure had no derivation and is withdrawn. The Week 1 backtest (§2) produces the estimate, and the go/no-go and success thresholds are set from it.\n\n## 0. Week 0 gate (before any build)\nDispatch is blocked until both items are resolved and recorded here:\n1. **Data source decision (§4).** The real-time requirement cannot be met within the $250 cap on the Optiq tiers as currently priced.\n2. **Spec confirmation (§1).** Confirm the roll-target and gap-trigger definitions against the actual roll_eod.py behavior.\n\n## 1. Roll triggers\nEvaluated only on quotes that pass the staleness guard (§3).\n- Short call delta >= 0.70, or\n- DTE <= 5 and extrinsic value < $0.10, or\n- Gap trigger: the session open is more than 4% through the strike (open >= strike × 1.04 for the short call), evaluated once at the first valid post-open snapshot and re-evaluated on later snapshots while it holds.\n\nRoll target (credit = net credit per share of the combo at the working limit price, i.e. sell-to-open minus buy-to-close):\n1. Evaluate the next strike up at +1 expiry. If its net credit >= $0.05, roll there.\n2. Otherwise evaluate the same strike at +1 expiry. If its net credit >= $0.00, roll there.\n3. Otherwise (both would be debits, or credit < $0 on the same strike), **do not roll**. Write a `skipped_debit` RollIntent, alert, and leave the position for human review. v2 never submits a debit roll.\n\nNo change to contract counts (position sizing is out of scope).\n*Rules above are the proposed reading of the original text; Week 0 confirms they match roll_eod.py semantics, and any difference is resolved in favor of the existing behavior.*\n\n## 2. Rationale and evidence\nHypothesis: rolling at the close misses intraday mean reversion, and closing spreads after 15:30 are wide, so intraday rolls may achieve better fills. Current support is anecdotal (desk notes listing several days where a mid-session roll \"would have been better\"). That is not evidence of a net gain, because intraday rolling also adds roll count, slippage and transaction costs. Claims about what other funds do are not relied upon.\n\nEvidence to be produced in Week 1, before Week 4 enablement:\n- Backtest/replay of the last 2 quarters of positions, comparing the EOD decisions with the v2 triggers, **net of commissions, fills at realistic bid/ask (not mid), and the added roll count**.\n- Output: estimated net APR delta with a range, plus roll-count change. If the delta is not positive after costs, the project stops before live enablement.\n\n## 3. Architecture\n- chain_poller (new): tiered polling under a shared token-bucket limiter set to 90% of the vendor's rate limit.\n  - Baseline: every 60 s, per held underlying, snapshot of front expiry + next expiry (40 × 2 = 80 req/min).\n  - Escalation: underlyings within a near-trigger band (e.g. delta >= 0.60, or DTE <= 7 with low extrinsic) are polled every 15 s, as budget allows; the limiter drops escalations before it drops baseline.\n  - On HTTP 429 or errors: exponential backoff with jitter, honoring Retry-After; no tight retry loops.\n  - Alerts: page if the poller has no successful snapshot for any underlying for > 2 min, or if 429s exceed a threshold per 5 min.\n- Data-staleness guard: every snapshot carries the vendor quote timestamp. roll_engine ignores quotes older than 20 s (RTH) and emits no intents for an underlying lacking a fresh quote. Delayed-quote feeds are rejected at startup (the poller verifies the entitlement is real-time).\n- roll_engine (new): consumes snapshots, evaluates §1 triggers, emits RollIntent rows.\n- order_router (existing broker client, extended): turns RollIntent into a single combo order (buy-to-close + sell-to-open) with a limit at mid minus 1 tick, re-priced every 20 s up to 3 times, then cancelled.\n- Mutual exclusion with roll_eod.py: both paths must insert a row into `rolls` (or `roll_claims`) with a UNIQUE (contract_id, trade_date) constraint before submitting any order; a failed insert means the other path already owns that contract today and the order is not sent. In addition, roll_eod.py exits at startup if ROLLER_V2=true and processes only contracts v2 has flagged `deferred_to_eod`.\n- Postgres: new tables roll_intents, rolls; positions changes in §5 are additive only.\n\n## 4. Market data vendor and cost\nCurrent vendor: Optiq Data. Plan tiers:\n\n| Tier    | Price/mo | Rate limit   | Option quotes   |\n|---------|----------|--------------|-----------------|\n| Starter | $79      | 5 req/min    | 15-min delayed  |\n| Growth  | $199     | 100 req/min  | real-time       |\n| Pro     | $499     | unlimited    | real-time       |\n\nFindings:\n- **Starter cannot be used**: quotes are 15 minutes delayed, so delta/extrinsic triggers and mid-based limit pricing would act on stale data. It is also far below any workable request rate.\n- Growth ($199) fits the tiered 80–90 req/min polling in §3, but Growth + existing VPS $60 = **$259, which is $9 over the $250 cap**.\n- Pro ($499 + $60 = $559) is far over the cap.\n\nOptions for the Week 0 decision (owner to choose; none is assumed):\n- (a) Source real-time chain/quotes from the existing broker API client instead of Optiq, if the account's entitlements and rate limits allow. Week 0 spike verifies this; the marginal cost would then be ~$0 and the Optiq plan could be dropped or kept on Starter for non-trading use.\n- (b) Growth plus cutting ≥ $9/month of VPS or other infra cost (e.g. a smaller VPS plan), keeping the total under $250.\n- (c) A formally approved exception to the $250 cap.\n\nThe build does not start until one option is chosen and the resulting monthly total is written here. The constraint is not changed by this plan.\n\n## 5. Data model migration (additive, expand/contract)\nGoal: introduce the normalized rolls table without destroying any history.\n- **Migration 0042 (week 1, additive only):** create rolls, roll_intents and the UNIQUE claim constraint; backfill **the complete roll_history (since account inception)** into rolls; leave positions.roll_history in place and unchanged. No DROP COLUMN.\n- **Safety steps before running on prod:**\n  - Take a full pg_dump (or base backup) and verify it by restoring to a scratch instance.\n  - Dry-run 0042 against that restored copy, and reconcile row counts and per-position roll counts between roll_history and rolls.\n  - Run on prod only after the dry run passes, outside market hours with a rollback plan (migration is transactional and additive, so rollback = drop the new tables).\n- roll_eod.py keeps reading roll_history unchanged through week 4 (it remains a valid fallback); v2 writes to rolls and, during the transition, also appends to roll_history so both stay consistent.\n- **Contract step (separate migration 0043, not part of this build):** drop roll_history only after v2 has been live and stable for at least 30 days, the backup is retained, and trading-infra owner signs off.\n\n## 6. Rollout\n- Week 1: additive migration (§5), backtest (§2), chain_poller, roll_engine skeleton.\n- Week 2-3: paper mode (RollIntent written, no orders) alongside roll_eod.py; compare intents vs. EOD decisions daily.\n- Week 4: ROLLER_V2=true on 5 underlyings, then all 40, only if the backtest showed a positive net-of-cost delta.\n- Success criterion: realized net APR over the first 30 live days is at or above the EOD baseline plus the margin set from the Week 1 backtest (lower bound of its range), net of commissions and slippage. If not met, revert to ROLLER_V2=false.\n\n## 7. Risks and mitigations\n- Runaway order loop: order_router enforces max 1 roll per contract per day and max 8 roll orders per account per day; both are hard limits checked before submit, plus a ROLLER_KILL env switch read on every loop.\n- Cap behavior: the 8-order cap counts submitted roll orders. When it is reached, remaining intents are marked `deferred_to_eod`, ranked by urgency (highest delta, then nearest expiry), an alert is sent, and roll_eod.py handles them in the 15:45 batch. Intents are never silently dropped. Week 2-3 paper mode reports how often the cap would have bound; if often, the cap is revisited by the owner (not changed by this plan).\n- Double rolls between v2 and roll_eod.py: prevented by the claim constraint and startup check in §3.\n- Stale or missing market data: staleness guard and poller alerting in §3; no fresh quote means no intent.\n- Partial fills on combo: combo orders are all-or-none at the broker; a rejected combo leaves the original short call untouched.\n- Broker API outage: roll_engine stops emitting intents when the last successful broker heartbeat is > 60 s old.\n- Irreversible data loss: no column is dropped in this build (§5).",
+ "fixerUsage": {
+  "calls": 1,
+  "tokIn": 3404,
+  "tokOut": 5065,
+  "usd": 0.064262,
+  "critMs": 41072
+ },
+ "status": "cleared"
+}

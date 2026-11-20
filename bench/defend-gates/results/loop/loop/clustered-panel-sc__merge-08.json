@@ -1,0 +1,113 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "merge-08",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "go.mod adds a local-path replace for zap pointing at ../zap, outside the repo. CI builds from a clean checkout, so the build fails or compiles unreviewed, non-reproducible local code into the binary distributed to on-call laptops. The replace also overrides the pinned pseudo-version, so the version listed in go.mod is not what compiles and the stated JSON encoder fix is not delivered via the module version.",
+     "evidence": "+replace go.uber.org/zap => ../zap"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "printPlan re-implements batching and diverges from computeBatches. It does not remove the canary from the host list, so the canary appears in batch 0 and again in a regular batch. It also sizes batches with floor(len(hosts)*MaxSurge) instead of ceil(len(rest)*MaxSurge). The dry-run plan on-call is meant to trust differs from what Run executes, which defeats the feature's purpose for 60+ host services.",
+     "evidence": "per := int(float64(len(hosts)) * o.MaxSurge)  vs  size := int(math.Ceil(float64(len(rest)) * o.MaxSurge))"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "Plan rendering is a second copy of the batching logic. Future changes to computeBatches will silently desynchronize the dry-run. printPlan should render the output of computeBatches.",
+     "evidence": "func printPlan(w io.Writer, hosts []string, o Options) {"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "No tests cover the dry-run path or assert that the printed plan equals computeBatches output with and without a canary. Nothing guards the central promise of the feature, and a single parity test would have caught the canary duplication bug.",
+     "evidence": "ABSENT: any _test.go changes covering printPlan, computeBatches parity, or --dry-run"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The PR says dry-run exits without touching the orchestrator API, but Run calls api.Hosts before the DryRun check. This is a read, but the description is inaccurate.",
+     "evidence": "hosts, err := api.Hosts(ctx, o.Service) ... if o.DryRun {"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The zap pseudo-version points at an untagged commit that cannot be verified from the artifact. The diff does not show the io and strings imports printPlan needs.",
+     "evidence": "go.uber.org/zap v1.27.1-0.20260914181502-9d3e1c0f7a2b"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "Each batch prints as one long comma-joined line, which is hard to scan for 60+ host services.",
+     "evidence": "fmt.Fprintf(w, \"  batch %d: %s\\n\", n, strings.Join(hosts[i:end], \", \"))"
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 18007,
+    "tokOut": 7586,
+    "usd": 0.043970300000000004,
+    "critMs": 21056
+   },
+   "wallMs": 48573
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "go.mod moves zap to a new pseudo-version but the diff has no go.sum hunk. A clean readonly build would fail on a missing checksum. CI would catch this before anything is distributed, so it should be confirmed and fixed, but it does not block the merge.",
+     "evidence": "ABSENT: go.sum hunk; go.mod changes only `go.uber.org/zap v1.27.1-0.20260914181502-9d3e1c0f7a2b`"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "No test asserts the core safety property, that Run with DryRun set never calls deployBatch. The existing test is close to tautological because printPlan calls computeBatches directly.",
+     "evidence": "ABSENT: test of Run with DryRun=true and a fake Orchestrator asserting no deploy calls"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "\"Cannot drift\" holds for the batching logic only. The real run re-fetches hosts, so a fleet change between preview and run can alter the batches.",
+     "evidence": "\"the printed plan cannot drift from the real rollout\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "A --canary host that is not in the fleet is still printed as batch 0 with no warning. This is the kind of mistake dry-run should help catch.",
+     "evidence": "computeBatches: `batches = append(batches, []string{o.CanaryHost})` with no membership check"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The zap dependency bump is bundled into a feature PR, which makes it harder to review or revert separately.",
+     "evidence": "\"Also bumps zap to pick up the JSON encoder fix we upstreamed.\""
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 20386,
+    "tokOut": 11693,
+    "usd": 0.0500545,
+    "critMs": 29310
+   },
+   "wallMs": 86362
+  }
+ ],
+ "artifact": "PR #219: deployctl rollout --dry-run\n\nOn-call wants to see exactly which hosts go in which batch before kicking off a rollout, especially for the 60+ host services.\n`deployctl rollout <service> <version> --dry-run` now prints the batch plan and exits without deploying anything. It still makes the read-only host-list call to the orchestrator API, because the plan needs the current host set. The plan is rendered directly from `computeBatches`, the same function `Run` uses to execute, so the printed plan cannot drift from the real rollout.\nAlso bumps zap to pick up the JSON encoder fix we upstreamed. This is done via the pinned pseudo-version in go.mod only, with no local `replace`, so CI's clean checkout builds exactly that version.\n\ndiff --git a/go.mod b/go.mod\nindex 3f1a9b2..8c0d4e7 100644\n--- a/go.mod\n+++ b/go.mod\n@@ -1,12 +1,12 @@\n module github.com/acme-int/deployctl\n\n go 1.22\n\n require (\n \tgithub.com/spf13/cobra v1.8.0\n-\tgo.uber.org/zap v1.27.0\n+\tgo.uber.org/zap v1.27.1-0.20260914181502-9d3e1c0f7a2b\n \tgolang.org/x/sync v0.7.0\n )\ndiff --git a/internal/rollout/rollout.go b/internal/rollout/rollout.go\nindex 6b2e4d1..a9c3f05 100644\n--- a/internal/rollout/rollout.go\n+++ b/internal/rollout/rollout.go\n@@ -18,30 +18,50 @@ type Options struct {\n \tService    string\n \tVersion    string\n \tMaxSurge   float64 // fraction of hosts per batch, e.g. 0.25\n \tCanaryHost string\n+\tDryRun     bool\n }\n\n // computeBatches splits hosts into rollout batches. The canary host (if any)\n // always goes alone in batch 0; the rest are split into batches of\n // ceil(len(rest) * MaxSurge) hosts.\n func computeBatches(hosts []string, o Options) [][]string {\n \tvar batches [][]string\n \trest := hosts\n \tif o.CanaryHost != \"\" {\n \t\tbatches = append(batches, []string{o.CanaryHost})\n \t\trest = without(hosts, o.CanaryHost)\n \t}\n \tsize := int(math.Ceil(float64(len(rest)) * o.MaxSurge))\n \tif size < 1 {\n \t\tsize = 1\n \t}\n \tfor i := 0; i < len(rest); i += size {\n \t\tbatches = append(batches, rest[i:min(i+size, len(rest))])\n \t}\n \treturn batches\n }\n\n+// printPlan renders the output of computeBatches so the dry-run plan is\n+// always identical to what Run executes.\n+func printPlan(w io.Writer, hosts []string, o Options) {\n+\tbatches := computeBatches(hosts, o)\n+\tfmt.Fprintf(w, \"rollout plan: %s -> %s (%d hosts)\\n\", o.Service, o.Version, len(hosts))\n+\tfor i, b := range batches {\n+\t\tlabel := \"\"\n+\t\tif i == 0 && o.CanaryHost != \"\" {\n+\t\t\tlabel = \" (canary)\"\n+\t\t}\n+\t\tfmt.Fprintf(w, \"  batch %d%s: %s\\n\", i, label, strings.Join(b, \", \"))\n+\t}\n+}\n+\n func Run(ctx context.Context, api Orchestrator, w io.Writer, o Options) error {\n \thosts, err := api.Hosts(ctx, o.Service)\n \tif err != nil {\n \t\treturn fmt.Errorf(\"list hosts: %w\", err)\n \t}\n+\tif o.DryRun {\n+\t\tprintPlan(w, hosts, o)\n+\t\treturn nil\n+\t}\n \tfor i, batch := range computeBatches(hosts, o) {\n \t\tif err := deployBatch(ctx, api, o, batch); err != nil {\n \t\t\treturn fmt.Errorf(\"batch %d: %w\", i, err)\n \t\t}\ndiff --git a/internal/rollout/rollout_test.go b/internal/rollout/rollout_test.go\nnew file mode 100644\nindex 0000000..4b1c9e8\n--- /dev/null\n+++ b/internal/rollout/rollout_test.go\n@@ -0,0 +1,31 @@\n+package rollout\n+\n+import (\n+\t\"bytes\"\n+\t\"reflect\"\n+\t\"strings\"\n+\t\"testing\"\n+)\n+\n+func TestPrintPlanMatchesComputeBatches(t *testing.T) {\n+\thosts := []string{\"h1\", \"h2\", \"h3\", \"h4\", \"h5\", \"h6\", \"h7\", \"h8\", \"h9\", \"h10\"}\n+\tfor _, canary := range []string{\"\", \"h3\"} {\n+\t\to := Options{Service: \"svc\", Version: \"v1\", MaxSurge: 0.25, CanaryHost: canary}\n+\t\tvar buf bytes.Buffer\n+\t\tprintPlan(&buf, hosts, o)\n+\n+\t\tvar got [][]string\n+\t\tlines := strings.Split(strings.TrimSpace(buf.String()), \"\\n\")\n+\t\tfor _, l := range lines[1:] {\n+\t\t\t_, list, ok := strings.Cut(l, \": \")\n+\t\t\tif !ok {\n+\t\t\t\tt.Fatalf(\"unparseable line %q\", l)\n+\t\t\t}\n+\t\t\tgot = append(got, strings.Split(list, \", \"))\n+\t\t}\n+\t\twant := computeBatches(hosts, o)\n+\t\tif !reflect.DeepEqual(got, want) {\n+\t\t\tt.Errorf(\"canary=%q: plan %v != computeBatches %v\", canary, got, want)\n+\t\t}\n+\t}\n+}\ndiff --git a/cmd/rollout.go b/cmd/rollout.go\nindex 0e4d7c2..51b8a90 100644\n--- a/cmd/rollout.go\n+++ b/cmd/rollout.go\n@@ -31,6 +31,7 @@ func newRolloutCmd() *cobra.Command {\n \tcmd.Flags().Float64Var(&o.MaxSurge, \"max-surge\", 0.25, \"fraction of hosts per batch\")\n \tcmd.Flags().StringVar(&o.CanaryHost, \"canary\", \"\", \"host to deploy first, alone\")\n+\tcmd.Flags().BoolVar(&o.DryRun, \"dry-run\", false, \"print the batch plan and exit\")\n \treturn cmd\n }",
+ "fixerUsage": {
+  "calls": 1,
+  "tokIn": 2974,
+  "tokOut": 4004,
+  "usd": 0.05193199999999999,
+  "critMs": 23624
+ },
+ "status": "cleared"
+}

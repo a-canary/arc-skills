@@ -1,0 +1,65 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "merge-02",
+ "rep": 2,
+ "wallMs": 198383,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "blocker",
+   "claim": "The duplicate-ballot log line writes the voter's email together with the choice they attempted to cast. Logs ship to a third-party host readable by the whole support team, so this links identity to vote outside the tally, breaking the core anonymity promise. Once shipped it cannot be recalled.",
+   "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value)"
+  },
+  {
+   "lens": "authz",
+   "severity": "major",
+   "claim": "The new results export route has no admin role check, unlike other admin routes and contrary to the PR description. Any caller, including unauthenticated ones, can download tallies by measure id.",
+   "evidence": "async def export_results(measure_id: int, db: Session = Depends(get_db),): ... ABSENT: Depends(require_role(\"admin\"))"
+  },
+  {
+   "lens": "spec-mismatch",
+   "severity": "major",
+   "claim": "The PR says the export is for closed measures, but the handler never checks measure state. It returns live running tallies while voting is open, which can be attached to a council packet as final and can reveal how individuals voted in small electorates.",
+   "evidence": "measure = db.get(Measure, measure_id)\n    if measure is None:\n        raise HTTPException(404)\n    counts = dict("
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Counts are keyed by the raw Ballot.choice column value but looked up with Choice enum members. If the stored values are not equal to the enum members, every lookup falls back to 0 and the council-packet CSV silently reports zero votes. No test shows the round-trip works.",
+   "evidence": "counts.get(choice, 0) ... ABSENT: type of Ballot.choice / any test showing non-zero counts"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The handler is async def but makes blocking synchronous SQLAlchemy calls, which can stall the event loop during the aggregate. Impact is modest for a rarely used admin export.",
+   "evidence": "async def export_results(...): measure = db.get(Measure, measure_id) ... db.query(Ballot.choice, func.count(Ballot.id))"
+  },
+  {
+   "lens": "ops",
+   "severity": "minor",
+   "claim": "Every rejected duplicate writes an unthrottled log line to a third-party host with no sampling or rate limit, and the line lacks a receipt id or timestamp that would help support diagnose the tickets.",
+   "evidence": "ABSENT: rate limiting/sampling on the duplicate path; log fields are only measure_id, user.email, body.choice.value"
+  },
+  {
+   "lens": "injection",
+   "severity": "minor",
+   "claim": "measure.slug is placed unescaped in the Content-Disposition filename and CSV cells, allowing header corruption or spreadsheet formula injection. Slugs are admin-set so risk is low.",
+   "evidence": "f'attachment; filename=\"{measure.slug}-results.csv\"' and writer.writerow([measure.slug, ...])"
+  },
+  {
+   "lens": "testing",
+   "severity": "minor",
+   "claim": "No tests are added for the export route or the duplicate-rejection logging.",
+   "evidence": "ABSENT: no test changes in the diff"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 48526,
+  "tokOut": 23454,
+  "usd": 0.06701208,
+  "critMs": 22952
+ }
+}

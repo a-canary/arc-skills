@@ -1,0 +1,71 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "merge-06",
+ "rep": 1,
+ "wallMs": 221895,
+ "verdict": "ATTACKS",
+ "confidence": 0.82,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The log line emits a SHA-256-derived fingerprint of the tenant API key. The stated constraint is that tenant keys must never appear in logs. The fingerprint is derived from the secret, is unsalted, and is stable across log lines. tenant.id is already logged, so it adds no debugging value and only creates exposure.",
+   "evidence": "{ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The upstream 429 retry calls upstream.chat a second time without charging the tenant's bucket. One admitted request can cause two upstream calls, so a tenant can effectively double its upstream rate exactly when the upstream is saturated. This undermines the PR's goal of stopping tenants from causing upstream 429s for each other.",
+   "evidence": "res = await upstream.chat(req.body, { signal: req.signal });\n    if (res.status === 429) {\n ...\n      res = await upstream.chat(req.body, { signal: req.signal });"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The retry sleeps up to 5s with a bare setTimeout that ignores req.signal. There is no concurrency cap or global retry budget, so during an upstream 429 storm sleeping requests pile up and then all fire second calls. If the client disconnects, the gateway still waits and sends the second upstream request with an aborted signal. If upstream asks for more than 5s, the retry fires early and likely 429s again.",
+   "evidence": "await new Promise((r) => setTimeout(r, delay));\n      res = await upstream.chat(req.body, { signal: req.signal });"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The default of 20 rps / burst 40 takes effect for all ~120 tenants on deploy. There is no flag, staged rollout, or mention of per-tenant override migration. Any tenant currently sustaining more than 20 rps will start getting 429s immediately, and the only rollback is a redeploy.",
+   "evidence": "limits from tenant config, default 20 rps / burst 40"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The route-level behavior is untested. Nothing covers the 429 plus Retry-After response, the upstream retry path, the 5s cap, the non-numeric Retry-After fallback, or LRU eviction resetting a tenant to a full burst. Only the bucket math is tested.",
+   "evidence": "ABSENT: tests for completions.ts route, retryAfterMs, and the upstream 429 retry; only bucket.test.ts with 2 tests"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The only observability is one info log per rejected request. There is no counter, metric, or alert for throttling, and log volume scales with rejected load (about 400 lines/s for the batch tenant).",
+   "evidence": "req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, \"tenant rate limited\")"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Tenant limits are not validated. A ratePerSec of 0 gives Infinity in the wait computation and a Retry-After of \"Infinity\". A burst of 0 rejects every request. A backwards clock step can also drive tokens negative.",
+   "evidence": "return Math.ceil(((1 - b.tokens) / limits.ratePerSec) * 1000);"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The first upstream 429 response body is never consumed or cancelled before the retry, which can hold the upstream connection open under load.",
+   "evidence": "let res = await upstream.chat(req.body, { signal: req.signal });\n    if (res.status === 429) {"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The limiter is per tenant only, with no global cap. Aggregate demand across ~120 tenants at the default limit can far exceed upstream capacity, so cross-tenant upstream 429s are not fully bounded. An LRU-evicted tenant also returns with a full burst.",
+   "evidence": "ABSENT: no global or upstream-level cap; Bucket state is bounded by an LRU (10k tenants)"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 21328,
+  "tokOut": 15244,
+  "usd": 0.054607720000000005,
+  "critMs": 25685
+ }
+}

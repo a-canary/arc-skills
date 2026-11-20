@@ -1,0 +1,119 @@
+{
+ "approach": "elephant-gold",
+ "case": "deploy-02",
+ "rep": 1,
+ "wallMs": 227455,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "rollback",
+   "severity": "blocker",
+   "claim": "Migration 0148 irreversibly drops legacy_legs and legacy_legs_to_json at 06:00, before the v5.0.0 deploy. The 4.18.2 template endpoints that the rollback target depends on read legacy_legs, so `kubectl rollout undo` to v4.18.2 cannot restore template service, breaking the agreed 30-minute rollback requirement.",
+   "evidence": "\"1. 06:00 ET apply migrations 0147, 0148.\" / \"ALTER TABLE order_templates DROP COLUMN legacy_legs;\" / \"Migrations are forward-only; no down migrations are needed for this release.\""
+  },
+  {
+   "lens": "migration",
+   "severity": "blocker",
+   "claim": "Migration 0147 sets legs_json NOT NULL while 4.18.2 pods are still serving traffic until the 06:10 rolling deploy completes. Template inserts/updates from 4.x pods that populate only legacy_legs will violate the constraint, breaking template saves for live users; mixed-version operation is never addressed.",
+   "evidence": "\"ALTER TABLE order_templates ALTER COLUMN legs_json SET NOT NULL;\" / \"1. 06:00 ET apply migrations 0147, 0148.\" / \"2. 06:10 ET deploy orders-svc v5.0.0 (rolling, 12 pods).\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "blocker",
+   "claim": "The scheduled public launch announcement states options trade with zero commissions and zero fees and 'no fine print', contradicting the release notes ($0.50 per-contract options fee; SEC and FINRA TAF fees still apply to sells). This is a materially misleading retail communication that violates the agreed FINRA Rule 2210 fair-and-balanced requirement.",
+   "evidence": "\"trade stocks, ETFs **and options** with zero commissions and zero fees. No catches, no fine print.\" vs. release notes: \"options contract fee lowered to $0.50 per contract (was $0.65)... Regulatory fees (SEC, FINRA TAF) still apply to sells.\""
+  },
+  {
+   "lens": "migration",
+   "severity": "major",
+   "claim": "Migration 0147 performs an unbatched full-table UPDATE inside an ALTER TABLE/SET NOT NULL transaction holding ACCESS EXCLUSIVE locks. Dry-run timing (41s on a snapshot) is the only evidence; no lock-wait, WAL, replication-lag, or concurrent-write figures are given, and there is no lock_timeout or abort criteria. Live contention could block the 4.x template endpoints far longer than measured.",
+   "evidence": "\"Migration 0147 dry run against a prod snapshot (2.9M templates): 41s, 0 conversion errors.\" / \"BEGIN; ALTER TABLE order_templates ADD COLUMN legs_json jsonb; UPDATE order_templates SET legs_json = legacy_legs_to_json(legacy_legs); ALTER TABLE order_templates ALTER COLUMN legs_json SET NOT NULL; COMMIT;\""
+  },
+  {
+   "lens": "backup",
+   "severity": "major",
+   "claim": "No backup or snapshot precedes the destructive drop of legacy_legs and legacy_legs_to_json, and no restore verification is described. The only recovery path for the legacy customer template data is gone once 0148 runs.",
+   "evidence": "ABSENT: any backup/snapshot or restore-verification step before \"DROP COLUMN legacy_legs;\"; QA lists only \"Migration 0147 dry run against a prod snapshot\""
+  },
+  {
+   "lens": "conversion-validation",
+   "severity": "major",
+   "claim": "The conversion of untrusted pipe-delimited legacy text into jsonb is validated only by a zero-error count on one snapshot. Definition of legacy_legs_to_json, NULL/empty handling, and behavior on malformed input are not shown, and a single bad row aborts the whole transaction.",
+   "evidence": "\"UPDATE order_templates SET legs_json = legacy_legs_to_json(legacy_legs);\" / \"0 conversion errors\" / ABSENT: definition of legacy_legs_to_json"
+  },
+  {
+   "lens": "authz",
+   "severity": "major",
+   "claim": "Reorder and multi-leg template prefill can produce 2/3/4-leg options orders, but the artifact states no server-side re-validation of prefilled legs against account options approval level, buying power, or the Options Disclosure Document requirement.",
+   "evidence": "\"Reorder from History reuses the template prefill path; no new order-entry endpoint.\" / \"Saved order templates now support multi-leg options strategies.\" / ABSENT: server-side validation of legs_json contents or options-approval gating"
+  },
+  {
+   "lens": "mobile-rollback",
+   "severity": "major",
+   "claim": "Halting the phased rollout does not revert 5.0 clients already installed. They continue calling /v5/templates, and the only fallback is hiding Reorder on 404; no server-side kill switch or feature flag is described to disable Quick Reorder or multi-leg templates independently of the schema change.",
+   "evidence": "\"Mobile: halt phased release; 5.0 clients fall back to hiding Reorder if `/v5/templates` returns 404.\""
+  },
+  {
+   "lens": "monitoring",
+   "severity": "major",
+   "claim": "Monitoring covers only generic 5xx, reject rate, and crash-free sessions. No alert exists for migration failure, template write failures, or NULL/conversion errors in legs_json, and the reject-rate rollback trigger has no defined baseline or evaluation window.",
+   "evidence": "\"Monitoring: order reject rate, template endpoint 5xx, crash-free sessions ≥ 99.6%.\" / \"order reject rate +50% over baseline\""
+  },
+  {
+   "lens": "comms-accuracy",
+   "severity": "major",
+   "claim": "The announcement 'Update the app today' conflicts with the 7-day phased App Store ramp and 6-day Play staged rollout, so most users cannot receive 5.0 that day. The 'Rebuy your winners' framing also implies repurchasing past gains is advantageous, without risk language, and is inconsistent with the review-and-slide step.",
+   "evidence": "\"Update the app today.\" vs. \"App Store phased release (7-day ramp) and Play staged rollout 5% → 20% → 50% → 100% over 6 days.\" / \"Rebuy your winners in one tap with Quick Reorder.\""
+  },
+  {
+   "lens": "approval",
+   "severity": "major",
+   "claim": "No evidence that the blog post and X announcement were reviewed and approved by a registered principal before publication under FINRA Rule 2210. The post is scheduled for 09:00 ET with no approval record.",
+   "evidence": "ABSENT: principal approval or sign-off for the launch announcement (blog + X, scheduled 09:00 ET); the artifact lists only the release manager and change ticket CHG-30551."
+  },
+  {
+   "lens": "release-scope",
+   "severity": "major",
+   "claim": "The release bundles the Quick Reorder feature, an options fee change, multi-leg options templates, and bug fixes under one change ticket, so the feature set cannot be reviewed, gated, or rolled back independently.",
+   "evidence": "\"Release proposal: BrokerLite 5.0 — Quick Reorder\" alongside \"Options pricing update\", \"Saved order templates now support multi-leg options strategies\", and \"Fixes: watchlist sort order persists across restarts; dark mode chart axis labels.\""
+  },
+  {
+   "lens": "expand-contract",
+   "severity": "major",
+   "claim": "Expand migration 0147 and destructive contract migration 0148 are applied in the same window with no soak period, so the old schema is removed before 5.0 health is confirmed.",
+   "evidence": "\"1. 06:00 ET apply migrations 0147, 0148.\""
+  },
+  {
+   "lens": "rollback-evidence",
+   "severity": "major",
+   "claim": "The 15-minute rollback completion is a target, not a demonstrated result. No rollback rehearsal against the migrated schema is reported, so the 30-minute SLO is asserted rather than shown.",
+   "evidence": "\"target: complete within 15 min, well inside the 30-minute rollback SLO\"; ABSENT: any rollback rehearsal or timing evidence."
+  },
+  {
+   "lens": "fee-disclosure",
+   "severity": "major",
+   "claim": "The options fee reduction is a customer-facing fee-schedule change, but the artifact shows no fee-schedule amendment, customer notice, or updated disclosure, and no mention of other per-contract charges such as OCC fees.",
+   "evidence": "ABSENT: fee-schedule amendment or customer notice for \"options contract fee lowered to $0.50 per contract (was $0.65)\"; no mention of OCC or other per-contract charges."
+  },
+  {
+   "lens": "ux-value",
+   "severity": "major",
+   "claim": "Reorder release notes promise the same order type is prefilled, but outside market hours market orders silently become limit at last close, so the user gets a different order than selected.",
+   "evidence": "\"prefill a new ticket with the same symbol, side, quantity and order type.\" vs. \"defaults market orders to limit at last close (unchanged behavior from 4.x).\""
+  },
+  {
+   "lens": "minor-accessibility",
+   "severity": "minor",
+   "claim": "Accessibility QA does not cover multi-leg template creation/editing, slide-to-submit has no described non-gesture alternative, and the dark-mode axis label fix has no contrast verification.",
+   "evidence": "\"Accessibility: VoiceOver/TalkBack pass on History and Reorder review sheet.\" / \"you still slide to submit\" / \"Fixes: ... dark mode chart axis labels.\""
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 58880,
+  "tokOut": 32513,
+  "usd": 0.028029099999999998,
+  "critMs": 28317
+ }
+}

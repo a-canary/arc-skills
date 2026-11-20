@@ -1,0 +1,143 @@
+{
+ "approach": "rubric-calibrated",
+ "case": "merge-07",
+ "rep": 1,
+ "wallMs": 122313,
+ "verdict": "ATTACKS",
+ "confidence": 0.92,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "`partition_date()` switched from UTC to local time. Workers run with TZ=America/Los_Angeles and the job runs at 01:30 UTC, which is 18:30 PDT on the previous calendar day. Each nightly run will write to dt=<yesterday>, the same partition the previous night already published, and dashboards that read the UTC date will never see today's partition.",
+   "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Per-file failures are caught and counted, but the `_SUCCESS` marker is written unconditionally. Downstream dashboards read a partition as soon as its marker appears, so they will read partitions missing one or more partner files and show that as complete. The run also exits 0, so nothing stops the marker.",
+   "evidence": "        except Exception:\n            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n            failed += 1\n    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+  },
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "`src.stem` comes from partner-chosen SFTP filenames and is interpolated into a `shell=True` command string with no quoting. A filename containing shell metacharacters (e.g. `$(...)`, `;`, backticks) executes on the worker, which holds write credentials for the entire raw bucket. Spaces alone also break the command.",
+   "evidence": "f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\",\n        shell=True,"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Failures are only logged and counted. No row-count reconciliation against the input, no alerting, and no non-zero exit, so partial or truncated ingests (including files with zero output rows, which are silently counted as ok) go unnoticed. The old code logged rows per file, which this removes.",
+   "evidence": "ok += 1\n        except Exception:\n            log.exception(...)\n            failed += 1\n    write_success_marker(...)\n    log.info(\"partner=%s dt=%s ok=%d failed=%d\", ...)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "`subprocess.run` has no timeout. A stalled gsutil transfer can hang the task indefinitely, blocking the nightly run and the partition's marker.",
+   "evidence": "subprocess.run(\n        f\"gsutil -q ...\",\n        shell=True,\n        check=True,\n    )"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "On failure, chunks already uploaded for the file and any partially written local gzip are left behind (the gzip handle is not closed on exception, and `chunk.unlink()` is skipped). Re-running with a changed source file leaves stale chunks from the earlier run in the same dt partition, which then get read as current data.",
+   "evidence": "for chunk in _write_chunks(src, work_dir):\n                _upload(chunk, partner, dt, src.stem)\n                chunk.unlink()"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The claim that parallel composite uploads are \"much faster\" than the client library is unbenchmarked. The PR also does not show that gsutil is installed on the workers or that the worker's credentials work with gsutil.",
+   "evidence": "ABSENT: benchmark or worker image/credential check for gsutil; the PR says \"parallel composite uploads are much faster than the client library for multi-GB objects\" with no numbers."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Files are opened without an explicit encoding, so they use the worker's locale encoding, while the previous pandas path read and wrote UTF-8. Non-UTF-8 locales could corrupt non-ASCII partner data.",
+   "evidence": "with src.open(newline=\"\") as fh:\n ...\n out = gzip.open(path, \"wt\", newline=\"\")"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The signature of `ingest_partner` changed (new required `work_dir` argument), but the diff shows no caller updates. Callers may break with TypeError.",
+   "evidence": "ABSENT: updated call sites for `ingest_partner(partner, drop_dir, work_dir)`."
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Local disk usage is not bounded or checked. Each file is fully compressed into work_dir and cleanup on failure is incomplete, so repeated failures can fill the worker disk. No disk-space precondition is set.",
+   "evidence": "ABSENT: disk quota/cleanup for work_dir; chunks are only unlinked on successful upload."
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "Beyond the shell injection, the blast radius is wide: every worker has write access to the whole raw bucket, which this PR does not narrow.",
+   "evidence": "BUCKET = \"acme-retail-raw\" (write credentials scoped to the entire bucket per the context)"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "No privacy issue found in this diff; it does not change what personal data is collected, retained, or exposed.",
+   "evidence": "No change to fields or retention; normalise_row is unchanged."
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "No new vendor dependency introduced; the change adds a dependency on the gsutil CLI rather than the Python client library, which is a minor portability tradeoff.",
+   "evidence": "subprocess.run(f\"gsutil -q ...\")"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "No compliance issue found in this diff.",
+   "evidence": "No licensing, ToS, or regulatory change in the diff."
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "No cost issue found; per-file retries are absent, so cost does not grow unboundedly on failure.",
+   "evidence": "No retry loop in ingest_partner."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "No rollback path for a bad run. Once the marker is written over partial or wrong-partition data, there is no mechanism to retract it. The PR does not discuss this.",
+   "evidence": "ABSENT: rollback or marker-retraction plan."
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "No UI issue found; this is a backend pipeline change.",
+   "evidence": "No UI files in the diff."
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "No UX-value issue found; the change addresses the stated OOM problem.",
+   "evidence": "\"The Northwind feed hit 3.1 GB last week and the ingest task OOM-killed the worker.\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "No efficiency issue found beyond the unbenchmarked speed claim.",
+   "evidence": "See evidence attack above."
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "No accessibility issue found; this diff has no user-facing surface.",
+   "evidence": "No user-facing output in the diff."
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The header-per-chunk writer is created lazily from the first row's keys. A later row with a different key set raises in DictWriter mid-chunk and fails the whole file, which is then marked failed with no per-row handling.",
+   "evidence": "if writer is None:\n                writer = csv.DictWriter(out, fieldnames=list(norm.keys()))"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3283,
+  "tokOut": 5943,
+  "usd": 0.00343258,
+  "critMs": 26885
+ }
+}

@@ -1,0 +1,83 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-01",
+ "rep": 1,
+ "wallMs": 377984,
+ "verdict": "ATTACKS",
+ "confidence": 0.92,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "clientOrderId is regenerated on every loop iteration, so an attempt the broker accepted but reported as timeout or 502/503/504 is followed by a new order with a different ID that the broker cannot dedupe. This can produce a duplicate fill and contradicts the PR's stated safety premise. The ID must be generated once, outside the loop.",
+   "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { const clientOrderId = randomUUID(); try { const res = await broker.post(\"/v2/orders\", { ... client_order_id: clientOrderId ..."
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Math.ceil rounds quantity up past headroom, so notional can exceed the per-symbol maxNotional cap that sizing must never exceed. Example: maxNotional 10000, price 30, lotSize 1 gives 334 shares, about 10020 notional. Restoring floor, or clamping to the cap, is required.",
+   "evidence": "const lots = headroom / price / lotSize; return Math.ceil(lots) * lotSize;"
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "After a timeout or 5xx the original order's state is unknown, but the code resubmits without first querying the broker by the original client_order_id to learn whether it was accepted. This is a blind resubmission of an ambiguous outcome, even if dedupe works.",
+   "evidence": "if (!retryable || attempt === MAX_ATTEMPTS) throw err; log.warn(\"order submit retry\", { symbol: intent.symbol, attempt }); await sleep(250 * 2 ** (attempt - 1));"
+  },
+  {
+   "lens": "evidence",
+   "severity": "blocker",
+   "claim": "The safety premise that the broker dedupes on client_order_id is asserted with no cited broker documentation, sandbox run, or test, and the diff's own ID rotation contradicts it. It must be evidenced before the PR crosses a live-money gate.",
+   "evidence": "\"Retries are safe: every order carries a client_order_id and the broker dedupes on it, so a retry after a timeout cannot double-fill.\" ABSENT: broker documentation or sandbox evidence of dedupe behaviour."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The change merges and deploys to a live brokerage before the open with no feature flag, canary, kill switch, or rollback plan described. A code revert cannot undo duplicate fills or cap-exceeding orders already sent.",
+   "evidence": "\"This PR is about to merge to main and deploy before the next market open.\" ABSENT: feature flag, kill switch, or rollback plan."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The retry depends on broker.post accepting a third options argument and on timeouts surfacing with name 'TimeoutError'. Neither is defined in the diff. If the option is ignored the 4s bound does not exist; if the name differs, timeouts are never retried.",
+   "evidence": "{ timeoutMs: 4000 } ... (err as Error).name === \"TimeoutError\"; ABSENT: BrokerClient.post signature or timeout error name."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "The sizing tests use only exact multiples of the lot size, so the ceil overshoot passes CI. No test asserts notional at or below maxNotional for non-divisible inputs, and no tests cover the retry path (backoff, 4xx non-retry, exhaustion, same ID across attempts).",
+   "evidence": "expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 })).toBe(100); ABSENT: src/router/submit.test.ts changes."
+  },
+  {
+   "lens": "other",
+   "severity": "major",
+   "claim": "The description calls the sizing change a tidy-up, but it changes rounding direction in a cap-enforcing risk function. The original floor already produced lot multiples, so the change adds overshoot without lot-size benefit and needs its own justification.",
+   "evidence": "\"Also tidies the sizing helper so quantities are rounded to the broker's lot size before submit.\" vs. -return Math.floor(...) +return Math.ceil(lots) * lotSize;"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "There is no total deadline. Worst case is three 4000ms timeouts plus 250ms and 500ms backoff, about 12.75s of blocking per order during the open when limit prices may go stale. Exhausted retries raise no alert or metric, and the retry log omits clientOrderId and the error.",
+   "evidence": "{ timeoutMs: 4000 } ... await sleep(250 * 2 ** (attempt - 1)); log.warn(\"order submit retry\", { symbol: intent.symbol, attempt });"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Retries add up to 3x submit load during the open burst, which can deepen the 502/503 throttling that caused the drops. 429 is not retried or backed off, and there is no shared retry budget.",
+   "evidence": "const RETRYABLE_STATUS = new Set([502, 503, 504]);"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Retry and sizing changes are bundled in one PR, so an incident revert of one forces reverting the other.",
+   "evidence": "PR #412: Retry transient broker errors on order submit ... Also tidies the sizing helper"
+  }
+ ],
+ "usage": {
+  "calls": 12,
+  "tokIn": 110176,
+  "tokOut": 50353,
+  "usd": 0.044815110000000005,
+  "critMs": 75981
+ }
+}

@@ -1,0 +1,101 @@
+{
+ "approach": "single-strong",
+ "case": "merge-01",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The PR claims retries are deduped by client_order_id, but randomUUID() is now generated inside the loop, so each retry sends a NEW client_order_id. A retry after a timeout (where the first order may have reached the broker and filled) will not be deduped, causing duplicate fills with real money. This violates the agreed constraint that submission be safe to retry.",
+     "evidence": "for (let attempt = 1; ...) { const clientOrderId = randomUUID(); try { ... client_order_id: clientOrderId"
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "sizeBuy changed Math.floor to Math.ceil, so the quantity rounds UP to the next lot and can exceed the headroom, breaching the per-symbol maxNotional cap that sizing must never exceed. E.g. maxNotional 10_000, price 30, lotSize 1 gives ceil(333.33)=334 -> $10,020 > cap. Short-cover case also overshoots when not divisible.",
+     "evidence": "-  return Math.floor(headroom / price / lotSize) * lotSize;\n+  const lots = headroom / price / lotSize;\n+  return Math.ceil(lots) * lotSize;"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The new tests only use evenly divisible values, so they pass with ceil and fail to detect the cap breach. No test covers a non-divisible headroom, and no test covers retry behaviour or id reuse across attempts. The PR's safety claim is unverified.",
+     "evidence": "expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 })).toBe(100); ... ABSENT: tests for submitOrder retry / client_order_id stability / non-divisible sizing"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "On final-attempt timeout or 5xx, the order state is unknown (it may be live at the broker), yet the error is simply thrown with no reconciliation lookup by client_order_id. Callers may treat it as not placed and resubmit, or miss a live position.",
+     "evidence": "if (!retryable || attempt === MAX_ATTEMPTS) throw err;"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A 4xx rejection that could stem from a duplicate client_order_id (e.g. 422 on a retry whose first attempt succeeded) would be thrown as a failure even though the order exists, if ids were stable. Retry handling does not account for the broker's duplicate-id response.",
+     "evidence": "4xx rejections are never retried"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The change deploys to a live money account right before market open; duplicate fills and cap-exceeding orders are irreversible financial actions, with no kill switch or staged rollout mentioned.",
+     "evidence": "This PR is about to merge to main and deploy before the next market open."
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Risk-cap enforcement relies solely on sizing; no independent check at submit that qty*limitPrice stays within maxNotional, so a sizing bug reaches the broker unchecked.",
+     "evidence": "ABSENT: notional validation in submitOrder"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3291,
+    "tokOut": 1136,
+    "usd": 0.0210412,
+    "critMs": 8093
+   },
+   "wallMs": 63331
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "With ORDER_RETRY_DISABLED=1, MAX_ATTEMPTS is 1, so a timeout or 5xx still throws SubmitOutcomeUnknownError instead of the raw error. That is not strictly the 'old behaviour'. The flag is also read at module load, so toggling it needs a process restart.",
+     "evidence": "const MAX_ATTEMPTS = process.env.ORDER_RETRY_DISABLED === \"1\" ? 1 : 3; ... if (retryable || attempt > 1) { throw new SubmitOutcomeUnknownError"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "Broker dedupe on client_order_id is asserted but not verified. Verification is left to a manual sandbox step, and retries default to on. The kill switch and the explicit deploy condition mitigate this.",
+     "evidence": "The broker dedupes on it, so a retry after a timeout cannot double-fill. ... Deploy with retries enabled only after confirming in the broker sandbox"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The 'exhausted retries' test makes a second submitOrder call against an already-rejecting mock and then asserts only that an id is a string. These assertions add little and are muddled.",
+     "evidence": "await expect(submitOrder(fakeBroker(post), intent)).rejects.toMatchObject({ clientOrderId: expect.any(String) }); expect(typeof id).toBe(\"string\");"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5373,
+    "tokOut": 1451,
+    "usd": 0.0325192,
+    "critMs": 10736
+   },
+   "wallMs": 97125
+  }
+ ],
+ "artifact": "PR #412: Retry transient broker errors on order submit\n\nDuring the first minutes after the open the broker intermittently returns 502/503 or hangs past our timeout, and we drop the order on the floor.\nThis wraps the submit call in a bounded retry (3 attempts, exponential backoff, 4xx rejections are never retried).\n\nRetry safety: one `client_order_id` is generated per `submitOrder` call, before the loop, and reused on every attempt. The broker dedupes on it, so a retry after a timeout cannot double-fill. A test asserts that the id is identical across attempts.\n\nUnknown outcomes: if the final attempt ends in a timeout or 5xx, or a retry after an ambiguous failure gets a 4xx (for example a duplicate-id rejection), the order may be live at the broker. In those cases `submitOrder` throws `SubmitOutcomeUnknownError`, which carries the `clientOrderId`. Callers must reconcile by that id and must not treat the error as \"not placed\" or resubmit under a new id. Wiring an automatic broker lookup by `client_order_id` is a follow-up. It needs the lookup endpoint confirmed against the broker docs first.\n\nRollout: setting `ORDER_RETRY_DISABLED=1` reduces submit to a single attempt, which restores the old behaviour without a redeploy. Deploy with retries enabled only after confirming in the broker sandbox that a repeated `client_order_id` does not create a second order.\n\nSizing: `sizeBuy` is unchanged. The existing `Math.floor` already rounds down to whole lots, which is what keeps notional at or under `maxNotional`. This PR only adds tests, including non-divisible cases, that pin that behaviour.\n\n```diff\ndiff --git a/src/router/submit.ts b/src/router/submit.ts\nindex 3a1f0c2..8be71d4 100644\n--- a/src/router/submit.ts\n+++ b/src/router/submit.ts\n@@ -1,18 +1,60 @@\n import { randomUUID } from \"node:crypto\";\n import { BrokerClient, BrokerError } from \"../broker/client\";\n import { OrderIntent, SubmittedOrder } from \"../types\";\n+import { sleep } from \"../util/sleep\";\n import { log } from \"../log\";\n\n+const RETRYABLE_STATUS = new Set([502, 503, 504]);\n+// Kill switch: ORDER_RETRY_DISABLED=1 -> single attempt (previous behaviour).\n+const MAX_ATTEMPTS = process.env.ORDER_RETRY_DISABLED === \"1\" ? 1 : 3;\n+\n+export class SubmitOutcomeUnknownError extends Error {\n+  constructor(\n+    public readonly clientOrderId: string,\n+    public readonly cause: unknown,\n+  ) {\n+    super(`order submit outcome unknown for client_order_id=${clientOrderId}`);\n+    this.name = \"SubmitOutcomeUnknownError\";\n+  }\n+}\n+\n export async function submitOrder(\n   broker: BrokerClient,\n   intent: OrderIntent,\n ): Promise<SubmittedOrder> {\n-  const clientOrderId = randomUUID();\n-  const res = await broker.post(\"/v2/orders\", {\n-    symbol: intent.symbol,\n-    qty: intent.qty,\n-    side: intent.side,\n-    type: \"limit\",\n-    limit_price: intent.limitPrice,\n-    client_order_id: clientOrderId,\n-  });\n-  return { id: res.id, clientOrderId, status: res.status };\n+  // Generated ONCE and reused for every attempt so the broker can dedupe retries.\n+  const clientOrderId = randomUUID();\n+  let lastErr: unknown;\n+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {\n+    try {\n+      const res = await broker.post(\n+        \"/v2/orders\",\n+        {\n+          symbol: intent.symbol,\n+          qty: intent.qty,\n+          side: intent.side,\n+          type: \"limit\",\n+          limit_price: intent.limitPrice,\n+          client_order_id: clientOrderId,\n+        },\n+        { timeoutMs: 4000 },\n+      );\n+      return { id: res.id, clientOrderId, status: res.status };\n+    } catch (err) {\n+      lastErr = err;\n+      const retryable =\n+        (err instanceof BrokerError && RETRYABLE_STATUS.has(err.status)) ||\n+        (err as Error).name === \"TimeoutError\";\n+      if (!retryable || attempt === MAX_ATTEMPTS) {\n+        // The order may be live at the broker if this failure was ambiguous\n+        // or if an earlier attempt was ambiguous. Surface the id for reconciliation.\n+        if (retryable || attempt > 1) {\n+          throw new SubmitOutcomeUnknownError(clientOrderId, err);\n+        }\n+        throw err;\n+      }\n+      log.warn(\"order submit retry\", { symbol: intent.symbol, attempt, clientOrderId });\n+      await sleep(250 * 2 ** (attempt - 1));\n+    }\n+  }\n+  throw lastErr;\n }\ndiff --git a/src/router/submit.test.ts b/src/router/submit.test.ts\nnew file mode 100644\nindex 0000000..5c1d9ab\n--- /dev/null\n+++ b/src/router/submit.test.ts\n@@ -0,0 +1,62 @@\n+import { submitOrder, SubmitOutcomeUnknownError } from \"./submit\";\n+import { BrokerError } from \"../broker/client\";\n+\n+jest.mock(\"../util/sleep\", () => ({ sleep: jest.fn().mockResolvedValue(undefined) }));\n+\n+const intent = { symbol: \"AAPL\", qty: 10, side: \"buy\", limitPrice: 100 } as any;\n+const timeout = () => Object.assign(new Error(\"timeout\"), { name: \"TimeoutError\" });\n+\n+function fakeBroker(post: jest.Mock) {\n+  return { post } as any;\n+}\n+\n+test(\"retries reuse the same client_order_id\", async () => {\n+  const post = jest\n+    .fn()\n+    .mockRejectedValueOnce(timeout())\n+    .mockRejectedValueOnce(new BrokerError(503, \"unavailable\"))\n+    .mockResolvedValueOnce({ id: \"b1\", status: \"accepted\" });\n+  const out = await submitOrder(fakeBroker(post), intent);\n+  const ids = post.mock.calls.map((c) => c[1].client_order_id);\n+  expect(post).toHaveBeenCalledTimes(3);\n+  expect(new Set(ids).size).toBe(1);\n+  expect(out.clientOrderId).toBe(ids[0]);\n+});\n+\n+test(\"4xx on first attempt is not retried and is rethrown as-is\", async () => {\n+  const err = new BrokerError(422, \"rejected\");\n+  const post = jest.fn().mockRejectedValue(err);\n+  await expect(submitOrder(fakeBroker(post), intent)).rejects.toBe(err);\n+  expect(post).toHaveBeenCalledTimes(1);\n+});\n+\n+test(\"exhausted retries throw an outcome-unknown error carrying the id\", async () => {\n+  const post = jest.fn().mockRejectedValue(timeout());\n+  const p = submitOrder(fakeBroker(post), intent);\n+  await expect(p).rejects.toBeInstanceOf(SubmitOutcomeUnknownError);\n+  expect(post).toHaveBeenCalledTimes(3);\n+  const id = post.mock.calls[0][1].client_order_id;\n+  await expect(submitOrder(fakeBroker(post), intent)).rejects.toMatchObject({\n+    clientOrderId: expect.any(String),\n+  });\n+  expect(typeof id).toBe(\"string\");\n+});\n+\n+test(\"4xx after an ambiguous attempt is reported as outcome unknown\", async () => {\n+  const post = jest\n+    .fn()\n+    .mockRejectedValueOnce(timeout())\n+    .mockRejectedValueOnce(new BrokerError(422, \"duplicate client_order_id\"));\n+  await expect(submitOrder(fakeBroker(post), intent)).rejects.toBeInstanceOf(\n+    SubmitOutcomeUnknownError,\n+  );\n+  expect(post).toHaveBeenCalledTimes(2);\n+});\ndiff --git a/src/risk/sizing.test.ts b/src/risk/sizing.test.ts\nindex 19be4c2..2d0a7e1 100644\n--- a/src/risk/sizing.test.ts\n+++ b/src/risk/sizing.test.ts\n@@ -3,6 +3,32 @@ import { sizeBuy } from \"./sizing\";\n test(\"no headroom when at cap\", () => {\n   expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 100, lotSize: 1 })).toBe(0);\n });\n+\n+test(\"sizes to the cap in whole lots\", () => {\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 })).toBe(100);\n+  expect(sizeBuy({ maxNotional: 10_000, price: 50, currentQty: 0, lotSize: 10 })).toBe(200);\n+});\n+\n+test(\"short position frees headroom for the cover\", () => {\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: -20, lotSize: 1 })).toBe(120);\n+});\n+\n+test(\"non-divisible headroom rounds down and never exceeds the cap\", () => {\n+  // 10_000 / 30 = 333.33 -> 333 shares ($9,990), not 334 ($10,020)\n+  expect(sizeBuy({ maxNotional: 10_000, price: 30, currentQty: 0, lotSize: 1 })).toBe(333);\n+  // 10_000 / 30 / 10 = 33.33 lots -> 330 shares\n+  expect(sizeBuy({ maxNotional: 10_000, price: 30, currentQty: 0, lotSize: 10 })).toBe(330);\n+});\n+\n+test(\"non-divisible short cover stays within the cap\", () => {\n+  // headroom = 10_000 + 20*30 = 10_600 -> 353.33 -> 353 shares ($10,590)\n+  expect(sizeBuy({ maxNotional: 10_000, price: 30, currentQty: -20, lotSize: 1 })).toBe(353);\n+});\n+\n+test(\"resulting notional never exceeds headroom across a sweep\", () => {\n+  for (const price of [7, 13, 29.99, 30, 101.37, 333.33]) {\n+    for (const lotSize of [1, 5, 10, 100]) {\n+      const qty = sizeBuy({ maxNotional: 10_000, price, currentQty: 0, lotSize });\n+      expect(qty * price).toBeLessThanOrEqual(10_000 + 1e-9);\n+    }\n+  }\n+});\n```",
+ "fixerUsage": {
+  "calls": 1,
+  "tokIn": 3339,
+  "tokOut": 5282,
+  "usd": 0.06617200000000001,
+  "critMs": 34859
+ },
+ "status": "cleared"
+}

@@ -1,0 +1,113 @@
+{
+ "approach": "triage-routed",
+ "case": "plan-09",
+ "rep": 1,
+ "wallMs": 582730,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "dedup-equivalence",
+   "severity": "major",
+   "claim": "Per-partition dedup equals global dedup only if no event_id maps to two event_dates. The check cited runs on the already globally deduplicated fact table, so it cannot show that raw.events lacks such duplicates. The 'retries within minutes' claim is unmeasured, and the event_time clamp to ingested_at can move a retry with a later ingested_at into a different event_date.",
+   "evidence": "Checked over all 4.2B rows: 0 such `event_id`s (query linked in DATA-412). SDK retries happen within minutes of the original send."
+  },
+  {
+   "lens": "double-count",
+   "severity": "major",
+   "claim": "The only detector for cross-partition duplicates is a weekly test. A duplicate that survives per-partition dedup would reach dashboards and the customer export for up to 7 days, which violates the agreed no-double-count constraint.",
+   "evidence": "New dbt test `unique_event_id` runs weekly on the full table (scans only `event_id`, ~140 GiB, ~$0.85) and alerts #data-oncall on failure."
+  },
+  {
+   "lens": "watermark-design",
+   "severity": "major",
+   "claim": "The high-water mark is derived from max(ingested_at) already in the table, but the plan never states that ingested_at is a column of fct_page_events. It also does not say how a partially failed multi-partition overwrite leaves the watermark unchanged. If a partial write advances it, the next window can skip late rows and create a silent gap.",
+   "evidence": "ABSENT: no statement that ingested_at is stored in fct_page_events or where the high-water mark lives. A failed run writes nothing and does not move the high-water mark."
+  },
+  {
+   "lens": "reconciliation-gap",
+   "severity": "major",
+   "claim": "The nightly full refresh that currently repairs drift is removed. Rows that become visible after the 2 h overlap are never re-selected unless their partition is touched. The visibility tail beyond p99.9 is unmeasured, and no ongoing reconciliation is planned after legacy is dropped, despite the no-gaps constraint.",
+   "evidence": "The 2 h overlap covers streaming-insert visibility delay (p99.9 measured at 4 min in September). After 30 clean parity nights: drop the legacy model and table (DATA-431)."
+  },
+  {
+   "lens": "privacy-erasure",
+   "severity": "major",
+   "claim": "Erasure runs raw.events first, then fct_page_events, with no stated retry, completion check, or alert. If the second delete fails, the user's rows stay in the fact table. Incremental rebuilds only touch partitions that receive new raw rows, so nothing removes them. The only test is a staging integration test.",
+   "evidence": "privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`. ... New staging integration test: erase a test user, force a 31-day rebuild, assert 0 rows for that user."
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "fct_page_events_v2 is a full copy of personal event data, built in step 1 and kept through the parity nights. The plan names only fct_page_events_legacy in the retention and erasure table lists, so an erasure or retention run during steps 1 to 3 would leave v2 untouched.",
+   "evidence": "For those 30 days the retention and erasure jobs include `fct_page_events_legacy` in their table lists. ABSENT: any statement that `fct_page_events_v2` is covered by erasure and retention."
+  },
+  {
+   "lens": "cutover-atomicity",
+   "severity": "major",
+   "claim": "The cutover is three manual, non-atomic operations with no abort criteria or recovery runbook for a stop between steps. The claim that a same-region copy replaces the table atomically for readers, and that no build overlaps the 12:00 swap, is neither tested nor measured.",
+   "evidence": "A same-region copy job is free and replaces the table atomically for readers. Swap at 12:00 UTC ... so all three steps land with no build in between. ABSENT: any prototype, abort criteria, or recovery steps for a partial swap."
+  },
+  {
+   "lens": "cutover-iam",
+   "severity": "major",
+   "claim": "bq cp -f replaces the table with a copy of v2. The plan does not check whether table-level IAM bindings, row-access policies, policy tags, or labels on the current fct_page_events survive. Looker and the customer usage export read that table, so losing access controls would be a customer-visible outage.",
+   "evidence": "`bq cp -f fct_page_events_v2 fct_page_events`. ... ABSENT: any check of access controls or policies on the replaced table."
+  },
+  {
+   "lens": "rollback-gap",
+   "severity": "major",
+   "claim": "Rollback copies fct_page_events_legacy, which is rebuilt only once a night as a separate job. Events ingested since its last run would be missing until the next full refresh, so the no-gap claim is overstated and a transient gap of up to a day is possible.",
+   "evidence": "Rollback: `bq cp -f fct_page_events_legacy fct_page_events`, then revert the PR; the next run is a full refresh ... No gap, no lost events."
+  },
+  {
+   "lens": "observability",
+   "severity": "major",
+   "claim": "Alerting covers only job failure. A run that succeeds but skips partitions, or a run that never starts, would leave dashboards stale with no alert. There is no freshness check against the 05:00 UTC SLA and no alert on bytes billed per run against the stated budget.",
+   "evidence": "Failure alerting is the existing dbt Cloud job alert to #data-oncall. ABSENT: freshness or completeness alert for the 05:00 UTC refresh, and a per-run bytes or cost alert."
+  },
+  {
+   "lens": "schedule-sla",
+   "severity": "minor",
+   "claim": "During parity, the 2h40m v1 full refresh still runs in the same invocation as v2, so the SLA risk is unchanged rather than reduced. The claim that the separate legacy job cannot delay the 05:00 refresh is asserted without evidence about slots or the shared lock.",
+   "evidence": "v1 and v2 run in the same dbt invocation with a shared `run_cutoff`. ... so it cannot delay the 05:00 refresh."
+  },
+  {
+   "lens": "cost-evidence",
+   "severity": "minor",
+   "claim": "The Looker 'after' figure compares dry runs of the top 20 queries against v2 with the full-population September total, so the comparison is not like-for-like. The customer usage export is not costed, and the steady-state total omits the weekly unique_event_id test (~$3.40/month).",
+   "evidence": "~$54 (dry runs of September's top 20 queries by bytes against v2: 61.2 → 8.7 TiB)"
+  },
+  {
+   "lens": "lock-mechanism",
+   "severity": "minor",
+   "claim": "The guarantee that erasure never interleaves with a build depends on an 'analytics_write' lock whose mechanism is not described. BigQuery has no native table lock, so the guarantee is asserted rather than shown.",
+   "evidence": "privacy-svc and the dbt jobs already share the `analytics_write` lock (unchanged), so an erasure never interleaves with a running build."
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The claim that 38 of 41 dashboards filter on event_date, which underpins dropping require_partition_filter, has no LookML inventory or query behind it.",
+   "evidence": "38 of 41 dashboards already filter on `event_date` (LookML `always_filter`). ABSENT: LookML inventory or query supporting the count."
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "The parity test fingerprints full rows containing personal event data. The plan does not say where mismatch details go, so a diff with sample rows could expose personal data to #data-oncall or a persisted table.",
+   "evidence": "alerts #data-oncall on any mismatch. ABSENT: destination and content of mismatch output, and whether it excludes row-level data."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The incremental job has no retry policy, timeout, or runtime budget, even though SLA misses are the motivating problem. Runtime was measured only on a 31-day snapshot prototype, not in production.",
+   "evidence": "ABSENT: retry count, job timeout, and production runtime measurement. Prototype on a prod snapshot (DATA-412): a 31-day rebuild took 11 min."
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 30246,
+  "tokOut": 54828,
+  "usd": 0.033352549999999995,
+  "critMs": 134466
+ }
+}

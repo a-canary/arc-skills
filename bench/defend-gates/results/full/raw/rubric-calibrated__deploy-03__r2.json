@@ -1,0 +1,143 @@
+{
+ "approach": "rubric-calibrated",
+ "case": "deploy-03",
+ "rep": 2,
+ "wallMs": 158806,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The artifact does not state how user_id is derived for the new sync-write and saver endpoints (token-bound vs request-supplied). If it is taken from the request body, one user could write or repair another user's streak.",
+   "evidence": "ABSENT: authn/authz description for streak_events writes and the saver endpoint. Only 'limit 1 per 30 days enforced server-side' is stated."
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "A new persistent per-user table records habit completions with a device identifier, but retention and deletion on account closure are not specified. Deleted users' streak history could persist indefinitely.",
+   "evidence": "'New table `streak_events (user_id, habit_id, day, source_device, created_at)`' and 'Privacy ... `source_device` stores a per-install random ID' with no retention or purge statement."
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "Nothing material found. Storage stays in the existing Go backend and database.",
+   "evidence": "'Backend changes (streaks-svc 2.14 → 2.15)' with no new vendor or service dependency."
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The backfill writes about 18.4M rows in production, starting right after the full deploy, with no throttling or concurrency limit stated. Load from it can push streaks-svc p95 over the 250ms gate, halting or harming the rollout.",
+   "evidence": "'Backfill job starts after full deploy.' and 'batches of 5k, checkpointed' with no rate limit. Gate: 'streaks-svc p95 < 250ms'."
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Streak is 'computed from events' but the read path (cached or computed per /v2/habits request) and retention for an unbounded events table are not described, so p95 and storage growth at 10-100x are unbounded.",
+   "evidence": "'streak is computed from events, idempotent on (user_id, habit_id, day)'. ABSENT: read-path caching, retention, or capacity estimate."
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "No cost estimate for event-table storage growth or backfill compute at 400k MAU.",
+   "evidence": "ABSENT: storage or compute budget. Only 'dry-run on prod snapshot: 18.4M rows, 22 min'."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Dual-write atomicity between streak_count and streak_events is not specified, and the mismatch gate measures server vs client recompute, not streak_count vs streak_events. A partial write leaves 3.1 clients showing a different streak than 3.2 with no gate catching it.",
+   "evidence": "'`habits.streak_count` is **kept** and dual-written by 2.15' and gate '`streak_mismatch_total` (server vs client recompute)'."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "After rolling back to 2.14, completions recorded as events during the window are not written to streak_count, so the two stores diverge. Re-deploying 2.15 later will not reconcile them, and the artifact asserts the rollback is clean.",
+   "evidence": "'2.14 runs against the migrated database unchanged (verified in staging)' and QA: '3.2 client against 2.14 API ... sync silently disabled, local streak shown'."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The schema has no field distinguishing saver-repaired days from real completions. A repaired day either disappears from the event-computed streak or is indistinguishable from a completion, so the one-per-30-days limit cannot be verified from the table.",
+   "evidence": "'New table `streak_events (user_id, habit_id, day, source_device, created_at)`' and '\"Streak saver\": one missed day per 30 days can be repaired'."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Source of truth is contradictory. It is stated both that streak is computed from events and that streak_count remains 'authoritative-compatible', which leaves unclear which store wins when they disagree.",
+   "evidence": "'streak is computed from events' vs 'schema is additive and `streak_count` remains authoritative-compatible'."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Offline saver use is unspecified. Two devices offline can each repair the same missed day locally; after reconnect the server rejects one, and the user sees the streak change unexpectedly. QA tested offline completion only.",
+   "evidence": "QA row 'offline completion then reconnect' covers completion only; saver row reads 'limit 1 per 30 days enforced server-side' with no offline case."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The timezone used to compute the 'day' idempotency key is not defined. Devices in different timezones completing the same habit may produce different days, causing double-counting or dropped completions.",
+   "evidence": "'idempotent on (user_id, habit_id, day)' with no timezone definition for day."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "QA was run on streaks-svc 2.15.0-rc2, but the rollout deploys 2.15 with no stated rc2-to-final diff or re-test, so the shipped backend is not the tested one.",
+   "evidence": "QA: 'streaks-svc 2.15.0-rc2' vs 'Backend deploy ... streaks-svc 2.15'."
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The crash-free 99.87% figure comes from 1,900 internal beta users over 6 days, a small sample against 400k MAU, so it is weak support for the 99.5% gate.",
+   "evidence": "'Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87%'."
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "The pre-prompt hardcodes '8:00 PM' though the reminder is at the user's chosen time, and the disabled-state date 'Nov 28' is a literal in copy marked localized, not a locale-formatted dynamic value.",
+   "evidence": "'Want a nudge at 8:00 PM' vs 'Optional streak reminder notification at the user's chosen time'; 'Streak saver available again on Nov 28'."
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "The saver is described as repairing 'one missed day' but the button only says 'Repair yesterday', so a missed day older than yesterday seems unrepairable, which may not match the stated feature.",
+   "evidence": "'one missed day per 30 days can be repaired' vs 'Repair yesterday'."
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "Nothing material found. Repair and reminder flows are short and the pre-prompt limits repeat asks.",
+   "evidence": "'shown only after the user reaches a 3-day streak, and only once per 30 days if they choose \"Not now\"'."
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "Nothing material found. VoiceOver, TalkBack, and large-font testing are reported as passing.",
+   "evidence": "'VoiceOver / TalkBack on streak screen and pre-prompt | device lab | Pass' and 'Dynamic Type XXL / Android font scale 200% | device lab | Pass, no truncation'."
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Nothing material found beyond the privacy retention gap already raised. Store privacy labels and data-safety forms are stated as verified.",
+   "evidence": "'Privacy nutrition label and Play data-safety form unchanged (verified against the updated data inventory)'."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Sync logic is spread across a new table, dual-write, a backfill job, a remote flag, and staged store rollouts, which increases hidden coupling and makes the N-1 compatibility path hard to test as a whole.",
+   "evidence": "'dual-written by 2.15 so 3.1 clients ... keep working' combined with 'backfill job' and 'streak_sync_v2' flag."
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Nothing further gate-worthy found beyond the points above.",
+   "evidence": "ABSENT: additional gate-relevant issues in the artifact."
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3472,
+  "tokOut": 11299,
+  "usd": 0.0056844,
+  "critMs": 52226
+ }
+}

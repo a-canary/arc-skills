@@ -1,0 +1,77 @@
+{
+ "approach": "rubric-calibrated",
+ "case": "merge-01",
+ "rep": 1,
+ "wallMs": 158503,
+ "verdict": "ATTACKS",
+ "confidence": 0.92,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "A fresh randomUUID() is generated inside the retry loop, so each retry submits under a new client_order_id. If an attempt times out after the broker accepted it, the retry is a second, independent order the broker cannot dedupe, so both can fill. This violates the agreed 'safe to retry, no duplicate fills' constraint.",
+   "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { const clientOrderId = randomUUID(); try { const res = await broker.post(..., client_order_id: clientOrderId ...)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "blocker",
+   "claim": "The stated safety argument is contradicted by the diff itself. The PR says the broker dedupes on client_order_id, but the code never reuses an ID across attempts, so the dedupe guarantee cannot apply to any retry. The dedupe behaviour is also not shown or referenced anywhere.",
+   "evidence": "\"every order carries a client_order_id and the broker dedupes on it, so a retry after a timeout cannot double-fill.\" vs. randomUUID() called per attempt; ABSENT: broker dedupe documentation or test"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Changing Math.floor to Math.ceil lets sizeBuy return a quantity whose notional exceeds maxNotional, which sizing must never do. Example: maxNotional 10000, price 30, lotSize 10 gives ceil(33.33)=34 lots = 340 shares = $10,200, over the cap. Headroom of $50 at price $100 returns 1 share ($100).",
+   "evidence": "const lots = headroom / price / lotSize; return Math.ceil(lots) * lotSize;"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The new sizing tests only use inputs that divide evenly by lot size, so they cannot detect the cap breach introduced by ceil. The non-divisible case is untested, and no test asserts notional <= maxNotional.",
+   "evidence": "expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 })).toBe(100); expect(sizeBuy({ maxNotional: 10_000, price: 50, currentQty: 0, lotSize: 10 })).toBe(200);"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The timeout is detected by matching err.name === \"TimeoutError\", but the diff does not show that broker.post produces that error name. If it does not, hung requests are never retried and the stated outage problem remains unfixed.",
+   "evidence": "(err as Error).name === \"TimeoutError\"; ABSENT: broker client timeout implementation or test asserting the thrown error name"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "The PR passes a third options argument ({ timeoutMs: 4000 }) to broker.post, but the diff does not change the BrokerClient signature. If post does not accept options, the build breaks right before the pre-open deploy.",
+   "evidence": "{ timeoutMs: 4000 }, ABSENT: BrokerClient.post signature change or type definition"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Retries are not bounded by a total deadline. Three 4s timeouts plus backoff can hold an order for ~13s, during which the limit price may be stale in a fast opening market. The retry is also not logged with the outcome or alerted on, so ops cannot see retry storms.",
+   "evidence": "await sleep(250 * 2 ** (attempt - 1)); log.warn(\"order submit retry\", ...)"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "During a 502/503/504 storm, each order produces up to three broker requests, multiplying load on an already degraded broker and possibly tripping rate limits. No cap or circuit breaker exists.",
+   "evidence": "const RETRYABLE_STATUS = new Set([502, 503, 504]); const MAX_ATTEMPTS = 3;"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The change ships to live trading without a feature flag or staged rollout. Rollback is only a git revert and redeploy, and the sizing change takes effect immediately.",
+   "evidence": "\"This PR is about to merge to main and deploy before the next market open.\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The lastErr variable and the trailing throw after the loop are effectively dead code, and the sizing rounding direction change is not explained in the PR text or comments.",
+   "evidence": "let lastErr: unknown; ... throw lastErr;"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3448,
+  "tokOut": 3759,
+  "usd": 0.00237358,
+  "critMs": 18262
+ }
+}

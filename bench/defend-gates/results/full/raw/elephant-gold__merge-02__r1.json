@@ -1,0 +1,101 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-02",
+ "rep": 1,
+ "wallMs": 170048,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "blocker",
+   "claim": "The new duplicate-ballot log line writes the voter's email with the measure and the choice they attempted. Logs ship to a third-party host readable by the whole support team, so a resident's identity becomes linkable to their vote outside the tally, breaking the core anonymity promise.",
+   "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value,)"
+  },
+  {
+   "lens": "authz",
+   "severity": "blocker",
+   "claim": "The results export route has no admin dependency and no authentication. The PR says the export is for admins, and other admin routes use Depends(require_role(\"admin\")). Anyone who can reach the URL can download tallies, and mid-vote disclosure cannot be undone.",
+   "evidence": "async def export_results(measure_id: int, db: Session = Depends(get_db),): ... (no Depends(require_role(\"admin\")))"
+  },
+  {
+   "lens": "scope",
+   "severity": "major",
+   "claim": "The PR says the tally is for measures once they close, but the handler never checks closure. Running counts for open measures can be exported and attached to a council packet, which looks final and may influence ballots.",
+   "evidence": "measure = db.get(Measure, measure_id)\n    if measure is None:\n        raise HTTPException(404)\n    counts = dict(..."
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The export publishes exact per-choice counts with no minimum-cell suppression. A measure with very few ballots discloses individual residents' choices, which conflicts with the anonymity promise. The PR gives no evidence of a disclosure review.",
+   "evidence": "ABSENT: any minimum count threshold or small-cell suppression before writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The duplicate-ballot log fires on every rejected request with no rate limit, sampling, or dedup. A retry loop can flood the third-party log host, which is typically billed by ingest.",
+   "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", ...) inside `if db.query(Receipt).filter_by(token=receipt).first():` with no rate limit or sampling in the diff"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The export filters Ballot by measure_id and the diff shows no index migration. At higher ballot volume this query scans the whole table. The index may exist elsewhere, so this needs confirmation.",
+   "evidence": "ABSENT: no index on Ballot.measure_id in the diff. Query: db.query(Ballot.choice, func.count(Ballot.id)).filter(Ballot.measure_id == measure_id).group_by(Ballot.choice)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The duplicate-ballot check is a read followed by a separate insert. Concurrent or retried requests can both pass the check and double-insert. This path predates the PR and the diff does not change it, so it is out of scope here but still a real risk.",
+   "evidence": "if db.query(Receipt).filter_by(token=receipt).first():\n ...\n    db.add(Receipt(token=receipt))\n    db.add(Ballot(measure_id=measure_id, choice=body.choice))\n    db.commit()"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The duplicate-ballot log records no timestamp, no original receipt time, and no correlation id. It cannot tell support whether the first ballot was stored, so it does not resolve the \"it says I already voted\" tickets it is meant to address.",
+   "evidence": "logger.info(\n            \"duplicate ballot rejected measure=%s voter=%s choice=%s\",\n            measure_id,\n            user.email,\n            body.choice.value,\n        )"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Admin data egress has no audit log. Nothing records who exported which measure's results, when, or whether it succeeded.",
+   "evidence": "ABSENT: no logger call in export_results"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Ballots whose stored choice is outside the Choice enum are dropped silently, so CSV totals can disagree with the actual ballot count. The export has no reconciliation check.",
+   "evidence": "ABSENT: no reconciliation of sum(counts.values()) against the total ballot count for measure_id"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "measure.slug is interpolated unescaped into the Content-Disposition header and written as a CSV cell. Quotes could break the header, and a leading '=' could trigger spreadsheet formula injection. Risk is low if slugs are admin-controlled.",
+   "evidence": "headers={\"Content-Disposition\": f'attachment; filename=\"{measure.slug}-results.csv\"'}"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "The CSV lacks the context a council packet needs to stand alone, such as measure title, close timestamp, and total ballots cast.",
+   "evidence": "writer.writerow([\"measure\", \"choice\", \"votes\"])\n    for choice in Choice:\n        writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "No tests accompany the new export route or the new log line. Closed-measure behavior, zero-count rows, and choice-key matching are unverified.",
+   "evidence": "ABSENT: any test file or test case added for GET /measures/{id}/results.csv"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The duplicate-ballot logging change is unrelated to the results export, so the two are bundled in one PR and cannot be reviewed or reverted separately.",
+   "evidence": "TITLE: Measure results CSV export and duplicate-ballot logging"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 47693,
+  "tokOut": 23269,
+  "usd": 0.021169700000000003,
+  "critMs": 28979
+ }
+}

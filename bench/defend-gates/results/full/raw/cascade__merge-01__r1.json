@@ -1,0 +1,60 @@
+{
+ "approach": "cascade",
+ "case": "merge-01",
+ "rep": 1,
+ "wallMs": 196567,
+ "verdict": "ATTACKS",
+ "confidence": 0.96,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "client_order_id is generated inside the retry loop, so each attempt carries a new ID. A retry after a timeout or 504 cannot be deduped by the broker against the original, which may have been accepted. This permits duplicate fills and contradicts the PR's safety claim and the agreed constraint.",
+   "evidence": "'const clientOrderId = randomUUID();' is inside 'for (let attempt = 1; ...)'; PR text: 'a retry after a timeout cannot double-fill.'"
+  },
+  {
+   "layer": "sizing",
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Changing floor to ceil makes sizeBuy round up, so the order notional can exceed the per-symbol maxNotional cap whenever headroom is not an exact multiple of the lot size. Example: maxNotional 10000, price 30, lotSize 10 gives lots=33.33, ceil=34, qty 340 = 10200 notional. This breaks the hard risk cap in live trading.",
+   "evidence": "'+  return Math.ceil(lots) * lotSize;' replacing 'Math.floor(headroom / price / lotSize) * lotSize'; the new tests use only exact divisions."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "The PR describes the sizing change as a tidy-up, but floor to ceil is a risk-relevant semantic change that reviewers could easily miss. The new tests do not cover non-divisible headroom, so nothing guards the cap.",
+   "evidence": "'Also tidies the sizing helper so quantities are rounded to the broker's lot size' versus the ceil diff."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The loop retries on timeout and 502/503/504, which are ambiguous outcomes where the order may already be live. There is no lookup by client_order_id before resubmitting. Combined with the per-attempt ID this directly risks duplicates.",
+   "evidence": "ABSENT: any status lookup or reconciliation before retry; the loop only does 'await sleep(250 * 2 ** (attempt - 1));'."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The no-double-fill claim is unsupported. There is no test of submitOrder retry behavior, and the code relies on an unshown BrokerClient.post timeoutMs option and a 'TimeoutError' name that may not exist, in which case timeouts would never be retried.",
+   "evidence": "'{ timeoutMs: 4000 }' and '(err as Error).name === \"TimeoutError\"'; ABSENT: submit tests and the BrokerClient timeout implementation."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Worst-case latency is about 12s+ per order with a stale limit price and no revalidation between attempts. The retry log also omits clientOrderId and has no metric.",
+   "evidence": "'log.warn(\"order submit retry\", { symbol: intent.symbol, attempt });'"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The change deploys straight to live trading before the open with no flag or paper validation. This is mitigated once the blockers are fixed.",
+   "evidence": "'about to merge to main and deploy before the next market open.'"
+  }
+ ],
+ "usage": {
+  "calls": 2,
+  "tokIn": 9015,
+  "tokOut": 6919,
+  "usd": 0.0332324,
+  "critMs": 38133
+ }
+}

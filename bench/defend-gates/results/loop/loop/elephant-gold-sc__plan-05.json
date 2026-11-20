@@ -1,0 +1,452 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "plan-05",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "scale",
+     "severity": "blocker",
+     "claim": "The nightly job does not fit its window at the planned adoption. Staging took 41 min for 12,000 users; at 30% of 2.1M MAU (~630k users, ~52x) linear scaling gives ~36 hours, so runs overlap and compound on the single primary that serves production writes. The plan does not address this gap.",
+     "evidence": "\"Staging run: 12,000 synthetic pantry users completed in 41 minutes.\" / \"Adoption assumption for sizing: 30% of MAU create a pantry within 90 days.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Scoring all 340k recipes for every pantry user in one SQL statement on the primary has no batching, per-user candidate cap, timeout, or retry, and does not use the read replicas. It risks long-running load on the primary, and a mid-run failure leaves pantry_matches partially updated.",
+     "evidence": "\"score every recipe in the catalog (340k recipes) in a single SQL statement joining pantry_items x recipe_ingredients on the primary\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The job fully recomputes and upserts ~50 rows for every user with a pantry each night, including inactive or churned users and users whose pantry has not changed. That is ~31M rows rewritten daily at full adoption (write amplification, bloat), and cost grows with cumulative pantry creators. There is no dirty-user or active-user strategy.",
+     "evidence": "\"for each user with a pantry, score every recipe in the catalog\" / \"upsert the top 50 into pantry_matches\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "No monitoring, alerting, staleness signal, kill switch, or fallback is specified for the nightly job or the carousel. An overrun or failure would go unnoticed and leave users with stale or missing matches.",
+     "evidence": "ABSENT: monitoring, alerting, or runbook for PantryMatchJob; no staleness or failure handling for the \"Cook from your pantry\" carousel."
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The carousel is a read on the hottest path (home feed, 2.1M MAU) with no stated caching or read-replica routing.",
+     "evidence": "\"Home feed gains a \\\"Cook from your pantry\\\" carousel (top 10 matches) once unlocked.\""
+    },
+    {
+     "lens": "rollout",
+     "severity": "major",
+     "claim": "Beta at 5% and full rollout to 100% are both in week 6, leaving no time to read beta results or fix capacity defects. There is no feature flag or rollback path, and the nightly job has no kill switch.",
+     "evidence": "\"Week 6: beta to 5% of users, then 100%.\" / ABSENT: feature flag, rollback, or kill switch"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The scoring spec is underspecified and ignores collected data. Quantity and unit are never used, so 1 tbsp of flour matches a recipe needing 2 cups. Expiry weighting has no defined function. Expired items are not excluded. Recipes with no ingredients leave the ratio's denominator undefined.",
+     "evidence": "\"Score = (pantry ingredients used / recipe ingredients) weighted by expiry proximity, with pantry staples (salt, oil, water, pepper) always counted as present.\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "Unlock requires 15 manually entered items with expiry dates before any value appears, and ongoing upkeep is also manual. The plan's own top churn reason is too much setup/typing (38%), so the design adds the burden users cited. No bulk add or quick-pick is described, and no pre-build validation that users will build a pantry.",
+     "evidence": "\"Pantry Match unlocks once a user has entered at least 15 items with expiry dates.\" / \"Too much setup / typing to get useful suggestions — 38%\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The 30% sizing adoption figure has no source and conflicts with the 25% unlock success target. The retention metric's 'matched control' is undefined, and self-selected unlockers would inflate the measured lift.",
+     "evidence": "\"Adoption assumption for sizing: 30% of MAU create a pantry within 90 days.\" / \"+3 pts 30-day retention for users who unlock vs. matched control.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The plan stores new per-user inventory and cooking-behavior data, but specifies no retention, account-deletion, export, or consent/disclosure handling.",
+     "evidence": "ABSENT: no retention, deletion, or privacy requirements for pantry_items or pantry_matches"
+    },
+    {
+     "lens": "authz",
+     "severity": "major",
+     "claim": "No authorization requirement is stated for the new per-user pantry CRUD and pantry_matches read paths. Per-user scoping is needed to prevent IDOR, and server-side ingredient validation is also unspecified.",
+     "evidence": "ABSENT: no ownership checks or user scoping for Pantry endpoints or the pantry_matches read path"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "major",
+     "claim": "No accessibility requirements are given for the item form, the ingredient autocomplete, or the progress bar across three platforms, which risks blocking screen reader and keyboard users from the unlock path.",
+     "evidence": "ABSENT: no accessibility requirements for the Pantry tab item form, ingredient autocomplete, or progress bar"
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The progress counter reads \"items added\" but unlock requires items with expiry dates, so it can show 15/15 while the gate stays closed.",
+     "evidence": "\"7 of 15 items added\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Notification scheduling lacks idempotency and dedupe details, and the plan does not say how user timezone is derived for quiet hours.",
+     "evidence": "\"max 1 push per user per day, respects existing quiet hours (21:00-08:00 local).\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 47487,
+    "tokOut": 17568,
+    "usd": 0.0958151,
+    "critMs": 28153
+   },
+   "wallMs": 104304
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The score normalization is undefined. Weights reach 1.5 over an unweighted denominator, so raw scores can exceed 1, and the 'normalized to [0,1]' step has no formula. The 0.3 storage threshold, the unit tests, and the carousel's quality all depend on it.",
+     "evidence": "\"The final score is then normalized to [0, 1].\" and \"A minimum score threshold (config, initial 0.3) applies before storing.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The quiet-window rationale is wrong. 02:00-09:00 UTC is roughly 18:00-05:00 local for US Pacific/Eastern users, so the first hours of the job run during the dinner 'cook tonight' peak. Replica load from the job would land on the busiest hours, and the stated rationale for the schedule fails.",
+     "evidence": "\"because ~78% of users are in US time zones, the quiet window is roughly 02:00-10:00 UTC\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Dirty-flag lost-update race. Jobs read pantry state from a lagging replica and the dirty flag is set on pantry writes. With no version compare-and-clear, an edit made during compute can be overwritten by results from pre-edit data and its dirty marker lost, leaving matches stale until the next edit.",
+     "evidence": "\"pantry_items writes set a dirty flag/timestamp\" and \"All reads run on a read replica; only the final per-user writes to pantry_matches hit the primary\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Expiry-driven recompute fires only when an item 'crossed into' the 7-day window. The weight changes daily as d falls from 7 to 0, so users with items already in the window keep stale boosted scores. Staleness handling (72h and pantry-changed) does not account for this drift.",
+     "evidence": "\"(b) an item crossed into the expiry boost window (a daily cheap query on pantry_items by expiry date)\" vs. \"weight = 1.0 + 0.5 x (7 - d) / 7\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Candidate capping orders by raw overlap count rather than by score. A recipe with 3 of 20 ingredients matched can outrank one with 2 of 3, and recipes using soon-to-expire items can be dropped before the boost applies. The 2,000-candidate cap can discard the best matches.",
+     "evidence": "\"cap candidates per user (config, initial 2,000, ordered by overlap count), then score those\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The 630k-user, 60-minute full-run target is unproven. The only measurement is the old design (41 min for 12k users). Per-user candidate retrieval is unbounded before the cap (long posting lists for onion, garlic, etc.), and ~1.26B candidate rows per run against the 02:00-09:00 window is never sized. There is no fallback if the week-3 benchmark misses.",
+     "evidence": "\"week 3 exit criterion: full active-user run completes under 60 minutes on the replica\" / \"cap candidates per user (config, initial 2,000, ordered by overlap count)\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "On-demand recomputes (app-open for inactive users, 72h staleness) have no dedupe, debounce, rate limit, or queue isolation. They run at daytime peak and share the read replicas that serve the home feed, so user-driven load can spike unboundedly. The job also shares replicas with carousel cache-miss reads, with no isolation.",
+     "evidence": "\"recomputed on next app open (enqueued on-demand, with the carousel showing the stale rows or hidden until fresh)\" / \"All reads run on a read replica\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Failure and backlog handling is unbounded. The 5 s statement timeout applies per batch statement for ~500 users, which heavy batches may exceed, and failed batches go to a dead set retried 'next night' with no size cap, retry limit, priority vs. new dirty work, or alert on dead-set size. The hard-stop resume logic (which users are done) is unspecified.",
+     "evidence": "\"Failed batches go to a dead set and are retried the next night\" / \"hard stop at 09:00 UTC and resumes remaining batches the next cycle\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The expiry-window query has no stated index on expiry date, and the same scan drives push selection. At 630k pantry users this can be a daily full scan of pantry_items. Per-user delete+insert on pantry_matches also churns dead tuples on the primary with only 'autovacuum-tuned' as mitigation.",
+     "evidence": "\"a daily cheap query on pantry_items by expiry date\" / \"pantry_matches is autovacuum-tuned\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Alerting misses core user-facing failure modes. The fresh-matches share (target 95%) is only a daily dashboard, and carousel fallback rate, cache/Redis failures, and dead-set growth have no alert thresholds. The staged rollout advances on 'alerts are clean', so it could proceed while many users silently see no carousel.",
+     "evidence": "\"A daily dashboard shows the share of active pantry users with fresh matches (target >= 95%)\" / \"carousel p95 latency and fallback rate\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The unlock-rate target contradicts the adoption scenarios. Unlockers (8+ items) are a subset of pantry creators, so a 15-25% of MAU unlock rate is impossible in the 10% scenario, yet the plan asserts consistency. The retention criterion is also ambiguously stated (+3 pts for unlockers vs. an ITT difference scaled by unlock rate).",
+     "evidence": "\"10%, 20%, 30% of MAU creating a pantry in 90 days\" vs. \"Unlock rate: 15-25% of MAU unlock Pantry Match within 60 days\" and \"+3 pts 30-day retention for users who unlock\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "Value is delivered poorly relative to its promise. A 0.3 minimum score lets recipes missing most ingredients appear under 'Cook from your pantry', unknown quantities count as fully covered, and quick-pick defaults for quantity/unit/expiry are unspecified, so the carousel can recommend recipes the user cannot cook, undermining the churn reason (#2) the feature targets. The carousel has no per-recipe coverage/missing-ingredient indicator.",
+     "evidence": "\"A minimum score threshold (config, initial 0.3)\" / \"the quantity is unknown (we do not penalize missing data)\" / \"defaults for quantity/unit/expiry\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "The pre-build validation measures only whether users reach 8 items and how long it takes, not whether the suggestions are wanted or cooked. Also, quick-pick and bulk-add are built in weeks 1-2, before the go/no-go that supposedly decides entry paths ('before week 3'), so the decision does not gate the spend. No success metric measures cooking from suggestions, and no diversity rule addresses churn reason #3.",
+     "evidence": "\"Go/no-go on the unlock threshold and entry paths before week 3 work starts\" vs. \"Weeks 1-2: Pantry tab + item form, quick-pick and bulk add\""
+    },
+    {
+     "lens": "free",
+     "severity": "major",
+     "claim": "A user who reaches 8 items gets no matches until the nightly job runs, since recompute is only on dirty+nightly and no on-demand compute is specified for the unlock event. The first-value moment is an empty or hidden carousel, and no empty state is defined.",
+     "evidence": "\"Pantry Match unlocks at 8 items\" and \"a user is recomputed only when (a) their pantry changed since the last compute\""
+    },
+    {
+     "lens": "ui",
+     "severity": "major",
+     "claim": "The carousel has no defined loading, empty, or omitted state. It disappears silently on the 150 ms timeout, read failure, or staleness, causing layout shift and leaving users unable to tell why suggestions are missing.",
+     "evidence": "\"the carousel is omitted and the rest of the feed renders\" / \"the carousel is hidden (rather than showing stale suggestions)\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "major",
+     "claim": "Accessibility criteria cover only the Pantry tab form/grid/progress bar. The home carousel (a horizontally scrolling control on the main feed) and the 'I made this' quantity prompt have no screen reader, keyboard, or reduced-motion requirements and fall outside the DoD and verification.",
+     "evidence": "Section 2 a11y list names only \"the item form, ingredient autocomplete, quick-pick grid, and progress bar\"; ABSENT: criteria for carousel and \"I made this\" prompt"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Deletion and retention are incomplete. Account deletion covers only pantry_items and pantry_matches, not the Redis per-user cache or the Sidekiq dead set holding user_ids. There is no retention bound for active users' pantry data, and no encryption or access statement for the new Redis store.",
+     "evidence": "\"pantry_items and pantry_matches rows are deleted on account deletion\"; \"Failed batches go to a dead set\"; \"per-user Rails.cache (Redis) entry (TTL 6 hours\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The privacy notice and legal review are scheduled for weeks 1-2, but pantry data is collected from live users in week 1 fake-door/prototype tests, and the 10% randomized holdout is an experiment with no disclosure or review. There is no lawful-basis or non-US (about 22% of users) data-residency/transfer analysis, so notice and review are tasks rather than a gate on collection.",
+     "evidence": "\"Privacy/legal review of the notice is a week 1 task.\" / \"a 1% fake-door on the home feed\" / \"10% of eligible users are held out\""
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "No cost estimate or budget exists for the replicas, Sidekiq pool, Redis cache, or primary write load at the 630k case, and nothing caps compute spend from unbounded on-demand recomputes or repeated dead-set retries.",
+     "evidence": "ABSENT: any cost estimate or budget; \"Capacity must hold at the 630k case.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Rollback is described only as flag-off. There is no schema migration down-path or disposition for pantry_items/pantry_matches and user data written during rollout if the feature is abandoned.",
+     "evidence": "\"Rollback is flag-off at any stage.\"; ABSENT: migration rollback / table drop plan"
+    },
+    {
+     "lens": "authz",
+     "severity": "major",
+     "claim": "The per-user Redis cache key format and tenancy are unspecified, and authorization covers endpoints only, not the job or cache read path, so a mis-keyed cache could serve one user's matches to another.",
+     "evidence": "\"backed by a per-user Rails.cache (Redis) entry (TTL 6 hours...)\" — ABSENT: cache key format and tenancy check"
+    },
+    {
+     "lens": "scope drift",
+     "severity": "major",
+     "claim": "The 6-week build bundles tab, matching engine, fan-out job, carousel, push notifications, analytics, and a holdout experiment with no defined minimum shippable slice. Notifications and carousel are independent features that could be cut.",
+     "evidence": "\"Week 5: notifications, analytics events, runbook, accessibility verification on all platforms\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "Default shelf lives for items without an expiry (used for the expiry boost and the 2-day-to-expiry push) are unspecified and unsourced, so users can be pushed about food 'expiring' on a guessed date.",
+     "evidence": "\"where missing, a default shelf life per ingredient category is used\" and \"when a pantry item is 2 days from expiry\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 117541,
+    "tokOut": 47558,
+    "usd": 0.1784218,
+    "critMs": 77822
+   },
+   "wallMs": 181332
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Default shelf-life dates are stored as expires_on and then flow through rules that disagree about them. Section 2 says a default never makes an item expired, but section 3 gives coverage 0 to any item with d < 0 and never limits that rule to expiry_source='user'. The partial index behind push selection also covers default dates, and the query is not said to filter on expiry_source.",
+     "evidence": "\"never causes an item to be treated as expired\" vs. \"Items already expired (d < 0) have coverage 0\" and \"sets a derived expires_on with expiry_source = 'default'\"; \"The same query and index drive push selection\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Recompute trigger (b) fires on any expires_on within 7 days, and default-derived dates count. Nearly every pantry item gets one, so the daily recompute set is probably far larger than the 5-15% dirty estimate. That undermines the nightly capacity and cost sizing at the 630k case.",
+     "evidence": "\"the user has any item with expires_on within the next 7 days (0 <= d <= 7)\" together with \"estimated 5-15% of pantry users plus the expiry-window users, to be measured in beta\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "The week 1 go/no-go on whether to proceed at all has no pass/fail criteria for completion rate, 'would cook tonight' rate or abandon rate. With about 20 participants, the decision can be justified whichever way it goes.",
+     "evidence": "\"Go/no-go on the unlock threshold, entry paths and overall proceed decision is made at the end of week 1\" with ABSENT: thresholds for any of the three measures"
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The no-layout-shift guarantee contradicts the stale state, which collapses the fixed-height placeholder and shifts the feed content below it.",
+     "evidence": "\"so state changes do not shift the content above or around it\" vs. \"the placeholder collapses to a one-line row\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Section 2 says every pantry change after unlock enqueues an on-demand compute, but section 4 lists only unlock, inactive-user app open and 72 h staleness as on-demand triggers. This affects load and fresh-matches semantics.",
+     "evidence": "\"on each pantry change after unlock) an on-demand compute\" vs. \"On-demand compute (unlock event, inactive-user app open, 72 h staleness)\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Expiry-window users count as stale after 36 h, but the fallback recomputes them every other day (48 h), so they would always be stale. The expiry weight w is also undefined for d < 0.",
+     "evidence": "\"older than 36 hours count as stale\" vs. \"recompute expiry-window users every other day\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The per-ingredient posting-list cap ranks by 'overlap ratio', which depends on the user's pantry. The denormalized nonstaple_count only describes the recipe, so the truncation rule is underspecified. The cache-aside path can also write a pre-recompute value back after invalidation, and the version is not checked on read, which allows up to 6 h of stale matches.",
+     "evidence": "\"recipes with the highest overlap ratio, using a denormalized recipes.nonstaple_count\"; \"TTL 6 hours, invalidated when the user's matches are recomputed\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "No step updates App Store privacy labels or Google Play Data safety declarations for the new pantry data before rollout.",
+     "evidence": "ABSENT: store privacy label / Data safety update in section 7 or the section 8 rollout gate"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Auto-archived expired items have no stated storage, restore path or retention. Nothing forbids a down-migration from dropping populated pantry tables. The down-path is tested only in week 5.",
+     "evidence": "\"auto-archived out of the active pantry\"; \"All schema changes are additive, with tested down-migrations\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 201941,
+    "tokOut": 53098,
+    "usd": 0.2278638,
+    "critMs": 98779
+   },
+   "wallMs": 220773
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "User-entered expired items get coverage 0, but nothing recomputes the user after expiry. Trigger (b) covers only 0 <= d <= 7, and pantry_version does not change when an item passes its date. Matches computed on the expiry day still count the item as covered, so expired ingredients keep driving recommendations until an unrelated pantry change.",
+     "evidence": "\"(b) the user has any item with a user-entered expiry ... and expires_on within the next 7 days (0 <= d <= 7)\" vs \"0 if the item is absent or has a user-entered expiry ... that has passed\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The claim that boosts only raise rank is false. Score = Σ(cov·w)/Σ(w) is a weighted average, so boosting an expiring item with below-average coverage lowers the score. The 0.6 quality filter is applied to the boosted score, so a boost can push a recipe out of the stored set. The weight for user-expired items (d<0) is also undefined.",
+     "evidence": "\"boosts only raise the rank of recipes that use expiring items relative to otherwise equal recipes\"; \"Score = Σ(coverage_i × w_i) / Σ(w_i)\"; \"score >= 0.6\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The on-demand triggers conflict between sections. Section 2 enqueues on every pantry change, while section 4 lists only unlock, inactive-user open and 72 h staleness. The 10-minute debounce and rate limiting also undercut the 'within about a minute' promise.",
+     "evidence": "\"on each pantry change after unlock) an on-demand compute ... is enqueued immediately\" vs \"On-demand compute (unlock event, inactive-user app open, 72 h staleness)\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The final write upserts the top-50 rows without a version guard. An out-of-order stale compute (e.g. from replica lag) can overwrite newer matches. The user stays dirty and heals on the next pass, but the rows are briefly regressed.",
+     "evidence": "\"(1) upserts the new top-50 rows with computed_for_version = v ... (2) clears dirty_since ... only WHERE pantry_version = v\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Dead-set retry rules conflict with the work-selection order. A user left dirty after dropping from the dead set has the oldest dirty_since and is selected first, which contradicts 'after new dirty work'. The 3-attempt cap never stops the loop.",
+     "evidence": "\"oldest dirty_since first\" vs \"processed after new dirty work, never ahead of it\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The spend ceiling relies on an on-demand global rate limit with no value. Spend has a dashboard but no alert or numeric budget threshold.",
+     "evidence": "\"A global rate limit (config) applies\"; ABSENT: spend alert in the alerts list"
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The stale state collapses the fixed-height placeholder, which contradicts the 'no layout shift' guarantee. Content below the carousel moves.",
+     "evidence": "\"the placeholder collapses to a one-line row\" vs \"fixed-height placeholder, so state changes do not shift the content\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The fake-door tap-through pass criterion compares against a 'current carousel median' that has no stated baseline. A fake placement is also not like-for-like with a live carousel. The power calculation for the +0.36 pt ITT target is deferred to week 5.",
+     "evidence": "\"fake-door tap-through is at or above the current home feed carousel median\"; \"A power calculation for this ITT size is completed in week 5\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The nightly job has no automatic pause on replication lag, unlike the on-demand queue, which pauses at 15 s. The job only alerts at 30 s, and the schedule lock has no stated expiry or stale-lock recovery.",
+     "evidence": "\"replication lag > 30 s while job is running\"; \"Runs are guarded by a lock\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The UTC-to-local conversions are inconsistent. 02:00 UTC is 19:00 PDT, not 18:00. The schedule also ignores non-US users, for whom 07:00-10:30 UTC falls in the evening (e.g. APAC).",
+     "evidence": "\"02:00-09:00 UTC is 18:00-05:00 local for Pacific/Eastern users\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 217984,
+    "tokOut": 43043,
+    "usd": 0.20828180000000002,
+    "critMs": 78366
+   },
+   "wallMs": 231739
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "A user who times out stays dirty and is reselected every night. Dropping them from the dead set after 3 attempts does not stop this, so the plan's claim that the dead-set retry limit caps spend is not strictly true. The cost per such user is bounded at about 2 s a night.",
+     "evidence": "\"a user that times out is skipped and left dirty (it stays dirty and is picked up next pass)\"; \"the user is dropped from the dead set, left marked stale\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The week 1 decision rule leaves \"modest margin\" undefined. The no-go thresholds (<40%, <30%, >40%) also leave gaps against the pass thresholds, so some results map to no defined call. This weakens the claim that the criteria are fixed in advance. The PM records the call and its reasoning, so it is not blocking.",
+     "evidence": "\"Any measure missing its threshold by a modest margin = conditional go\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The week 1 test collects real pantry contents under the \"existing research consent\", but the plan does not confirm that consent covers pantry data. Legal review starts on day 1, so the check can be made before collection begins.",
+     "evidence": "\"a 5-day prototype test with ~20 recruited participants under the existing research consent\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The 10% holdout is not reconciled with the 1% and 5% staged exposure, and the power calculation for the ~0.36 pt ITT effect is deferred to week 5. The retention read comes after the 6-week build, so this does not block the build.",
+     "evidence": "\"A power calculation for this ITT size is completed in week 5\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "\"Today\" in the expiry comparisons has no stated timezone, and the job runs at about 23:00 Pacific, so a UTC-based \"today\" could mark a Pacific user's item expired early.",
+     "evidence": "\"expires_on < today\"; ABSENT: timezone definition for date comparisons"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The nightly batch queue has no automatic pause on replica lag, unlike the on-demand queue. The job-completion alert fires only at the hard stop, with no heartbeat. The capped connection pool and the lag alert at 30 s partly cover this.",
+     "evidence": "\"job not finished by the 10:30 UTC hard stop\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 229789,
+    "tokOut": 41788,
+    "usd": 0.2006388,
+    "critMs": 90324
+   },
+   "wallMs": 166968
+  }
+ ],
+ "artifact": "# Pantry Match: build plan\n\nSquad: Discovery (3 eng + 1 mobile) | 6 weeks | PM: Discovery PM\n\n## 1. Problem\nChurned-user exit survey, Q2 (n = 3,800), top reasons:\n1. \"Too much setup / typing to get useful suggestions\" — 38%\n2. \"Recipes need ingredients I don't have\" — 22%\n3. \"Same recipes keep showing up\" — 15%\nPantry Match targets reason #2: suggest recipes that use what the user already has. Reason #3 is addressed by the diversity and rotation rules in section 3. Reason #1 is the main risk to this design (setup burden), so the UX below is built to minimize typing and a pre-build validation is required (see section 2).\n\n## 2. User experience\n- New Pantry tab. Users add items with a form: ingredient (autocomplete over our 9,400-ingredient catalog), quantity, unit, expiry date (optional).\n- Low-effort entry paths, to avoid adding the setup burden users cited in churn surveys (built in week 2, after the week 1 go/no-go):\n  - Quick-pick grid of ~100 common ingredients (one tap to add). Defaults are explicit: quantity = unknown, unit = none, expiry = none. Unknown quantity is treated as \"have some\" (see section 3) and is flagged in the UI so users can refine it.\n  - Bulk add: select multiple ingredients from the catalog/categories in one pass (same defaults).\n  - Expiry dates are optional. Where missing, a default shelf life per ingredient category is used only for ranking (see section 3, \"Default shelf life\"). It is never shown as the user's expiry, never triggers a push, never triggers a recompute, and never causes an item to be treated as expired.\n- Pantry Match unlocks at 8 items (not 15; expiry not required). The threshold is a server-side config value, tuned during beta. Until then the tab shows a progress bar (\"3 of 8 items added\") with a text equivalent.\n- On unlock (and on each pantry change after unlock) an on-demand compute for that user is enqueued immediately (see section 4), so first matches normally appear within about a minute rather than after the nightly run. Until they are ready the Pantry tab and carousel show the \"computing\" state (see \"Carousel states\" below).\n- Pre-build validation (week 1). It measures three things, not just setup completion:\n  1. the share of users who complete 8 items and how long it takes;\n  2. whether the suggestions are wanted: users in the test see sample matches built from their own entries and give a \"would cook this tonight\" tap or rating, and we record tap-through;\n  3. the setup-burden signal (abandon rate).\n  - Method: a 5-day prototype test with ~20 recruited participants under the existing research consent, plus a 1% fake-door on the home feed that records only taps (no pantry contents stored).\n  - Pass/fail criteria (initial; the PM confirms or adjusts them before the test starts and they are recorded in advance, so they cannot be set after seeing results):\n    - Completion: >= 60% of participants reach 8 items (the same assumption used in section 9), with median time to 8 items <= 5 minutes.\n    - Wanted: >= 50% of participants mark at least one of their sample matches \"would cook this tonight\", and fake-door tap-through is at or above the current home feed carousel median.\n    - Setup burden: <= 25% of participants abandon before reaching 8 items.\n  - Decision rule: all three met = go. Any measure missing its threshold by a modest margin = conditional go, and the unlock threshold and entry paths are revised (e.g. lower the 8-item threshold, make quick-pick the default entry path) and re-checked on the fake-door data. Completion < 40%, \"would cook\" < 30%, or abandon > 40% = no-go: the squad stops and the PM re-scopes before any week 2 work. With ~20 participants the prototype results are directional, so the fake-door tap data is read alongside them and the PM records the call and the reasoning.\n  - Go/no-go on the unlock threshold, entry paths and overall proceed decision is made at the end of week 1 against these criteria, before any quick-pick or bulk-add work starts (week 2) and before week 3 work. Results go to the PM.\n- Users are asked to update quantities after cooking (prompt on the recipe \"I made this\" screen); the prompt is optional and skippable, and matching does not depend on it being answered.\n- Home feed gains a \"Cook from your pantry\" carousel (top 10 matches) once unlocked. Each card shows a coverage indicator (\"You have 6 of 8 ingredients\") and names up to 3 missing ingredients. See section 4 for read path, caching and fallback.\n- Carousel states (all platforms). The carousel sits below the first feed card in a fixed-height placeholder, so state changes do not shift the content above or around it.\n  - Loading: skeleton in the reserved height, shown for at most the 150 ms read budget.\n  - Computing (unlocked, no matches yet): \"Finding recipes for your pantry…\".\n  - Empty (computed, but no recipe passes the quality filter): \"Add a few more ingredients to see matches\" with a link to the Pantry tab.\n  - Stale/unavailable (read timeout, error, or matches older than 72 h with pantry changes): the placeholder collapses to a one-line row, \"Pantry suggestions are updating — see your pantry\", and the Pantry tab shows the same reason. The rest of the feed is never blocked.\n- Accessibility (all three platforms, WCAG 2.1 AA): the item form, ingredient autocomplete, quick-pick grid, progress bar, home carousel and \"I made this\" quantity prompt must be fully operable by screen reader (VoiceOver/TalkBack/web ARIA combobox pattern with announced result counts and selection) and keyboard (web: logical tab order, visible focus, no keyboard traps).\n  - Progress bar exposes a text value and role.\n  - Touch targets are >= 44pt/48dp; no information is conveyed by color alone.\n  - The date picker has an accessible typed-entry alternative.\n  - Carousel: exposed as a list (\"Recipe 3 of 10\"); every card and its coverage text is focusable and announced; there are explicit previous/next controls (not swipe-only); no auto-advance; animations honor reduced-motion settings; the loading/computing/empty/stale states are announced via live region.\n  - \"I made this\" prompt: focus moves into the prompt and returns to the trigger on close; quantity controls have labels and a typed-entry alternative; \"Skip\" is reachable first by screen reader and keyboard.\n  - Accessibility checks are part of the definition of done for weeks 1-2 (Pantry tab) and week 4 (carousel, prompt) and verified with each platform's screen reader before beta.\n\n## 3. Matching\n- Pantry staples (salt, oil, water, pepper) are always counted as present and excluded from both numerator and denominator.\n- Per-ingredient terms, for each non-staple recipe ingredient i (n = number of non-staple ingredients in the recipe):\n  - coverage_i = 1 if the pantry has the ingredient in sufficient quantity; pantry qty / required qty, capped at 1, when units are convertible; 1 when units are not convertible (e.g. \"1 clove\") or the quantity is unknown (we do not penalize missing data, but the card flags it); 0 if the item is absent or has a user-entered expiry (expiry_source = 'user') that has passed (expires_on earlier than today). Items whose expires_on is default-derived (expiry_source = 'default') are never treated as expired and keep their normal coverage.\n  - b_i = the expiry boost of the matching pantry item, in [0, 1] (see \"Expiry boost\" below); b_i = 0 if there is no matching item, no expiry, more than 7 days to expiry, or the item is expired. An expired item has coverage 0 and therefore contributes no boost.\n  - Unit conversion covers mass/volume via a standard conversion table; unit-less/count items compare counts.\n- Two separate quantities, so that boosts can never lower a recipe's eligibility:\n  - Coverage score (unboosted, used for the quality filter and shown/stored as `score`): score = Σ coverage_i / n. Because 0 <= coverage_i <= 1, score is always in [0, 1]. A recipe where every ingredient is fully covered scores 1.0.\n  - Rank score (used only to order recipes): rank_score = score + β × Σ(coverage_i × b_i) / n, where β is config (initial 0.1). rank_score is in [0, 1 + β]. Because the boost is additive and every term is non-negative, covering an expiring item can only raise rank_score, never lower it, and the boost never affects whether a recipe passes the quality filter.\n- Expiry boost: b = 0 for items with no expiry or more than 7 days to expiry; b = (7 - d) / 7 for items with d days left (0 <= d <= 7), so an item expiring today has b = 1 and the maximum rank_score uplift is β. This applies to both user-entered and default-derived dates. For default-derived dates with d < 0, b = 0 (no boost, and no coverage penalty). For user-entered dates with d < 0, coverage is 0 and b = 0. The function and constants (β, 7-day window) live in config so they can be tuned.\n- Default shelf life: for items without a user-entered expiry, a default shelf life by ingredient category (sourced from USDA FoodKeeper data, reviewed by the content team) sets a derived expires_on with expiry_source = 'default'. Default-derived dates affect only the ranking boost, evaluated whenever a compute happens for another reason. They are never treated as \"expired\", never trigger recomputes (section 4), never trigger pushes (section 5), and are never displayed as the user's expiry.\n- Quality filter for \"can I cook this tonight\": a recipe is stored and shown only if the unboosted coverage score >= 0.6 (config, initial; replaces the earlier 0.3) and at most 3 non-staple ingredients are missing or zero-coverage (config, initial 3). Both are tuned in beta against cook-through (section 9). The stored top 50 are the recipes passing the filter with the highest rank_score.\n- Recipes with zero non-staple ingredients (or no ingredients) are excluded from scoring.\n- Diversity and rotation (reason #3): the carousel shows the top 10 from the stored 50 after (a) demoting for 14 days any recipe the user has seen 3 times without tapping, and (b) allowing at most 3 recipes sharing the same main ingredient.\n- Ingredient normalization reuses the existing ingredient_aliases table (e.g. \"scallion\" = \"green onion\"). The server validates that every pantry item ingredient_id exists in the catalog and that quantity/unit/expiry values are in valid ranges; free-text ingredients are rejected.\n- Unit tests cover the quantity mismatch case (1 tbsp flour vs. 2 cups), user-expired items (coverage 0, b = 0), default-expiry items past their derived date (coverage unchanged, no recompute or push trigger), empty recipes, staples, score bounds (property test: score in [0, 1] and rank_score in [0, 1 + β]), boost monotonicity (property test: adding or increasing an expiry boost never lowers rank_score and never changes score or filter eligibility, including for partially covered expiring items), and the missing-ingredient filter.\n\n## 4. Compute\nSizing: adoption is modeled at three levels (10%, 20%, 30% of MAU creating a pantry in 90 days; no existing source for these, they are planning scenarios to be replaced by beta data). At 2.1M MAU this is ~210k / 420k / 630k pantry users. Unlockers are a subset of pantry creators; the success metric in section 9 is defined on that basis. Capacity must hold at the 630k case.\n\nStaging benchmark: 12,000 synthetic users completed in 41 minutes with the old full-catalog single-statement design. Linear scaling at 630k users is ~36 hours, so that design is not used. The redesign below has no measurement yet; the 60-minute figure is a target, not a result.\n- Early spike (end of week 2): measure candidate retrieval and scoring for 12k synthetic users on a production-sized replica, to catch a miss before week 3.\n- Week 3 exit criterion: a full active-user run at 630k synthetic users on a production-sized replica completes under 60 minutes with primary write load unaffected.\n- Worst-case sizing: 630k users × 2,000 candidates = ~1.26B candidate rows if every user were recomputed in one run. The dirty-user strategy below means a normal night processes a small fraction of that (estimated 5-15% of pantry users plus the user-entered-expiry-window and just-expired users, to be measured in beta). Because only user-entered expiry dates drive the expiry triggers, and expiry is optional and defaults to none in the quick-pick and bulk-add paths, that set is expected to be a minority of pantry users. The week 3 benchmark is also run with a pessimistic synthetic mix (e.g. 50% of users holding a user-entered expiry within 7 days) so the sizing does not rest on that expectation.\n- Fallback if the benchmark misses (decided at the week 3 gate, in this order): lower the candidate cap (e.g. 2,000 to 500); restrict nightly work to users active in the last 14 days; recompute expiry-window users every other day (the just-expired trigger below is kept daily because it is bounded by items that crossed their date since the last compute); spread work over two nights; pin the compute to a dedicated replica. If it still misses, the carousel ships only on-demand per user (cached) and the nightly job is dropped.\n\nDesign:\n- New table pantry_matches(user_id, recipe_id, score, rank_score, computed_at, computed_for_version), top 50 per user (`score` is the unboosted coverage score, `rank_score` the ordering value, section 3). Per-user pantry state lives in pantry_state(user_id, pantry_version, last_computed_version, dirty_since, last_active_at, computed_at).\n- Dirty-flag correctness (no lost updates): every pantry_items write increments pantry_state.pantry_version and sets dirty_since if null. A compute reads the pantry items and pantry_version together in one snapshot (one transaction on the replica), and the final write on the primary is a per-user transaction that (1) upserts the new top-50 rows with computed_for_version = v, deletes rows no longer in the top 50, and (2) clears dirty_since and sets last_computed_version only `WHERE pantry_version = v`. If the user edited during compute, or the replica lagged so v was already stale, the version no longer matches, the dirty marker stays, and the user is recomputed on the next pass. Stale results are never marked fresh.\n- Recompute triggers: a user is recomputed when (a) pantry_version > last_computed_version, or (b) the user has any item with a user-entered expiry (expiry_source = 'user') and expires_on within the next 7 days (0 <= d <= 7), because the boost changes every day as d falls, not only when an item crosses into the window, or (c) the user has any item with a user-entered expiry that has passed since their last compute, i.e. expires_on < today and expires_on >= date(pantry_state.computed_at). Trigger (c) is needed because pantry_version does not change when an item passes its date, yet the item's coverage drops to 0 the day after expiry; without it, matches computed on the expiry day (when the item still counts as covered) would keep recommending on an expired ingredient until an unrelated pantry change. Items that expired before the last compute were already handled by it and do not re-trigger. Default-derived expiry dates (expiry_source = 'default') never satisfy (b) or (c); their boost is recalculated only when the user is recomputed for another reason, which keeps the daily set small. In all cases the user must also have been active in the last 30 days. The daily expiry queries filter on expiry_source = 'user' and use a partial index on pantry_items (expires_on, user_id) WHERE expires_on IS NOT NULL AND expiry_source = 'user', bounded to a range (today - 14 days to today + 7 days) and joined to active users, so they are index range scans and not table scans. Items expired more than 14 days ago are covered by trigger (a)/(c) on earlier nights, or, for users who were inactive, by the on-demand recompute on next app open. The same index drives push selection (section 5, forward-looking window only). If beta shows the expiry-window set is too large, (b) moves to every other day (see fallback).\n- Inactive users (30+ days) are skipped and recomputed on next app open through the on-demand path below.\n- Candidate generation, not full-catalog scoring: for each user, use an inverted index (recipe_ingredients by ingredient_id) to retrieve recipes sharing a non-staple pantry ingredient. The 340k-recipe cross join is not used.\n  - Retrieval is bounded before the cap: pantry ingredients are walked rarest-first (smallest posting list first), and for very common ingredients (onion, garlic, etc.) the posting-list scan is limited to a per-ingredient maximum (config) of the recipes with the highest overlap ratio, using a denormalized recipes.nonstaple_count.\n  - The candidate cap (config, initial 2,000) is ordered by an optimistic bound on rank_score: (number of matched non-expired ingredients + β × Σ b_i of matched ingredients) / nonstaple_count. This is a proxy for the real rank_score, not raw overlap count. A recipe matching 2 of 3 ingredients therefore outranks one matching 3 of 20, and recipes using soon-to-expire items are not dropped before the boost applies. The exact score and rank_score are then computed on the capped set, and the quality filter is applied to the exact unboosted score.\n- Execution: PantryMatchJob is a fan-out Sidekiq job: a coordinator enqueues batches of ~100 users to a dedicated low-priority queue with limited concurrency (config, initial 8 workers). Compute reads use a dedicated connection pool pinned to a capped share of replica connections, so job load cannot starve the feed. Only the final per-user writes hit the primary, in small batched transactions.\n  - Timeouts and retries: statement timeout is per user query (config, initial 2 s), not per batch; a user that times out is skipped and left dirty (it stays dirty and is picked up next pass). Batches retry with exponential backoff (max 3 attempts) and are idempotent.\n  - Resume after a hard stop: there is no batch bookkeeping to reconcile. The coordinator selects work from pantry_state (dirty or expiry-due, oldest dirty_since first), so the next cycle simply continues with whatever is still dirty.\n  - Dead set: capped (config, initial 5,000 entries) with a retry limit of 3 nightly attempts, after which the user is dropped from the dead set, left marked stale, and an alert fires. Dead-set entries carry only user_id and batch id, expire after 7 days, and are processed after new dirty work, never ahead of it.\n- On-demand compute (unlock event, inactive-user app open, 72 h staleness): runs on its own queue with its own concurrency cap (config, initial 4) and a per-user unique-job lock (at most one pending or running compute per user) with a 10-minute debounce. A global rate limit (config) applies, and the queue is paused automatically (load shedding) when replica lag exceeds 15 s or home feed p95 breaches its guardrail. The user then sees the \"computing\" state or stale state, never an error. Daytime work is thereby bounded by queue concurrency and rate limit, independent of traffic spikes.\n- Schedule: because ~78% of users are in US time zones, 02:00-09:00 UTC is 18:00-05:00 local for Pacific/Eastern users, which includes the dinner \"cook tonight\" peak, so that window is not used. The job starts at 07:00 UTC (roughly 23:00 Pacific / 03:00 Eastern) and has a hard stop at 10:30 UTC (roughly 03:30 Pacific / 06:30 Eastern, before the morning ramp), a 3.5 h window. The window is to be confirmed against 30-day replica traffic data in week 3. Runs are guarded by a lock so a late run never overlaps the next one.\n- Carousel read path: served from the read replica via GET /pantry/matches, backed by a per-user Rails.cache (Redis) entry (TTL 6 hours, invalidated when the user's matches are recomputed) so the home feed does not hit Postgres on each open. Cache misses use single-flight locking so a burst of misses for the same user (or a Redis outage) does not stampede the replica. The home feed request does not block on the carousel: if the read exceeds a 150 ms budget or fails, the carousel shows the \"stale/unavailable\" state and the rest of the feed renders. Home feed p95 and error rate are guarded by a rollout check.\n- Cache key and tenancy: key = `pantry_matches:v1:user:{user_id}`, where user_id comes only from the authenticated session. The cached value embeds its user_id and computed_for_version; on read, a mismatched user_id is discarded and treated as a miss (and logged as a security event). The job writes via the same helper. Specs cover cross-user cache reads.\n- Row growth: pantry_matches is ~31.5M rows at 630k users × 50. Writes are upserts that skip users whose top 50 did not change and delete only rows leaving the top 50, instead of deleting and re-inserting every row, which limits dead-tuple churn. Per-table autovacuum is tuned (low scale factor, e.g. 0.01), dead-tuple ratio is alerted on (section 6), and rows for deleted/inactive users are purged (section 7).\n- Cost (owner: Discovery eng lead with Finance, model due end of week 2, budget approved at the week 3 gate): estimate monthly cost for incremental replica CPU, Sidekiq worker hours (8 batch workers × ≤3.5 h/night plus 4 on-demand workers), Redis memory (~1 KB per user × 630k ≈ 0.6 GB), pantry_matches storage and IOPS, and primary write load at the 630k case. The budget is enforced in code by queue concurrency, the on-demand rate limit, the dead-set retry limit (3), and the hard stop, so spend has a ceiling that does not depend on traffic. A spend/usage dashboard is added to section 6 metrics.\n\n## 5. Notifications\nStretch scope (see section 8 cut order): ships only if the minimum shippable slice is complete and its gates are met.\n- Optional \"use it before it goes bad\" push when a pantry item is 2 days from expiry. Only items with a user-entered expiry date (expiry_source = 'user') are eligible; default-shelf-life items never trigger a push. Selection uses the same expiry_source = 'user' query and partial index as the recompute trigger (section 4).\n- Opt-in only (off by default), max 1 push per user per day, respects existing quiet hours (21:00-08:00 local).\n- Sent via the existing push pipeline with its own kill switch (feature flag pantry_push).\n\n## 6. Reliability, monitoring and kill switches\n- Feature flags (existing flag system): pantry_tab (UI), pantry_match_job (nightly job on/off), pantry_carousel (home feed carousel), pantry_push (notifications). Each can be turned off without a deploy. Turning off pantry_carousel removes the carousel with no effect on the rest of the feed; turning off pantry_match_job halts enqueuing and in-flight batches stop at the next batch boundary.\n- Metrics (existing observability stack): job duration, batches succeeded/failed/retried, users processed vs. expected, share of pantry users selected by each trigger (dirty vs. user-entered expiry window vs. just-expired), queue depth and latency of the pantry and on-demand queues, dead-set size, primary write rate and replication lag during the job, pantry_matches table size and dead tuples, carousel p95 latency, fallback rate and state mix, cache hit rate, Redis errors, and spend/usage vs. the budget (section 4).\n- Alerts (page the Discovery on-call):\n  - job not finished by the 10:30 UTC hard stop;\n  - failed-batch rate > 2%;\n  - dead-set size > 1,000 or growing 3 nights in a row;\n  - replication lag > 30 s while job is running;\n  - primary CPU/write-latency regression attributable to the pantry queues;\n  - carousel error rate > 1%;\n  - carousel fallback (omitted/stale) rate > 5% over 15 minutes;\n  - Redis/cache error rate > 1% or cache hit rate below the baseline set in beta;\n  - fresh-matches share (below) < 90% for 2 hours (warning at < 95%);\n  - pantry_matches dead-tuple ratio > 20%;\n  - on-demand queue latency > 5 minutes.\n- Staleness signal: each user's matches carry computed_at and computed_for_version. If the pantry changed since the last compute and computed_at is older than 72 hours, the carousel shows the stale/unavailable state (rather than stale suggestions) and an on-demand recompute is enqueued. Users in the user-entered-expiry window, or with a user-entered item that has expired since their last compute, whose last compute is older than 36 hours count as stale for this metric. The share of active pantry users with fresh matches (target >= 95%) is measured hourly, shown on the dashboard, and alerted as above.\n- Rollout gate: staged rollout (section 8) advances only if the alerts above are clean and the fresh-matches share, carousel fallback rate and dead-set size are within target for the hold period.\n- Runbook (written in week 5, linked from the alerts): how to pause the job, drain the queues, re-run failed batches, purge and rebuild pantry_matches, roll back the flags, and run the abandonment/rollback procedure (section 8).\n\n## 7. Authorization, privacy and data handling\n- Authorization: all Pantry endpoints (pantry_items CRUD, GET /pantry/matches) derive user_id from the authenticated session, never from request params; records are looked up through current_user's association (e.g. current_user.pantry_items.find), so cross-user ids return 404. Request specs cover cross-user read/update/delete attempts for every endpoint. Ingredient ids and quantity/unit/expiry values are validated server-side (see section 3), and per-user item count is capped (config, initial 500) with rate limiting on writes. The job and cache read paths are covered by the key and tenancy checks in section 4.\n- Retention and deletion:\n  - pantry_items, pantry_state and pantry_matches rows are deleted on account deletion (added to the existing deletion workflow, within its SLA).\n  - The same workflow deletes the user's Redis cache key(s) and removes any pending or dead-set jobs referencing the user_id; compute jobs also skip users that no longer exist, so a late job cannot recreate data.\n  - Dead-set entries expire after 7 days regardless.\n  - pantry_matches for users inactive > 90 days are purged.\n  - For active users, pantry_items follow the existing account data retention policy (kept while the account exists); items whose user-entered expiry passed more than 90 days ago are auto-archived out of the active pantry, and the user can delete any item or clear the pantry at any time.\n  - Pantry data is included in the existing data export.\n  - Quantity update prompts store only the resulting pantry quantity, not a separate cooking-history log beyond what \"I made this\" already records.\n- Redis: the cached value contains only user_id, recipe_ids, scores and versions (no pantry contents). It uses the existing Redis deployment's TLS in transit, encryption at rest and service-only access, and no new store is introduced.\n- Disclosure and review (a gate, not a task): the privacy policy and an in-product first-use notice state that pantry contents are stored and used to personalize recipe suggestions and (if opted in) expiry reminders. Privacy/legal review starts on day 1 and covers the notice, the lawful basis, the holdout experiment disclosure, and whether the roughly 22% of users outside the US introduce any new data-residency or transfer questions (pantry data is stored in the same Postgres/Redis as existing user data, to be confirmed by legal). No pantry data is collected from non-employee, non-consented users before sign-off: the week 1 validation uses consented research participants and tap-only events (section 2), and the staged rollout does not start until legal sign-off is recorded. Pantry data is not shared with third parties and is not used for ads.\n\n## 8. Timeline\nMinimum shippable slice (MSS): Pantry tab + item form + matching + nightly/on-demand job + carousel, behind flags, with the holdout and analytics events needed to measure it. Notifications (section 5) are stretch scope, cut first if any gate slips. Cut order if time or capacity runs short: (1) push notifications, (2) the \"I made this\" quantity prompt, (3) bulk add, (4) the nightly job (fall back to on-demand-only, section 4). Quick-pick, the carousel and the holdout are not cut.\n- Week 1: pre-build validation (fake-door/prototype, section 2) with go/no-go on the proceed decision, unlock threshold and entry paths at the end of the week, judged against the pass/fail criteria recorded in advance; pantry data model, authz and validation scaffolding, feature flags; legal/privacy review kicked off; core item form.\n- Week 2: quick-pick and bulk add (iOS/Android/web) per the week 1 decision, with accessibility criteria in the definition of done; privacy notice drafted/reviewed; cost model; early retrieval/scoring spike on a production-sized replica (section 4).\n- Week 3: scoring (spec in section 3), candidate generation, fan-out and on-demand jobs, dirty-version and expiry-trigger logic (including the just-expired trigger); exit criterion is the 630k-user benchmark on a production-sized replica (section 4), with the cost budget approved and the fallback decision made if it misses.\n- Week 4: home carousel with states, cache/fallback and key checks, carousel accessibility, \"I made this\" quantity prompt (cut-order item), monitoring and alerts wired up.\n- Week 5: analytics events (including carousel impressions, taps and cook-through), runbook, accessibility verification on all platforms, migration down-path tested in staging (below); notifications only if the MSS is on track; internal dogfood (employees) at 100% of employees.\n- Week 6: staged rollout with flags, only after legal sign-off: 1% on day 1, 5% by day 2-3 (beta), hold at 5% for at least 3 days to read job metrics, primary/replica health, carousel latency, fresh-matches share, and unlock/drop-off rates; advance to 25% only if alerts are clean and the capacity targets hold. Further ramp to 100% continues after week 6 if the guardrails hold; 100% is not committed within the 6 weeks.\n- Rollback and abandonment: flag-off is the first response at any stage (data is retained but unused). All schema changes are additive, with tested down-migrations. If the feature is abandoned: pantry_matches and the Redis keys are dropped immediately; pantry_items and pantry_state are exported or deleted after a user notice period of 30 days, using the same deletion machinery as account deletion; the holdout assignment is removed. The runbook documents each step and who approves it.\n\n## 9. Success metrics\n- Unlock rate (unlockers / MAU): unlockers are a subset of pantry creators, so with 10/20/30% of MAU creating a pantry and an assumed 60% of creators reaching 8 items (to be validated by the week 1 prototype and re-baselined from beta), the expected range is 6-18% of MAU within 60 days of full rollout. Target: >= 8% of MAU and >= 60% of pantry creators reaching unlock.\n- Cooking from suggestions (value metric): share of unlockers who open and then log \"I made this\" for a recipe that was shown in the carousel within 7 days of the impression; target >= 25% of unlockers cooking at least one carousel recipe within 30 days of unlocking (initial; set from beta data). Also tracked: carousel tap-through rate and the rate at which users see the same recipe 3+ times without tapping (rotation rule, section 3).\n- Retention: the primary comparison is intent-to-treat (ITT). At rollout, 10% of eligible users are held out from seeing the Pantry tab and carousel, and we compare 30-day retention for exposed vs. holdout users. The goal is a +3 pt effect among unlockers (the \"complier\" effect), which is equal to the ITT difference divided by the unlock rate; at a 12% unlock rate that is ≈ +0.36 pt ITT. The effect among unlockers is estimated using the holdout assignment as the instrument. A power calculation for this ITT size is completed in week 5 and the target is reviewed after the beta read. A matched comparison (unlockers vs. holdout users who would have unlocked, using pre-exposure activity, platform and tenure) is supporting evidence only.\n- Setup-burden guardrail: median time to unlock, share of users who start the pantry and abandon before unlock, and the exit-survey share citing setup/typing (baseline 38%) must not worsen.\n- Guardrails: home feed p95 latency and error rate, primary write latency, pantry queue health and fresh-matches share (section 6), and spend vs. budget (section 4).",
+ "fixerUsage": {
+  "calls": 4,
+  "tokIn": 35813,
+  "tokOut": 44999,
+  "usd": 0.593226,
+  "critMs": 285854
+ },
+ "status": "cleared"
+}

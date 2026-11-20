@@ -1,0 +1,65 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "merge-07",
+ "rep": 2,
+ "wallMs": 219953,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "_upload builds a shell command via f-string and runs it with shell=True. Partner-chosen filenames (src.stem flows into local chunk names and the GCS path) are untrusted; shell metacharacters like $(...) or backticks would execute arbitrary commands on a worker holding write credentials for the whole raw bucket. Spaces also break the command, and no timeout is set.",
+   "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "_SUCCESS marker is written unconditionally even when files failed. Downstream dashboards read the partition as soon as the marker appears, so a partial partner partition is published as complete. Failures are only logged and counted, never propagated.",
+   "evidence": "except Exception: log.exception(...); failed += 1 ... write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "partition_date() changed from UTC to host-local time. Workers run with TZ=America/Los_Angeles and the job runs at 01:30 UTC, when LA is still the previous day, so data and marker land in dt=(previous day) instead of the UTC date downstream expects.",
+   "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "Partner-supplied filenames are used unsanitised in the GCS object path. Names containing '/' or '..' could write outside the intended raw/{partner}/dt= prefix, and the worker's bucket-wide credentials widen the blast radius.",
+   "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "A file failing mid-way leaves already-uploaded chunks in GCS and local chunk files in work_dir (no cleanup in the except branch). Reruns or retries write into the same partition and can duplicate or mix data; there is no idempotency.",
+   "evidence": "for chunk in _write_chunks(src, work_dir): _upload(chunk, partner, dt, src.stem); chunk.unlink()  ... except Exception: ... failed += 1"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The CSV writer takes fieldnames from the first normalised row of each chunk only. If later rows have different keys, DictWriter.writerow raises ValueError (extra keys), failing the file, and chunks can end up with inconsistent schemas. This is new behaviour compared with the pandas path and is untested.",
+   "evidence": "writer = csv.DictWriter(out, fieldnames=list(norm.keys()))"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The raw output layout changes from one object per source file to a directory of chunk objects per source, and ingest_partner gains a required work_dir argument. The PR gives no evidence that downstream readers or callers were updated, and no migration or rollback plan.",
+   "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\" ; def ingest_partner(partner: str, drop_dir: Path, work_dir: Path)"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "No tests, benchmark, or memory measurement back the gsutil speedup claim or the chunk size choice; gsutil is a new environment dependency and composite uploads create temporary component objects.",
+   "evidence": "ABSENT: tests or a before/after output comparison"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 20726,
+  "tokOut": 7714,
+  "usd": 0.055728440000000004,
+  "critMs": 15834
+ }
+}

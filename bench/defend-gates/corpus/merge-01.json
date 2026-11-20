@@ -1,0 +1,28 @@
+{
+  "id": "merge-01",
+  "gate": "merge",
+  "title": "Order-submit retries and lot-size rounding",
+  "context": "Repo: trading-engine, the order router for a live brokerage account trading real money. Orders go to the broker's REST API; the risk module enforces a per-symbol maxNotional cap that sizing must never exceed. Agreed constraint: order submission must be safe to retry without risk of duplicate fills. This PR is about to merge to main and deploy before the next market open.",
+  "artifact": "PR #412: Retry transient broker errors on order submit\n\nDuring the first minutes after the open the broker intermittently returns 502/503 or hangs past our timeout, and we drop the order on the floor.\nThis wraps the submit call in a bounded retry (3 attempts, exponential backoff, 4xx rejections are never retried).\nRetries are safe: every order carries a client_order_id and the broker dedupes on it, so a retry after a timeout cannot double-fill.\n\nAlso tidies the sizing helper so quantities are rounded to the broker's lot size before submit.\n\ndiff --git a/src/router/submit.ts b/src/router/submit.ts\nindex 3a1f0c2..8be71d4 100644\n--- a/src/router/submit.ts\n+++ b/src/router/submit.ts\n@@ -1,18 +1,44 @@\n import { randomUUID } from \"node:crypto\";\n import { BrokerClient, BrokerError } from \"../broker/client\";\n import { OrderIntent, SubmittedOrder } from \"../types\";\n+import { sleep } from \"../util/sleep\";\n import { log } from \"../log\";\n\n+const RETRYABLE_STATUS = new Set([502, 503, 504]);\n+const MAX_ATTEMPTS = 3;\n+\n export async function submitOrder(\n   broker: BrokerClient,\n   intent: OrderIntent,\n ): Promise<SubmittedOrder> {\n-  const clientOrderId = randomUUID();\n-  const res = await broker.post(\"/v2/orders\", {\n-    symbol: intent.symbol,\n-    qty: intent.qty,\n-    side: intent.side,\n-    type: \"limit\",\n-    limit_price: intent.limitPrice,\n-    client_order_id: clientOrderId,\n-  });\n-  return { id: res.id, clientOrderId, status: res.status };\n+  let lastErr: unknown;\n+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {\n+    const clientOrderId = randomUUID();\n+    try {\n+      const res = await broker.post(\n+        \"/v2/orders\",\n+        {\n+          symbol: intent.symbol,\n+          qty: intent.qty,\n+          side: intent.side,\n+          type: \"limit\",\n+          limit_price: intent.limitPrice,\n+          client_order_id: clientOrderId,\n+        },\n+        { timeoutMs: 4000 },\n+      );\n+      return { id: res.id, clientOrderId, status: res.status };\n+    } catch (err) {\n+      lastErr = err;\n+      const retryable =\n+        (err instanceof BrokerError && RETRYABLE_STATUS.has(err.status)) ||\n+        (err as Error).name === \"TimeoutError\";\n+      if (!retryable || attempt === MAX_ATTEMPTS) throw err;\n+      log.warn(\"order submit retry\", { symbol: intent.symbol, attempt });\n+      await sleep(250 * 2 ** (attempt - 1));\n+    }\n+  }\n+  throw lastErr;\n }\ndiff --git a/src/risk/sizing.ts b/src/risk/sizing.ts\nindex 77c2e10..a04b9f3 100644\n--- a/src/risk/sizing.ts\n+++ b/src/risk/sizing.ts\n@@ -8,13 +8,15 @@ export interface SizingInput {\n   maxNotional: number; // USD cap per symbol, from risk config\n   price: number;\n   currentQty: number; // signed: negative when short\n   lotSize: number;\n }\n\n export function sizeBuy(input: SizingInput): number {\n   const { maxNotional, price, currentQty, lotSize } = input;\n   const headroom = maxNotional - currentQty * price;\n   if (headroom <= 0) return 0;\n-  return Math.floor(headroom / price / lotSize) * lotSize;\n+  const lots = headroom / price / lotSize;\n+  return Math.ceil(lots) * lotSize;\n }\ndiff --git a/src/risk/sizing.test.ts b/src/risk/sizing.test.ts\nindex 19be4c2..2d0a7e1 100644\n--- a/src/risk/sizing.test.ts\n+++ b/src/risk/sizing.test.ts\n@@ -3,6 +3,16 @@ import { sizeBuy } from \"./sizing\";\n test(\"no headroom when at cap\", () => {\n   expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 100, lotSize: 1 })).toBe(0);\n });\n+\n+test(\"sizes to the cap in whole lots\", () => {\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 })).toBe(100);\n+  expect(sizeBuy({ maxNotional: 10_000, price: 50, currentQty: 0, lotSize: 10 })).toBe(200);\n+});\n+\n+test(\"short position frees headroom for the cover\", () => {\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: -20, lotSize: 1 })).toBe(120);\n+});",
+  "expected_verdict": "ATTACKS",
+  "defects": [
+    {
+      "id": "d1",
+      "lens": "reliability",
+      "severity": "blocker",
+      "description": "The PR claims retries are deduped by client_order_id, but a fresh UUID is generated on every attempt. A timeout where the broker actually accepted the order is followed by a resubmit under a new id, producing duplicate live orders/fills.",
+      "evidence": "const clientOrderId = randomUUID();"
+    },
+    {
+      "id": "d2",
+      "lens": "correctness",
+      "severity": "major",
+      "description": "Sizing switched from Math.floor to Math.ceil, so any non-exact headroom rounds up a lot and the order exceeds the risk maxNotional cap (e.g. $10,000 headroom at $300 -> 34 shares = $10,200). New tests only use exact divisions so they pass.",
+      "evidence": "return Math.ceil(lots) * lotSize;"
+    }
+  ],
+  "decoys": [
+    "Retry loop itself is bounded: 3 attempts, 250ms/500ms backoff, only 502/503/504 or timeouts retried; 4xx rejections rethrown immediately.",
+    "Signed currentQty for shorts is intentional and tested: a short frees headroom for the cover ('short position frees headroom for the cover')."
+  ]
+}

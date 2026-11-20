@@ -1,0 +1,352 @@
+{
+ "approach": "self-consistency-3",
+ "case": "plan-01",
+ "rep": 1,
+ "wallMs": 106833,
+ "verdict": "ATTACKS",
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The design cannot run on the chosen data tier. chain_poller needs 160 req/min of real-time chains, but the plan selects Starter (5 req/min, 15-min delayed), so the intraday triggers would fire on stale data.",
+   "evidence": "\"40 underlyings => 160 requests/min during RTH.\" / \"We stay on Starter.\" / \"Starter | $79 | 5 req/min | 15-min delayed\""
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The budget math is wrong. No tier satisfies both real-time data and the $250 cap at the required rate: Growth (100 req/min) is still below 160 req/min and costs $259 with the VPS, and Pro is unlimited but costs $559 with the VPS.",
+   "evidence": "\"Monthly run cost: Optiq Starter $79 + existing VPS $60 = $139, comfortably inside the $250 cap.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Polling every 15 s across 40 underlyings with two expiries is about 32x the Starter rate limit. The plan has no batching, caching, backoff, or 429 handling strategy.",
+   "evidence": "\"every 15 s, fetch a real-time option chain snapshot for each held underlying (front expiry + next expiry). 40 underlyings => 160 requests/min\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The migration is destructive and irreversible. It drops the source column in the same transaction as a 90-day backfill, runs in-place on prod, and has no rollback, yet roll_eod.py is kept as a fallback through week 4 and may still depend on roll_history.",
+   "evidence": "\"In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.\" / \"roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Discarding roll history older than 90 days is unjustified for a family-office book. The claim that older entries are unneeded is asserted without any check of audit, tax, or reporting dependencies.",
+   "evidence": "\"older entries are not needed by roll_engine.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Re-pricing a combo order every 20 s up to 3 times, then cancelling, risks duplicate or orphaned orders. If a cancel fails or a prior replace is still working, two roll orders could execute, and the plan defines no idempotency keys or reconciliation.",
+   "evidence": "\"re-priced every 20 s up to 3 times, then cancelled.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The plan stops emitting intents on a stale heartbeat but says nothing about roll orders already in flight or about how a partially failed roll is reconciled. Those could be stranded during a broker outage.",
+   "evidence": "\"roll_engine stops emitting intents when the last successful broker heartbeat is > 60 s old.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The plan states no alerting, on-call, or observability requirements for a 24/7 polling system that places orders, and no behaviour for vendor outages or data gaps.",
+   "evidence": "ABSENT: alerting, paging, or monitoring requirements for chain_poller or order_router."
+  },
+  {
+   "lens": "evidence",
+   "severity": "blocker",
+   "claim": "The headline +3.8% APR improvement has no backtest, prototype, or quantified source. It rests on anecdotal desk notes and an unsupported claim about other funds, and the stated rationale depends on real-time data the plan does not buy.",
+   "evidence": "\"Expected impact: +3.8% net APR vs. EOD rolling (see §2).\" / \"Desk notes from the last two quarters list several days where a mid-session roll 'would have been better'.\" / \"Intraday rolling is also standard practice among the option-income funds we follow.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The success criterion is statistically weak. Thirty live days on five and then 40 underlyings cannot reliably distinguish a 3.8% APR difference from noise, and no control design is specified.",
+   "evidence": "\"Success criterion: realized net APR over the first 30 live days >= EOD baseline + 3.8%.\""
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The order_router places live trades with no described authentication, credential scoping, or secret handling for the broker API, and no authorization control on the ROLLER_KILL switch beyond an env variable.",
+   "evidence": "ABSENT: credential storage, least-privilege scope, and access control for ROLLER_KILL and the order path."
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Automated option order placement at this frequency and real-time data use are subject to vendor and exchange licensing terms, plus broker automation rules. None of these are addressed, and the plan assumes the Starter license permits automated real-time use.",
+   "evidence": "ABSENT: data-licensing review and broker/ToS sign-off for automated intraday order placement."
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "All market data depends on a single vendor with no fallback source or exit path, so vendor pricing or outages would halt the roll engine.",
+   "evidence": "\"Current vendor: Optiq Data.\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "Undefined trigger and target semantics would make operator review of intents slow and ambiguous. 'Gaps > 4% through strike' and whether 'credit' is net of fees are not defined.",
+   "evidence": "\"Underlying gaps > 4% through strike within the session.\" / \"next strike up if the credit is >= $0.05.\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Running two engines behind a flag, with a migration that deletes the data the old engine uses, couples the rollback path to the schema change and makes testing the fallback difficult.",
+   "evidence": "\"roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4.\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "No gate-worthy finding on this lens. Account position and trade-history retention is covered only by the migration discussion.",
+   "evidence": "\"Backfill copies roll_history entries from the last 90 days into rolls.\""
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "No gate-worthy finding on this lens.",
+   "evidence": "ABSENT: no user-facing display is described."
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "No gate-worthy finding on this lens beyond the unproven value thesis, which is covered under evidence.",
+   "evidence": "\"Expected impact: +3.8% net APR vs. EOD rolling (see §2).\""
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "No gate-worthy finding on this lens.",
+   "evidence": "ABSENT: no user-facing interface is described."
+  },
+  {
+   "lens": "other",
+   "severity": "major",
+   "claim": "The 8-roll-per-account daily cap and the one-roll-per-contract cap are unjustified against a 40-name book. The caps could silently block legitimate rolls, and the plan does not say what happens when they trip.",
+   "evidence": "\"max 1 roll per contract per day and max 8 roll orders per account per day; both are hard limits\""
+  },
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "The plan's data tier cannot support its own polling design, and the cost math is wrong. Starter allows 5 req/min with 15-minute-delayed quotes, so the 160 req/min real-time poll is impossible on it. The tier that fits (Growth, $199) plus VPS ($60) totals $259, which exceeds the $250 cap. Only Pro ($499) meets the requirement, and it is over budget too.",
+   "evidence": "\"We stay on Starter. Monthly run cost: Optiq Starter $79 + existing VPS $60 = $139, comfortably inside the $250 cap.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The request-rate arithmetic is inconsistent. Fetching front and next expiry for 40 underlyings every 15 s is 320 req/min, not 160. Even the 160 figure exceeds Growth's 100 req/min limit, so the design fails under every tier except Pro.",
+   "evidence": "\"fetch a real-time option chain snapshot for each held underlying (front expiry + next expiry). 40 underlyings => 160 requests/min during RTH.\""
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "major",
+   "claim": "The whole trigger engine depends on one vendor with no fallback, data-source abstraction, or exit plan. A tier change or price change would stop the engine, and the plan does not mention how the data source would be swapped.",
+   "evidence": "\"Current vendor: Optiq Data.\" with no alternative or exit path stated"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "Migration 0042 runs against production and drops roll_history in the same transaction. There is no rollback or backup step, so the pre-migration history is lost permanently. The backfill covers only 90 days, so anything older is destroyed irreversibly.",
+   "evidence": "\"In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.\" and \"older entries are not needed by roll_engine.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The fallback path cannot work after the migration. roll_eod.py is kept deployed as the fallback through week 4, but the column it presumably reads is dropped on Monday of week 1. Flipping ROLLER_V2=false would therefore not restore the EOD baseline.",
+   "evidence": "\"roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4.\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Deleting roll records older than 90 days from a family-office trading book likely conflicts with record-retention and tax/audit obligations. The plan does not mention any retention requirement or review by compliance.",
+   "evidence": "\"older entries are not needed by roll_engine.\" with no retention policy referenced"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The roll-target rule has no defined branch when credit is below $0.05 (the plan only specifies same strike +1 expiry or next strike up when credit >= $0.05). The gap trigger is also ambiguous about whether it means intraday move past strike or a close-based test. Both gaps leave the engine unable to make a deterministic decision.",
+   "evidence": "\"Roll target: same strike +1 expiry, or next strike up if the credit is >= $0.05.\" and \"Underlying gaps > 4% through strike within the session.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The reprice loop has no specified cancel-replace semantics. If the original combo is not confirmed cancelled before a re-priced order is sent, the account can carry two conflicting combos, risking double-rolls or unintended naked shorts. The plan does not address this race.",
+   "evidence": "\"re-priced every 20 s up to 3 times, then cancelled.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The triggers have no hysteresis or cooldown. A delta near 0.70 or an extrinsic value near $0.10 could generate repeated roll intents as the price oscillates, causing whipsaw.",
+   "evidence": "\"Short call delta >= 0.70, or\" with no debounce or cooldown rule"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The headline +3.8% net APR improvement has no backtest, prototype, or quantified data behind it. It rests on anecdotal desk notes and a generic claim that other funds do it. The success criterion (30 live days) also cannot be measured within the 4-week build.",
+   "evidence": "\"Expected impact: +3.8% net APR vs. EOD rolling (see §2).\" and \"Desk notes from the last two quarters list several days where a mid-session roll 'would have been better'.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The broker-heartbeat stop only prevents new intents. It does not say what happens to combo orders already in flight when the heartbeat is lost, and no alerting or on-call path is defined for a stalled engine or a failed kill switch.",
+   "evidence": "\"roll_engine stops emitting intents when the last successful broker heartbeat is > 60 s old.\" with no in-flight order handling or alerting"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The kill switch is an environment variable read per loop and the order limits are in-process checks. There is no authorization on order submission, so a compromised or misconfigured process can bypass the caps.",
+   "evidence": "\"plus a ROLLER_KILL env switch read on every loop.\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Running two roll paths in parallel with a destructive schema change creates hidden coupling between roll_eod.py and the new tables. The dual-path design is not specified in enough detail to test.",
+   "evidence": "\"roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4.\""
+  },
+  {
+   "lens": "other",
+   "severity": "major",
+   "claim": "Rollout is too aggressive for the risk. Going to all 40 underlyings in week 4 after only a short 5-underlying trial, with a Monday 08:00 prod migration and no rehearsal described, gives no staged validation of the live order path.",
+   "evidence": "\"Week 4: ROLLER_V2=true on 5 underlyings, then all 40.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "Migration 0042 runs in-place against prod and drops positions.roll_history in the same transaction as a 90-day backfill. The plan has no pre-migration snapshot, no down-migration, and no rollback, so older roll history is destroyed irreversibly.",
+   "evidence": "In the same transaction, ALTER TABLE positions DROP COLUMN roll_history."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The fallback path is promised but not shown to survive the migration. roll_eod.py stays deployed through week 4, yet the plan never states that roll_eod.py is independent of the dropped column.",
+   "evidence": "ABSENT: confirmation that roll_eod.py does not read positions.roll_history; roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4."
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The cost math is internally inconsistent. The plan chooses Starter to fit the $250 cap, but Starter cannot meet the real-time requirement. The tier that could (Growth) brings the total to $259, which breaches the agreed cap.",
+   "evidence": "We stay on Starter. Monthly run cost: Optiq Starter $79 + existing VPS $60 = $139 ... | Growth | $199 | 100 req/min | real-time"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The polling design exceeds the Starter rate limit by about 32x. At 40 underlyings with two expiries polled every 15 s, the load is 160 req/min against a 5 req/min cap, and it grows linearly with the book (10x underlyings gives 1600 req/min).",
+   "evidence": "| Starter | $79 | 5 req/min | 15-min delayed | ... 40 underlyings => 160 requests/min during RTH."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The triggers are designed for intraday timing but run on 15-minute-delayed quotes. Delta, DTE/extrinsic, and gap triggers would fire on stale prices, so the core premise of rolling mid-session on the opening spike fade is not achievable with the chosen data.",
+   "evidence": "Starter | $79 | 5 req/min | 15-min delayed ... We stay on Starter."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The headline +3.8% APR improvement is asserted with no backtest, no simulation, and no cited data. It rests on anecdotal desk notes and the claim that other funds do it, which is not evidence for this book.",
+   "evidence": "Expected impact: +3.8% net APR vs. EOD rolling (see §2). ... Desk notes from the last two quarters list several days where a mid-session roll 'would have been better'."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The success criterion cannot be evaluated inside the stated schedule. Live rollout starts in week 4 of a 4-week build, but the criterion needs 30 live days. Paper mode compares intents, not P&L, and runs on delayed data, so it cannot validate the claimed edge.",
+   "evidence": "Success criterion: realized net APR over the first 30 live days >= EOD baseline + 3.8%. ... compare intents vs. EOD decisions daily."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The daily cap of 8 roll orders per account is not sized to a 40-underlying book. Once the cap is hit, short calls that have triggered stay unrolled and exposed to assignment, and the plan defines no behaviour for that case.",
+   "evidence": "max 8 roll orders per account per day ... ABSENT: behaviour when the cap is reached or a trigger is suppressed by the cap."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "After three re-prices the combo order is cancelled and the original short call stays open. The plan gives no escalation for a failed roll near expiry, deep ITM, or ex-dividend, which is the case where assignment risk is highest.",
+   "evidence": "re-priced every 20 s up to 3 times, then cancelled. ABSENT: escalation path for a failed roll."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The runaway-loop kill switch may not function as described. An environment variable is fixed when a process starts, so reading ROLLER_KILL on every loop does not pick up a change made while the process is running unless a re-read mechanism is specified.",
+   "evidence": "plus a ROLLER_KILL env switch read on every loop."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Limit prices are set from snapshots with no quote-age check and no price-sanity bound. The only staleness guard covers the broker heartbeat, not market data, so orders can be priced off quotes that are minutes old.",
+   "evidence": "roll_engine stops emitting intents when the last successful broker heartbeat is > 60 s old. ABSENT: any market-data freshness check or limit-price sanity bound."
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The plan does not describe how broker and vendor credentials are stored or scoped for the new polling and order paths, and it adds an unauthenticated runtime control via an env switch.",
+   "evidence": "ABSENT: credential handling and access controls for ROLLER_KILL and the broker/vendor keys."
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "No attack on this lens. The plan collects only market and position data.",
+   "evidence": "ABSENT: any personal data; none is described."
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "The design depends on a single market-data vendor with no second feed or documented exit path, which becomes a hard dependency for the whole roll engine.",
+   "evidence": "Current vendor: Optiq Data."
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Polling at 160 req/min and automated order re-pricing may breach vendor or broker API terms or rate policies. The plan does not mention a terms review.",
+   "evidence": "ABSENT: review of Optiq or broker terms for polling frequency and automated order re-pricing."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Two roll paths (roll_eod.py and roll_engine behind a flag) plus a paper mode will coexist for weeks, with no test plan or deletion date for the old path.",
+   "evidence": "roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The gap trigger is ambiguous: it does not say whether the 4% move is measured from prior close or intraday, nor what 'through strike' means for puts or for multiple breaches.",
+   "evidence": "Underlying gaps > 4% through strike within the session."
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The plan targets a mission of capped drawdown but does not analyse how more frequent rolling at delta >= 0.70 changes drawdown or assignment exposure.",
+   "evidence": "ABSENT: drawdown or assignment-risk analysis against the capped-drawdown mission."
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "No attack on this lens. The change is backend-only.",
+   "evidence": "ABSENT: any UI surface; none is described."
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "No attack beyond the unproven benefit already raised under evidence.",
+   "evidence": "Expected impact: +3.8% net APR vs. EOD rolling (see §2)."
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "No attack on this lens. Latency is discussed only as order re-pricing.",
+   "evidence": "re-priced every 20 s up to 3 times, then cancelled."
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "No attack on this lens. The change is backend-only.",
+   "evidence": "ABSENT: any user-facing interface; none is described."
+  }
+ ],
+ "usage": {
+  "calls": 3,
+  "tokIn": 8973,
+  "tokOut": 17005,
+  "usd": 0.00859277,
+  "critMs": 34801
+ }
+}

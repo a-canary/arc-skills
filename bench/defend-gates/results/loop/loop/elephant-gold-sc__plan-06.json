@@ -1,0 +1,400 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "plan-06",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The consent prompt does not disclose everything the payload sends. The payload also includes a persistent install ID and an exit-code class, but the prompt lists only command, backend, version and OS/arch, and calls the data 'anonymous'. A persistent identifier makes installs linkable across days. Consent is therefore not informed, which breaks the agreed 'explicit user consent' constraint.",
+     "evidence": "Prompt: \"Share anonymous usage stats (command name, backend type, kvx version, OS/arch)? [y/N]\" vs payload \"exit code class (ok/user-error/internal-error)... and a random install ID generated locally\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The minisign public key is compiled into every binary and there is no rotation, revocation or secondary-key path. If the key leaks or a signing mistake happens, installed clients either trust attacker-signed binaries or reject every legitimate release until users reinstall manually. The plan makes this key the root of trust for executable replacement.",
+     "evidence": "\"The minisign public key is compiled into the binary... The same key already signs our releases today\" ABSENT: key rotation, revocation or fallback key"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Signature verification does not prevent downgrades. `--version` accepts any tag, so a validly signed old release with a known flaw (such as the pre-v2.6.3 credential-logging bug) can be installed. Nothing stops a hostile or stale API response from pointing 'latest' at an older signed archive. The plan states no minimum-version check, no downgrade warning or confirmation, and no signed version binding.",
+     "evidence": "\"kvx self-update [--check] [--version vX.Y.Z]\" with \"the archive is rejected unless the signature verifies\" and no downgrade protection stated"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The order of operations around kvx.prev is not specified: when it is written relative to the rename, what happens if it already exists, and what happens if rollback finds it missing or corrupt. Temp-file cleanup on failure is also unstated. The tests cover rollback but not these cases.",
+     "evidence": "\"The previous binary is kept as kvx.prev; kvx self-update --rollback swaps them back.\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Archive extraction is unspecified (entry-name validation, symlinks, size limits). Signature verification reduces the risk, but extraction should still be written defensively.",
+     "evidence": "ABSENT: extraction path validation and size limits for the downloaded archive"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The plan does not say how long the install ID lives, whether `telemetry off` deletes it, or how the collector handles source IPs and server logs.",
+     "evidence": "ABSENT: install ID lifetime and deletion on opt-out; collector IP and access-log policy"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The default-on daily update check hits the unauthenticated GitHub API with no stated backoff or handling of 403/429 responses. Telemetry POSTs have no jitter. Failures are silent, so maintainers cannot tell dropped data from low usage.",
+     "evidence": "\"a single HTTPS GET with a 1.5 s timeout\"; \"fire-and-forget... failures are dropped\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "The update and telemetry endpoints are hard-wired, with no override for mirrors or air-gapped environments. The collector sits on a single donated VPS with no stated ops owner. The default-on update check discloses IP and version to GitHub without being listed in the telemetry docs.",
+     "evidence": "\"Queries the GitHub Releases API\"; \"existing donated VPS\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 57865,
+    "tokOut": 16121,
+    "usd": 0.1024188,
+    "critMs": 33262
+   },
+   "wallMs": 76906
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The key-handling rules contradict each other. The backup private key is held offline and never used for routine releases, yet a backup-signed revoked-keys.json is published with every release. That would require using the offline key on each release, or the revocation list goes stale. As written, the revocation mechanism cannot be built.",
+     "evidence": "\"The backup private key is generated offline, held by a second maintainer, and never used for routine releases.\" vs. \"a signed `revoked-keys.json` is published with each release (signed by the backup key)\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The revocation list has no defined client behaviour. The plan does not say where it is fetched from, when it is checked relative to signature verification, or whether a failed fetch fails open or closed. It also has no version, sequence number or expiry, so an attacker holding a compromised primary key could replay an older backup-signed list that predates the revocation.",
+     "evidence": "ABSENT: fetch source, ordering, fail-open/closed behaviour, and freshness/rollback protection for revoked-keys.json; only \"self-update refuses archives signed by a revoked key\" is stated."
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The collector design is internally inconsistent and its privacy claims cannot be checked. Counting distinct installs needs per-install state, which conflicts with 'daily aggregate counts only'. No retention period is given for install IDs, and nothing covers web-server or proxy logs that would see client IPs alongside install IDs. The consent prompt and docs make claims about handling that the design does not back up.",
+     "evidence": "\"writing daily aggregate counts only (raw events discarded after aggregation; install IDs are used only to count distinct installs...)\"; ABSENT: retention of install IDs, request logs and client IPs on the VPS."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The consent prompt says 'success/error class' while the payload field is 'exit code class'. The planned test that the prompt mentions every payload field would fail or need an ad hoc mapping. The wording should come from one source of truth.",
+     "evidence": "Prompt: \"success/error class\" vs Payload: \"exit code class (ok/user-error/internal-error)\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The success-metric baseline is not computed on the metric's definition. 59% is the complement of downloads on versions <= v2.6.2, whereas the target is the share on the latest minor version. Download counts also do not show installed versions.",
+     "evidence": "\"share of downloads on the latest minor version >= 75% (from 59%)\" vs \"41% of release-asset downloads ... versions <= v2.6.2\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The plan only describes an atomic rename over the running binary, which does not work on Windows. It is also silent on failure handling: a new binary that fails to start, a crash between creating kvx.prev and the rename, and timeouts and temp-file cleanup for the archive download.",
+     "evidence": "\"Writes the new binary to a temp file in the same directory, fsyncs, then atomic rename over the current binary.\"; ABSENT: Windows strategy, post-replace health check, download timeout/cleanup policy"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The schedule is tight. Week 3 holds the collector, docs, the key rotation rehearsal, release notes and a one-week rc soak, and the rotation rehearsal depends on the rc existing. Two maintainers are also delivering two independent features with no stated contingency.",
+     "evidence": "\"Week 3: collector service, docs/telemetry.md, key rotation rehearsal and SECURITY.md updates, release notes, v2.8.0-rc1 for 1 week, then v2.8.0.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Rollback to kvx.prev bypasses the downgrade check and is bounded only by the hardcoded minimum-safe version, so it can reinstall a version with a later-fixed vulnerability. There is also no stated behaviour when kvx.prev is missing, and no path to delete previously sent telemetry data.",
+     "evidence": "\"`--rollback` to kvx.prev is exempt from the downgrade check on the same minimum-safe rule.\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 74203,
+    "tokOut": 24164,
+    "usd": 0.12239610000000001,
+    "critMs": 46119
+   },
+   "wallMs": 154348
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The revocation list expires after exactly one year and is re-signed 'at least once a year' by a manual offline ceremony. There is no slack, no alerting and no release-time check on remaining validity. A slipped ceremony makes every client fail closed, and because installs are refused, a client cannot self-update to a release carrying a fresh embedded list. The only recovery is the manual reinstall, which is the path the plan says users avoid.",
+     "evidence": "\"valid for 1 year; the backup key re-signs an unchanged list with a higher sequence at least once a year, a scheduled ceremony\" and \"if that is itself expired, self-update fails closed and refuses to install, printing the manual reinstall instructions\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The success measure does not match its baseline. 41% on versions <= v2.6.2 implies 59% on any newer version, not 59% on the latest minor. The metric also counts GitHub download events rather than running installs, so it cannot show whether users actually upgraded. Opt-in telemetry is not planned as a way to measure that.",
+     "evidence": "\"share of downloads on the latest minor version >= 75% (from 59%)\" vs \"41% of release-asset downloads 60 days later were still for versions <= v2.6.2\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The atomic-replace sequence is underspecified. Keeping kvx.prev requires moving the current binary aside before the new one is renamed in. A crash between the two renames leaves no kvx binary, and directory fsync is not mentioned. Windows, where a running executable cannot be renamed over, is not addressed.",
+     "evidence": "\"Writes the new binary to a temp file in the same directory, fsyncs, then atomic rename over the current binary. The previous binary is kept as kvx.prev\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The consent prompt tells the user the IP is 'not stored', but the plan admits the VPS provider's network-level logging is outside the project's control. That caveat sits only in the docs, not in the prompt, which weakens the 'explicit informed consent' constraint. The prompt should scope the claim to kvx's collector.",
+     "evidence": "\"Your IP address is seen by the server but not stored.\" vs \"The VPS provider's network-level logging is outside our control and is noted in docs/telemetry.md.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The startup update check makes an outbound request to GitHub by default (opt-out via env var). It is not covered by the telemetry consent flow or listed as a data flow in docs/telemetry.md, despite the 'nothing collected without consent' constraint.",
+     "evidence": "\"The check is a single HTTPS GET with a 1.5 s timeout run in a goroutine\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Replay protection relies on a local state file whose loss or reset is not specified. If it is lost, the client falls back to the embedded list, which can predate later revocations.",
+     "evidence": "\"stored in the local state file, initially the embedded one\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The week 2 schedule is overloaded for two maintainers. It combines package-manager detection, the startup notice, the revocation and fail-closed machinery, and the telemetry client with consent flow. The key rotation rehearsal, collector, docs and the rc soak are all pushed into week 3, leaving little slack on security-critical work.",
+     "evidence": "\"Week 2: package-manager detection, startup notice, key backup/revocation mechanism (signed list, sequence/expiry, fetch and fail-closed logic), telemetry client + consent flow.\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 89231,
+    "tokOut": 24151,
+    "usd": 0.13484960000000001,
+    "critMs": 56300
+   },
+   "wallMs": 145167
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "input-validation",
+     "severity": "major",
+     "claim": "The telemetry collector is an unauthenticated public endpoint, but the plan sets no body-size limit, rate limit or cap on the in-memory daily install-ID set, so hostile or random IDs can exhaust memory on the single donated VPS. Client-supplied strings (command name, version, OS/arch) have no allowlist before they become on-disk count keys and are published under stats/, so the stats can be poisoned and key cardinality is unbounded.",
+     "evidence": "\"the collector keeps a daily set of install IDs in memory only (never written to disk)\"; \"command name (e.g. \\\"diff\\\")\"; \"Aggregates are published monthly in the repo under stats/.\"; ABSENT: request size/rate limits, set-size cap, field allowlists, and a collector test for these"
+    },
+    {
+     "lens": "rollback-downgrade",
+     "severity": "minor",
+     "claim": "`--rollback` swaps kvx.prev back with no stated re-verification of its signature or check against the current revocation list. A binary signed by a key revoked since it was installed could be reinstated. Behaviour when kvx.prev is missing is also unspecified.",
+     "evidence": "\"`--rollback` to kvx.prev is exempt from the downgrade check on the same minimum-safe rule.\""
+    },
+    {
+     "lens": "trust-boundary",
+     "severity": "minor",
+     "claim": "The plan does not say how the revocation list embedded in a newly installed archive interacts with the stored highest-sequence state. It never states that the effective sequence is the max of the two, so a carried older list could weaken replay protection.",
+     "evidence": "\"(d) is a release whose embedded list is valid (not expired) at install time, so the update carries a fresh list\""
+    },
+    {
+     "lens": "key-management",
+     "severity": "minor",
+     "claim": "There is no procedure for creating and embedding a replacement backup key after the backup is used or lost. The 6-month re-signing ceremony also sits uneasily with the stated rationale of not using the backup key routinely. The plan documents both as accepted trade-offs, with manual reinstall as the last resort.",
+     "evidence": "\"the backup key re-signs an unchanged list with a higher sequence on a scheduled ceremony every 6 months\"; \"held by a second maintainer\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The consent prompt says the IP is not stored, while the plan admits the VPS provider's network-level logging is outside its control. The provider-logging caveat is kept in docs but is missing from the prompt. The prompt's \"success/error class\" also differs from the payload's \"exit code class\".",
+     "evidence": "\"Your IP address is seen by the server but not stored.\"; \"The VPS provider's network-level logging is outside our control\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Platform details are underspecified. Atomic rename over a running executable fails on Windows, and Windows is implied by the service-mode out-of-scope note. Package-manager detection does not say it resolves symlinks. The revocation-list fetch has no explicit timeout.",
+     "evidence": "\"atomic rename over the current binary\"; \"if the binary path is under a Homebrew Cellar or is owned by the dpkg/rpm database\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The success target is conditional and ill-defined for baselines between 60% and 75%, and the latest-minor baseline is not yet measured. The plan says it will be measured before ship, so this is not blocking.",
+     "evidence": "\"+15 percentage points, or >= 75% if the baseline is already above 60%\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 105720,
+    "tokOut": 39800,
+    "usd": 0.1536517,
+    "critMs": 71986
+   },
+   "wallMs": 109345
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "schedule",
+     "severity": "major",
+     "claim": "The 3-week, 2-maintainer budget does not fit the Week 3 scope. Week 3 holds the collector, its abuse tests, docs, the key-rotation rehearsal, SECURITY.md and release notes. It also needs a 1-week rc1 soak before v2.8.0, so the plan takes at least 4 weeks. The security-critical rotation rehearsal is the item most at risk of being cut.",
+     "evidence": "\"Maintainers: 2 | 3 weeks\" vs \"Week 3: collector service ... key rotation rehearsal and SECURITY.md updates, release notes, v2.8.0-rc1 for 1 week, then v2.8.0.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The binary swap is under-specified for crash safety and portability. Moving the current binary to kvx.prev and renaming the temp file into place are two separate steps, so a crash between them can leave no kvx at the path. Directory fsync and Windows behaviour (renaming over a running executable) are not addressed.",
+     "evidence": "\"temp file in the same directory, fsyncs, then atomic rename over the current binary. The previous binary is kept as kvx.prev\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The collector's version regex rejects prerelease tags such as v2.8.0-rc1, so rc builds are dropped to `rejected` and the rc soak yields no telemetry. Separately, one POST per day with a 20-event batch cap does not say what happens to events beyond 20.",
+     "evidence": "\"kvx version must match `^v\\d+\\.\\d+\\.\\d+$`\"; \"a batch holds at most 20 events\"; \"at most one POST per day\""
+    },
+    {
+     "lens": "metric-logic",
+     "severity": "minor",
+     "claim": "The collector keeps one global distinct-install set per day, not per version. Published per-version figures are therefore event counts, so they cannot give running-install version adoption as the secondary metric implies. The metric is caveated but still over-claimed.",
+     "evidence": "\"Opted-in installs' version distribution (from the daily per-version counts published in stats/)\""
+    },
+    {
+     "lens": "state-logic",
+     "severity": "minor",
+     "claim": "Several revocation and update edge cases are unspecified. Expired-list mode has no behaviour without a TTY and without --yes. Expiry is judged against an unspecified local clock. The rule for adopting the embedded list from a newly installed archive against the stored highest sequence is missing. The kvx.prev rollback path has no integrity or revocation check.",
+     "evidence": "\"the user must confirm on a TTY (or pass `--yes`)\"; \"stored in the local state file, initially the embedded one\"; \"`--rollback` to kvx.prev is exempt from the downgrade check\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Operational recovery gaps remain around the key ceremony and release process. The plan has no step to regenerate a new offline backup key after a rotation consumes it. It has no hotfix path when the 120-day CI gate blocks a release because the ceremony is overdue. It has no procedure to yank a bad release.",
+     "evidence": "\"fails the release if the list embedded in the build has less than 120 days of validity remaining\"; \"we ship a release signed by the backup key and rotate\""
+    },
+    {
+     "lens": "logic",
+     "severity": "minor",
+     "claim": "Package-manager detection checks the binary path without saying to resolve symlinks, so a symlink into a Homebrew Cellar could be missed.",
+     "evidence": "\"if the binary path is under a Homebrew Cellar or is owned by the dpkg/rpm database\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 123988,
+    "tokOut": 43386,
+    "usd": 0.1569684,
+    "critMs": 70571
+   },
+   "wallMs": 204715
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy/consent accuracy",
+     "severity": "major",
+     "claim": "The consent prompt tells users their IP is \"not stored\", but the plan holds per-IP rate-limit entries in memory and says the VPS provider's network-level logging is outside the project's control. Consent text is the one place the \"explicit consent\" constraint is exercised, so it must not state a guarantee the plan cannot back. It should say the collector does not persist IPs and that the hosting provider may log network traffic.",
+     "evidence": "\"Your IP address is seen by the server but not stored.\" vs \"The VPS provider's network-level logging is outside our control and is noted in docs/telemetry.md.\""
+    },
+    {
+     "lens": "trust-boundary",
+     "severity": "minor",
+     "claim": "Expired-list mode accepts any archive signed by the embedded primary or backup key that is not in the expired list, so a key revoked after expiry is not caught. The plan states this trade-off openly and limits it with four conditions, a confirmation prompt, and expiry safeguards, so it is an accepted, bounded risk rather than a blocker.",
+     "evidence": "\"This trades a bounded window of exposure (a key revoked after the list expired is not known to the client) for avoiding a mass-lockout\""
+    },
+    {
+     "lens": "secrets",
+     "severity": "minor",
+     "claim": "The plan says the backup key is used only when a revocation occurs, then schedules a re-signing ceremony every 6 months. The wording contradicts itself and should be reconciled. The backup key also has a single custodian, with no loss or handover procedure. The primary key's storage is not stated.",
+     "evidence": "\"signed by the backup key only when a revocation event occurs\" vs \"re-signs an unchanged list with a higher sequence on a scheduled ceremony every 6 months\"; \"held by a second maintainer\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Rollback to kvx.prev is exempt from the downgrade check, and the plan does not say the previous binary is re-verified against the current revocation list. The rc0 rehearsal also does not say it avoids publishing sequence bumps to the production `keys` tag.",
+     "evidence": "\"`--rollback` to kvx.prev is exempt from the downgrade check on the same minimum-safe rule.\"; \"rehearsed on a throwaway pre-release tag (v2.8.0-rc0)\""
+    },
+    {
+     "lens": "input-validation",
+     "severity": "minor",
+     "claim": "The plan does not say that `--version` and the API tag are validated before they are used to build download URLs, or that download hosts and redirects are restricted. It also does not define archive extraction path sanitisation, timeouts for self-update downloads, or exclusive temp-file creation.",
+     "evidence": "ABSENT: validation of `--version`/tag format, host allowlist, extraction rules, and download timeouts"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "Install IDs are pseudonymous personal data, and the plan names no controller, privacy notice, erasure path, or hosting jurisdiction for the collector. This should be settled in docs/telemetry.md before launch.",
+     "evidence": "ABSENT: data controller, hosting location, erasure/deletion procedure"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 130795,
+    "tokOut": 51538,
+    "usd": 0.1699602,
+    "critMs": 56677
+   },
+   "wallMs": 204341
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rotation/revocation rehearsal is not isolated from production trust state. The revocation list is a monotonic-sequence asset on the fixed production `keys` tag, and clients reject lower sequences. The plan does not say the rehearsal uses a throwaway keyset or a non-production list location. A rehearsal that publishes to `keys`, or signs with the real backup key, could burn sequence numbers or revoke live keys irreversibly.",
+     "evidence": "\"rehearsed on a throwaway pre-release tag (v2.8.0-rc0) in week 2\" vs \"a fixed, well-known GitHub Releases tag (`keys`)\" and \"accepts the list only if `sequence` is >= the highest sequence seen\"; ABSENT: test keys or isolated trust root for the rehearsal"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The consent prompt names 'success/error class' but the payload spec calls the field 'exit code class'. The required test that the prompt mentions every payload field may not match the documented schema, and the prompt wording should be aligned.",
+     "evidence": "prompt: \"success/error class\" vs payload: \"exit code class (ok/user-error/internal-error)\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The collector's strict version regex `^v\\d+\\.\\d+\\.\\d+$` drops all events from rc builds as 'rejected', so opted-in soak users produce no telemetry signal.",
+     "evidence": "\"kvx version must match `^v\\d+\\.\\d+\\.\\d+$`\" together with \"v2.8.0-rc1 in the wild for 1 week\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The revocation-list signing description is internally inconsistent. It says the list is signed 'only when a revocation event occurs' and also that the backup key re-signs every 6 months. The expiry safeguards depend on the 6-month cadence.",
+     "evidence": "\"signed by the backup key only when a revocation event occurs\" vs \"re-signs an unchanged list ... on a scheduled ceremony every 6 months\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The rollback mechanics are underspecified. Nothing says how kvx.prev is created before the atomic rename, or what happens on a second update or a crash between steps. Atomic rename over a running binary is also not specified for Windows.",
+     "evidence": "\"The previous binary is kept as kvx.prev; kvx self-update --rollback swaps them back.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Requests dropped by rate limits (429), including legitimate installs behind shared NAT, are not flagged in published stats. Only the install-ID cap sets a flag, so the 'approximate' caveat may understate the undercount.",
+     "evidence": "\"excess requests answered 429 and not counted\"; \"`distinct_installs_capped` flag\" applies only to the memory cap"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 132259,
+    "tokOut": 45421,
+    "usd": 0.1674301,
+    "critMs": 64283
+   },
+   "wallMs": 193028
+  }
+ ],
+ "artifact": "# Plan: kvx self-update + opt-in telemetry\n\nMaintainers: 2 | 3 weeks build + 1 week rc soak (4 calendar weeks to release) | Target release: v2.8.0\n\n## 1. Motivation\n- After the v2.6.3 credential-logging fix, 41% of release-asset downloads 60 days later were still for versions <= v2.6.2 (GitHub release download counts, tallied per asset).\n- Issues #812, #845, #903 ask for \"kvx self-update\" (78 combined thumbs-up).\n- Backend prioritisation is currently guesswork: we maintain 3 backends with equal effort and do not know relative use.\n\n## 2. kvx self-update\nCommand: kvx self-update [--check] [--version vX.Y.Z] [--allow-downgrade] [--rollback]\n- Queries the GitHub Releases API for the latest non-prerelease tag; --check only prints whether an update exists.\n- Downloads the platform archive and its .minisig signature. The archive is rejected unless the signature verifies against a trusted key. The current key already signs our releases today (documented in SECURITY.md).\n- Key trust, rotation and revocation: the binary embeds two minisign public keys, a primary (the current release key) and a backup. The backup private key is generated offline, held by a second maintainer, and never used for routine releases. Releases are signed with the primary; if the primary is compromised or lost, we ship a release signed by the backup key and rotate. Because a compromised-key scenario cannot be fixed by clients that never update, SECURITY.md documents the manual reinstall path as the last resort. Rotation procedure is documented and rehearsed in week 2, as soon as the revocation mechanism lands, and the rehearsal is repeated on rc1 as part of the soak.\n- Rehearsal isolation (production trust state is never touched): the rehearsal runs in a separate trust root and a separate release location.\n  - Throwaway keyset: a freshly generated primary and backup minisign keypair created for the rehearsal only. The real primary and the real offline backup private keys are never used, loaded or brought online for a rehearsal, and the real `keys` tag and real release repo are never published to.\n  - Non-production location: the rehearsal publishes to a scratch GitHub repository owned by the project (including its own `keys` tag and the throwaway pre-release tag v2.8.0-rc0), not to the production repo. Rehearsal clients run in a scratch environment (temp HOME/state directory) so the production sequence high-water mark is never stored or advanced.\n  - Build separation: rehearsal binaries are built with a `rehearsal` build tag that embeds the throwaway public keys and points at the scratch repo. The production release CI job fails if that tag is set, or if the embedded keys or update URL differ from the production ones, and a test asserts that production builds contain no rehearsal key or URL.\n  - Sequence numbers: because lists on the scratch `keys` tag are signed only by the throwaway backup key, production clients reject them, so they cannot burn real sequence numbers or revoke live keys. Production `revoked-keys.json` is signed only in a real revocation event or the scheduled re-sign ceremony.\n  - The repeat on rc1 follows the same rules: the rc1 source is rebuilt with the `rehearsal` tag against the scratch repo, and the production rc1 artifacts are only inspected, not used in the rotation exercise.\n- Revocation list: `revoked-keys.json` is NOT published with every release, since that would require using the offline backup key routinely. Instead it is signed by the backup key only when a revocation event occurs (an infrequent, manual, offline signing ceremony), and is a release asset on a fixed, well-known GitHub Releases tag (`keys`) plus attached to the next release. It contains a monotonically increasing `sequence` number, an `issued_at` timestamp and an `expires_at` (valid for 1 year; the backup key re-signs an unchanged list with a higher sequence on a scheduled ceremony every 6 months, so each signed list has at least 6 months of slack before expiry). Initially the list is empty (sequence 1) and is embedded in the binary.\n- Revocation-list expiry safeguards: (a) the release checklist includes a check, enforced in the release CI job, that fails the release if the list embedded in the build has less than 120 days of validity remaining; (b) a scheduled CI job runs weekly against the published `keys` tag and opens an issue (and notifies both maintainers) when remaining validity is under 90 days; (c) the ceremony dates are put on the maintainers' shared calendar, with the second maintainer as backup owner.\n- Client behaviour for the revocation list: on each `self-update`, before any archive is downloaded or verified, the client fetches `revoked-keys.json` and its .minisig from the `keys` tag and verifies it against the embedded backup key. It accepts the list only if `sequence` is >= the highest sequence seen (stored in the local state file, initially the embedded one), so older lists cannot be replayed. A list that is unreachable, fails verification, has a lower sequence, or is expired is handled as follows: the client falls back to the last verified list (or the embedded one). If the fallback is expired, the client does not hard-fail for a stale list alone: it enters a restricted \"expired-list\" mode in which it will install only an archive that (a) verifies against the embedded primary or backup key, (b) is not signed by any key in the expired list, (c) has a version strictly higher than the running one, and (d) is a release whose embedded list is valid (not expired) at install time, so the update carries a fresh list. This is the recovery path: an expired list can therefore be repaired by self-update itself, without a manual reinstall. A warning is printed and the user must confirm on a TTY (or pass `--yes`). The manual reinstall instructions are printed only if no such archive is available. This trades a bounded window of exposure (a key revoked after the list expired is not known to the client) for avoiding a mass-lockout; the exposure is limited because the safeguards above make expiry an exceptional event. Signature verification of the archive otherwise rejects any archive signed by a key in the effective list. The embedded list is refreshed with every release, so a fresh install is never more than one release stale.\n- Downgrade protection: the signed archive must contain a version that matches the requested tag (the version is read from the signed archive's embedded metadata, not from the API response). By default self-update refuses to install a version lower than the running one, whether from `--version` or from a stale/hostile API \"latest\". `--allow-downgrade` is required for deliberate downgrades, prints a warning, and asks for confirmation on a TTY. Versions older than a hardcoded minimum-safe version (v2.6.3, the credential-logging fix) are refused even with `--allow-downgrade`; the minimum is raised in later releases when further security fixes ship. `--rollback` to kvx.prev is exempt from the downgrade check on the same minimum-safe rule.\n- Writes the new binary to a temp file in the same directory, fsyncs, then atomic rename over the current binary. The previous binary is kept as kvx.prev; kvx self-update --rollback swaps them back.\n- Package-manager installs: if the binary path is under a Homebrew Cellar or is owned by the dpkg/rpm database, self-update refuses and prints the matching brew/apt/dnf command instead, so we never fight the package manager.\n- Startup notice: at most once per 24 h, a single stderr line \"kvx vX.Y.Z available (kvx self-update)\". Suppressed when stderr is not a TTY, when CI=true, or when KVX_NO_UPDATE_CHECK=1. The check is a single HTTPS GET with a 1.5 s timeout run in a goroutine; it never delays the command.\n\n## 3. Telemetry (opt-in)\n- Default is OFF. On first interactive run after upgrade, kvx asks once, listing the full payload: \"Share usage stats? Sent: command name, backend type, success/error class, kvx version, OS/arch, and a random install ID (lets us count distinct installs; it is not derived from your machine or identity, but it does link one install's reports together). No arguments, keys, values or hostnames. The collector does not write your IP address to disk or logs, but it does see it while handling the request, and the hosting provider may log network traffic. Details: kvx telemetry status --show-payload [y/N]\". Empty answer = no. The prompt is never shown when stdin is not a TTY or CI=true. The prompt wording is covered by a test that fails if any payload field is missing from it. We describe the data as \"pseudonymous\", not \"anonymous\", in the prompt and docs.\n- Changeable any time: kvx telemetry on|off|status; `kvx telemetry reset-id` regenerates the install ID; KVX_TELEMETRY=0 hard-disables regardless of config.\n- Payload (complete list, documented in docs/telemetry.md): command name (e.g. \"diff\"), backend type (\"consul\" | \"etcd\" | \"ssm\"), exit code class (ok/user-error/internal-error), kvx version, GOOS/GOARCH, and a random install ID generated locally (not derived from hostname, user, or MAC). No arguments, keys, values, paths, hostnames, or endpoints are ever sent.\n- kvx telemetry status --show-payload prints the exact JSON that would be sent.\n- Transport: batched, at most one POST per day, fire-and-forget with 2 s timeout; failures are dropped, never retried in the foreground.\n- Collector: a ~150-line Go service on the project's existing donated VPS. Distinct-install counting requires per-install state, so this is stated plainly rather than as \"aggregates only\": the collector keeps a daily set of install IDs in memory only (never written to disk) to count distinct installs, and the set is discarded at the end of each UTC day. Only daily counts (per command, backend, error class, version, OS/arch, and distinct installs per day) are written to disk; no install ID is persisted, so distinct installs are not tracked across days (monthly figures are the sum of daily counts and are described as such). Raw events are not stored.\n- Collector input validation and abuse limits (the endpoint is public and unauthenticated, so all input is treated as hostile):\n  - Request limits: POST only, `Content-Type: application/json`, request body capped at 4 KiB (`http.MaxBytesReader`), unknown JSON fields rejected, read/write timeouts set on the server, and a batch holds at most 20 events. Oversized or malformed requests get 4xx and are not counted.\n  - Per-field allowlists, checked before anything is counted or used as a key: command name must be in the fixed list of kvx command names compiled into the collector; backend in {consul, etcd, ssm}; error class in {ok, user-error, internal-error}; OS/arch in the fixed set of GOOS/GOARCH pairs kvx releases are built for; kvx version must match `^v\\d+\\.\\d+\\.\\d+$` and be a version that exists as a published release (list compiled in and updated at each release; unknown versions are counted under `other`). Install ID must match a strict 32-hex-character format (random 128-bit value). Events with any invalid field are dropped whole and counted only in a single `rejected` counter. This bounds on-disk key cardinality to the product of the allowlists (plus `other`), so hostile input cannot create unbounded keys or poison stats with arbitrary strings.\n  - Rate limiting: a global request-rate cap and a per-source-IP token bucket kept in memory only (IP-keyed entries are bounded in number, expire after a short idle time, and are never written to disk or logs), with excess requests answered 429 and not counted. Because the endpoint is unauthenticated, rate limits reduce but cannot eliminate stat inflation; stats are described as approximate in docs/telemetry.md, and distinct-install counts can be inflated by someone generating random IDs within the rate limits.\n  - Memory cap: the daily install-ID set is capped (e.g. 500,000 IDs, ~16 MB of raw IDs, well below the VPS memory limit; the service also runs under a systemd `MemoryMax`). When the cap is reached, new IDs are not added, the event's other counters are still counted, and a `distinct_installs_capped` flag is recorded for that day so published figures are marked as a lower bound.\n  - Published stats under stats/ contain only allowlisted keys and counts, plus the `other` and `rejected` counters.\n- Server logs: the collector and any reverse proxy on the VPS have access logging disabled for the telemetry endpoint (no client IPs or request bodies logged); error logs are rate-limited, contain no IPs or install IDs, and are retained for 7 days. This is verified by a config check in the deployment docs and stated in docs/telemetry.md, along with the retention rules above. The VPS provider's network-level logging is outside our control and is noted in docs/telemetry.md, and the consent prompt says so too, so the prompt does not promise more than we can guarantee.\n- Aggregates are published monthly in the repo under stats/.\n\n## 4. Testing\n- Self-update: integration tests against a local fake release server covering valid signature, bad signature, truncated download, non-writable directory, rollback, and the Homebrew/dpkg refusal paths. Added: signature by backup key accepted, signature by revoked key refused, downgrade refused by default, `--allow-downgrade` below minimum-safe version refused, API \"latest\" pointing at an older signed archive refused, and tag/embedded-version mismatch refused.\n- Revocation list: tests for a valid newer list applied, a replayed lower-sequence list rejected, a bad-signature list rejected, an unreachable list falling back to the last verified list, an expired list with no valid fallback entering restricted \"expired-list\" mode (installs only a higher-version archive that carries a fresh list and is not signed by a key in the expired list; refuses otherwise), and the release CI check failing a build whose embedded list has under 120 days remaining.\n- Rehearsal isolation: a test that a production build embeds only the production public keys and update URL and contains no rehearsal key or scratch-repo URL; a release CI check that fails if the `rehearsal` build tag is set; and a test that a production-keyed client rejects a list signed by the throwaway backup key and leaves its stored sequence unchanged.\n- Telemetry: test that nothing is sent when unset, off, CI=true, KVX_TELEMETRY=0, or non-TTY; golden test that the payload schema matches docs/telemetry.md; test that the consent prompt mentions every payload field and contains the IP/hosting-provider disclosure; test that the collector writes no install IDs to disk.\n- Collector abuse tests: oversized body (>4 KiB) rejected; batch over 20 events rejected; unknown JSON fields rejected; each field with a non-allowlisted value (command, backend, error class, OS/arch, malformed version, malformed install ID) drops the event and increments only `rejected`; an unknown but well-formed version is counted under `other`; a flood of random valid-format install IDs stops growing the set at the cap and sets `distinct_installs_capped`; per-IP and global rate limits return 429; on-disk and published keys are verified to be a subset of the allowlist product plus `other`/`rejected`.\n\n## 5. Timeline\nBuild is 3 weeks; the rc soak adds a 4th calendar week. The release date is end of week 4, not week 3.\n- Week 1: self-update (download, verify, atomic replace, rollback, downgrade protection) + tests.\n- Week 2: package-manager detection, startup notice, key backup/revocation mechanism (signed list, sequence/expiry, fetch, expired-list restricted mode, release-time and weekly expiry checks), plus the rehearsal isolation (throwaway keyset, scratch repo, `rehearsal` build tag, production-build CI guards). At the end of the week, run the key rotation rehearsal on the throwaway v2.8.0-rc0 tag in the scratch repo, using only throwaway keys, and write up SECURITY.md updates from what it shows. The rehearsal is placed here so it is not squeezed by week 3 work.\n- Week 3: telemetry client + consent flow, collector service (in-memory daily distinct count, request/field validation, rate and memory limits, logging config) and its abuse tests, docs/telemetry.md. Cut v2.8.0-rc1 at the end of the week.\n- Week 4 (soak): v2.8.0-rc1 in the wild for 1 week; only bug fixes, release notes, and a repeat of the rotation rehearsal (same throwaway keys and scratch repo, rc1 source built with the `rehearsal` tag). Then v2.8.0.\n- Scope-cut rule: if week 3 is behind, telemetry (section 3, client and collector) is the designated item to slip to v2.8.1, and self-update ships in v2.8.0 alone. The self-update key/revocation work and the rotation rehearsal are not cut.\n\n## 6. Out of scope\n- Auto-installing updates without the user running kvx self-update (we only notify).\n- Delta/binary-diff updates; full archives are < 12 MB.\n- Telemetry for kvx running as a Windows service (no TTY to ask consent); it stays off.\n- Recovering already-installed clients whose trusted keys are all compromised without a reinstall (documented manual path only).\n\n## 7. Success measures\n- Baseline correction: the 41% figure means 41% of downloads 60 days after v2.6.3 were for <= v2.6.2, i.e. 59% were for v2.6.3 or newer. That is not the same as \"latest minor\", and no baseline for latest-minor share has been measured yet.\n- Before v2.8.0 ships, compute the same GitHub download-count statistic for the most recent prior minor release (60 days after its release) to establish the true latest-minor baseline; the target is set relative to that baseline (proposed: +15 percentage points, or >= 75% if the baseline is already above 60%).\n- Primary metric: 60 days after a release, share of release-asset downloads on the latest minor version. Download counts measure download events, not running installs, so this is a proxy: it can show new downloads moving to current versions but not whether existing users upgraded in place (self-update downloads are also counted as asset downloads, which partly captures this).\n- Running-install adoption can be measured only through opt-in telemetry, which already sends kvx version and a random install ID. Opted-in installs' version distribution (from the daily per-version counts published in stats/) is reported as a secondary metric, with the caveat that opt-in users are a self-selected, non-representative sample and that the unauthenticated endpoint means counts are approximate.\n- Telemetry opt-in rate reported transparently in stats/; no target, since it is the user's choice.",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 36141,
+  "tokOut": 33879,
+  "usd": 0.4833259999999999,
+  "critMs": 178904
+ },
+ "status": "running"
+}

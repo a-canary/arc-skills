@@ -1,0 +1,138 @@
+{
+ "approach": "single-strong",
+ "case": "merge-07",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "Partner-chosen filenames flow into a shell=True command via an f-string (local path uses chunk name derived from src.stem; dest uses src_name). A filename like `x;rm -rf ...;.csv` or with $(...) gives command execution on a worker holding write creds for the whole raw bucket.",
+     "evidence": "f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Partner-controlled stem also becomes part of the GCS object path and local output path (path traversal / overwriting another partner's or path's objects, since creds cover the whole bucket). No sanitisation.",
+     "evidence": "out_dir / f\"{src.stem}-{len(chunks):04d}.csv.gz\"; dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "partition_date changed from UTC to local time (TZ=America/Los_Angeles). Job runs 01:30 UTC = 17:30/18:30 PT previous day, so data is written to dt=(previous day) while dashboards read the UTC date partition. Data lands in the wrong partition and the _SUCCESS marker for the UTC date is wrong/misleading.",
+     "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")"
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "_SUCCESS marker is written unconditionally even when files failed. Failures are only logged/counted, so dashboards consume partial partitions as complete, with no raise or alert.",
+     "evidence": "except Exception: ... failed += 1 ... write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "A failure mid-file leaves earlier chunks already uploaded plus the local partial chunk never deleted (unlink skipped on exception), causing partial data in the partition and disk leak in work_dir; reruns with a possibly different layout duplicate/mix data. Task never fails, so Airflow won't retry or alert. No gsutil timeout.",
+     "evidence": "_upload(chunk, ...); chunk.unlink() inside try; subprocess.run(..., check=True) without timeout"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Header derived from the first normalised row's keys per chunk; if normalise_row yields varying keys, columns misalign. Also an empty file yields zero chunks silently counted ok. Original per-file path `{stem}.csv.gz` layout changed to a `{stem}/` directory with multiple chunks, altering the contract for downstream readers without mention (PR claims otherwise unchanged).",
+     "evidence": "dest = .../{src_name}/{local.name}; writer = csv.DictWriter(out, fieldnames=list(norm.keys()))"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "Signature of ingest_partner gained a required work_dir parameter; callers (DAG) aren't updated in the diff, which would break at runtime. Dropping the existing google-cloud-storage client for a shelled-out gsutil also adds an undeclared binary dependency.",
+     "evidence": "def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "Claim that gsutil composite uploads are much faster is unsupported, and composite uploads require crcmod and leave composed objects; no benchmark or test provided. Chunks are only ~500k rows gzip so many may be under the 150M threshold anyway.",
+     "evidence": "parallel composite uploads are much faster than the client library for multi-GB objects"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3126,
+    "tokOut": 1388,
+    "usd": 0.0229012,
+    "critMs": 10084
+   },
+   "wallMs": 22980
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The object layout changes from `<stem>.csv.gz` to a `<stem>/<stem>-NNNN.csv.gz` prefix, and the author admits downstream readers were not checked. Dashboards read the dt= partition as soon as `_SUCCESS` appears. A reader that expects the old layout would see an empty or broken partition even though the job reports success.",
+     "evidence": "\"Downstream readers need to read the prefix; I have not checked every reader in this PR.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "`_safe_name` maps different partner filenames to the same stem (e.g. `a b.csv` and `a_b.csv`, or `.a.csv` and `a.csv`). Both files get identical object names, so the second silently overwrites the first. Both count as `ok` and `_SUCCESS` is written, which is silent data loss in the partition.",
+     "evidence": "`s = re.sub(r\"[^A-Za-z0-9._-]\", \"_\", stem).lstrip(\".\")` with deterministic dest `.../{safe_stem}/{local.name}` and no collision check"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The new `gsutil` binary dependency is unverified on the worker image. The PR gives no evidence it is installed or that it authenticates with the workers' credentials. If it is missing, every file fails with FileNotFoundError and the nightly ingest breaks after merge.",
+     "evidence": "\"the `gsutil` binary (Cloud SDK) must be on the worker image.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Overwrite-on-retry only replaces chunks with matching names. If a re-run produces fewer chunks (e.g. the partner replaced the file), stale higher-numbered chunks remain under the stem prefix and would be read as duplicate data. A stale `_SUCCESS` from an earlier run also stays in place while a re-run overwrites files.",
+     "evidence": "\"Object names are deterministic, so a retry overwrites what was uploaded before.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The claim that parallel composite uploads are much faster is unmeasured. Each chunk is 500k rows of gzip, and the 150M threshold may rarely be hit. Composite uploads also leave temporary component objects on timeout, and the timeout kill may not reach child processes.",
+     "evidence": "\"parallel composite uploads are much faster than the client library for multi-GB objects\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4265,
+    "tokOut": 2293,
+    "usd": 0.036507200000000004,
+    "critMs": 18155
+   },
+   "wallMs": 36359
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A retry only overwrites objects whose names match. If the drop directory changes between runs, objects from the earlier attempt stay in the partition. They would then be covered by a later _SUCCESS marker.",
+     "evidence": "Object names are deterministic, so a retry overwrites what was uploaded before."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4486,
+    "tokOut": 841,
+    "usd": 0.0228712,
+    "critMs": 7910
+   },
+   "wallMs": 17818
+  }
+ ],
+ "artifact": "PR #58: Stream partner feeds instead of loading into pandas\n\nThe Northwind feed hit 3.1 GB last week and the ingest task OOM-killed the worker.\nThis rewrites `ingest_partner` to stream rows through the normaliser into a gzip CSV on local disk, then upload it with the existing `google-cloud-storage` client using a resumable, chunked upload from the file (no full read into memory).\nSchema normalisation is unchanged (same `normalise_row`).\n\nChanges from review:\n- **Object layout is unchanged:** each input file still lands as a single `raw/<partner>/dt=<dt>/<stem>.csv.gz`. An earlier revision split files into chunks under a `<stem>/` prefix, which would have required checking every downstream reader. I dropped that, so dashboards reading the partition see the same layout as before.\n- **No new runtime dependency:** an earlier revision used the `gsutil` binary, which I could not confirm is on the worker image or authenticates with the workers' credentials. Uploads now use `google-cloud-storage`, which is already used by `write_success_marker`. The tradeoff is that we lose gsutil's parallel composite uploads. Resumable chunked upload is slower for multi-GB objects but fine for a nightly job. The upload has a timeout.\n- Partner names are validated. Partner-chosen file names are sanitised before they reach local paths or GCS object names.\n- Sanitised names can no longer collide: if sanitising changes a stem (e.g. `a b` vs `a_b`, or `.a` vs `a`), a short hash of the original stem is appended. Names that need no sanitising are unchanged. If two files in a run still map to the same object name, the second is counted as a failure rather than silently overwriting the first.\n- `partition_date()` stays on UTC, since dashboards read the UTC `dt=` partition and the job runs at 01:30 UTC while workers use `TZ=America/Los_Angeles`.\n- Per-file failures are still logged and counted so one bad file doesn't stop the other files from being attempted. `_SUCCESS` is written only if every file succeeded. Otherwise the task raises, so Airflow retries and alerts and dashboards never see a partial partition.\n- The per-file temp dir is always removed in `finally`. Object names are deterministic, so a retry overwrites what was uploaded before.\n- The CSV header is fixed from the first row of each file. A row with unexpected keys fails the file instead of misaligning columns. An empty file is a failure, not a silent success.\n- `work_dir` is optional (defaults to a temp dir), so existing callers of `ingest_partner(partner, drop_dir)` keep working. The gzip file is written to local disk, so `work_dir` needs space for the compressed output of the largest file.\n\n```diff\ndiff --git a/pipelines/partner_ingest.py b/pipelines/partner_ingest.py\nindex a17c3e2..f48b0d9 100644\n--- a/pipelines/partner_ingest.py\n+++ b/pipelines/partner_ingest.py\n@@ -1,52 +1,92 @@\n+import csv\n+import gzip\n+import hashlib\n import logging\n-from datetime import datetime, timezone\n+import re\n+import shutil\n+import tempfile\n+from datetime import datetime, timezone\n from pathlib import Path\n+from typing import Optional\n\n-import pandas as pd\n from google.cloud import storage\n\n from pipelines.normalise import normalise_row\n from pipelines.markers import write_success_marker\n\n log = logging.getLogger(__name__)\n BUCKET = \"acme-retail-raw\"\n+UPLOAD_TIMEOUT_S = 3600\n+UPLOAD_CHUNK_BYTES = 32 * 1024 * 1024\n+_PARTNER_RE = re.compile(r\"[A-Za-z0-9_-]+\")\n\n\n def partition_date() -> str:\n     return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n\n\n-def ingest_partner(partner: str, drop_dir: Path) -> None:\n-    dt = partition_date()\n-    client = storage.Client()\n-    bucket = client.bucket(BUCKET)\n-    for src in sorted(drop_dir.glob(\"*.csv\")):\n-        df = pd.read_csv(src, dtype=str)\n-        df = df.apply(normalise_row, axis=1, result_type=\"expand\")\n-        blob = bucket.blob(f\"raw/{partner}/dt={dt}/{src.stem}.csv.gz\")\n-        blob.upload_from_string(df.to_csv(index=False, compression=\"gzip\"))\n-        log.info(\"uploaded %s rows=%d\", src.name, len(df))\n-    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")\n+def _safe_name(stem: str) -> str:\n+    \"\"\"Partner-chosen filenames are untrusted: keep a conservative charset.\n\n+    If sanitising changes the name, append a hash of the original so that\n+    distinct inputs (e.g. \"a b\" and \"a_b\") cannot map to the same object.\n+    \"\"\"\n+    s = re.sub(r\"[^A-Za-z0-9._-]\", \"_\", stem).lstrip(\".\") or \"unnamed\"\n+    if s != stem:\n+        s += \"-\" + hashlib.sha1(stem.encode(\"utf-8\", \"replace\")).hexdigest()[:8]\n+    return s\n+\n+\n+def _write_gz(src: Path, dest: Path) -> int:\n+    \"\"\"Stream src through normalise_row into a gzip CSV at dest; return row count.\"\"\"\n+    rows = 0\n+    writer = None\n+    with src.open(newline=\"\") as fh, gzip.open(dest, \"wt\", newline=\"\") as out:\n+        for row in csv.DictReader(fh):\n+            norm = normalise_row(row)\n+            if writer is None:\n+                # header fixed from the first row; the default\n+                # extrasaction=\"raise\" fails the file on unexpected keys\n+                writer = csv.DictWriter(out, fieldnames=list(norm.keys()))\n+                writer.writeheader()\n+            writer.writerow(norm)\n+            rows += 1\n+    if rows == 0:\n+        raise ValueError(f\"{src.name} contains no data rows\")\n+    return rows\n+\n+\n+def ingest_partner(\n+    partner: str, drop_dir: Path, work_dir: Optional[Path] = None\n+) -> None:\n+    if not _PARTNER_RE.fullmatch(partner):\n+        raise ValueError(f\"invalid partner name: {partner!r}\")\n+    dt = partition_date()\n+    bucket = storage.Client().bucket(BUCKET)\n+    ok = failed = 0\n+    seen = set()\n+    for src in sorted(drop_dir.glob(\"*.csv\")):\n+        safe_stem = _safe_name(src.stem)\n+        if safe_stem in seen:\n+            log.error(\n+                \"partner=%s file=%s maps to duplicate object name %s\",\n+                partner, src.name, safe_stem,\n+            )\n+            failed += 1\n+            continue\n+        seen.add(safe_stem)\n+        tmp = tempfile.mkdtemp(dir=work_dir)\n+        try:\n+            gz = Path(tmp) / f\"{safe_stem}.csv.gz\"\n+            rows = _write_gz(src, gz)\n+            blob = bucket.blob(f\"raw/{partner}/dt={dt}/{safe_stem}.csv.gz\")\n+            blob.chunk_size = UPLOAD_CHUNK_BYTES  # resumable, streamed from file\n+            blob.upload_from_filename(\n+                str(gz), content_type=\"application/gzip\", timeout=UPLOAD_TIMEOUT_S\n+            )\n+            log.info(\"uploaded %s rows=%d\", src.name, rows)\n+            ok += 1\n+        except Exception:\n+            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n+            failed += 1\n+        finally:\n+            shutil.rmtree(tmp, ignore_errors=True)\n+    log.info(\"partner=%s dt=%s ok=%d failed=%d\", partner, dt, ok, failed)\n+    if failed:\n+        # No _SUCCESS marker: the partition is incomplete. Fail so Airflow retries/alerts.\n+        raise RuntimeError(f\"partner={partner} dt={dt}: {failed} file(s) failed\")\n+    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")\n```",
+ "fixerUsage": {
+  "calls": 2,
+  "tokIn": 7483,
+  "tokOut": 8426,
+  "usd": 0.11418400000000001,
+  "critMs": 53296
+ },
+ "status": "cleared"
+}

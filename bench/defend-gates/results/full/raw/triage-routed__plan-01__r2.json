@@ -1,0 +1,107 @@
+{
+ "approach": "triage-routed",
+ "case": "plan-01",
+ "rep": 2,
+ "wallMs": 239563,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "data-vendor-feasibility",
+   "severity": "blocker",
+   "claim": "The design polls real-time option chains every 15 s for 40 underlyings (160 req/min during RTH), but the chosen Starter tier allows only 5 req/min and delivers 15-minute-delayed quotes. The data path cannot run as specified, and triggers and limit prices would be based on stale quotes.",
+   "evidence": "\"40 underlyings => 160 requests/min during RTH.\" / \"Starter | $79 | 5 req/min | 15-min delayed\" / \"We stay on Starter.\""
+  },
+  {
+   "lens": "budget-constraint",
+   "severity": "blocker",
+   "claim": "The $139/month cost figure assumes a tier that cannot support the design. The tiers that could (Growth at 100 req/min, still short of 160, or Pro at $499) exceed the $250 cap once the $60 VPS is included, so the stated cost is invalid.",
+   "evidence": "\"Monthly run cost: Optiq Starter $79 + existing VPS $60 = $139, comfortably inside the $250 cap.\" / \"Growth | $199 | 100 req/min\" / \"Pro | $499 | unlimited\""
+  },
+  {
+   "lens": "data-loss-irreversible",
+   "severity": "blocker",
+   "claim": "The migration runs against prod and drops positions.roll_history in the same transaction that backfills only 90 days. All older roll records are destroyed irreversibly, with no backup, export, or rollback step, and the claim that they are unneeded is unsupported.",
+   "evidence": "\"Backfill copies roll_history entries from the last 90 days into rolls; older entries are not needed by roll_engine.\" / \"In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.\""
+  },
+  {
+   "lens": "fallback-integrity",
+   "severity": "major",
+   "claim": "roll_eod.py is kept as the fallback through week 4, but the migration removes the column it may read. Reverting to ROLLER_V2=false could break the fallback exactly when it is needed. The plan does not confirm whether roll_eod.py reads roll_history.",
+   "evidence": "\"roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4.\" alongside \"DROP COLUMN roll_history\""
+  },
+  {
+   "lens": "data-vendor-feasibility",
+   "severity": "major",
+   "claim": "Even at Growth's 100 req/min, the 160 req/min polling demand exceeds the limit, and the plan has no batching, subset, or throttling handling. Throttling would silently stop trigger evaluation.",
+   "evidence": "\"Growth | $199 | 100 req/min | real-time\" / \"40 underlyings => 160 requests/min during RTH\" / ABSENT: rate-limit backoff or throttle alerting"
+  },
+  {
+   "lens": "unsupported-business-case",
+   "severity": "major",
+   "claim": "The +3.8% APR success bar has no backtest, sample, or methodology. It rests on anecdotal desk notes and an appeal to other funds' practice, yet it is the go/no-go criterion.",
+   "evidence": "\"Expected impact: +3.8% net APR vs. EOD rolling (see §2).\" / \"Desk notes from the last two quarters list several days...\" / ABSENT: backtest or quantified result"
+  },
+  {
+   "lens": "concurrency-double-roll",
+   "severity": "major",
+   "claim": "No single-writer rule exists between roll_eod.py and roll_engine/order_router during paper mode, cutover, or ROLLER_V2 toggling. Both could submit a roll for the same short call. Re-pricing retries may also be counted inconsistently against the daily per-contract limit, and cancel-after-fill is unreconciled.",
+   "evidence": "ABSENT: mutual exclusion between roll_eod.py and roll_engine / \"re-priced every 20 s up to 3 times, then cancelled\" / \"max 1 roll per contract per day ... checked before submit\""
+  },
+  {
+   "lens": "stale-data-guard",
+   "severity": "major",
+   "claim": "Triggers are evaluated against snapshots with no quote-timestamp or age check. The only staleness guard is broker heartbeat age, which does not cover market-data staleness.",
+   "evidence": "\"roll_engine stops emitting intents when the last successful broker heartbeat is > 60 s old.\" / ABSENT: quote-age validation"
+  },
+  {
+   "lens": "paper-mode-validity",
+   "severity": "major",
+   "claim": "Paper mode is meant to test whether intraday timing helps, but it runs on the 15-minute delayed feed, so its comparison against EOD cannot validate the intraday premise.",
+   "evidence": "\"Week 2-3: paper mode (RollIntent written, no orders) alongside roll_eod.py; compare intents vs. EOD decisions daily.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Migration 0042 combines ALTER TABLE DROP COLUMN and backfill in one transaction against prod with no batching, row-count estimate, or lock timeout. This can hold ACCESS EXCLUSIVE locks and block readers and writers during market-adjacent hours.",
+   "evidence": "\"Migration 0042 runs in-place against prod Monday 08:00 ET (pre-market).\" / \"In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "No handling is defined for broker errors, a re-price failing mid-sequence, or a cancel that races a fill. A short call could be bought back without its replacement sold, leaving a naked position, and rolls table state is not reconciled against broker positions.",
+   "evidence": "\"a rejected combo leaves the original short call untouched\" / ABSENT: cancel-ack failure handling, rolls-vs-broker reconciliation"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "roll_intents is written from snapshot evaluations every 15 s per underlying with no dedup, retention, or per-cycle emission limit, so the table can grow quickly. The 90-day backfill policy does not cover the new tables.",
+   "evidence": "\"roll_engine (new): consumes snapshots, evaluates §1 triggers, emits RollIntent rows.\" / \"Postgres: new tables roll_intents, rolls\" / ABSENT: retention or TTL"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Re-pricing and order volume are not costed. Each roll can produce up to 4 submissions, so per-order commission or message fees could exceed the plan's assumptions.",
+   "evidence": "\"re-priced every 20 s up to 3 times, then cancelled\" / \"max 8 roll orders per account per day\""
+  },
+  {
+   "lens": "logic bug",
+   "severity": "minor",
+   "claim": "The gap trigger and the roll-target rule are underspecified. It is unclear what happens when the credit is negative or below $0.05 while the gap trigger fires.",
+   "evidence": "\"Roll target: same strike +1 expiry, or next strike up if the credit is >= $0.05.\" / \"Underlying gaps > 4% through strike within the session.\""
+  },
+  {
+   "lens": "schedule-realism",
+   "severity": "minor",
+   "claim": "The plan has no staging rehearsal of the production migration, and moves from migration to live trading on all 40 underlyings within four weeks.",
+   "evidence": "\"Week 4: ROLLER_V2=true on 5 underlyings, then all 40.\" / ABSENT: staging migration rehearsal"
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 24526,
+  "tokOut": 11298,
+  "usd": 0.00771287,
+  "critMs": 24489
+ }
+}

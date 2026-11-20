@@ -1,0 +1,95 @@
+{
+ "approach": "clustered-panel",
+ "case": "merge-07",
+ "rep": 1,
+ "wallMs": 214254,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "Partner-chosen SFTP filenames (src.stem) are interpolated into an f-string run with shell=True under worker credentials that have write access to the whole raw bucket. A crafted filename with shell metacharacters executes arbitrary commands, and unquoted spaces break the upload.",
+   "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True) with dest built from src_name=src.stem"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "Partner filenames are used unsanitised as GCS object path segments and chunk basenames. Names containing '/' or '..' can escape the raw/{partner}/dt= prefix and write into other partners' or dates' partitions.",
+   "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "_SUCCESS is written unconditionally after per-file failures are caught and only counted. Dashboards treat the marker as completion, so partial or empty partitions are published as finished.",
+   "evidence": "except Exception:\n            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n            failed += 1\n    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "partition_date() changed from UTC to local time. Workers run with TZ=America/Los_Angeles and the job runs at 01:30 UTC, so the local date is the previous day and the run writes into the wrong dt partition that dashboards do not read.",
+   "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Chunks uploaded before a mid-file failure remain in the GCS partition with no rollback, and the failed file's local chunks are not removed. Truncated data is visible under the dt partition and can be read downstream as valid.",
+   "evidence": "for chunk in _write_chunks(src, work_dir):\n                _upload(chunk, partner, dt, src.stem)\n                chunk.unlink()\n            ok += 1\n        except Exception:"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Local disk is not cleaned up on exception: partially written chunks and remaining chunks in work_dir persist across runs, so multi-GB feeds can exhaust worker disk.",
+   "evidence": "except Exception:\n            log.exception(\"partner=%s file=%s failed\", partner, src.name)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "gsutil runs with no timeout and no retry, so a hung transfer blocks the nightly run indefinitely and transient GCS errors fail whole files.",
+   "evidence": "subprocess.run(\n        f\"gsutil ...\",\n        shell=True,\n        check=True,\n    )"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The run never raises when files fail, so the Airflow task reports success. Alerting and retries do not fire on partial partner runs.",
+   "evidence": "log.info(\"partner=%s dt=%s ok=%d failed=%d\", partner, dt, ok, failed)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Object layout changed from raw/{partner}/dt=…/{stem}.csv.gz to per-source subdirectories with numbered chunks. Downstream readers expecting the old path will miss or misread data, and the PR does not mention it.",
+   "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\"  (previously f\"raw/{partner}/dt={dt}/{src.stem}.csv.gz\")"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Re-runs for the same date do not clear the partition first. Deterministic chunk names can overwrite some chunks while stale chunks from earlier attempts remain, so downstream may double-count rows.",
+   "evidence": "ABSENT: no deletion or overwrite handling for raw/{partner}/dt={dt}/ before upload; chunk names are deterministic f\"{src.stem}-{len(chunks):04d}.csv.gz\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Normalisation input and output changed: normalise_row now receives csv.DictReader dicts with empty strings instead of pandas rows with NaN, and the CSV writer fixes headers from the first row's keys, so later rows with different keys raise or mis-column. The PR's claim that normalisation is unchanged is not supported.",
+   "evidence": "norm = normalise_row(row)\n            if writer is None:\n                writer = csv.DictWriter(out, fieldnames=list(norm.keys()))"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The gsutil parallel composite upload speed claim is unbenchmarked, and 500k-row chunks may be well below the 150M threshold so the flag may never apply. No tests cover chunking, failure handling, or date logic.",
+   "evidence": "ABSENT: benchmark or test changes; CHUNK_ROWS = 500_000 with parallel_composite_upload_threshold=150M"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A header-only or empty CSV produces zero chunks and is counted as ok while writing nothing.",
+   "evidence": "ok += 1 follows the loop over _write_chunks, which yields no chunks when the reader has no rows"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 19953,
+  "tokOut": 11199,
+  "usd": 0.0095891,
+  "critMs": 22874
+ }
+}

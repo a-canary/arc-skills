@@ -1,0 +1,83 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-12",
+ "rep": 2,
+ "wallMs": 546011,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "now() returns the transaction start time, and BEGIN runs before the FOR UPDATE wait. A booking that waits on the lock while the class starts can pass the closed check and book a class that has already begun, which contradicts the stated database-clock rejection. Evaluate clock_timestamp() after the lock is acquired, or re-check after the lock.",
+   "evidence": "'(cancelled_at IS NOT NULL OR starts_at <= now()) AS closed FROM classes WHERE id = $1 FOR UPDATE' and 'started or cancelled classes are rejected using the database clock'"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Each booking holds a pooled client across BEGIN, the lock wait, and COMMIT. A burst on one class can occupy pool connections, and with no checkout bound (connectionTimeoutMillis) or stated pool max, bookings for unrelated classes and other endpoints can stall. This contradicts the claim that other classes are unaffected.",
+   "evidence": "'const client = await db.connect();' and 'which serializes bookings per class without affecting other classes'; ABSENT: pool max or connectionTimeoutMillis configuration"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The pg pool's 5s statement_timeout also bounds the FOR UPDATE wait, so a waiter that exceeds it fails through next(err) as a 500 rather than a clean 409 or retryable status. Pool max bounds how many requests can queue, and holds are short, so this is unlikely at normal load. It is still an unmapped failure mode during the exact burst this PR targets.",
+   "evidence": "'The pg pool sets statement_timeout=5s.' and 'SELECT capacity, ... FROM classes WHERE id = $1 FOR UPDATE' with catch ending in 'throw err;'"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The no-oversell and no-duplicate invariants live only in bookClass. There is no partial unique index on (class_id, member_id) WHERE cancelled_at IS NULL and no capacity guard. Any other INSERT INTO bookings path, or a refactor that drops FOR UPDATE, could reintroduce the bug silently. A grep confirming bookClass is the sole writer should be run before merge.",
+   "evidence": "'No schema change.' ABSENT: confirmation that bookClass is the only INSERT INTO bookings path, and ABSENT: a partial unique index or capacity constraint"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The concurrency tests are not shown to fail on the pre-fix autocommit code, so the regression guard is unproven. No throughput or hold-time measurement is given for a same-second sell-out of a large class, and the 'oversold by 1-2' report has no attached data.",
+   "evidence": "it('never oversells when members book concurrently' ... toHaveLength(3); ABSENT: pre-fix run output, throughput measurement, or support data for 'oversold by 1-2'"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The closed check runs before the existing-booking check, so a member retrying a double submit after the class starts gets 409 class_closed instead of the original 200. This is a product choice that should be stated, since the PR promises the existing booking for repeat bookings.",
+   "evidence": "'if (cls.rows[0].closed) return { kind: 'closed' };' precedes 'if (mine.rows.length > 0) return { kind: 'booked', bookingId: mine.rows[0].id, created: false };'"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The rollback-failure path, where release(broken) destroys the client, has no test. Failures injected during BEGIN, the lock, the insert, or COMMIT are not exercised.",
+   "evidence": "'client.release(broken); // a client that could not roll back is destroyed, not reused' ABSENT: any test injecting failure during BEGIN, lock, insert, or COMMIT"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "No metrics, logs, or alerts cover lock-wait time, pool checkout wait, broken-client destruction, or booking 500 rates. Contention would surface only through support reports, as the original oversell did.",
+   "evidence": "ABSENT: metrics, logs, or alerts for lock waits, pool saturation, or release(broken) events"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The capacity count and the same-member lookup have no supporting index on bookings(class_id) or (class_id, member_id) with the cancelled_at filter. Lock hold time grows with booking history for the class.",
+   "evidence": "'SELECT count(*)::int AS n FROM bookings WHERE class_id = $1 AND cancelled_at IS NULL' ABSENT: index or query-plan evidence"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "If COMMIT succeeds on the server but the response is lost, the client receives a 500 for a booking that exists. The idempotent repeat path makes a retry safe, but the retry behaviour is not documented or tested.",
+   "evidence": "'await client.query('COMMIT');' followed by catch, ROLLBACK, and 'throw err;'; 'booking the same class twice returns the existing booking (200)'"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The PR bundles locking, idempotent 200s, a new 409 class_closed, and new 404s for malformed ids under an overselling title. The client-visible behaviour changes are described in the PR body but not flagged as API contract changes.",
+   "evidence": "'Also: booking the same class twice returns the existing booking (200) instead of a duplicate; started or cancelled classes are rejected using the database clock; malformed class ids return 404'"
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 97010,
+  "tokOut": 54784,
+  "usd": 0.041280090000000005,
+  "critMs": 89592
+ }
+}

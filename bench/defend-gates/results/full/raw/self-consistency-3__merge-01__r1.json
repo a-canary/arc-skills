@@ -1,0 +1,328 @@
+{
+ "approach": "self-consistency-3",
+ "case": "merge-01",
+ "rep": 1,
+ "wallMs": 86866,
+ "verdict": "ATTACKS",
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Each retry generates a fresh randomUUID() as client_order_id, so the broker's dedupe on client_order_id cannot catch a duplicate. If attempt 1 times out after the broker accepted it, attempt 2 submits a second order with a new ID and can double-fill.",
+   "evidence": "for (let attempt = 1; ...) { const clientOrderId = randomUUID(); try { const res = await broker.post(... client_order_id: clientOrderId ...)"
+  },
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "Retry-induced duplicate submission on a live account is an unauthorized trade exposure. It breaks the agreed 'safe to retry' constraint and is not gated by any check.",
+   "evidence": "ABSENT: no reuse of the original clientOrderId across attempts and no status lookup of the prior order before resubmitting."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "Duplicate fills from a retried submit are real market positions and cannot be undone by reverting code. The PR is set to deploy before market open with no kill switch or rollback plan.",
+   "evidence": "ABSENT: no feature flag, rollback procedure, or idempotency-key reuse; 'This PR is about to merge to main and deploy before the next market open.'"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Switching floor to ceil lets sizeBuy return quantities whose notional exceeds maxNotional, violating the hard per-symbol cap that sizing must never exceed. Example: maxNotional 10000, price 33, lotSize 1 gives headroom/price ≈ 303.03, ceil → 304, notional ≈ 10032.",
+   "evidence": "-  return Math.floor(headroom / price / lotSize) * lotSize;\n+  const lots = headroom / price / lotSize;\n+  return Math.ceil(lots) * lotSize;"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR says it 'rounds to the broker's lot size' and that the cap is respected, but the change is ceil, which the tests only pass because their inputs divide exactly. No test covers a non-divisible price, so the cap violation is unverified.",
+   "evidence": "test(\"sizes to the cap in whole lots\", ...) uses price: 100 and price: 50 only; ABSENT: any non-divisible case."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The safety claim 'a retry after a timeout cannot double-fill' is asserted but not evidenced: the broker's dedupe behavior is not shown and the retry path itself is contradicted by the code, which uses a new ID per attempt.",
+   "evidence": "Retries are safe: every order carries a client_order_id and the broker dedupes on it, so a retry after a timeout cannot double-fill.\" vs. randomUUID() inside the loop."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Timeout detection depends on an error name 'TimeoutError' that the PR never shows BrokerClient producing for the { timeoutMs: 4000 } option. If the client throws a different error, hangs are not retried, or are retried incorrectly.",
+   "evidence": "ABSENT: the BrokerClient.post timeout implementation; only (err as Error).name === \"TimeoutError\" in submit.ts."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "No test exercises the new retry logic (retryable vs non-retryable, attempt limit, duplicate-ID behavior). The only tests added are for sizing.",
+   "evidence": "ABSENT: any test in submit.test.ts or equivalent; the test diff only touches sizing.test.ts."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Worst-case latency is large for a limit order at market open: three attempts at 4s timeout plus backoff is roughly 13s, during which price moves. There is no total deadline and no alerting on retry exhaustion beyond a warn log.",
+   "evidence": "{ timeoutMs: 4000 } with MAX_ATTEMPTS = 3 and sleep(250 * 2 ** (attempt - 1)); ABSENT: an overall deadline or an alert on final failure."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The retry log omits clientOrderId and status, making it hard to correlate a retry with a broker-side order during incident review.",
+   "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, attempt });"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "No authn/authz or secret changes in this diff; the broker call path is unchanged apart from retries.",
+   "evidence": "ABSENT: any auth-related change in the diff."
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "No personal data is collected, stored, or exposed by this diff.",
+   "evidence": "ABSENT: any personal data field in the diff."
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "No new vendor dependency or lock-in is introduced; the broker REST call pattern is unchanged.",
+   "evidence": "ABSENT: any new external provider or SDK."
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Retry storms during broker outages at open can multiply request volume up to 3x per order with no circuit breaker or global rate limit, though the diff does not show this is a hot path problem.",
+   "evidence": "MAX_ATTEMPTS = 3; no circuit breaker or rate limiting in the diff."
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "No direct spend impact; extra broker API calls on retries are bounded at three per order.",
+   "evidence": "MAX_ATTEMPTS = 3."
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "No user-facing rendering or copy changes in this diff.",
+   "evidence": "ABSENT: any UI file in the diff."
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Retrying transient errors addresses the stated drop-on-floor problem, so the value intent is sound.",
+   "evidence": "During the first minutes after the open the broker intermittently returns 502/503 or hangs past our timeout, and we drop the order on the floor."
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "Retry delay adds latency to fills at open. This is part of the reliability attack above rather than a separate issue.",
+   "evidence": "sleep(250 * 2 ** (attempt - 1))"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "No accessibility-relevant change in this diff.",
+   "evidence": "ABSENT: any UI or copy change."
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Duplicate submissions from retries could create unintended positions, which may raise order-handling or best-execution concerns. The diff does not address this.",
+   "evidence": "ABSENT: any review of duplicate-order handling against broker or regulatory order-handling requirements."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The retry loop mixes error classification, ID generation, and backoff in one function, which makes the duplicate-ID bug easy to introduce and hard to test in isolation.",
+   "evidence": "for (let attempt = 1; ...) { const clientOrderId = randomUUID(); try { ... } catch (err) { ... } }"
+  },
+  {
+   "lens": "other",
+   "severity": "major",
+   "claim": "The PR bundles a safety-critical retry change and a sizing change that loosens the cap into one merge with no separation. The sizing change alone should block the merge even if the retry is fixed.",
+   "evidence": "PR #412 title: \"Retry transient broker errors on order submit\" and the sizing diff in the same PR."
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The retry loop generates a new client_order_id on every attempt, so the broker's dedupe on client_order_id cannot catch a retry after a timeout where the first order was actually accepted. This can produce a double fill, which the agreed constraint forbids.",
+   "evidence": "for (let attempt = 1; ...) { const clientOrderId = randomUUID(); try { const res = await broker.post(... client_order_id: clientOrderId ...)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Switching from floor to ceil lot rounding can push notional above the per-symbol maxNotional cap, violating the invariant that sizing must never exceed it. Example: maxNotional 10000, price 30, lotSize 1 gives headroom/price = 333.3, which rounds to 334 shares = $10,020. The artifact shows no downstream cap re-check.",
+   "evidence": "const lots = headroom / price / lotSize; return Math.ceil(lots) * lotSize;"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR asserts retries are safe because the broker dedupes on client_order_id, but the diff contradicts this by regenerating the id per attempt. The safety claim is load-bearing and unsupported; no broker dedupe behaviour or test is cited.",
+   "evidence": "\"Retries are safe: every order carries a client_order_id and the broker dedupes on it, so a retry after a timeout cannot double-fill.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "When attempts are exhausted on timeout or 502/503/504, the order may already exist at the broker, but the caller receives a thrown error and no reconciliation step (for example, querying by the client_order_id) is shown. This leaves the position state unknown during the open.",
+   "evidence": "if (!retryable || attempt === MAX_ATTEMPTS) throw err;"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "No test exercises the retry path (retry on 503, no retry on 4xx, timeout retry, or exhaustion). The sizing test also has no non-integer case, so it would not catch the ceil cap breach.",
+   "evidence": "test(\"sizes to the cap in whole lots\", ...) uses only exact multiples: 10_000/100 and 10_000/(50*10)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The timeout mechanism is unverified. The diff passes a third options argument to broker.post and relies on err.name === \"TimeoutError\", but neither the client signature nor the thrown error name is shown. If the name differs, timeouts silently never retry.",
+   "evidence": "{ timeoutMs: 4000 }, ... (err as Error).name === \"TimeoutError\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Worst-case submit latency is about 3×4s plus 750ms backoff, roughly 12.75s, during the first minutes after the open. The limit price may be stale by the time a retry lands, and there is no alert on final failure. The warn log also omits clientOrderId, which makes reconciliation hard.",
+   "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, attempt });"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The PR bundles a retry change and a sizing behaviour change, is set to deploy before market open, and states no rollback path or feature flag.",
+   "evidence": "ABSENT: rollback plan or feature flag; deploy-before-open timing is stated only in the PR context"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The sizing change is described as a tidy-up, but it changes sizing behaviour (floor to ceil) and is bundled with unrelated retry logic, which obscures review of a risk-relevant change.",
+   "evidence": "\"Also tidies the sizing helper so quantities are rounded to the broker's lot size before submit.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The retry loop generates a new client_order_id on every attempt, so the broker's dedupe on client_order_id cannot catch a retry. If attempt 1 times out or gets a 502/503 after the broker accepted the order, attempt 2 submits a second order that can fill, which is a duplicate fill on a live account.",
+   "evidence": "for (let attempt = 1; ...) { const clientOrderId = randomUUID(); ... client_order_id: clientOrderId"
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "Retrying on TimeoutError and 502/503/504 is unsafe for a non-idempotent POST whose outcome is unknown. The fix requires one client_order_id generated before the loop and reused on every attempt, plus a lookup by that ID before resubmitting.",
+   "evidence": "(err as Error).name === \"TimeoutError\") ... await sleep(250 * 2 ** (attempt - 1));"
+  },
+  {
+   "lens": "evidence",
+   "severity": "blocker",
+   "claim": "The PR's central safety claim, that retries cannot double-fill because the broker dedupes on client_order_id, is asserted without evidence and is contradicted by the diff, which mints a fresh ID per attempt. The claim is load-bearing for the merge decision.",
+   "evidence": "\"Retries are safe: every order carries a client_order_id and the broker dedupes on it, so a retry after a timeout cannot double-fill.\" vs. ABSENT: broker docs or test showing dedupe behaviour with a reused ID, and no test for retry-after-timeout."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Switching from floor to ceil can push the order notional above the headroom and the maxNotional cap that sizing must never exceed. For example, headroom 10050 at price 100 with lotSize 1 yields 101 shares, which is 10100 notional.",
+   "evidence": "const lots = headroom / price / lotSize; return Math.ceil(lots) * lotSize;"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "The PR says it 'tidies' rounding to the lot size, but it changes the rounding direction from floor to ceil. That is a behavioural change to risk sizing and it is not described in the title or body.",
+   "evidence": "-  return Math.floor(headroom / price / lotSize) * lotSize;\n+  const lots = headroom / price / lotSize;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Floating-point division can make an exact lot count such as 100.0000000001 round up under ceil. The result is an extra lot, which can exceed the cap.",
+   "evidence": "ABSENT: epsilon handling or integer arithmetic in sizeBuy; tests use only exact values (100, 200, 120)."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The new sizing tests do not exercise fractional lots, the only case where ceil differs from floor and where the cap is at risk. They therefore cannot detect the cap violation.",
+   "evidence": "expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 })).toBe(100); ... expect(...price: 50, lotSize: 10 )).toBe(200);"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The timeout error check depends on the name of an error thrown by the broker client. Nothing in the diff shows the client sets that name, so a real timeout may not be retried, or may be retried incorrectly.",
+   "evidence": "ABSENT: definition or test showing broker client throws an error with name \"TimeoutError\" from { timeoutMs: 4000 }."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The retry log omits clientOrderId and the outcome, and no alert is added. Operators cannot tell from logs whether a retried order may have produced a duplicate.",
+   "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, attempt });"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Three attempts with a 4s timeout and backoff per order can multiply broker request volume during a 502/503 storm at the open. There is no global concurrency limit or circuit breaker.",
+   "evidence": "const MAX_ATTEMPTS = 3; ... { timeoutMs: 4000 }"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Each retry can create a real order and charge commissions or slippage if the broker accepted the earlier attempt. The PR does not quantify this.",
+   "evidence": "ABSENT: cost analysis of retried submissions."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The change is to be merged and deployed before the market open on a live account. The PR has no rollback plan, no feature flag, and no sandbox or paper-account verification, and a duplicate order cannot be undone once submitted.",
+   "evidence": "\"This PR is about to merge to main and deploy before the next market open.\" vs. ABSENT: rollback procedure, feature flag, or paper-trading test."
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Automatically resubmitting orders on a live brokerage account may create duplicate orders that raise best-execution or order-audit concerns. The PR does not address audit trail for resubmitted orders.",
+   "evidence": "ABSENT: audit or record of linked attempts for a retried order."
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "No security issue found in the diff. Inputs are internal intent objects and no new trust boundary or credential handling is added.",
+   "evidence": "ABSENT: new authn/authz or secret handling in diff; none found."
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "No personal data collection, retention, or exposure change is introduced. Nothing material found.",
+   "evidence": "ABSENT: new personal data fields or logging of personal data in diff."
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "No new vendor dependency or lock-in is introduced beyond the existing broker. Nothing material found.",
+   "evidence": "ABSENT: new external service or provider dependency in diff."
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "No user-facing rendering is changed. Nothing material found.",
+   "evidence": "ABSENT: UI files in diff."
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Retrying transient broker errors addresses the stated problem of dropped orders at the open, but the value depends on the duplicate-fill defect being fixed first.",
+   "evidence": "\"we drop the order on the floor.\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "Backoff adds up to about 750ms of latency per order during outages. The PR does not state an acceptable latency budget.",
+   "evidence": "await sleep(250 * 2 ** (attempt - 1));"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "No accessibility-relevant change is introduced. Nothing material found.",
+   "evidence": "ABSENT: UI or copy changes in diff."
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The short-position test asserts a headroom model that treats cover capacity as freed cap room. That semantics is not described in the PR and is not checked against the risk module's definition of maxNotional.",
+   "evidence": "expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: -20, lotSize: 1 })).toBe(120);"
+  }
+ ],
+ "usage": {
+  "calls": 3,
+  "tokIn": 9936,
+  "tokOut": 11669,
+  "usd": 0.0059344,
+  "critMs": 18667
+ }
+}

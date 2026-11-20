@@ -1,0 +1,125 @@
+{
+ "approach": "clustered-panel",
+ "case": "plan-07",
+ "rep": 2,
+ "wallMs": 191494,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "The monthly cost is understated by about 30x. 38M lines/day x 60 tokens = 2.28B tokens per day, which is $1,140 per day, but the plan presents it as a monthly figure. Over 30 days, input is about 68B tokens (~$34,200/month), so the total is roughly 23x the $1,500 approved budget. Output (~$7/day) is also treated as monthly.",
+   "evidence": "\"Input: 38M lines x 60 tokens = 2.28B tokens -> ~$1,140\" / \"Estimated total: ~$1,150/month, within the $1,500 budget.\""
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "Costs use average volume only. The stated peak day (61M lines) would cost about $1,830 of input alone, and the plan has no cap, sampling, throttling, or spend alarm to bound spend. Fixed prompt overhead (sent with each of the 8,640 daily calls) is also omitted and its size is not stated, so the input figure is a lower bound.",
+   "evidence": "\"Application logs: 38M lines/day average across 30 services (peak day 61M).\" / \"every 5 minutes, sends the last 5 minutes of logs per service to the LLM with a fixed prompt\" / ABSENT: prompt token size, peak sizing, spend cap"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The 'within seconds of a page' goal conflicts with the design. Summaries are precomputed on non-overlapping 5-minute windows, so an attached summary can be up to ~5 minutes stale plus LLM latency, and errors that straddle a window boundary are split across two summaries. Staleness is not acknowledged or marked.",
+   "evidence": "\"summary ... within seconds of a page\" / \"every 5 minutes, sends the last 5 minutes of logs per service\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "Staffing assumes 100% availability, but the charter says on-call and interrupts average 50% of time. Twelve eng-weeks is full theoretical capacity with no contingency for on-call, interrupts, or rework, so the 6-week schedule is not credible and on-call coverage during the build is unowned.",
+   "evidence": "\"Staffing: both platform engineers full-time for 6 weeks (2 x 6 = 12 eng-weeks).\" / Context: \"on-call/interrupt work averages 50% of their time\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The privacy claim overreaches. The Q1 audit covers redaction for log retention, and the listed masks (emails, tokens, card numbers, IPs) do not show removal of names, free-text user input, addresses, phone numbers, or customer identifiers before logs go to a third-party LLM. The plan also gives no legal basis, data-minimization review, provider data-residency, sub-processor list, or customer-contract review for this new external transfer of all 38M lines/day.",
+   "evidence": "\"already masks emails, tokens, card numbers and IPs for our log retention policy (audited in Q1)\" / \"Corvid account has zero-retention enabled; data processing addendum signed by Legal (ref DPA-0417).\" / ABSENT: redaction coverage for other PII, residency, sub-processors, legal basis"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "log-tap sits on the production Vector log path with no stated isolation. If it backpressures, stalls, or fails, it can degrade or drop the logs that alerting and retention depend on, and on-call's own log access. No drop policy or isolation requirement is given.",
+   "evidence": "\"log-tap (new): subscribes to the existing Vector pipeline after the redaction stage and forwards every application log line to the summarizer queue.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "No rollback or kill switch is specified for log-tap, the summarizer, or the PagerDuty auto-comment. Disabling them would apparently require a redeploy, and no rollback criteria are defined for a feature that feeds live incidents.",
+   "evidence": "\"Summaries are advisory only. Alert rules, paging, and escalation policies are unchanged.\" / ABSENT: kill switch, rollback criteria"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "No failure handling is specified for the LLM dependency or the queue: no timeout, retry/backoff, rate-limit handling, circuit breaker, or behavior when a summary is late or missing at page time. The auto-comment could be silently absent or stale exactly when needed.",
+   "evidence": "\"summarizer (new): every 5 minutes, sends the last 5 minutes of logs per service to the LLM with a fixed prompt and stores a structured summary\" / ABSENT: timeout, retry, missing-summary behavior"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "No observability or alerting is defined for the new pipeline. A silent failure of log-tap, the queue, or the LLM would leave on-call believing summaries exist when they do not. 'Dashboards' is the only mention, with no SLOs or alerts.",
+   "evidence": "\"Hardening, dashboards, runbook | 2\" / ABSENT: SLOs, alerts, staleness indicator"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "LLM output is posted into PagerDuty incident comments, and the suspected-deploy and endpoint fields are derived from log content that can contain attacker-controlled text. Prompt injection could steer the summary shown to responders, and no output validation, grounding check, or sanitization is specified.",
+   "evidence": "\"On page: the PagerDuty incident gets an auto-comment with the latest summaries\" / ABSENT: prompt-injection handling, output validation, grounding of 'suspected deploy'"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The launch gate is statistically and methodologically weak. With n=40, the 5% misleading threshold allows 2 misleading summaries to pass. A single IC grades all cases with no blinding, no inter-rater agreement, and no test of the 'suspected deploy' claim, which is the most harmful failure mode.",
+   "evidence": "\"Launch gate: >= 70% useful, <= 5% misleading.\" / ABSENT: grader count, inter-rater agreement, blinding, deploy-claim evaluation"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The headline MTTR target (47 to 30 min) has no supporting evidence. No prototype or pilot shows summaries shorten time-to-mitigation, and the plan gives no baseline measurement method. Model choice, output size, and average line length are also unmeasured assumptions.",
+   "evidence": "\"Target: median MTTR 47 min -> 30 min within one quarter of launch.\" / \"Average line length: ~60 tokens after redaction.\" / ABSENT: prototype results, baseline method"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Queue and storage growth is called negligible without numbers. Raw log forwarding through Redis at 61M peak lines/day is a throughput and memory question, and Postgres growth has no retention policy.",
+   "evidence": "\"Queue + storage: existing Redis and Postgres, negligible.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Dependency fan-out at page time is unbounded. A widely depended-on service could produce a large auto-comment or many reads during the incident.",
+   "evidence": "\"the PagerDuty incident gets an auto-comment with the latest summaries for the paging service and its direct dependencies (from the service catalog)\""
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "Single external model provider with no fallback, self-hosting option, or exit path. Prompts, output schema, and eval set are coupled to Corvid-mini, and pricing is not price-locked.",
+   "evidence": "\"Model: Corvid-mini, $0.50 per 1M input tokens, $2.00 per 1M output tokens.\" / ABSENT: fallback, portability plan"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "Access controls for log-tap, the summarizer queue, and summary storage are unstated, though these will hold a copy of all application logs.",
+   "evidence": "ABSENT: access control and authz model for log-tap, queue, and summary store"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Post-launch ownership of the prompt, service-catalog mapping, and eval set is undefined for a 2-person team already at 50% interrupt load.",
+   "evidence": "ABSENT: post-launch ownership and maintenance effort"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Provider terms, usage policy, and rate limits for sending production log volume are not referenced; only the DPA is cited.",
+   "evidence": "\"data processing addendum signed by Legal (ref DPA-0417)\" / ABSENT: provider usage-policy and rate-limit review"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 18450,
+  "tokOut": 13499,
+  "usd": 0.00879082,
+  "critMs": 35415
+ }
+}

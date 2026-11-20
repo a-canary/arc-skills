@@ -1,0 +1,100 @@
+{
+ "approach": "self-consistency-3",
+ "case": "merge-12",
+ "rep": 2,
+ "wallMs": 120659,
+ "verdict": "ATTACKS",
+ "attacks": [
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Every booking for a hot class holds a pool connection while it waits on the row lock. With node-postgres defaults (max 10, no connectionTimeoutMillis) a popular class opening can exhaust the pool and stall unrelated endpoints, which contradicts the 'without affecting other classes' claim.",
+   "evidence": "const client = await db.connect(); ... 'SELECT capacity, ... FROM classes WHERE id = $1 FOR UPDATE' ; ABSENT: pool max, connectionTimeoutMillis, or any cap on concurrent bookings per class"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Under a spike, the queue of requests waiting on the same row lock can exceed the 5s statement_timeout. Those requests then fail with a generic error that goes to next(err) and returns a 500, with no mapping to a retryable 409/503, no backoff guidance, and no alerting for lock-timeout failures.",
+   "evidence": "pg pool sets statement_timeout=5s; catch (err) { ... throw err; } and case-by-case handler only maps not_found/closed/full; ABSENT: lock_timeout or error mapping for SQLSTATE 57014"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The concurrency regression test may pass on the unfixed code. If the test pool serializes the 12 calls, no real overlap happens, and nothing shows the test fails before the FOR UPDATE change. The central oversell claim is therefore unproven.",
+   "evidence": "const results = await Promise.all(members.map((m) => bookClass(db, m, classId))); ABSENT: a run against the pre-change code showing oversell, or a pool size and overlap assertion"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The no-oversell and no-duplicate invariants now rest only on application-level locking. Any other write path (admin insert, import, a future bulk endpoint) can still oversell or duplicate, and the database cannot enforce either rule.",
+   "evidence": "No schema change. ; ABSENT: unique partial index on bookings(class_id, member_id) WHERE cancelled_at IS NULL, or a capacity constraint"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Duplicate bookings used to create a second row (201). They now return the existing booking with 200. The PR changes this business behaviour and the response contract without stating the intent or who relies on the old behaviour.",
+   "evidence": "return res.status(result.created ? 201 : 200).json({ bookingId: result.bookingId }); ABSENT: product/spec reference for idempotent re-booking and client impact"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The 'started' check depends on the type and timezone of starts_at and on the database clock. Neither is stated, so an unclear timestamptz versus timestamp column could reject or allow bookings at the wrong time.",
+   "evidence": "(cancelled_at IS NOT NULL OR starts_at <= now()) AS closed ; ABSENT: starts_at column type and time-zone handling"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The PR says the per-class lock works \"without affecting other classes,\" but every waiting booking holds a pooled connection for the whole lock wait, and the pool is shared across the API. A surge on one popular class can exhaust the pool and block bookings and other endpoints for every class.",
+   "evidence": "\"which serializes bookings per class without affecting other classes\" / \"const client = await db.connect();\" — ABSENT: pool max size, connectionTimeoutMillis, or any bound on queued connection waits."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Lock waits count against the 5s statement_timeout. If a surge queues enough bookings behind FOR UPDATE, late waiters will time out and get a 500 via next(err) instead of a clear 409 or a retry. No test covers contention beyond 12 requests.",
+   "evidence": "\"The pg pool sets statement_timeout=5s.\" / \"} catch (err) {\\n    next(err);\" — ABSENT: a test or handling for lock-wait timeouts under load."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The no-oversell invariant now depends entirely on every code path that inserts into bookings taking the class row lock first. There is no DB constraint or capacity check at the table level, so any other writer (admin add, import, waitlist) would silently bypass it.",
+   "evidence": "\"No schema change.\" / \"INSERT INTO bookings (class_id, member_id) VALUES ($1, $2) RETURNING id\" — ABSENT: a list of other writers to bookings, or an audit showing none exist."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The per-class lock only prevents overselling if every code path that inserts into `bookings` takes the same `classes` row lock. The PR changes only `bookClass`, and the artifact never shows that no other writer exists. Any other insert path would still oversell, and there is no DB constraint to catch it.",
+   "evidence": "ABSENT: no audit or grep of other `INSERT INTO bookings` sites. The artifact says only \"serializes bookings per class\" and \"No schema change.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The PR says the lock serializes bookings \"without affecting other classes,\" but transactions hold a pool connection while they wait on the hot class's row lock. A burst on one class can occupy the whole pool and delay bookings for other classes.",
+   "evidence": "\"which serializes bookings per class without affecting other classes\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "`statement_timeout=5s` also applies to lock waits. Members queued behind a burst past 5s get a DB error, which `next(err)` turns into a 500. Pool acquisition has no stated timeout, and there is no `lock_timeout`, retry, or alerting for this case.",
+   "evidence": "ABSENT: no handling for lock-wait timeouts; \"The pg pool sets statement_timeout=5s\" applies to the new `FOR UPDATE` statement."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "`now()` returns the transaction start time, and BEGIN runs before the lock wait. A class that starts during the wait can still be booked, so the \"started\" check is slightly stale.",
+   "evidence": "'SELECT capacity, (cancelled_at IS NOT NULL OR starts_at <= now()) AS closed ... FOR UPDATE'"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The concurrency test is not shown to fail on the pre-fix code. With a default-size pool, its 12 parallel calls may not reliably interleave, so it may pass without proving the fix.",
+   "evidence": "ABSENT: no pre-fix run or reproduction of the oversell; \"never oversells when members book concurrently\" is the only evidence."
+  }
+ ],
+ "usage": {
+  "calls": 3,
+  "tokIn": 14526,
+  "tokOut": 13815,
+  "usd": 0.0070533,
+  "critMs": 23865
+ }
+}

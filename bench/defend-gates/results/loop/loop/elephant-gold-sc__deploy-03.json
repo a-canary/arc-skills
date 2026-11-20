@@ -1,0 +1,52 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "deploy-03",
+ "rounds": [
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The rollback says 3.2 with the flag off is functionally equivalent to 3.1 plus copy changes. The artifact never says whether the streak saver and the opt-in reminder flow are gated by streak_sync_v2, so those features may not be covered by the kill switch. The QA table also has no row for flag-off behavior.",
+     "evidence": "\"3.2 with flag off is functionally equivalent to 3.1 plus copy changes.\" / ABSENT: statement of whether saver and reminders are gated by `streak_sync_v2`"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The new user-keyed table `streak_events` has no stated retention or account-deletion cascade. This is likely handled by existing deletion pipelines, but it should be confirmed.",
+     "evidence": "ABSENT: retention or erasure handling for `streak_events (user_id, habit_id, day, source_device, created_at)`"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The backfill runs against the live production database with no stated throttle, alert, or abort criteria. The dry run was on a snapshot. Inserts are idempotent on (user_id, habit_id, day) and the job is checkpointed, which limits correctness risk.",
+     "evidence": "\"Backfill job starts after full deploy.\" / \"batches of 5k, checkpointed\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "If 2.14 is redeployed and later 2.15 is rolled forward again, `streak_events` will lack completions made during the 2.14 window. The artifact gives no reconciliation step, though re-running the resumable backfill would likely address it.",
+     "evidence": "\"redeploy streaks-svc 2.14; schema is additive and `streak_count` remains authoritative-compatible\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 61049,
+    "tokOut": 30142,
+    "usd": 0.1049209,
+    "critMs": 42745
+   },
+   "wallMs": 125786
+  }
+ ],
+ "artifact": "# Release proposal: Stride 3.2 — Streak Sync\n\nOwner: mobile squad B · Store submission: Mon 2026-11-02 · Backend deploy: Mon 2026-11-02 10:00 UTC · Epic: STR-1190\n\n## What ships\n\n- Streaks now sync across devices. A habit completed on the watch or tablet counts toward the same streak on the phone.\n- \"Streak saver\": one missed day per 30 days can be repaired from the streak screen.\n- Optional streak reminder notification at the user's chosen time.\n\n## UI copy (final, localized en/es/de/fr/pt-BR)\n\n- Streak screen header: \"12-day streak\" (VoiceOver/TalkBack label: \"Current streak, 12 days\").\n- Saver button: \"Repair yesterday\" (disabled state label: \"Streak saver available again on Nov 28\").\n- Reminder pre-prompt sheet: \"Want a nudge at 8:00 PM so you don't lose your streak?\" Buttons: \"Remind me\" / \"Not now\".\n\n## Notifications permission\n\n- We do not request OS notification permission on launch or on upgrade.\n- The in-app pre-prompt sheet is shown only after the user reaches a 3-day streak, and only once per 30 days if they choose \"Not now\".\n- iOS: if the user taps \"Remind me\" we request provisional authorization first; full authorization is requested only if they enable sound in reminder settings.\n- Android 13+: POST_NOTIFICATIONS is requested only after \"Remind me\". Denial is stored and the reminder toggle shows \"Turn on in system settings\" with a deep link.\n\n## Backend changes (streaks-svc 2.14 → 2.15)\n\n- New table `streak_events (user_id, habit_id, day, source_device, created_at)`; streak is computed from events, idempotent on `(user_id, habit_id, day)`.\n- `habits.streak_count` is **kept** and dual-written by 2.15 so 3.1 clients (which read `streak_count` from `/v2/habits`) keep working unchanged.\n- Backfill: one `streak_events` row per day of each habit's current streak, run as a resumable job (batches of 5k, checkpointed), dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches vs `streak_count`.\n- Dropping `streak_count` is **not** part of this release. It is scheduled for 3.4, after the minimum supported app version is raised past 3.1 (tracked in STR-1244).\n\n## QA report summary (build 3.2.0 (4410), streaks-svc 2.15.0-rc2)\n\n| Area | Env | Result |\n|---|---|---|\n| Multi-device sync (phone + watch + tablet), offline completion then reconnect | staging | Pass |\n| Timezone change mid-streak (UTC−8 → UTC+9), DST boundary | staging | Pass |\n| 3.1 client against 2.15 API (N-1 compatibility) | staging | Pass |\n| 3.2 client against 2.14 API (server rollback scenario) | staging | Pass (sync silently disabled, local streak shown) |\n| Streak saver: limit 1 per 30 days enforced server-side | staging | Pass |\n| VoiceOver / TalkBack on streak screen and pre-prompt | device lab | Pass |\n| Dynamic Type XXL / Android font scale 200% | device lab | Pass, no truncation |\n| Crash-free sessions, internal beta (1,900 users, 6 days) | prod | 99.87% |\n\nStaging remote config was exported from prod and only `streak_sync_v2` differed (on in staging); prod values for every other key were identical during QA.\n\n## Rollout plan\n\n1. 10:00 UTC deploy streaks-svc 2.15 (canary 10% of pods for 1h, then full). Backfill job starts after full deploy.\n2. Remote config `streak_sync_v2`: 1% → 10% → 50% → 100% of 3.2 users, 24h between steps.\n3. iOS phased release (7 days) and Play staged rollout 10% → 50% → 100% in parallel; the flag gates the feature independently of store rollout.\n4. Gates to advance each step: crash-free sessions ≥ 99.5%, `streak_mismatch_total` (server vs client recompute) < 0.1% of synced users, streaks-svc p95 < 250ms, support tickets tagged `streak` < 2× 4-week baseline.\n\n## Rollback\n\n- Feature: set `streak_sync_v2` to 0%; 3.2 clients revert to local-only streaks within one config fetch (≤ 15 min). Verified in QA.\n- Backend: redeploy streaks-svc 2.14; schema is additive and `streak_count` remains authoritative-compatible, so 2.14 runs against the migrated database unchanged (verified in staging).\n- Store builds: halt phased/staged rollout; 3.2 with flag off is functionally equivalent to 3.1 plus copy changes.\n\n## Privacy\n\n- `source_device` stores a per-install random ID, not a hardware identifier. No new data shared with third parties. Privacy nutrition label and Play data-safety form unchanged (verified against the updated data inventory).",
+ "fixerUsage": {
+  "calls": 0,
+  "tokIn": 0,
+  "tokOut": 0,
+  "usd": 0,
+  "critMs": 0
+ },
+ "status": "cleared"
+}

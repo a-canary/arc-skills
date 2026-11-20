@@ -1,0 +1,160 @@
+{
+ "approach": "self-consistency-3",
+ "case": "merge-10",
+ "rep": 1,
+ "wallMs": 140524,
+ "verdict": "ATTACKS",
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "TestClaimNeverHandsOutAJobTwice does not detect duplicate handouts. It only counts successful Claims, so one job handed to two workers while another job is never claimed still yields 40 claims and passes.",
+   "evidence": "if n := claims.Load(); n != 40 { t.Fatalf(\"got %d claims for 40 jobs\", n) } -- no job IDs are recorded or checked for uniqueness"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The PR says Complete requires the caller to still hold the lease, but Complete does not check locked_until. A worker whose lease has expired can still complete the job if no one has reclaimed it yet.",
+   "evidence": "WHERE id = $1 AND locked_by = $2 AND status = 'running'"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The claim query filters on status and locked_until and orders by created_at, id, but no index is added. Each claim scans and sorts the table, which grows with 7 days of finished rows. This is acceptable at 20k rows but degrades at 10-100x.",
+   "evidence": "ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz; ABSENT: CREATE INDEX on thumbnail_jobs(status, created_at) or a partial index"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The stated safety invariant that a live worker never outlives its lease depends on render honouring context cancellation, including any subprocess. The diff does not show this, and the lease margin is only one minute.",
+   "evidence": "the job context is cancelled at jobTimeout, so a live worker never outlives its lease -- ABSENT: render's cancellation of child processes"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Lease ownership depends on w.id being unique per worker process. Its source is not in the diff. A constant or colliding ID would let one worker complete or hold another's job, which matters once replicas scale out.",
+   "evidence": "store.Claim(ctx, w.id, ...) -- ABSENT: how w.id is generated"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "On graceful shutdown the in-flight job stays 'running' until its lease expires, which can take up to jobTimeout + 1m before retry. There is no log or metric for this handoff.",
+   "evidence": "if ctx.Err() != nil { return nil } // shutting down: leave the lease to expire so another worker retries the job"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "No rollback path is stated for the migration or the removal of ResetRunning. Rolling back to the old binary depends on its ResetRunning to requeue locked jobs, which is not documented.",
+   "evidence": "ABSENT: rollback or down-migration steps for 0042_thumbnail_job_leases.sql"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "nothing: the new SQL uses bound parameters and the worker identity is not user-controlled.",
+   "evidence": "$1, $2 bound in Claim and Complete"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "nothing: the change adds only a worker identifier and timestamps to an internal job table.",
+   "evidence": "ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "nothing: no new vendor or service dependency; the change stays on the existing Postgres.",
+   "evidence": "pgxpool.Pool and thumbnail_jobs only"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "nothing: the change adds no new compute or spend; claim polling behaviour is unchanged.",
+   "evidence": "for { job, err := w.store.Claim(...) }"
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "nothing: no user-facing rendering changes.",
+   "evidence": "no UI files in diff"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "nothing: the change addresses the stated goal of running more than one worker.",
+   "evidence": "Lease-based thumbnail job claiming so more than one worker can run"
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "nothing: no added user-facing steps or latency beyond the shutdown lease delay already noted.",
+   "evidence": "no user-facing flow in diff"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "nothing: no interface changes.",
+   "evidence": "no UI files in diff"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "nothing: no licensing, platform, or regulatory surface changes.",
+   "evidence": "internal thumbnail job store only"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The test file uses errors, fmt, atomic, time, and errgroup, and references ErrNoJob and seedQueued, none of which are shown in the diff. Imports and helpers may be missing or undefined.",
+   "evidence": "ABSENT: definitions of ErrNoJob, seedQueued, and the test imports"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "nothing: the claim against a poison job is deferred to #215 and is not a gate blocker for this PR.",
+   "evidence": "poison-job attempts cap (#215) are separate changes"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The safety argument that a live worker never outlives its lease depends on render and its child work honoring the job context. Nothing in the artifact shows that render, ffmpeg, or the object upload respects cancellation. If one of them ignores it, a stale holder can keep writing to the same object key after another worker has reclaimed the job.",
+   "evidence": "\"the job context is cancelled at jobTimeout, so a live worker never outlives its lease\" — ABSENT: any evidence that render propagates ctx to subprocesses and uploads, or a test of a render that ignores cancellation."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The Complete ownership guard only works if worker IDs are unique per process. The diff never shows how w.id is generated, so two replicas sharing an ID would pass the guard and could complete each other's jobs. Replica count is 1 here, so this matters for the scale-out follow-up.",
+   "evidence": "\"err := s.db.QueryRow ... Complete(ctx, job.ID, w.id, ...)\" — ABSENT: how w.id is derived (hostname, pod name, UUID, or config constant)."
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The claim predicate filters on status and locked_until and sorts by created_at, id, but the migration adds no index. Every claim therefore scans and sorts the whole thumbnail_jobs table, and the cost grows with table size under load.",
+   "evidence": "\"db/migrations/0042_thumbnail_job_leases.sql: ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz;\" — ABSENT: any index on (status, created_at, id) or on locked_until."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Lease loss on Complete is only logged at Warn, with no metric or alert. Lease expiry and duplicate execution become invisible to ops, even though they are the new failure mode this change introduces.",
+   "evidence": "\"w.log.Warn(\\\"lease lost before completion\\\", \\\"job\\\", job.ID)\" — ABSENT: a counter, alert, or dashboard for lease loss and expired-lease reclaim."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Rolling back to the pre-PR binary restores ResetRunning at startup, which requeues every running job, including jobs leased by a live new-version worker. This is only safe because Recreate and replica count 1 guarantee no overlap, and the artifact does not state that rollback caveat.",
+   "evidence": "\"Startup ResetRunning is removed. Replica count stays 1 here\" — ABSENT: rollback guidance covering the restored ResetRunning."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Test coverage misses the paths most likely to regress: reclaiming NULL-lease rows left by the old worker, the shutdown branch that returns nil without completing, and lease loss on Complete as seen by the Run loop. The concurrency test also never asserts distinct job IDs directly.",
+   "evidence": "\"func TestClaimNeverHandsOutAJobTwice\" counts claims only; \"func TestExpiredLeaseIsReclaimedAndStaleHolderLosesIt\" uses -time.Second, with no NULL-lease case and no shutdown case."
+  }
+ ],
+ "usage": {
+  "calls": 3,
+  "tokIn": 14064,
+  "tokOut": 26489,
+  "usd": 0.013385679999999999,
+  "critMs": 44866
+ }
+}

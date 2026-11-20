@@ -1,0 +1,77 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "deploy-08",
+ "rep": 2,
+ "wallMs": 232249,
+ "verdict": "ATTACKS",
+ "confidence": 0.93,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "On a batch-level SendBulkEmail error the worker records every recipient as a permanent failure, skips Ack, and continues. Transient SES errors or throttles become permanent 'Not delivered' with no retry or backoff, and those recipients are excluded from the issue's remaining sends.",
+   "evidence": "if err != nil { for _, r := range batch.Recipients { failures.Record(ctx, batch.IssueID, r.SubscriberID, errCode(err)) } metrics.Inc(\"send.batch_failed\") continue }"
+  },
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "Production runs 48 workers at ~25 msg/s each (~1,200 msg/s) against a 300 msg/s SES account limit. QA never exercised real throttling because it ran with throttling simulated off, even though staging was observed throttling at 4 workers. Combined with the no-retry failure path, production throttling would mass-drop subscribers.",
+   "evidence": "\"SEND_WORKERS=48\"; \"300 messages/second\"; \"QA ran with SES throttling simulated off via the sandbox mock\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The launch post tells all publishers that Smart Send Time is live for everyone today, which contradicts the 5%/25%/100% gated ramp. It is an irreversible public commitment that undermines the gates and the rollback.",
+   "evidence": "\"Smart Send Time is live for every publication today\" vs \"ramp `SMART_SEND_DEFAULT` by publication cohort: 5% (week 1), 25% (week 2), 100% (week 3)\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "blocker",
+   "claim": "Smart Send Time holds issues up to 18 hours by default, yet 40% of publications (4,480) are time-sensitive news outlets (breaking news, election results, weather alerts). There is no exemption, no per-issue send-now override, and no lateness gate beyond a support-ticket count.",
+   "evidence": "\"4,480 of them (40%) are news or local-news outlets whose issues are time-sensitive\" and \"Issues are held for at most 18 hours.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The per-entry result loop indexes batch.Recipients[i] without checking that the lengths match. Misalignment would misattribute failures to the wrong subscribers. Separately, a crash between SendBulkEmail and Ack redelivers the batch and causes duplicate sends, with no idempotency mechanism.",
+   "evidence": "\"for i, res := range out.BulkEmailEntryResults { ... batch.Recipients[i].SubscriberID\" then \"q.Ack(ctx, batch)\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The performance goal is unsupported: the only end-to-end run was 11 min at 4 workers, with no run at the planned 48 workers or under real throttling. The '5× faster' public claim has no measured basis.",
+   "evidence": "\"Pass, 0 failures, 11 min\" vs \"every Inkwell issue reaches inboxes up to 5× faster\""
+  },
+  {
+   "lens": "monitoring",
+   "severity": "major",
+   "claim": "No alert or pager covers send.batch_failed, send_failures growth, or SES throttle rate. These are exactly the failure modes in the worker code. The pager triggers only on queue lag and complaint rate, so silent recipient loss would not page anyone.",
+   "evidence": "\"On-call pager: queue lag > 10 min, complaint rate > 0.1%.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "Smart Send Time accuracy (71% within ±1h) has no baseline or acceptance threshold, and the gate criteria (open-rate lift ≥ 3%, 'late' tickets < 20/week) lack control size, window, and definition, so they cannot be evaluated. Default-on ships on this evidence.",
+   "evidence": "\"2,000 sampled subscribers | — | 71%\"; \"open-rate lift ≥ 3% vs control and 'issue arrived late' support tickets < 20/week\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Smart Send Time builds a per-subscriber open-behavior profile from 90 days of opens and applies it by default. The artifact states no consent basis, disclosure, or retention policy for this derived data.",
+   "evidence": "ABSENT: consent basis, privacy notice update, or retention policy for predicted-hour data"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Turning Smart Send off releases all held issues immediately, which could spike SES volume against the 300 msg/s limit. The artifact gives no mitigation, nor any statement of whether the flag hot-reloads.",
+   "evidence": "\"held issues are released immediately\"; \"300 messages/second\""
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 22073,
+  "tokOut": 9153,
+  "usd": 0.06428694000000001,
+  "critMs": 22664
+ }
+}

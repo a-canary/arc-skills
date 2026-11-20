@@ -1,0 +1,581 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "merge-07",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "`_upload` builds a shell command via f-string and runs it with `shell=True`. `src.stem` comes from partner-chosen SFTP filenames and flows into `dest`, so a crafted filename can execute arbitrary commands on workers holding write credentials for the whole raw bucket. Spaces in names also break the command.",
+     "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "`_SUCCESS` marker is written unconditionally even when files failed. Dashboards read a partition as soon as the marker appears, so partial or empty partner data is published as complete with no signal.",
+     "evidence": "except Exception:\n            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n            failed += 1\n    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "`partition_date()` changed from UTC to naive local time. Workers run with TZ=America/Los_Angeles and the job runs at 01:30 UTC (previous evening in Pacific), so data and marker land in dt=(UTC date − 1). The UTC partition dashboards read never gets a marker and the prior day's partition is polluted or overwritten.",
+     "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "A mid-file failure leaves already-uploaded chunks orphaned in the raw partition. The local chunk and open gzip handle are never cleaned up, so scratch disk can fill. A retry writes alongside stale chunks and downstream prefix reads can double-count.",
+     "evidence": "for chunk in _write_chunks(src, work_dir):\n                _upload(chunk, partner, dt, src.stem)\n                chunk.unlink()"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "File failures are only logged and counted. `ingest_partner` returns normally, so the Airflow task is green even with failed files or total failure, and nothing alerts on the count.",
+     "evidence": "log.info(\"partner=%s dt=%s ok=%d failed=%d\", partner, dt, ok, failed)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "`subprocess.run` has no timeout or retry, so a hung gsutil blocks the nightly run, and a transient blip fails a whole multi-GB file. gsutil is also a new undeclared runtime dependency; if missing or unauthenticated, every file fails silently and the marker still goes out.",
+     "evidence": "subprocess.run(\n        f\"gsutil -q ... cp {local} {dest}\",\n        shell=True,\n        check=True,\n    )"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The claim that normalisation is unchanged is unverified. `normalise_row` now receives a csv.DictReader dict instead of a pandas Series, and the output header is fixed from each chunk's first normalised row. Rows with differing keys raise or misalign columns.",
+     "evidence": "norm = normalise_row(row)\n            if writer is None:\n                writer = csv.DictWriter(out, fieldnames=list(norm.keys()))"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Object layout changes from a single `{stem}.csv.gz` to nested `{stem}/{stem}-NNNN.csv.gz` chunks, each with its own header row. Downstream readers expecting one CSV per file would ingest header lines as data. No migration or rollback plan is given.",
+     "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Partner-controlled filenames are used unsanitized as GCS object path segments, allowing odd paths or collisions within the raw bucket.",
+     "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The performance rationale is unmeasured. 500k-row gzip chunks may fall below the 150M composite threshold, so the claimed speed-up may never apply.",
+     "evidence": "CHUNK_ROWS = 500_000 ... parallel_composite_upload_threshold=150M"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Empty or header-only source files yield zero chunks and are counted as ok with nothing ingested.",
+     "evidence": "for chunk in _write_chunks(src, work_dir): ... ok += 1"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "`ingest_partner` gains a required `work_dir` parameter with no caller updates shown, and the diff adds no tests.",
+     "evidence": "def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None:"
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 20579,
+    "tokOut": 15041,
+    "usd": 0.0654281,
+    "critMs": 30656
+   },
+   "wallMs": 76272
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Output parity with the old pandas path is unverified, and the author says a parity check must run before merge. The input to normalise_row changes from a pandas Series to a DictReader dict. NA/null/nan tokens are no longer coerced to empty, and the header is fixed from the first row with a strict key check, so raw-bucket content may silently change. The merge precondition is unmet and the job overwrites raw objects in place.",
+     "evidence": "\"I have not yet verified output parity against the old pandas path on real feeds. ... A parity check on a Northwind sample should be run before merge.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "A stale _SUCCESS marker from an earlier successful run of the same dt is never removed. If a rerun fails partway, objects are overwritten in place while the old marker stays, so dashboards read a partly rewritten partition as complete. This contradicts 'Dashboards never see a partial partition as complete'.",
+     "evidence": "ABSENT: no marker deletion before uploads begin; only \"If any file failed, `_SUCCESS` is not written and the task raises\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "An empty drop directory only logs a warning and then writes _SUCCESS, so a missing or late partner SFTP delivery produces a complete-looking empty partition. This conflicts with the 'Failures are loud' claim.",
+     "evidence": "\"if not files: log.warning(\"partner=%s dt=%s no input files\", partner, dt)\" followed by unconditional write_success_marker when failed == 0"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "A header-only or empty source file yields a gzip with no header line, because the writer and header are created only inside the row loop. It is counted as ok with rows=0 and uploaded. This breaks the stated one-header-row layout and the old header-only behaviour, with no failure signal.",
+     "evidence": "\"if writer is None: fields = list(norm.keys()); writer = csv.DictWriter(...); writer.writeheader()\" runs only inside the row loop"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "ingest_partner gains a required work_dir parameter, but no call site or DAG change is in the diff. Existing two-argument calls will raise TypeError at runtime.",
+     "evidence": "\"def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None:\" ABSENT: updated callers"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "gsutil parallel composite uploads create temporary component objects under the destination prefix. A timeout kill can leave them behind, so the 'no orphaned chunks' claim is unsupported. Strays could be read by consumers or billed.",
+     "evidence": "\"A retry overwrites the same object, so there are no orphaned chunks.\" with \"parallel_composite_upload_threshold=150M\" and subprocess.run(..., timeout=UPLOAD_TIMEOUT_S)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The 'Layout unchanged' claim is not strictly true. Filenames with characters outside [A-Za-z0-9._-] now get different object names than before.",
+     "evidence": "\"name = _safe_name(src.stem)\" versus the claim \"Layout unchanged ... as before\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "There is no overall task deadline. Each file can take up to 3 attempts of 1h each, run serially. A few stuck uploads could hold the task for many hours.",
+     "evidence": "\"each upload has a 1h timeout and up to 3 attempts with backoff\" with a sequential \"for src in files:\" loop"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Files are opened without an explicit encoding, so decoding depends on worker locale instead of the UTF-8 default of the old pandas path.",
+     "evidence": "\"src.open(newline=\\\"\\\") as fh, gzip.open(out_path, \\\"wt\\\", newline=\\\"\\\")\" with no encoding="
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The failure mode that motivated the PR is an OOM kill, which skips the finally cleanup. Partner gzips may stay on scratch disk with no startup sweep.",
+     "evidence": "\"local.unlink(missing_ok=True)\" inside finally; ABSENT: work_dir cleanup on startup"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The failure, collision and marker-gating paths have no tests in the diff, and the subprocess and shutil.which calls have no injection seam.",
+     "evidence": "ABSENT: no test changes in the diff"
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 25102,
+    "tokOut": 23323,
+    "usd": 0.0696529,
+    "critMs": 42282
+   },
+   "wallMs": 98682
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "_clear_marker treats any non-zero `gsutil stat` exit (network, auth, transient) as proof the marker is absent. The run then proceeds with the stale _SUCCESS still present while objects are rewritten, breaking the stated guarantee that dashboards never see a partly rewritten partition as complete.",
+     "evidence": "`if rm.returncode != 0:` ... `stat = subprocess.run([\"gsutil\", \"-q\", \"stat\", marker], timeout=300)` / `if stat.returncode == 0: raise RuntimeError(...)` vs. \"If the old marker cannot be removed, the task fails before touching any objects.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Only _SUCCESS is cleared. Objects from a prior run under names the current run no longer produces (renamed/dropped file, partial resend) are never removed, so the new _SUCCESS certifies a partition mixing stale and new data.",
+     "evidence": "ABSENT: any listing/deletion of existing objects under raw/{partner}/dt={dt}/ before upload; `_clear_marker` removes only `_SUCCESS`. \"A retry overwrites the same object.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The new writer's output will not be byte-identical to the old pandas output. csv.DictWriter defaults to a \"\\r\\n\" line terminator whereas pandas wrote \"\\n\"; csv.DictReader also collapses duplicate header names silently, where pandas mangled them. The PR claims layout parity and \"Layout unchanged\" despite these differences.",
+     "evidence": "`writer = csv.DictWriter(out, fieldnames=fields)` (no lineterminator); `for row in csv.DictReader(fh):` with no duplicate-header check"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Source and gzip files are opened without an explicit encoding, so behavior depends on worker locale. pandas defaulted to UTF-8; a non-UTF-8 locale can corrupt or fail non-ASCII partner data.",
+     "evidence": "`with src.open(newline=\"\") as fh, gzip.open(out_path, \"wt\", newline=\"\") as out:`"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "normalise_row is asserted unchanged, but its input changes from a pandas Series (with NaN) to a dict (with \"\"). Behavior depending on NaN/None/Series semantics could change silently, and the NA token mapping is only an approximation. The PR itself admits parity is unverified and the in-place overwrite has no versioning/backup noted, with the parity check a merge precondition that has not been run.",
+     "evidence": "\"Output parity with the old pandas path has not been verified on real feeds. Do not merge until a parity check ... has been run.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Source discovery uses a case-sensitive `*.csv` glob; files like .CSV are silently skipped, so a partition missing deliveries can still get _SUCCESS.",
+     "evidence": "`files = sorted(drop_dir.glob(\"*.csv\"))`"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The leading-slash component prefix placing temp objects at bucket root is asserted but not verified, and the lifecycle rule bounding strays is outside this PR.",
+     "evidence": "\"GSUtil:parallel_composite_upload_component_prefix=/_tmp_composite_uploads\"; \"that is a bucket config change outside this PR.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "No overall run deadline: serial uploads with 3 attempts of 1h each per file can stall or exceed the Airflow task timeout.",
+     "evidence": "`UPLOAD_TIMEOUT_S = 3600` / `UPLOAD_RETRIES = 3`; ABSENT: job-level deadline"
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 32021,
+    "tokOut": 26541,
+    "usd": 0.0774071,
+    "critMs": 51250
+   },
+   "wallMs": 125054
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR states that output parity between the pandas path and the new streaming path is unverified, and makes the parity check and the `normalise_row` review a merge precondition. Neither is shown as done. The new path changes the row input type and the NA semantics, and raw objects are overwritten in place with no backup.",
+     "evidence": "\"Output parity with the old pandas path has not been verified on real feeds. Do not merge until a parity check on a Northwind sample ... has been run\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "`_clear_partition` deletes the `_SUCCESS` marker and every object in the partition before any replacement is written or validated. There is no versioning or backup. A rerun that fails (a bad file, auth loss, a timeout, or a normalisation regression) destroys the previously good partition for that date.",
+     "evidence": "\"before any upload, `ingest_partner` deletes any existing `_SUCCESS` for the partition, then deletes every other existing object under `raw/{partner}/dt={dt}/`\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "`csv.DictReader` is used without `restval`, so short rows yield `None` for missing trailing fields. `_clean` passes `None` through to `normalise_row`, contradicting the PR's claim of `\"\"`. Rows with extra fields put a list under the key `None`, and `v in NA_TOKENS` then raises TypeError on the unhashable list. Ragged rows that pandas accepted now fail with an obscure error.",
+     "evidence": "reader = csv.DictReader(fh) ... return {k: (\"\" if v in NA_TOKENS else v) for k, v in row.items()}"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The source file is opened with `encoding=\"utf-8\"`, not `utf-8-sig`. A UTF-8 BOM stays in the first header name (e.g. `\\ufeffsku`), which silently renames the first column. pandas stripped the BOM, so this breaks parity.",
+     "evidence": "with src.open(newline=\"\", encoding=\"utf-8\") as fh"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Nothing prevents two ingest runs for the same partner and date from overlapping, for example an Airflow retry while a timed-out original is still running. The clear step of one run can delete objects the other just uploaded, and `_SUCCESS` can then certify a mixed set. The stated guarantee only holds for sequential reruns.",
+     "evidence": "ABSENT: no lock, lease, or run-scoped staging prefix around `_clear_partition` and the upload loop"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The glob matches only lowercase `*.csv`. Files such as `.CSV` or `.csv.gz` are skipped silently, so a partition can get `_SUCCESS` with files missing. This undercuts the \"failures are loud\" claim.",
+     "evidence": "files = sorted(drop_dir.glob(\"*.csv\"))"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Not-found detection depends on English gsutil stderr substrings. A gsutil version or locale change could turn a clean first run into a RuntimeError.",
+     "evidence": "elif \"matched no objects\" not in ls.stderr and \"No URLs matched\" not in ls.stderr:"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Orphaned composite components after a killed upload persist until a lifecycle rule is applied. The rule is explicitly outside this PR, so cleanup is a manual follow-up.",
+     "evidence": "\"Add a GCS lifecycle rule on that prefix (e.g. delete after 2 days); that is a bucket config change outside this PR.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Sanitising filenames changes object names for partner files with characters outside `[A-Za-z0-9._-]`. This contradicts the claim that the layout is unchanged.",
+     "evidence": "\"Layout unchanged\" vs \"sanitised to `[A-Za-z0-9._-]` before use in local paths or object names\""
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 34635,
+    "tokOut": 21501,
+    "usd": 0.0850733,
+    "critMs": 55583
+   },
+   "wallMs": 109158
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "Raw objects are overwritten in place with no versioning or backup, while the author states output parity with the pandas path is unverified and a merge precondition. A normalisation regression would permanently replace good raw data.",
+     "evidence": "\"Parity check status: NOT YET RUN.\" ... \"There is still no versioning or backup of overwritten objects\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "File discovery only matches lowercase `*.csv`. Other names (`.CSV`, etc.) are silently skipped and not counted as failures. The partition can still get `_SUCCESS` while incomplete, and `_prune_stale` then deletes any previously uploaded object for the skipped file. There is no check for in-progress SFTP files.",
+     "evidence": "files = sorted(drop_dir.glob(\"*.csv\")) ... ABSENT: logging or failure for skipped non-matching files"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "normalise_row now receives dict rows with NA tokens blanked and str values, rather than a pandas Series with NaN. It has not been reviewed for NaN/Series-dependent logic. The NA-token blanking also erases legitimate values such as country code 'NA'. Whether the old path used dtype=str is unstated, so parity is unsupported.",
+     "evidence": "\"Any logic in `normalise_row` that depends on NaN/None/Series semantics could behave differently, and the NA token mapping is only an approximation of pandas.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Lock handling can leak the lock. If the lock-creation `gsutil cp` times out after the object is created, TimeoutExpired escapes before the lock is returned or released. `_release_lock` is also unguarded, so a timeout in `finally` masks the original error and leaves the lock. Retries then fail until manual cleanup.",
+     "evidence": "res = subprocess.run([\"gsutil\", ... \"x-goog-if-generation-match:0\", \"cp\", ...], timeout=300) ... rm = subprocess.run([\"gsutil\", \"-q\", \"rm\", lock_url], timeout=300)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "On timeout, subprocess.run kills only the parent gsutil, not its parallel-composite child processes. They can keep writing during a retry or after the lock is released, so the claimed no-overlap guarantee is overstated.",
+     "evidence": "subprocess.run(cmd, check=True, timeout=UPLOAD_TIMEOUT_S) ... \"so an Airflow retry cannot overlap a timed-out original\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Correctness and recoverability depend on bucket lifecycle rules (`_locks/`, `_tmp_composite_uploads/`) that are outside the PR and not confirmed deployed. Without them, one killed worker blocks retries for that partner/date and composite orphans accumulate.",
+     "evidence": "\"the lifecycle rule is bucket config outside this PR.\" / \"that is a bucket config change outside this PR.\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "The diff bundles a streaming rewrite, locking, marker clearing, pruning, and composite-upload config with no tests. Each shells out to gsutil, so the behaviour is hard to verify or roll back in isolation.",
+     "evidence": "ABSENT: any test file or fixture in the diff."
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Stale object URLs are passed as a single argv to `gsutil rm`, which can exceed OS limits for a large stale set. Uploads are also sequential with no overall timeout.",
+     "evidence": "rm = subprocess.run([\"gsutil\", \"-q\", \"-m\", \"rm\"] + stale, timeout=3600)"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The leading-slash component prefix placing temp objects at bucket root is asserted but not demonstrated. Not-found detection also relies on exact English gsutil stderr strings.",
+     "evidence": "\"GSUtil:parallel_composite_upload_component_prefix=/_tmp_composite_uploads\" ; return \"matched no objects\" in stderr or \"No URLs matched\" in stderr"
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 42420,
+    "tokOut": 35140,
+    "usd": 0.09446439999999999,
+    "critMs": 57776
+   },
+   "wallMs": 101556
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "other",
+     "severity": "blocker",
+     "claim": "Output parity with the old pandas path has not been verified. The author states this is a merge precondition and the parity check is NOT YET RUN. Parsing, NA handling, BOM, short-row fill, and duplicate-header behaviour changed for dashboard-facing data.",
+     "evidence": "Parity check status: NOT YET RUN. ... Do not merge until a parity check on a Northwind sample (old path vs. new path, diffing decompressed output) has been run"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The NA-token mapping approximates an old read_csv call whose arguments (dtype, keep_default_na, na_values) were never confirmed. It blanks legitimate values such as country code NA across every field, and normalise_row's behaviour on the new str-dict input (vs. NaN/Series) is unreviewed.",
+     "evidence": "I have not confirmed the old call's arguments (`dtype`, `keep_default_na`, `na_values`) and the token set must be adjusted to match them."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The process-group kill guarantee covers only _upload. The backup (`-m cp`) and prune (`-m rm`) calls use plain subprocess.run with a timeout, which kills only the direct gsutil child. Parallel workers can keep copying or deleting after the timeout and after the lock is released. _run_group also has no cleanup if the parent is SIGTERMed.",
+     "evidence": "rm = subprocess.run([\"gsutil\", \"-q\", \"-m\", \"rm\"] + stale, timeout=3600)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The published _SUCCESS marker is removed and the partition backed up before any input validation. A stray non-.csv file, a recently modified file, or a name collision, all detectable up front, withdraws an already-good partition from dashboards. The PR's validation checks all run inside the loop after the marker has been cleared.",
+     "evidence": "_clear_marker(partner, dt)\n        _backup_existing(partner, dt, ...)\n        ok = failed = 0 ... if src.suffix.lower() != \".csv\": ... failed += 1"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Merge precondition (2) (lifecycle rules for _locks/, _tmp_composite_uploads/, _backups/) is not evidenced as deployed. Without the _locks/ rule a killed worker blocks retries; without the _backups/ rule, full partition copies accumulate each run. Backups and temp components also retain raw partner data with no enforced retention.",
+     "evidence": "ABSENT: confirmation that the lifecycle rules are deployed. \"Backups accumulate, so add a lifecycle rule on `_backups/` (bucket config outside this PR).\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "The tests stub normalise_row with an identity function and mock every gsutil helper. The real normaliser, _clear_marker, _backup_existing, _prune_stale, upload retries and lock-acquire failure paths have no coverage. The process-group test only asserts that a timeout raises, not that child processes die, so the data-safety invariants the PR claims are unverified.",
+     "evidence": "monkeypatch.setattr(pi, \"normalise_row\", lambda r: r) ... gsutil-calling helpers are mocked; there is no integration test against a real bucket."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The duplicate-header check uses set() over all header names, so a header with two or more empty cells (e.g. consecutive trailing commas) is rejected as duplicates. pandas accepted these by naming them Unnamed: N, so a feed that previously loaded would now fail the whole partition. The PR does not mention this case.",
+     "evidence": "if len(set(header)) != len(header):\n            # DictReader would silently collapse duplicates; pandas mangled them."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The mtime guard fails files with future-dated mtimes (negative age) on every run. It is also bypassed when the partner's transfer preserves an old source mtime. The PR acknowledges the heuristic but not the future-date failure mode.",
+     "evidence": "if time.time() - src.stat().st_mtime < MIN_FILE_AGE_S:"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "There is no run-level deadline. Up to 3 attempts × 1h per file, continuing across files after failures, can hold the lock for many hours. A hard-killed worker's stale lock blocks retries until a 1-day lifecycle rule or manual removal.",
+     "evidence": "UPLOAD_TIMEOUT_S = 3600\nUPLOAD_RETRIES = 3 ... a lifecycle rule on `_locks/` (e.g. delete after 1 day)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Backup and prune pass every object URL on the command line without batching, so large partitions could exceed argument limits. The partner name is interpolated unsanitised into wildcard listings. The leading-slash component-prefix behaviour is asserted without verification and may not match the lifecycle prefix.",
+     "evidence": "cp = subprocess.run([\"gsutil\", \"-q\", \"-m\", \"cp\"] + urls + [dest], timeout=3600) ... \"GSUtil:parallel_composite_upload_component_prefix=/_tmp_composite_uploads\""
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 65922,
+    "tokOut": 45588,
+    "usd": 0.1280894,
+    "critMs": 81213
+   },
+   "wallMs": 155593
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "Output parity with the old pandas path has not been run, and normalise_row has not been reviewed for NaN/Series-dependent logic. The old read_csv arguments (dtype, keep_default_na, na_values) are unconfirmed, so NA-token blanking and str-vs-inferred-dtype output (e.g. '007' vs '7') may differ. This rewrites the production writer for data dashboards consume, and the author lists it as a merge precondition.",
+     "evidence": "**Parity check status: NOT YET RUN.** Output parity with the old pandas path has not been verified on real feeds ... Do not merge until a parity check on a Northwind sample ... has been run"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The lifecycle rules for `_locks/`, `_tmp_composite_uploads/` and `_backups/` are not confirmed as deployed. Without the `_locks/` rule a killed worker blocks retries for that partner/date. Without the other two, raw partner data accumulates with no retention. This is an explicit merge precondition that is unmet.",
+     "evidence": "**Status of (2): NOT CONFIRMED.** The rules are bucket config outside this PR and I have no evidence they are deployed"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The stale `_SUCCESS` marker is deleted before the backup runs. If the backup (list or copy) fails on a transient error, the task raises after the good partition has already been withdrawn from dashboards with no data change. The backup could run before the marker is cleared, since the marker only needs to be gone before the first overwrite.",
+     "evidence": "_clear_marker(partner, dt)\n        _backup_existing(partner, dt, datetime.now(timezone.utc).strftime(\"%Y%m%dT%H%M%SZ\"))"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Input discovery uses is_file(), which silently skips subdirectories and dangling symlinks, contradicting the stated rule that nothing is skipped silently. It also follows symlinks, so a partner-created `*.csv` symlink could make the worker read an arbitrary local file and upload it. A delivery placed in a subfolder is ignored and the partition can still get _SUCCESS.",
+     "evidence": "entries = sorted(p for p in drop_dir.iterdir() if p.is_file())"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Two gsutil-dependent behaviours are unverified and only exercised against mocks. First, whether a leading '/' in the component prefix puts composite components at the bucket root; if wrong, temporary raw-data objects land inside consumer-visible partitions. Second, whether the 'not found' stderr strings match real gsutil output; if not, the first run for any new partition fails. No test asserts the -o flags, and the not-found test reuses the code's own string.",
+     "evidence": "\"-o\", \"GSUtil:parallel_composite_upload_component_prefix=/_tmp_composite_uploads\" ... return \"matched no objects\" in stderr or \"No URLs matched\" in stderr"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "There is no task-level time budget. Files upload serially with up to 1h per attempt and 3 attempts each, plus 1h backup and prune calls. A multi-GB feed with a few failing uploads can overrun the 01:30 UTC window dashboards depend on, and no Airflow execution timeout is stated.",
+     "evidence": "UPLOAD_TIMEOUT_S = 3600 ... \"each upload has a 1h timeout and up to 3 attempts with backoff\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "New partner-facing failure rules are introduced without any notice or impact check. Duplicate non-blank headers that pandas previously loaded now produce no output. A stray non-.csv file fails the whole partition. One bad file clears `_SUCCESS` and withholds the entire partner partition until a rerun succeeds.",
+     "evidence": "so that case no longer produces output at all ... A content failure therefore withholds the partition until a rerun succeeds"
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 82013,
+    "tokOut": 43756,
+    "usd": 0.1355577,
+    "critMs": 104332
+   },
+   "wallMs": 197320
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "The streaming writer replaces the production path for every partner, but output parity with the old pandas path has not been run. NA handling, string-vs-inferred dtypes, the normaliser's inputs and the old read_csv arguments are all unconfirmed. Dashboards read the partition as soon as _SUCCESS appears, so wrong data would be published unchecked. The author states the PR must not merge until parity is verified.",
+     "evidence": "**Parity check status: NOT YET RUN.** Output parity with the old pandas path has not been verified on real feeds... Do not merge until a parity check on a Northwind sample ... has been run"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR's own merge preconditions are unmet. The lifecycle rules for _locks/, _backups/ and _tmp_composite_uploads/ are not confirmed. The scratch-bucket gsutil check is not run. The partner/stray-file scan and notice are not done. The Airflow execution_timeout is not set. Without the _locks/ rule, one killed worker blocks retries for that partner/date. Without the other two, raw partner data accumulates with no retention.",
+     "evidence": "**Status of (2): NOT CONFIRMED.** ... **Status: NOT RUN.** ... **Status: NOT DONE.** ... **Status: NOT DONE.**"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Symlink and recent-mtime checks run only in _preflight, but files are opened much later in _write_gzip, after the lock, backup and marker clear, and serially over hours. A partner with drop write access can swap a file for a symlink after preflight and get an arbitrary local file read and uploaded. A file still being rewritten can also be read mid-write, and the truncated last row is silently accepted via restval=\"\". This contradicts the stated guarantee.",
+     "evidence": "\"Symlinks are rejected outright, so a partner-created `x.csv` link cannot make the worker read and upload an arbitrary local file.\" vs. `with src.open(newline=\"\", encoding=\"utf-8-sig\") as fh` in _write_gzip (no re-check, no O_NOFOLLOW)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The not-found stderr strings are unverified against real gsutil. Every nightly run targets a new dt= partition, so _clear_marker and _backup_existing hit the not-found branch on nearly every run. If the strings do not match, every nightly ingest fails, not just the first run for a new partition.",
+     "evidence": "\"UNVERIFIED against real gsutil output\" ... return \"matched no objects\" in stderr or \"No URLs matched\" in stderr"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "_acquire_lock cleans up only on TimeoutExpired. If gsutil's internal retry creates the lock server-side and then gets a 412 on the retried attempt, the non-zero return raises without a token check or release. That leaves a stale lock with no owner, and same-day retries fail until it is removed by hand.",
+     "evidence": "if res.returncode != 0: raise RuntimeError(f\"could not acquire {lock_url} (another run in progress, a stale lock, \""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "Partner-facing rules become stricter at merge. Any stray entry fails the whole run, duplicate headers fail the file, a header-only file is a hard failure, and one bad file withholds the partner's entire partition. Historical feeds have not been scanned and no partner/ops notice has gone out, so deliveries that succeed today could start failing.",
+     "evidence": "\"I have not checked historical feeds for duplicate headers or stray files, and no partner/ops notice has gone out\" and \"A source file with a header but no data rows\" listed under failures"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The NA-token mapping blanks legitimate values in every column, including country code NA. The old read_csv arguments (keep_default_na, na_values, dtype) were never confirmed, so downstream data may change without confirmed intent.",
+     "evidence": "\"This also blanks legitimate values such as country code `NA`\" and \"I have not confirmed the old call's arguments (`dtype`, `keep_default_na`, `na_values`)\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Backup and prune pass every object URL as argv elements. A partition with many objects can exceed the OS argument-size limit. The step then fails before any copy or delete and blocks the partition, with the marker possibly already cleared in the prune case. gsutil -I (stdin) avoids this.",
+     "evidence": "cp = _run_group([\"gsutil\", \"-q\", \"-m\", \"cp\"] + urls + [dest], 3600) ... rm = _run_group([\"gsutil\", \"-q\", \"-m\", \"rm\"] + stale, 3600)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Mutual exclusion is best-effort. gsutil children can survive a plain SIGTERM or SIGKILL of the worker and keep copying or deleting after the lock is released or goes stale. A rerun could overlap them, and a surviving prune could delete objects from a newer run's set. The claim that children die with the parent rests on an unevidenced assumption about Airflow's SIGTERM handling.",
+     "evidence": "\"in that case the children may survive (the lock is also left stale, as above)\" and \"(`BaseException`, which covers Airflow's SIGTERM-to-exception handling and `KeyboardInterrupt`)\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "No Airflow execution_timeout is set and TASK_BUDGET_S is a placeholder. The budget is checked only between files, so worst case stacks the budget, a file's 3x1h upload retries, and the 1h backup and prune. The task can hold the worker for many hours.",
+     "evidence": "TASK_BUDGET_S = 3 * 3600 ... \"a placeholder to be tuned\" ... \"(5) set the Airflow `execution_timeout` ... Status: NOT DONE\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Rollback is a manual gsutil cp from the backup prefix, with no runbook. It restores objects but not the _SUCCESS marker, so the partition stays withheld during recovery.",
+     "evidence": "\"recoverable from the backup prefix with a manual `gsutil cp`; there is no automated restore.\""
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 93860,
+    "tokOut": 48650,
+    "usd": 0.1584773,
+    "critMs": 96233
+   },
+   "wallMs": 216922
+  }
+ ],
+ "artifact": "PR #58: Stream partner feeds instead of loading into pandas; upload with gsutil\n\nThe Northwind feed hit 3.1 GB last week and the ingest task OOM-killed the worker.\nThis rewrites `ingest_partner` to stream rows through the normaliser into one gzip CSV per source file on scratch disk, then push each with gsutil (parallel composite uploads are much faster than the client library for multi-GB objects).\n\n- **Layout unchanged:** one `raw/{partner}/dt={dt}/{name}.csv.gz` object per source file with a single header row, as before. No migration is needed. A retry overwrites the same object. A source file with no data rows is treated as a failure (see Failures), so no header-less object is ever written. The writer emits `\\n` line terminators and UTF-8, matching what pandas wrote. Blank header cells are named `Unnamed: N` (N = column index), as pandas did, so feeds with several blank trailing headers still load. Duplicate non-blank header names in a source file are rejected as a failure (pandas would have mangled them to `a`, `a.1`; the dict-based reader would silently collapse them), so that case no longer produces output at all.\n- **Behaviour changes visible to partners/ops:** three rules are stricter than before: (a) duplicate non-blank headers fail the file, (b) any stray non-`.csv` entry, subdirectory or symlink in the drop fails the whole run, (c) one bad file (content failure) withholds the partner's whole partition until a rerun succeeds. I have not checked historical feeds for duplicate headers or stray files, and no partner/ops notice has gone out; both are merge preconditions below.\n- **Partition date stays UTC:** `partition_date()` is unchanged. Workers run in America/Los_Angeles and the job runs at 01:30 UTC, so local time would land in the wrong partition.\n- **Input discovery is explicit:** every entry in the drop directory is considered, not just regular files. `.csv` regular files are matched case-insensitively (`.CSV` is processed). Anything else (`.part`, `.tmp`, `.txt`, a subdirectory, a symlink of any name, a special file) is never skipped silently: it is logged and fails the run, so the partition cannot get `_SUCCESS` (or have objects pruned) while a delivery looks incomplete. Symlinks are rejected outright, so a partner-created `x.csv` link cannot make the worker read and upload an arbitrary local file. A `.csv` modified within the last 10 minutes (`MIN_FILE_AGE_S`) also fails the run, as a guard against reading a file SFTP is still writing. This is an mtime heuristic, not a guarantee; partners that upload under the final name and take longer between writes than that are not detectable here.\n- **Up-front validation before anything is touched:** the checks that need only directory metadata (non-regular entry or symlink, non-`.csv` file, recently modified `.csv`, two files that sanitise to the same name) run in a preflight step before the lock is taken, before the backup and before the stale `_SUCCESS` is removed. If any fail, the task raises and the existing partition, marker included, is left exactly as it was, so a stray `.part` file cannot withdraw an already-good partition from dashboards. Problems that can only be found by reading file content (no data rows, duplicate headers, extra fields, normaliser key mismatch) are still discovered during processing, after the marker has been cleared. Pre-scanning multi-GB files would double the read cost, so I have not done that. A content failure therefore withholds the partition until a rerun succeeds (see below).\n- **Failures are loud:** a file that fails during processing is logged and counted, and the run continues so other files still get processed. If any file failed, `_SUCCESS` is not written and the task raises, so Airflow marks it failed and alerts. The following count as failures:\n  - an empty drop directory, or one with no `.csv` files (a missing or late partner delivery);\n  - a subdirectory, symlink, special file or non-`.csv` file in the drop directory (preflight);\n  - a `.csv` modified within the last 10 minutes (preflight);\n  - two files that sanitise to the same name (preflight);\n  - a source file with a header but no data rows;\n  - a source file with duplicate non-blank header names;\n  - a row with more fields than the header (pandas also rejects these).\n- **Backup first, then stale marker cleared, stale objects pruned last:** after preflight passes, `ingest_partner` first copies all existing objects under the partition server-side to `gs://{bucket}/_backups/{partner}/dt={dt}/{run_id}/` (`run_id` is the UTC start time). The backup does not modify the partition, so a transient list/copy failure fails the task with the existing partition and its `_SUCCESS` still intact. Only after the backup succeeds, and before any upload, is any existing `_SUCCESS` deleted, so dashboards stop reading the partition just before objects are replaced. Existence of the marker is checked with `gsutil ls`, and only a \"not found\" result is treated as absent; any other error (network, auth) fails the task before touching any objects. Objects are overwritten in place (each overwrite is atomic per object) as their replacements upload, and only after every file has uploaded successfully are objects under the partition that are not part of the new set (renamed or dropped files, partial resends) deleted, immediately before `_SUCCESS` is written. A rerun therefore cannot leave stale objects under a new `_SUCCESS`, and a rerun that fails (bad file content, auth loss, timeout, normalisation regression) no longer deletes the previously uploaded objects. Once the marker has been removed, that partition is withheld from dashboards until a rerun succeeds. A failed rerun may leave a mix of old and newly overwritten objects, but never with a marker. Overwritten or pruned objects are recoverable from the backup prefix with a manual `gsutil cp`; there is no automated restore. Backups accumulate and contain raw partner data, so they need a lifecycle rule on `_backups/` whose retention is no longer than the raw bucket's own policy (bucket config outside this PR; see Merge preconditions).\n- **No concurrent runs per partner/date:** `ingest_partner` takes a lock object `gs://{bucket}/_locks/{partner}/dt={dt}.lock`, created with `x-goog-if-generation-match:0` so creation fails if it already exists. The lock body is a random per-run token. If the create command times out, the lock may still have landed, so the token is read back and the lock deleted only if it is ours before the error is raised. Release also deletes the lock only if the token matches, never raises (it runs in `finally` and must not mask the original error), and logs if it could not release. If the lock cannot be created, the task fails before touching the partition, so an Airflow retry normally cannot overlap a still-running original. A hard-killed worker can leave a stale lock, which makes retries fail loudly (the error message includes the `gsutil rm` command) until it is removed; a lifecycle rule on `_locks/` (e.g. delete after 1 day) or manual deletion clears it. This is best-effort mutual exclusion, not a fencing token: a request already in flight to GCS when a process is killed may still complete.\n- **No shell:** gsutil is invoked with an argument list (no `shell=True`). Partner-chosen filenames are sanitised to `[A-Za-z0-9._-]` before use in local paths or object names.\n- **Upload resilience:** each upload has a 1h timeout and up to 3 attempts with backoff. Every gsutil call that runs with `-m` or parallel composite uploads (the upload, the backup `cp` and the prune `rm`) goes through `_run_group`: it runs in its own process group, and on timeout, or on any exception or interrupt in the parent (`BaseException`, which covers Airflow's SIGTERM-to-exception handling and `KeyboardInterrupt`), the whole group is SIGKILLed. gsutil's parallel workers therefore die with the parent rather than continuing to write, copy or delete during a retry or after the lock is released. A worker that is itself SIGKILLed, or a plain SIGTERM with no Python handler, gives the parent no chance to clean up; in that case the children may survive (the lock is also left stale, as above). The task fails fast if `gsutil` is not on PATH. Missing auth surfaces as failed files, which means no marker and a failed task. The local gzip is always removed in a `finally`, and file handles are closed by context managers.\n- **Task time budget:** files upload serially, so worst-case per-file time (3 x 1h attempts) can add up. `TASK_BUDGET_S` (currently 3h; a placeholder to be tuned to the dashboards' freshness SLA) is checked before each file: once exceeded, the task raises, no marker is written and the lock is released. It cannot interrupt a file already in flight, so the worst case is the budget plus one file's retries. It is not a replacement for an Airflow `execution_timeout` on the task, which lives in the DAG definition outside this diff and should be set there too.\n- **Composite upload temp objects:** gsutil composite uploads write temporary component objects and normally delete them on success. A timeout kill can leave them behind. I previously claimed there would be no orphans, which was wrong. Components are now directed to a separate `_tmp_composite_uploads/` prefix at the bucket root, outside any `dt=` partition, so consumers of a partition never see them. Strays after a killed upload are still possible. Correctness does not depend on cleanup, but storage accumulates without it, and the components contain raw partner data: add a GCS lifecycle rule on that prefix (e.g. delete after 2 days), which is bucket config outside this PR. The leading `/` in the `parallel_composite_upload_component_prefix` value is my reading of gsutil's docs (absolute prefix, relative to the bucket root); it has not been tried against a real bucket, and the tests only mock gsutil, so see Merge preconditions.\n- **gsutil output matching:** `_not_found` matches the stderr strings `matched no objects` / `No URLs matched`. These are from memory of gsutil's messages and are likewise unverified against a real bucket; if they do not match, the first run for any new partition would fail loudly (safe direction, but disruptive). The unit test for it necessarily reuses the same strings, so it proves the branching, not the match.\n- **Signature:** `work_dir` is now optional. If omitted, a temporary directory is created and removed per run, so existing two-argument callers keep working.\n- **Normalisation:** `normalise_row` itself is unchanged, but it now receives a `csv.DictReader` dict (all values `str`) instead of a pandas Series (with NaN). The reader uses `restval=\"\"`, so short rows get `\"\"` for missing trailing fields (pandas gave NaN, written as empty), and files are read as `utf-8-sig` so a leading BOM is stripped from the first header name as pandas did. Any logic in `normalise_row` that depends on NaN/None/Series semantics or on pandas dtype inference could behave differently, and that review has not been done yet (it is part of the parity precondition below). pandas `read_csv` (with default NA handling) turned NA-like tokens (`NA`, `null`, `nan`, etc.) into NaN, which `to_csv` wrote as empty. The reader now maps the same default token set to `\"\"` in every column to approximate that. This also blanks legitimate values such as country code `NA`; if the old call used default NA handling, that is the same behaviour as before, not a new regression, but I have not confirmed the old call's arguments (`dtype`, `keep_default_na`, `na_values`), and the token set must be adjusted to match them. Because the new reader keeps every value as a string, columns that pandas dtype-inferred may format differently (e.g. `007` stays `007` where inference to int would have written `7`, or `1.0` vs `1`); the parity check must look for this explicitly. `NA_TOKENS` is a single module constant so that adjustment is a one-line change. The writer fixes the header from the file's first normalised row and raises on any row whose keys differ, so a mismatch fails the file instead of misaligning columns.\n- **Tests:** `tests/test_partner_ingest.py` covers the gzip writer (BOM, NA tokens, short rows, blank headers, header-only, duplicate headers, extra fields, empty file), filename sanitising, the backup/marker/upload/prune/success ordering, preflight failures that must leave the partition untouched (non-`.csv` file, recently modified file, name collision, subdirectory, symlink, empty drop), content failures that must withhold `_SUCCESS` and pruning, the task time budget, `_clear_marker` (present / absent / error), `_backup_existing` failure, `_prune_stale` selecting only stale objects, upload retries, lock-acquire failure, lock release safety, and a process-group test that checks a child process spawned by the killed command is actually dead. `normalise_row` is stubbed with an identity function in the ingest tests so they isolate the streaming and ordering logic; the real normaliser relies on its own existing tests and the parity check below, not on these. gsutil calls are mocked; there is no integration test against a real bucket.\n- **Parity check status: NOT YET RUN.** Output parity with the old pandas path has not been verified on real feeds, and I have no results to report yet. Do not merge until a parity check on a Northwind sample (old path vs. new path, diffing decompressed output) has been run, including a review of `normalise_row` for NaN/Series-dependent logic, a check of the old `read_csv` arguments (dtype, NA handling) against the new reader, and a look for string-vs-inferred-dtype differences (leading zeros, float formatting). Results will be posted on this PR before merge. The backup prefix makes a bad overwrite recoverable, but this check remains a merge precondition.\n- **Merge preconditions:** (1) the parity check above, including confirming the old `read_csv` arguments and adjusting `NA_TOKENS` to match; (2) the lifecycle rules for `_locks/`, `_tmp_composite_uploads/` and `_backups/` are deployed and confirmed in the bucket config, since without the `_locks/` rule one killed worker blocks retries for that partner/date until someone removes the lock by hand, and without the other two, raw partner data accumulates with no retention. **Status of (2): NOT CONFIRMED.** The rules are bucket config outside this PR and I have no evidence they are deployed; I will link the config change here before merge. (3) a manual check against a scratch bucket with real gsutil that composite components land under `_tmp_composite_uploads/` (not inside any `dt=` prefix) and that `ls` on a missing partition/marker produces stderr matching `_not_found`. **Status: NOT RUN.** (4) a scan of recent drops for each partner for duplicate headers, subdirectories and stray non-`.csv` files, and a heads-up to partner ops about the stricter rules above. **Status: NOT DONE.** (5) set the Airflow `execution_timeout` on the task and tune `TASK_BUDGET_S` to the dashboards' SLA (DAG config, outside this diff). **Status: NOT DONE.**\n\ndiff --git a/pipelines/partner_ingest.py b/pipelines/partner_ingest.py\nindex a17c3e2..f48b0d9 100644\n--- a/pipelines/partner_ingest.py\n+++ b/pipelines/partner_ingest.py\n@@ -1,52 +1,300 @@\n+import csv\n+import gzip\n import logging\n+import os\n+import re\n+import shutil\n+import signal\n+import subprocess\n+import tempfile\n+import time\n+import uuid\n from datetime import datetime, timezone\n from pathlib import Path\n+from typing import Optional\n\n-import pandas as pd\n-from google.cloud import storage\n-\n from pipelines.normalise import normalise_row\n from pipelines.markers import write_success_marker\n\n log = logging.getLogger(__name__)\n BUCKET = \"acme-retail-raw\"\n+UPLOAD_TIMEOUT_S = 3600\n+UPLOAD_RETRIES = 3\n+MIN_FILE_AGE_S = 600\n+# Soft budget for the whole task, checked between files. Placeholder: tune to the dashboard SLA.\n+TASK_BUDGET_S = 3 * 3600\n+# Mirrors pandas read_csv default NA tokens, which the old path coerced to empty.\n+# Must be adjusted to match the old read_csv call's keep_default_na/na_values once confirmed.\n+NA_TOKENS = {\n+    \"\", \"#N/A\", \"#N/A N/A\", \"#NA\", \"-1.#IND\", \"-1.#QNAN\", \"-NaN\", \"-nan\",\n+    \"1.#IND\", \"1.#QNAN\", \"<NA>\", \"N/A\", \"NA\", \"NULL\", \"NaN\", \"None\",\n+    \"n/a\", \"nan\", \"null\",\n+}\n\n\n def partition_date() -> str:\n     return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n\n\n+def _safe_name(stem: str) -> str:\n+    # Partner-chosen filenames: restrict to a safe character set.\n+    return re.sub(r\"[^A-Za-z0-9._-]\", \"_\", stem)\n+\n+\n+def _clean(row: dict) -> dict:\n+    return {k: (\"\" if v in NA_TOKENS else v) for k, v in row.items()}\n+\n+\n+def _write_gzip(src: Path, out_path: Path) -> int:\n+    rows = 0\n+    # utf-8-sig strips a leading BOM so the first header name is not renamed (pandas did the same).\n+    with src.open(newline=\"\", encoding=\"utf-8-sig\") as fh, \\\n+            gzip.open(out_path, \"wt\", newline=\"\", encoding=\"utf-8\") as out:\n+        header = next(csv.reader(fh), None)\n+        if header is None:\n+            raise ValueError(\"source file is empty\")\n+        # Blank header cells get pandas-style names so several blanks are not \"duplicates\".\n+        header = [h if h != \"\" else f\"Unnamed: {i}\" for i, h in enumerate(header)]\n+        if len(set(header)) != len(header):\n+            # DictReader would silently collapse duplicates; pandas mangled them.\n+            raise ValueError(\"duplicate header names in source file\")\n+        # restval=\"\" fills short rows with empty strings instead of None.\n+        reader = csv.DictReader(fh, fieldnames=header, restval=\"\")\n+        writer = None\n+        fields: list[str] = []\n+        for row in reader:\n+            if None in row:\n+                # Extra fields land under the None key as a list; pandas rejects these rows too.\n+                raise ValueError(f\"data row {rows + 1}: more fields than header\")\n+            norm = normalise_row(_clean(row))\n+            if writer is None:\n+                fields = list(norm.keys())\n+                writer = csv.DictWriter(out, fieldnames=fields, lineterminator=\"\\n\")\n+                writer.writeheader()\n+            elif set(norm.keys()) != set(fields):\n+                raise ValueError(f\"row {rows + 1}: keys differ from header\")\n+            writer.writerow(norm)\n+            rows += 1\n+    if rows == 0:\n+        # No data rows means no normalised header; do not upload a header-less object.\n+        raise ValueError(\"source file has no data rows\")\n+    return rows\n+\n+\n+def _run_group(cmd: list[str], timeout: int, capture: bool = False) -> subprocess.CompletedProcess:\n+    # Own process group so a timeout (or any exception/interrupt in this process) kills\n+    # gsutil's -m / composite-upload worker children too, not just the parent.\n+    pipe = subprocess.PIPE if capture else None\n+    proc = subprocess.Popen(\n+        cmd, start_new_session=True, stdout=pipe, stderr=pipe, text=capture\n+    )\n+    try:\n+        out, err = proc.communicate(timeout=timeout)\n+    except BaseException:\n+        try:\n+            os.killpg(proc.pid, signal.SIGKILL)\n+        except ProcessLookupError:\n+            pass\n+        proc.wait()\n+        raise\n+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)\n+\n+\n+def _upload(local: Path, partner: str, dt: str, name: str) -> None:\n+    dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{name}.csv.gz\"\n+    cmd = [\n+        \"gsutil\", \"-q\",\n+        \"-o\", \"GSUtil:parallel_composite_upload_threshold=150M\",\n+        # Leading \"/\" puts component objects at the bucket root, outside any dt= partition.\n+        # UNVERIFIED against real gsutil; see Merge preconditions (3).\n+        \"-o\", \"GSUtil:parallel_composite_upload_component_prefix=/_tmp_composite_uploads\",\n+        \"cp\", str(local), dest,\n+    ]\n+    for attempt in range(1, UPLOAD_RETRIES + 1):\n+        try:\n+            rc = _run_group(cmd, UPLOAD_TIMEOUT_S).returncode\n+            if rc != 0:\n+                raise subprocess.CalledProcessError(rc, cmd)\n+            return\n+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):\n+            if attempt == UPLOAD_RETRIES:\n+                raise\n+            log.warning(\"upload attempt %d/%d failed for %s\", attempt, UPLOAD_RETRIES, dest)\n+            time.sleep(5 * 2**attempt)\n+\n+\n+def _not_found(stderr: str) -> bool:\n+    # UNVERIFIED against real gsutil output; see Merge preconditions (3).\n+    return \"matched no objects\" in stderr or \"No URLs matched\" in stderr\n+\n+\n+def _preflight(partner: str, dt: str, entries: list[Path]) -> None:\n+    # Metadata-only checks, run before the lock/backup/marker so a bad drop cannot\n+    # withdraw an already-good partition from dashboards.\n+    problems: list[str] = []\n+    names: dict[str, str] = {}\n+    now = time.time()\n+    for src in entries:\n+        if src.is_symlink() or not src.is_file():\n+            # Subdirectories, symlinks (could point at arbitrary local files) and special files.\n+            problems.append(f\"{src.name}: not a regular file (subdirectory, symlink or special file)\")\n+            continue\n+        if src.suffix.lower() != \".csv\":\n+            problems.append(f\"{src.name}: not a .csv (unexpected or in-progress file)\")\n+            continue\n+        if now - src.stat().st_mtime < MIN_FILE_AGE_S:\n+            problems.append(f\"{src.name}: modified within the last {MIN_FILE_AGE_S}s; upload may be in progress\")\n+        name = _safe_name(src.stem)\n+        if name in names:\n+            problems.append(f\"{src.name}: sanitised name collides with {names[name]}\")\n+        names[name] = src.name\n+    if problems:\n+        for p in problems:\n+            log.error(\"partner=%s dt=%s preflight: %s\", partner, dt, p)\n+        raise RuntimeError(\n+            f\"partner={partner} dt={dt}: {len(problems)} preflight problem(s); partition left untouched\"\n+        )\n+\n+\n+def _acquire_lock(partner: str, dt: str, work_dir: Path) -> tuple[str, str]:\n+    # Create-if-absent lock so two runs for the same partner/date cannot overlap.\n+    lock_url = f\"gs://{BUCKET}/_locks/{partner}/dt={dt}.lock\"\n+    token = uuid.uuid4().hex\n+    body = work_dir / \"lock.txt\"\n+    body.write_text(token)\n+    try:\n+        res = subprocess.run(\n+            [\"gsutil\", \"-q\", \"-h\", \"x-goog-if-generation-match:0\", \"cp\", str(body), lock_url],\n+            capture_output=True, text=True, timeout=300,\n+        )\n+    except subprocess.TimeoutExpired:\n+        # The create may have landed before the kill; if the lock holds our token, remove it.\n+        _release_lock(lock_url, token)\n+        raise\n+    finally:\n+        body.unlink(missing_ok=True)\n+    if res.returncode != 0:\n+        raise RuntimeError(\n+            f\"could not acquire {lock_url} (another run in progress, a stale lock, \"\n+            f\"or a storage error; if stale, remove with `gsutil rm {lock_url}`): {res.stderr.strip()}\"\n+        )\n+    return lock_url, token\n+\n+\n+def _release_lock(lock_url: str, token: Optional[str] = None) -> None:\n+    # Never raises: runs in finally blocks and must not mask the original error.\n+    try:\n+        if token is not None:\n+            cat = subprocess.run(\n+                [\"gsutil\", \"-q\", \"cat\", lock_url], capture_output=True, text=True, timeout=300\n+            )\n+            if cat.returncode != 0 or cat.stdout.strip() != token:\n+                return  # lock absent or held by another run: do not delete it\n+        rm = subprocess.run([\"gsutil\", \"-q\", \"rm\", lock_url], timeout=300)\n+        if rm.returncode != 0:\n+            log.error(\"could not release lock %s; remove it manually\", lock_url)\n+    except Exception:\n+        log.exception(\"could not release lock %s; remove it manually\", lock_url)\n+\n+\n+def _clear_marker(partner: str, dt: str) -> None:\n+    # Remove only the stale _SUCCESS; other objects are pruned after a fully successful run.\n+    marker = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/_SUCCESS\"\n+    ls = subprocess.run(\n+        [\"gsutil\", \"ls\", marker], capture_output=True, text=True, timeout=300\n+    )\n+    if ls.returncode == 0:\n+        rm = subprocess.run([\"gsutil\", \"-q\", \"rm\", marker], timeout=300)\n+        if rm.returncode != 0:\n+            raise RuntimeError(f\"could not remove stale marker {marker}\")\n+    elif not _not_found(ls.stderr):\n+        # Not a clean \"not found\": network/auth/etc. Do not assume the marker is absent.\n+        raise RuntimeError(f\"could not check for stale marker {marker}: {ls.stderr.strip()}\")\n+\n+\n+def _backup_existing(partner: str, dt: str, run_id: str) -> None:\n+    # Copy objects about to be overwritten or pruned to a backup prefix (server-side), so a bad run is recoverable.\n+    prefix = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/\"\n+    ls = subprocess.run([\"gsutil\", \"ls\", prefix + \"**\"], capture_output=True, text=True, timeout=300)\n+    if ls.returncode != 0:\n+        if _not_found(ls.stderr):\n+            return\n+        raise RuntimeError(f\"could not list {prefix}: {ls.stderr.strip()}\")\n+    urls = [u.strip() for u in ls.stdout.splitlines() if u.strip()]\n+    if urls:\n+        dest = f\"gs://{BUCKET}/_backups/{partner}/dt={dt}/{run_id}/\"\n+        # -m spawns parallel workers: run in a process group so a timeout kills them all.\n+        cp = _run_group([\"gsutil\", \"-q\", \"-m\", \"cp\"] + urls + [dest], 3600)\n+        if cp.returncode != 0:\n+            raise RuntimeError(f\"could not back up {prefix} to {dest}\")\n+\n+\n+def _prune_stale(partner: str, dt: str, keep: set[str]) -> None:\n+    # Called only after every file uploaded: delete objects not part of this run's set.\n+    prefix = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/\"\n+    ls = subprocess.run(\n+        [\"gsutil\", \"ls\", prefix + \"**\"], capture_output=True, text=True, timeout=300\n+    )\n+    if ls.returncode != 0:\n+        if _not_found(ls.stderr):\n+            return\n+        raise RuntimeError(f\"could not list {prefix}: {ls.stderr.strip()}\")\n+    keep_urls = {f\"{prefix}{n}.csv.gz\" for n in keep}\n+    stale = [u.strip() for u in ls.stdout.splitlines() if u.strip() and u.strip() not in keep_urls]\n+    if stale:\n+        log.info(\"pruning %d stale object(s) under %s\", len(stale), prefix)\n+        # -m spawns parallel workers: run in a process group so a timeout kills them all.\n+        rm = _run_group([\"gsutil\", \"-q\", \"-m\", \"rm\"] + stale, 3600)\n+        if rm.returncode != 0:\n+            raise RuntimeError(f\"could not remove stale objects under {prefix}\")\n+\n+\n+def ingest_partner(partner: str, drop_dir: Path, work_dir: Optional[Path] = None) -> None:\n+    if shutil.which(\"gsutil\") is None:\n+        raise RuntimeError(\"gsutil not found on PATH\")\n+    if work_dir is None:\n+        with tempfile.TemporaryDirectory(prefix=f\"ingest_{partner}_\") as tmp:\n+            return ingest_partner(partner, drop_dir, Path(tmp))\n+    dt = partition_date()\n+    # All entries, not just regular files: subdirectories and symlinks must not be skipped silently.\n+    entries = sorted(drop_dir.iterdir())\n+    files = [p for p in entries if p.suffix.lower() == \".csv\"]\n+    if not files:\n+        # A missing or late delivery must not look like a complete (empty) partition.\n+        raise RuntimeError(f\"partner={partner} dt={dt}: no input files in {drop_dir}\")\n+    # Everything detectable from metadata is checked before the backup/marker removal.\n+    _preflight(partner, dt, entries)\n+    deadline = time.monotonic() + TASK_BUDGET_S\n+    lock_url, token = _acquire_lock(partner, dt, work_dir)\n+    try:\n+        # Backup first: it does not modify the partition, so a transient failure here\n+        # leaves the existing partition and its _SUCCESS intact.\n+        _backup_existing(partner, dt, datetime.now(timezone.utc).strftime(\"%Y%m%dT%H%M%SZ\"))\n+        _clear_marker(partner, dt)\n+        ok = failed = 0\n+        seen: set[str] = set()\n+        for src in files:\n+            if time.monotonic() > deadline:\n+                raise RuntimeError(\n+                    f\"partner={partner} dt={dt}: task time budget ({TASK_BUDGET_S}s) exceeded; _SUCCESS not written\"\n+                )\n+            name = _safe_name(src.stem)  # unique: guaranteed by _preflight\n+            local = work_dir / f\"{name}.csv.gz\"\n+            try:\n+                seen.add(name)\n+                rows = _write_gzip(src, local)\n+                _upload(local, partner, dt, name)\n+                log.info(\"uploaded %s rows=%d\", src.name, rows)\n+                ok += 1\n+            except Exception:\n+                log.exception(\"partner=%s file=%s failed\", partner, src.name)\n+                failed += 1\n+            finally:\n+                local.unlink(missing_ok=True)\n+        log.info(\"partner=%s dt=%s ok=%d failed=%d\", partner, dt, ok, failed)\n+        if failed:\n+            # No _SUCCESS marker: dashboards must not treat a partial partition as complete.\n+            raise RuntimeError(\n+                f\"partner={partner} dt={dt}: {failed} file(s) failed; _SUCCESS not written\"\n+            )\n+        _prune_stale(partner, dt, seen)\n+        write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")\n+    finally:\n+        _release_lock(lock_url, token)\ndiff --git a/tests/test_partner_ingest.py b/tests/test_partner_ingest.py\nnew file mode 100644\n--- /dev/null\n+++ b/tests/test_partner_ingest.py\n@@ -0,0 +1,163 @@\n+import gzip\n+import os\n+import subprocess\n+import time\n+from pathlib import Path\n+\n+import pytest\n+\n+from pipelines import partner_ingest as pi\n+\n+\n+@pytest.fixture(autouse=True)\n+def identity_normalise(monkeypatch):\n+    # Isolates streaming/ordering logic; the real normaliser is covered by its own tests + parity check.\n+    monkeypatch.setattr(pi, \"normalise_row\", lambda r: r)\n+\n+\n+@pytest.fixture\n+def dirs(tmp_path):\n+    drop, work = tmp_path / \"drop\", tmp_path / \"work\"\n+    drop.mkdir()\n+    work.mkdir()\n+    return drop, work\n+\n+\n+@pytest.fixture\n+def calls(monkeypatch):\n+    log = []\n+    monkeypatch.setattr(pi.shutil, \"which\", lambda _: \"/usr/bin/gsutil\")\n+    monkeypatch.setattr(pi, \"partition_date\", lambda: \"2026-01-01\")\n+    monkeypatch.setattr(pi, \"_acquire_lock\", lambda p, d, w: (\"lock\", \"tok\"))\n+    monkeypatch.setattr(pi, \"_release_lock\", lambda u, t=None: log.append(\"release\"))\n+    monkeypatch.setattr(pi, \"_clear_marker\", lambda p, d: log.append(\"clear\"))\n+    monkeypatch.setattr(pi, \"_backup_existing\", lambda p, d, r: log.append(\"backup\"))\n+    monkeypatch.setattr(pi, \"_upload\", lambda l, p, d, n: log.append(\"upload\"))\n+    monkeypatch.setattr(pi, \"_prune_stale\", lambda p, d, k: log.append(\"prune\"))\n+    monkeypatch.setattr(pi, \"write_success_marker\", lambda b, pfx: log.append(\"success\"))\n+    return log\n+\n+\n+def _write(path: Path, text: str, age_s: int = 3600) -> Path:\n+    path.write_text(text, encoding=\"utf-8\")\n+    old = time.time() - age_s\n+    os.utime(path, (old, old))\n+    return path\n+\n+\n+def _read_gz(path: Path) -> str:\n+    with gzip.open(path, \"rt\", encoding=\"utf-8\", newline=\"\") as fh:\n+        return fh.read()\n+\n+\n+def _cp(cmd, rc=0, out=\"\", err=\"\"):\n+    return subprocess.CompletedProcess(cmd, rc, stdout=out, stderr=err)\n+\n+\n+def test_write_gzip_maps_na_and_short_rows(tmp_path):\n+    src = _write(tmp_path / \"a.csv\", \"\\ufeffid,v,w\\n1,NA,x\\n2,y\\n\")\n+    out = tmp_path / \"a.csv.gz\"\n+    assert pi._write_gzip(src, out) == 2\n+    assert _read_gz(out) == \"id,v,w\\n1,,x\\n2,y,\\n\"\n+\n+\n+def test_write_gzip_names_blank_headers_like_pandas(tmp_path):\n+    src = _write(tmp_path / \"c.csv\", \"a,,\\n1,2,3\\n\")\n+    out = tmp_path / \"c.csv.gz\"\n+    assert pi._write_gzip(src, out) == 1\n+    assert _read_gz(out) == \"a,Unnamed: 1,Unnamed: 2\\n1,2,3\\n\"\n+\n+\n+@pytest.mark.parametrize(\"text\", [\"\", \"id\\n\", \"a,a\\n1,2\\n\", \"a,b\\n1,2,3\\n\"])\n+def test_write_gzip_rejects_bad_files(tmp_path, text):\n+    src = _write(tmp_path / \"b.csv\", text)\n+    with pytest.raises(ValueError):\n+        pi._write_gzip(src, tmp_path / \"b.csv.gz\")\n+\n+\n+def test_safe_name():\n+    assert pi._safe_name(\"../x y;rm\") == \".._x_y_rm\"\n+\n+\n+def test_success_order_and_uppercase_extension(dirs, calls):\n+    drop, work = dirs\n+    _write(drop / \"A.CSV\", \"id\\n1\\n\")\n+    pi.ingest_partner(\"p\", drop, work)\n+    # backup runs before the marker is cleared, so a backup failure cannot withdraw a good partition\n+    assert calls == [\"backup\", \"clear\", \"upload\", \"prune\", \"success\", \"release\"]\n+\n+\n+def test_backup_failure_leaves_marker_in_place(dirs, calls, monkeypatch):\n+    drop, work = dirs\n+    _write(drop / \"a.csv\", \"id\\n1\\n\")\n+\n+    def boom(p, d, r):\n+        calls.append(\"backup\")\n+        raise RuntimeError(\"transient\")\n+\n+    monkeypatch.setattr(pi, \"_backup_existing\", boom)\n+    with pytest.raises(RuntimeError):\n+        pi.ingest_partner(\"p\", drop, work)\n+    assert calls == [\"backup\", \"release\"]  # marker never cleared, nothing uploaded\n+\n+\n+def test_content_failure_blocks_marker_and_prune(dirs, calls):\n+    drop, work = dirs\n+    _write(drop / \"good.csv\", \"id\\n1\\n\")\n+    _write(drop / \"bad.csv\", \"id\\n\")  # header only\n+    with pytest.raises(RuntimeError):\n+        pi.ingest_partner(\"p\", drop, work)\n+    assert \"success\" not in calls and \"prune\" not in calls\n+    assert calls[-1] == \"release\"\n+\n+\n+def test_time_budget_exceeded_blocks_marker(dirs, calls, monkeypatch):\n+    drop, work = dirs\n+    _write(drop / \"a.csv\", \"id\\n1\\n\")\n+    monkeypatch.setattr(pi, \"TASK_BUDGET_S\", -1)\n+    with pytest.raises(RuntimeError, match=\"budget\"):\n+        pi.ingest_partner(\"p\", drop, work)\n+    assert \"upload\" not in calls and \"success\" not in calls\n+    assert calls[-1] == \"release\"\n+\n+\n+@pytest.mark.parametrize(\"files\", [\n+    [(\"good.csv\", 3600), (\"x.csv.part\", 3600)],   # unexpected / in-progress file name\n+    [(\"good.csv\", 3600), (\"new.csv\", 5)],         # recently modified\n+    [(\"a b.csv\", 3600), (\"a_b.csv\", 3600)],       # sanitised name collision\n+])\n+def test_preflight_failure_leaves_partition_untouched(dirs, calls, files):\n+    drop, work = dirs\n+    for name, age in files:\n+        _write(drop / name, \"id\\n1\\n\", age_s=age)\n+    with pytest.raises(RuntimeError):\n+        pi.ingest_partner(\"p\", drop, work)\n+    assert calls == []  # no lock, no backup, no marker removal, no upload\n+\n+\n+def test_preflight_rejects_subdirectory(dirs, calls):\n+    drop, work = dirs\n+    _write(drop / \"good.csv\", \"id\\n1\\n\")\n+    (drop / \"late_delivery\").mkdir()\n+    with pytest.raises(RuntimeError):\n+        pi.ingest_partner(\"p\", drop, work)\n+    assert calls == []\n+\n+\n+@pytest.mark.parametrize(\"link_name\", [\"evil.csv\", \"evil.txt\"])\n+def test_preflight_rejects_symlinks_including_dangling(dirs, calls, tmp_path, link_name):\n+    drop, work = dirs\n+    _write(drop / \"good.csv\", \"id\\n1\\n\")\n+    target = _write(tmp_path / \"secret.txt\", \"id\\n1\\n\")\n+    os.symlink(target, drop / link_name)\n+    os.symlink(tmp_path / \"missing\", drop / \"dangling.csv\")\n+    with pytest.raises(RuntimeError):\n+        pi.ingest_partner(\"p\", drop, work)\n+    assert calls == []  # the link target is never read or uploaded\n+\n+\n+def test_empty_drop_fails_before_lock(dirs, calls):\n+    drop, work = dirs\n+    with pytest.raises(RuntimeError):\n+        pi.ingest_partner(\"p\", drop, work)\n+    assert calls == []\n+\n+\n+def test_clear_marker_present_absent_error(monkeypatch):\n+    ran = []\n+    results = iter([\n+        _cp([], 0), _cp([], 0),                                        # present: ls ok, rm ok\n+        _cp([], 1, err=\"One or more URLs matched no objects\"),         # absent\n+        _cp([], 1, err=\"AccessDeniedException: 403\"),                  # error\n+    ])\n+\n+    def fake_run(cmd, **kw):\n+        ran.append(\"rm\" if \"rm\" in cmd else \"ls\")\n+        return next(results)\n+\n+    monkeypatch.setattr(pi.subprocess, \"run\", fake_run)\n+    pi._clear_marker(\"p\", \"d\")\n+    assert ran == [\"ls\", \"rm\"]\n+    ran.clear()\n+    pi._clear_marker(\"p\", \"d\")\n+    assert ran == [\"ls\"]\n+    with pytest.raises(RuntimeError):\n+        pi._clear_marker(\"p\", \"d\")\n+\n+\n+def test_backup_failure_raises(monkeypatch):\n+    prefix = f\"gs://{pi.BUCKET}/raw/p/dt=d/\"\n+    monkeypatch.setattr(\n+        pi.subprocess, \"run\",\n+        lambda cmd, **kw: _cp(cmd, 0, out=f\"{prefix}a.csv.gz\\n{prefix}b.csv.gz\\n\"),\n+    )\n+    seen = {}\n+\n+    def fake_group(cmd, timeout, capture=False):\n+        seen[\"cmd\"] = cmd\n+        return _cp(cmd, 1)\n+\n+    monkeypatch.setattr(pi, \"_run_group\", fake_group)\n+    with pytest.raises(RuntimeError):\n+        pi._backup_existing(\"p\", \"d\", \"run1\")\n+    assert f\"{prefix}a.csv.gz\" in seen[\"cmd\"] and seen[\"cmd\"][-1].endswith(\"_backups/p/dt=d/run1/\")\n+\n+\n+def test_prune_stale_deletes_only_stale(monkeypatch):\n+    prefix = f\"gs://{pi.BUCKET}/raw/p/dt=d/\"\n+    monkeypatch.setattr(\n+        pi.subprocess, \"run\",\n+        lambda cmd, **kw: _cp(cmd, 0, out=f\"{prefix}a.csv.gz\\n{prefix}old.csv.gz\\n{prefix}_SUCCESS\\n\"),\n+    )\n+    seen = {}\n+\n+    def fake_group(cmd, timeout, capture=False):\n+        seen[\"cmd\"] = cmd\n+        return _cp(cmd, 0)\n+\n+    monkeypatch.setattr(pi, \"_run_group\", fake_group)\n+    pi._prune_stale(\"p\", \"d\", {\"a\"})\n+    assert f\"{prefix}old.csv.gz\" in seen[\"cmd\"]\n+    assert f\"{prefix}a.csv.gz\" not in seen[\"cmd\"]\n+\n+\n+def test_upload_retries_then_succeeds(monkeypatch, tmp_path):\n+    results = iter([_cp([], 1), _cp([], 1), _cp([], 0)])\n+    n = []\n+    monkeypatch.setattr(pi, \"_run_group\", lambda cmd, t, capture=False: (n.append(1), next(results))[1])\n+    monkeypatch.setattr(pi.time, \"sleep\", lambda s: None)\n+    pi._upload(tmp_path / \"x.csv.gz\", \"p\", \"d\", \"x\")\n+    assert len(n) == 3\n+\n+\n+def test_upload_gives_up_after_retries(monkeypatch, tmp_path):\n+    monkeypatch.setattr(pi, \"_run_group\", lambda cmd, t, capture=False: _cp(cmd, 1))\n+    monkeypatch.setattr(pi.time, \"sleep\", lambda s: None)\n+    with pytest.raises(subprocess.CalledProcessError):\n+        pi._upload(tmp_path / \"x.csv.gz\", \"p\", \"d\", \"x\")\n+\n+\n+def test_acquire_lock_failure_names_rm_command(monkeypatch, tmp_path):\n+    monkeypatch.setattr(pi.subprocess, \"run\", lambda cmd, **kw: _cp(cmd, 1, err=\"412 Precondition Failed\"))\n+    with pytest.raises(RuntimeError, match=\"gsutil rm\"):\n+        pi._acquire_lock(\"p\", \"d\", tmp_path)\n+\n+\n+def test_release_lock_never_deletes_foreign_lock(monkeypatch):\n+    ran = []\n+\n+    def fake_run(cmd, **kw):\n+        ran.append(cmd[2])\n+        return subprocess.CompletedProcess(cmd, 0, stdout=\"someone-else\\n\", stderr=\"\")\n+\n+    monkeypatch.setattr(pi.subprocess, \"run\", fake_run)\n+    pi._release_lock(\"gs://b/_locks/p/dt=d.lock\", \"mine\")\n+    assert ran == [\"cat\"]\n+\n+\n+def test_release_lock_swallows_timeouts(monkeypatch):\n+    def fake_run(cmd, **kw):\n+        raise subprocess.TimeoutExpired(cmd, 1)\n+\n+    monkeypatch.setattr(pi.subprocess, \"run\", fake_run)\n+    pi._release_lock(\"gs://b/_locks/p/dt=d.lock\", \"mine\")  # must not raise\n+\n+\n+def test_run_group_timeout_kills_child_processes(tmp_path):\n+    pidfile = tmp_path / \"child.pid\"\n+    cmd = [\"sh\", \"-c\", f\"sleep 60 & echo $! > {pidfile}; wait\"]\n+    with pytest.raises(subprocess.TimeoutExpired):\n+        pi._run_group(cmd, 1)\n+    child = int(pidfile.read_text())\n+    for _ in range(50):\n+        try:\n+            os.kill(child, 0)\n+        except ProcessLookupError:\n+            return  # grandchild is gone\n+        time.sleep(0.1)\n+    pytest.fail(\"child process survived the group kill\")",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 55830,
+  "tokOut": 83181,
+  "usd": 1.055102,
+  "critMs": 610677
+ },
+ "status": "cap"
+}

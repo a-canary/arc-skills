@@ -1,0 +1,125 @@
+{
+ "approach": "triage-routed",
+ "case": "deploy-04",
+ "rep": 2,
+ "wallMs": 312968,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "secrets/authz",
+   "severity": "blocker",
+   "claim": "Share links embed the owner's live project API key as query parameter `k` and the share page returns it to any viewer as `replayKey`. Anyone holding the link (including via unfurl crawlers, logs, referrers, history) gets a working credential for the owner's project, and deleting the share does not revoke the key.",
+   "evidence": "url.searchParams.set(\"k\", project.apiKey); ... replayKey: url.searchParams.get(\"k\")"
+  },
+  {
+   "lens": "authz/cost",
+   "severity": "blocker",
+   "claim": "Anonymous share viewers replay against the owner's project quota with no per-link or per-viewer cap, so anyone with a link can drive unbounded billable inference on a paid, per-token-billed project. This compounds the key leak.",
+   "evidence": "// Viewers without an account replay against the owner's project quota."
+  },
+  {
+   "lens": "cost/reliability",
+   "severity": "blocker",
+   "claim": "The free pool can autoscale to max_replicas 24 of $2.49/h H100s (~$43k/month) with no spend cap, budget kill-switch, or replica ceiling tied to the $4k budget. The $3.6k projection assumes only 2 replicas.",
+   "evidence": "free-8b: min_replicas: 2, max_replicas: 24, scale_on: queue_depth > 8 for 60s"
+  },
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "The advertised 100k tokens/day free limit is not enforced in the config: the free tier has no daily_tokens field (pro sets daily_tokens: null explicitly), and only per-second rate, burst, and per-request caps are set.",
+   "evidence": "free: rate_limit: { requests: 20, per: second, burst: 40 }, max_tokens_per_request: 4096 vs. release notes \"100k tokens per day\""
+  },
+  {
+   "lens": "cost/qa",
+   "severity": "blocker",
+   "claim": "The production rate limit is 20 requests per second with burst 40, not the advertised 20 per minute. QA validated only `per: minute` on staging, so the shipped limit is untested and roughly 60x the public promise, which breaks the cost model.",
+   "evidence": "rate_limit: { requests: 20, per: second, burst: 40 } vs. QA \"staging config used `per: minute`\""
+  },
+  {
+   "lens": "privacy/security",
+   "severity": "major",
+   "claim": "Shared conversation content is published with Open Graph tags, no noindex, no expiry, and no stated retention; deletion is not stated to purge stored messages or unfurl/third-party caches. Share contents may contain personal data of the sharer or third parties.",
+   "evidence": "Share pages are server-rendered with Open Graph tags so links unfurl nicely on Slack/X. / ABSENT: retention policy or TTL for db.shares; \"deleted shares return 404\""
+  },
+  {
+   "lens": "trust boundary",
+   "severity": "major",
+   "claim": "Shared messages, including model output, are rendered to other viewers with no stated sanitization, creating a stored XSS path.",
+   "evidence": "return { messages: share.messages, model: share.model, replayKey: ... }"
+  },
+  {
+   "lens": "authz",
+   "severity": "major",
+   "claim": "Share id entropy and enumerability are unspecified, so if ids are guessable, shared messages and embedded keys can be enumerated.",
+   "evidence": "const share = await db.shares.get(params.id); ABSENT: id generation scheme"
+  },
+  {
+   "lens": "cost/abuse",
+   "severity": "major",
+   "claim": "No-card email signup has no sybil or per-account guard, so unlimited accounts multiply per-key quota; the HN/X launch will drive spikes, and the only protection is an on-call page rather than a stop.",
+   "evidence": "\"Sign up with email, no card required.\" ABSENT: per-account cap, spend alarm, or automatic disable at budget threshold"
+  },
+  {
+   "lens": "alerting",
+   "severity": "major",
+   "claim": "Alerting is on replica count (>6) and error rate only, with no spend or token-volume alert against the $4k budget and no saturation alert at max_replicas, so overspend surfaces only on the invoice.",
+   "evidence": "Alerting: free pool replicas > 6 pages on-call; error rate > 2% pages on-call. ABSENT: budget or spend alert"
+  },
+  {
+   "lens": "capacity",
+   "severity": "major",
+   "claim": "The '<30% utilization' claim is unsupported: no tokens/s per H100 is given and no peak-to-average or launch-spike factor is modeled.",
+   "evidence": "Two H100 replicas serve the projected free load at < 30% utilization ABSENT: tokens/s per replica, peak-to-average factor"
+  },
+  {
+   "lens": "reliability/isolation",
+   "severity": "major",
+   "claim": "The 'free pool isolated from shared-h100' claim is contradicted by share replays, which charge the owner's project (possibly a pro project on shared-h100) for anonymous traffic.",
+   "evidence": "\"Free pool is isolated from `shared-h100`, so free traffic cannot degrade paid latency.\" vs. \"Viewers without an account replay against the owner's project quota.\""
+  },
+  {
+   "lens": "rollback",
+   "severity": "major",
+   "claim": "Rollback covers only signups. It does not revoke existing free keys, share links, or leaked embedded keys, and gives no kill switch for the free pool, the share endpoint, or the new tier config.",
+   "evidence": "Rollback: `free_signup_open` off stops new signups; existing free keys keep working."
+  },
+  {
+   "lens": "launch-risk",
+   "severity": "major",
+   "claim": "The share feature, free flag, and HN/X launch post go live within about an hour of deploy, with no load test, scale-out timing, or cold-start validation for the 60s scale trigger and min_replicas 2.",
+   "evidence": "Deploy at 16:00 UTC, flag on at 16:45 UTC, Launch post 17:00 UTC; QA summary contains no load or scale tests"
+  },
+  {
+   "lens": "logging",
+   "severity": "major",
+   "claim": "Logging redaction covers gateway access logs only; the playground /s/[id]?k= request line carrying the API key is not covered, so the key may land in application or proxy logs.",
+   "evidence": "\"Gateway access logs redact the `Authorization` header and drop request bodies\" ABSENT: redaction of `k` query parameter in playground/share logs"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "No privacy notice, consent text, or retention period is given for free-tier email accounts and per-project usage telemetry published at a high-visibility launch.",
+   "evidence": "\"Sign up with email, no card required.\" ABSENT: privacy notice, retention period, or consent text for free accounts"
+  },
+  {
+   "lens": "injection",
+   "severity": "minor",
+   "claim": "Share id is concatenated into the URL path without encoding or validation at the route boundary.",
+   "evidence": "new URL(\"/s/\" + share.id, PLAYGROUND_ORIGIN)"
+  },
+  {
+   "lens": "observability",
+   "severity": "minor",
+   "claim": "No alert or SLO covers /v1/usage errors or daily-limit enforcement, so limit failures could be silent.",
+   "evidence": "\"`/v1/usage` matches billing ledger within 0.1%: pass.\" ABSENT: alert or SLO on /v1/usage"
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 24766,
+  "tokOut": 11320,
+  "usd": 0.00774565,
+  "critMs": 28911
+ }
+}

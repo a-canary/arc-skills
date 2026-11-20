@@ -1,0 +1,719 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-01",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "clientOrderId is regenerated on every attempt, so a retry after a timeout or 502/503/504 where the broker already accepted attempt 1 submits a second live order under an id the broker cannot dedupe. This is a duplicate-fill path that violates the agreed retry-safety constraint.",
+     "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { const clientOrderId = randomUUID(); try { const res = await broker.post(..."
+    },
+    {
+     "lens": "compliance",
+     "severity": "blocker",
+     "claim": "Math.ceil rounds the quantity up past headroom, so the order notional can exceed the per-symbol maxNotional that sizing must never exceed. Example: maxNotional 10000, price 33, lotSize 1 gives 304 shares, notional 10032.",
+     "evidence": "const lots = headroom / price / lotSize; return Math.ceil(lots) * lotSize;"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The retry-safety premise rests on broker dedupe on client_order_id, asserted without a cited source, dedupe window, or test. The diff contradicts the premise, and the window is unstated relative to the ~12.75s retry span.",
+     "evidence": "\"Retries are safe: every order carries a client_order_id and the broker dedupes on it, so a retry after a timeout cannot double-fill.\" (ABSENT: broker dedupe docs, window, or test)"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The timeout branch depends on BrokerClient.post accepting a { timeoutMs } option and throwing an error named 'TimeoutError'. Neither is shown in the diff. If either is wrong, hung requests are silently not retried, which is the bug this PR targets.",
+     "evidence": "(err as Error).name === \"TimeoutError\" (ABSENT: src/broker/client.ts change or test confirming the name and option)"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "No test exercises submitOrder's retry behaviour (retryable vs 4xx, id stability across attempts, timeout path). The sizing tests use only exact multiples, so they cannot detect the cap overshoot.",
+     "evidence": "test(\"sizes to the cap in whole lots\", ...) uses only exact divisions; ABSENT: any submitOrder retry test"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "On exhaustion or an ambiguous outcome (timeout, 502/503/504), the code neither queries the order by client_order_id nor reconciles, and the retry log omits clientOrderId. An order accepted on a failed attempt is invisible to operators.",
+     "evidence": "if (!retryable || attempt === MAX_ATTEMPTS) throw err; log.warn(\"order submit retry\", { symbol: intent.symbol, attempt });"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Live submit semantics and live sizing change and deploy before the open with no feature flag, kill switch, canary, or rollback plan. A code revert cannot undo orders already sent.",
+     "evidence": "\"This PR is about to merge to main and deploy before the next market open.\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "A floor-to-ceil change in a risk-sizing function is bundled into a retry PR and described as a tidy-up, hiding a cap-relevant behaviour change and making partial revert harder.",
+     "evidence": "\"Also tidies the sizing helper so quantities are rounded to the broker's lot size before submit.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The PR says quantities are rounded to lot size before submit, but submitOrder sends intent.qty unchanged; rounding happens only in sizeBuy, and other paths are not shown.",
+     "evidence": "qty: intent.qty, (unchanged in submitOrder) vs. \"quantities are rounded to the broker's lot size before submit\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Backoff has no jitter and there is no total deadline or retry budget, so a broker-wide 502/503 burst can synchronize retries across symbols; worst case is about 12.75s per order.",
+     "evidence": "await sleep(250 * 2 ** (attempt - 1)); { timeoutMs: 4000 } with MAX_ATTEMPTS = 3"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Floating-point division before ceil can push an exact-multiple result up one lot, and there is no guard against non-positive price or lotSize.",
+     "evidence": "const lots = headroom / price / lotSize; return Math.ceil(lots) * lotSize;"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "The same limit_price is reused across attempts spanning several seconds, so a retried limit may be stale against the market.",
+     "evidence": "limit_price: intent.limitPrice, reused on every attempt"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "HTTP 429 and connection-level network errors are not retried, so transient failures still drop orders during the open.",
+     "evidence": "const RETRYABLE_STATUS = new Set([502, 503, 504]);"
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 99476,
+    "tokOut": 42731,
+    "usd": 0.03949739,
+    "critMs": 60684
+   },
+   "wallMs": 70827
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "idempotency",
+     "severity": "blocker",
+     "claim": "The no-second-live-order guarantee depends on the broker deduping or rejecting a repeated client_order_id for at least the full ~12.75s retry span. The artifact says this is unverified, cites no broker doc or sandbox result, and the code comment states it as fact. A duplicate fill would exceed maxNotional.",
+     "evidence": "\"Not yet verified, must be confirmed before merge/deploy: That the broker dedupes or rejects on a repeated `client_order_id`, and for how long.\" and \"Generated once and reused on every attempt so the broker can dedupe retries.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "This change targets a live real-money router with no feature flag or kill switch, and it is set to deploy before the open while its own safety assumption is still open. Reverting the code does not cancel orders already sent.",
+     "evidence": "\"There is no feature flag in this PR. Reverting the code does not undo orders already sent, so please verify the items above in the broker sandbox before deploying ahead of the open.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "A 4xx on a repeated id is described as the signal that an earlier attempt landed, but the catch block only sets retryable to false and rethrows the same error as any rejection. The caller cannot tell 'duplicate, order is live' from 'rejected, no order', so a caller that resubmits could create the duplicate the design prevents. Callers are not shown in the diff.",
+     "evidence": "\"If the broker rejects the repeat id with a 4xx, that is not retried and is thrown, which is the signal that an earlier attempt landed.\" Code: \"if (!retryable || attempt === MAX_ATTEMPTS) { log.error(...); throw err; }\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The timeout retry depends on BrokerClient.post accepting a third { timeoutMs } argument and surfacing errors named 'TimeoutError'. client.ts is unchanged and unverified. If either is wrong, hung requests are not retried, or the option is ignored and the call never resolves.",
+     "evidence": "\"That `BrokerClient.post` accepts `{ timeoutMs }` and that a timeout surfaces as an error with `name === \\\"TimeoutError\\\"`. ... `src/broker/client.ts` is not changed in this PR.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "On exhaustion the order may still be in flight at the broker, and a client-side timeout does not cancel it. Nothing reconciles by id or pages anyone. Recovery depends on an operator reading logs, and a late fill can go unseen.",
+     "evidence": "\"On exhaustion we throw and log the `clientOrderId`, but we do not query the broker by id to reconcile. That is a follow-up. Until then, an operator must check the logged id after a failed submit.\""
+    },
+    {
+     "lens": "build",
+     "severity": "major",
+     "claim": "submit.ts imports ../util/sleep, but the diff does not create that module. If it does not already exist, the build and tests break. If it does exist, its behaviour is not shown.",
+     "evidence": "ABSENT: a new util/sleep.ts in the diff, while submit.ts has \"import { sleep } from \\\"../util/sleep\\\";\""
+    },
+    {
+     "lens": "testing",
+     "severity": "major",
+     "claim": "The tests use hand-built fakes that encode the same assumptions as the code. BrokerError is created with Object.create and a hand-set status, and TimeoutError is a plain Error with a renamed name. If production uses a different status field or error shape, every retry test passes and production never retries 502/503/504 or timeouts. The tests cannot falsify the broker or client assumptions.",
+     "evidence": "\"const e = Object.create(BrokerError.prototype);\\n  e.status = status;\" and \"const e = new Error(\\\"timeout\\\");\\n  e.name = \\\"TimeoutError\\\";\""
+    },
+    {
+     "lens": "idempotency",
+     "severity": "minor",
+     "claim": "The retry span of about 12.75s is not compared with any broker dedupe window, which is unknown. If the window is shorter, late retries lose idempotency even if the broker dedupes correctly within it.",
+     "evidence": "\"The total retry span is about 12.75s (3 x 4s timeout plus 250ms and 500ms backoff).\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The loop re-sends the same qty and limit price for up to ~12.75s during the open without re-checking current price or the risk cap. The caller is not shown, so this is a question rather than a proven breach. Retries do not change this order's notional, but a stale limit may fill at a price the strategy no longer wants.",
+     "evidence": "\"qty: intent.qty, ... limit_price: intent.limitPrice\" re-sent on every attempt; \"The total retry span is about 12.75s\""
+    },
+    {
+     "lens": "sizing",
+     "severity": "minor",
+     "claim": "sizeBuy is computed from a price, but the order is submitted at intent.limitPrice. The diff does not show these are the same value, so the real limit notional could exceed maxNotional while the sizing tests pass.",
+     "evidence": "ABSENT: any check that the price passed to sizeBuy equals intent.limitPrice; the body sends \"limit_price: intent.limitPrice\"."
+    },
+    {
+     "lens": "testing",
+     "severity": "minor",
+     "claim": "The title promises lot-size rounding, but the diff changes no rounding logic. The 'not a lot multiple' test uses lotSize 1, where every integer is a multiple, so lot rounding is not exercised. sizing.ts is not shown, so the tests pin behaviour the PR does not establish.",
+     "evidence": "TITLE: \"Order-submit retries and lot-size rounding\"; \"const input = { maxNotional: 10_000, price: 33, currentQty: 0, lotSize: 1 };\""
+    },
+    {
+     "lens": "sizing",
+     "severity": "minor",
+     "claim": "The short-position test assumes a short cover frees headroom on signed qty. The artifact never references the maxNotional spec, so the test may lock in the wrong sign convention.",
+     "evidence": "\"expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: -20, lotSize: 1 })).toBe(120);\" with no spec reference"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Only 502/503/504 and timeouts are retried. Connection resets, which are ambiguous after send, and 429 rate limits are dropped, so the original drop-the-order failure persists for those classes.",
+     "evidence": "\"const RETRYABLE_STATUS = new Set([502, 503, 504]);\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Backoff is fixed with no jitter and no circuit breaker. Submits that fail together during a broker 5xx event retry in lockstep, adding load to an endpoint that is already failing.",
+     "evidence": "\"await sleep(250 * 2 ** (attempt - 1));\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "One intent can now produce several broker submission attempts, but there is no durable per-attempt record. The success path logs nothing, so there is no operator trace from intent to broker order id on normal submits. Only warn and error lines exist.",
+     "evidence": "\"return { id: res.id, clientOrderId, status: res.status };\" with no log; ABSENT: a persisted per-attempt audit record"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The retryable check casts err and reads .name with no null guard. A thrown null or undefined makes the catch block throw a TypeError and mask the original error.",
+     "evidence": "\"(err as Error).name === \\\"TimeoutError\\\"\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Each order can now make up to three broker calls during the busiest minutes of the day. The added rate-limit and quota load is not estimated.",
+     "evidence": "\"This wraps the submit call in a bounded retry (3 attempts, exponential backoff, 4xx rejections are never retried).\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Retry and failure logs omit side and qty, which weakens operator lookup when reconciling a failed submit by id.",
+     "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, clientOrderId, attempt })"
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 124545,
+    "tokOut": 52468,
+    "usd": 0.04937969,
+    "critMs": 92480
+   },
+   "wallMs": 110200
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "The PR contradicts itself on whether it may merge. The status line forbids merging until broker checks pass, while the rollout section and gate context direct a merge and deploy before the open. The gate cannot clear until one decision is recorded.",
+     "evidence": "\"**Status: do not merge or enable until the broker checks below are done.**\" vs \"Merge and deploy dark. After the sandbox checks pass, enable the flag.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The no-duplicate-fill constraint rests on broker dedupe of a repeated client_order_id, which the PR itself marks unverified. No sandbox result is recorded. This must be resolved before the flag is enabled, since a duplicate fill would breach maxNotional.",
+     "evidence": "\"**That assumption is unverified** (see below).\" and \"A duplicate fill would push exposure past `maxNotional`.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Ambiguous first-attempt failures outside the retryable set are rethrown raw. A 500, connection reset after the body is sent, or socket hang-up may have reached the broker, but the code treats them as clean failures. This contradicts the stated contract that only a first-attempt 4xx means nothing was sent.",
+     "evidence": "\"const RETRYABLE_STATUS = new Set([502, 503, 504]);\" and \"A 4xx on the first attempt, with no prior ambiguous attempt, is still thrown unchanged: nothing was sent that could have landed.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Hang protection and timeout classification depend on unverified behavior of the unchanged client: that post accepts a third { timeoutMs } argument, and that timeouts are named \"TimeoutError\". If either is wrong, hung requests are not retried or are unbounded, and first-attempt timeouts are rethrown without OrderStateUnknownError. Hand-built test fakes cannot catch this.",
+     "evidence": "\"That `BrokerClient.post` accepts `{ timeoutMs }` and that a timeout surfaces as an error with `name === \\\"TimeoutError\\\"`\" and \"`src/broker/client.ts` is not changed in this PR.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Callers of submitOrder are outside the diff and unaudited. Any caller that resubmits on a thrown error creates a second live order with a fresh clientOrderId, which the lookup-by-id step would not catch.",
+     "evidence": "\"Callers of `submitOrder` are not in this diff and **must be audited before enabling the flag**\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "No reconciliation exists. A timed-out order can fill after submitOrder throws, and detection depends on an operator reading logged ids during the open. There is no metric or alert on OrderStateUnknownError or retry exhaustion.",
+     "evidence": "\"we do not query the broker by id or page anyone\" and \"an operator must check the logged id after every `OrderStateUnknownError`\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Disabling the flag does not undo orders already sent while it was on. Enabling creates live exposure that the code does not track, so the enablement step is effectively one-way until reconciliation exists.",
+     "evidence": "\"Disabling the flag does not undo orders already sent. Anything sent while it was on must be reconciled by id.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Sizing sees only filled currentQty. Headroom consumed by an in-flight or ambiguous order during the retry window is invisible, so a later sizing pass can exceed maxNotional. The PR adds no in-flight accounting.",
+     "evidence": "\"`sizing.ts` is intentionally unchanged.\" and the sizing tests take only currentQty as input"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "clientOrderId exists only in memory and in logs. A crash after the broker accepts the order but before the response returns loses the id. The legacy path has the same gap, but retries widen the window.",
+     "evidence": "\"const clientOrderId = randomUUID();\" with no persistence before broker.post"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The classifier dereferences the thrown value without a guard. A thrown null or undefined makes .name throw a TypeError inside the catch, which bypasses the OrderStateUnknownError logic.",
+     "evidence": "\"|| (err as Error).name === \\\"TimeoutError\\\";\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Fixed, unjittered backoff with a 4s timeout lets all clients retry in lockstep against a broker already returning 502/503/504 at the open.",
+     "evidence": "await sleep(250 * 2 ** (attempt - 1));"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "A limit order retried over about 12.75s may be stale against the price it was sized for. The PR does not address price drift during retries.",
+     "evidence": "The total retry span is about 12.75s (3 x 4s timeout plus 250ms and 500ms backoff)."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The title promises lot-size rounding, but sizing.ts is unchanged and the sizing diff only adds regression tests. Reviewers may assume a rounding fix exists.",
+     "evidence": "\"TITLE: Order-submit retries and lot-size rounding\" and \"`sizing.ts` is intentionally unchanged.\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 141568,
+    "tokOut": 52725,
+    "usd": 0.052912789999999994,
+    "critMs": 85836
+   },
+   "wallMs": 95554
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "In the flag-on catch, the retryable check dereferences `err` for any rejection that is not a BrokerError. If `broker.post` rejects with null or undefined, `(err as Error).name` throws a TypeError before `log.error` and before `OrderStateUnknownError`. The caller then gets a bare TypeError while the order may be live, which breaks the stated rule that any non-BrokerError is reported as unknown.",
+     "evidence": "const retryable = (err instanceof BrokerError && RETRYABLE_STATUS.has(err.status)) || (err as Error).name === \"TimeoutError\";"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The flag-on branch passes a third argument to `broker.post`, but the PR says `client.ts` is unchanged and never shows that the signature accepts one. If it is two-argument, the TypeScript build fails at merge. The tests cast the broker to `any`, so they would not catch this. The merge needs a typecheck or CI result, or the signature shown.",
+     "evidence": "const res = await broker.post(\"/v2/orders\", body, { timeoutMs: 4000 }); ... \"src/broker/client.ts is not changed in this PR.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "`submit.ts` has no client-side deadline of its own. If `BrokerClient` ignores `timeoutMs`, a hung first attempt never reaches the retry loop, `OrderStateUnknownError`, or the `order_state_unknown` log. This is an enablement blocker, not a merge blocker, but it should be recorded as one.",
+     "evidence": "ABSENT: any Promise.race or AbortSignal enforcing the 4000ms bound inside submitOrder; \"If the option is ignored, hung requests are unbounded.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Every 4xx is classed as a definitive rejection, including 408 Request Timeout, where the broker may already have received the request. A 408 should go to the unknown-state path, not be thrown unchanged.",
+     "evidence": "const definitiveReject = err instanceof BrokerError && err.status >= 400 && err.status < 500;"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The title promises lot-size rounding, but `sizing.ts` is unchanged and the rounding change was dropped. The title should be corrected so reviewers do not assume a rounding change is present.",
+     "evidence": "TITLE: Order-submit retries and lot-size rounding ... \"`sizing.ts` is intentionally unchanged.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "Tests always pass `retryEnabled` explicitly, so the `ORDER_SUBMIT_RETRY` environment default that governs production is never exercised. The claim that the merge is inert has no test or CI output in the PR.",
+     "evidence": "const opts = { retryEnabled: true, sleep: jest.fn().mockResolvedValue(undefined) };"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "A per-call `retryEnabled` option overrides the environment flag, so any caller can enable retries without the rollout control. No caller in the diff does this, but the control is not enforced in one place.",
+     "evidence": "opts.retryEnabled ?? process.env.ORDER_SUBMIT_RETRY === \"1\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Enablement is gated only by prose and a per-call env read, with no startup refusal or recorded check that the enable preconditions are met. This is an enablement blocker, not a merge blocker, since the flag defaults off.",
+     "evidence": "\"`ORDER_SUBMIT_RETRY=1` must not be set in production until every item under 'Enable preconditions' below is done and recorded in this PR.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Enablement blockers remain open and are not fixed by this diff: sizeBuy ignores in-flight or ambiguous notional, and no jitter, retry budget, or caller audit exists. The PR records these as enable preconditions, so they block enablement, not this merge.",
+     "evidence": "\"sizeBuy sees only filled currentQty ... That is not implemented here, and the sizing tests do not cover it.\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 148042,
+    "tokOut": 72595,
+    "usd": 0.06414259,
+    "critMs": 117814
+   },
+   "wallMs": 121719
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Merge precondition unmet: the flag-on path passes a third argument to broker.post, which the unchanged client.ts may not accept. No passing tsc or CI result is recorded, so the build on main is unknown and the merge cannot cross.",
+     "evidence": "\"CI (or a local `tsc --noEmit`) must pass on this branch, and that result must be recorded in this PR.\" ABSENT: any recorded typecheck or CI result."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "HTTP 408 Request Timeout is a 4xx, so it is classified as a definitive rejection even though the server may have processed the request. This contradicts the stated rule that only a definitive 4xx proves non-acceptance, and it can drop a possibly live order without OrderStateUnknownError.",
+     "evidence": "const definitiveReject = err instanceof BrokerError && err.status >= 400 && err.status < 500;"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "A success after an earlier ambiguous attempt returns silently with no log and no flag. If the broker accepted the earlier attempt too, the duplicate is never surfaced to operators. Adding an ambiguity check on the success path and a test would close this.",
+     "evidence": "const res = await broker.post(\"/v2/orders\", body, { timeoutMs: 4000 }); return { id: res.id, clientOrderId, status: res.status }; ABSENT: success-after-ambiguous log or test."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Enable gate: the no-duplicate guarantee that justifies retrying timeouts and 5xx responses is an unverified assumption about an external broker. No doc citation or sandbox result exists. Must be resolved before enablement, not merge.",
+     "evidence": "\"That assumption is unverified, and no sandbox result is recorded yet. Until it is confirmed, this PR must not be enabled.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Enable gate: sizeBuy sees only filled currentQty, so in-flight or ambiguous orders consume headroom it cannot see. Two same-symbol submits can each size to the full cap and exceed maxNotional. The required block on new sizing is not implemented or tested.",
+     "evidence": "\"`sizeBuy` sees only filled `currentQty`, so headroom consumed by an in-flight or ambiguous order is invisible to it.\" ... \"the sizing tests do not cover it.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Enable gate: the preconditions for a one-way path are enforced only by prose and a single env var, with no code-level or startup guard. Enabling before reconciliation, caller audit, or alerting exists cannot be detected by the code, and orders sent while enabled cannot be recalled.",
+     "evidence": "\"ORDER_SUBMIT_RETRY=1 must not be set in production until every item under 'Enable preconditions' below is done and recorded in this PR.\" ABSENT: any code-level guard."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Enable gate: no reconciliation or alert exists. Detection of unknown-state orders depends on an operator reading logs during the open, and the unknown-state clientOrderIds are kept only in logs and in-memory state, so a crash mid-retry leaves live orders with no durable id.",
+     "evidence": "\"**Known gap: no reconciliation.**\" ... \"Anything sent while the flag was on must be reconciled by id.\" ABSENT: alert rule, reconciliation code, or durable store of ambiguous ids."
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 162501,
+    "tokOut": 84996,
+    "usd": 0.07323489000000001,
+    "critMs": 116022
+   },
+   "wallMs": 131037
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The merge gate is unmet. The flag-on path passes a third `{ timeoutMs }` argument to `broker.post`, `client.ts` is unchanged, and the unit tests cast the broker to `any`. If `post` is two-argument, the TypeScript build fails on main even with the flag off. The PR states it must not merge until a typecheck result is recorded.",
+     "evidence": "\"Merge precondition: typecheck (currently NOT MET, no result recorded).\" ... \"This PR must not merge until that result is posted.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "HTTP 429 (rate limited) is a non-408 4xx, so it is treated as a definitive rejection and never retried. Rate limiting is a plausible transient failure at the open, so this is a tuning gap in the retry policy, not a safety defect.",
+     "evidence": "\"const RETRYABLE_STATUS = new Set([408, 502, 503, 504]);\" and \"err.status >= 400 && err.status < 500 && err.status !== 408\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "502, 503, and 504 are retried, but 500 is classified as ambiguous and not retried. The split is documented but thinly justified, since a 500 can also mean the order landed.",
+     "evidence": "\"any 5xx (including 500) ... not retried but is still reported as unknown.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Backoff is fixed at 250ms and 500ms with no jitter and no retry budget. Submits that fail together retry in lockstep. This only matters when the flag is on, so it belongs in the enable preconditions.",
+     "evidence": "\"await sleep(250 * 2 ** (attempt - 1));\" with no jitter or budget in the diff"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "No compliance or risk sign-off is recorded for duplicate or unreconciled live orders on a real-money account. This is an enablement concern, not a merge defect, and should be added to the enable preconditions.",
+     "evidence": "ABSENT: compliance or risk sign-off for duplicate and unreconciled orders."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The retry-attempt warning has no structured `event` key, unlike the failure and success-after-ambiguous logs, so retry volume cannot be alerted on by a stable name.",
+     "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, clientOrderId, attempt, });"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The flag is read by exact string match against \"1\", so values like `true` silently leave retries off with no startup warning.",
+     "evidence": "const retryEnabled = opts.retryEnabled ?? process.env.ORDER_SUBMIT_RETRY === \"1\";"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A socket reset or hang-up is classified as ambiguous and not retried, and the test asserts exactly one call. This is an explicit design choice, but it leaves a common transient drop unhandled given the stated goal.",
+     "evidence": "\"first-attempt network error is ambiguous: OrderStateUnknownError\" with \"expect(post).toHaveBeenCalledTimes(1)\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The title promises lot-size rounding, but that change was dropped. The diff only adds regression tests, and the non-multiple test uses lotSize 1, so lot>1 rounding is not pinned.",
+     "evidence": "TITLE: \"Order-submit retries and lot-size rounding\" versus \"That change was dropped.\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Test seams (`retryEnabled`, `sleep`) are exposed in the production `SubmitOptions` type, and the flag is read in two places (opts and env), which makes effective config harder to audit.",
+     "evidence": "\"retryEnabled?: boolean;\" alongside \"process.env.ORDER_SUBMIT_RETRY === \\\"1\\\"\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The deploy-before-open timeline creates schedule pressure to enable the flag before the unfinished enable preconditions are met. This is a process risk for the enablement decision.",
+     "evidence": "\"This PR is about to merge to main and deploy before the next market open.\" versus \"Enable preconditions (all required, none done yet).\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 173182,
+    "tokOut": 54324,
+    "usd": 0.060035090000000006,
+    "critMs": 104386
+   },
+   "wallMs": 113516
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The merge gate is unmet. The flag-on path passes a third `{ timeoutMs }` argument to `broker.post`, `client.ts` is unchanged, and the typecheck result is not recorded. If `post` is two-argument, the build fails on main even with the flag off.",
+     "evidence": "Typecheck result (to be filled in by the author before merge): **PENDING.** ... `src/broker/client.ts` is not changed in this PR"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The success-path `log.warn` sits inside the `try`. If the logger throws after a successful `post` in the ambiguous case, the catch reports a live order as `OrderStateUnknownError` and the caller never receives `res.id`. Moving the success log outside the `try` removes this. Flag-off code is not affected.",
+     "evidence": "try { const res = await broker.post(\"/v2/orders\", body, { timeoutMs: 4000 }); if (ambiguous) { log.warn(...) } return { id: res.id, clientOrderId, status: res.status }; } catch (err) {"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "Idempotency depends on the broker deduping or rejecting a repeated `client_order_id`. This is unverified, and the PR records it as an enable gate. It must not be enabled until a source or sandbox result is recorded.",
+     "evidence": "**That assumption is unverified, and no sandbox result is recorded yet.** It is an enable gate, not a merge gate"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "`sizeBuy` sees only filled `currentQty`, so in-flight or ambiguous exposure is invisible and same-symbol submits could each size to the full cap. The PR records this as an enable gate, and no test or code covers it yet.",
+     "evidence": "`sizeBuy` sees only filled `currentQty`, so headroom consumed by an in-flight or ambiguous order is invisible to it. ... That is not implemented here, and the sizing tests do not cover it."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Enablement is effectively one-way until reconciliation exists. Disabling the flag does not recover orders already sent, and reconciliation is not built.",
+     "evidence": "**Enablement is effectively one-way until reconciliation exists**: disabling does not undo orders already sent, and the code does not track them."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Ambiguous `clientOrderId`s exist only in logs and process memory. A crash mid-retry can lose the id of a possibly live order. The PR links this to the reconciliation follow-up.",
+     "evidence": "there is no durable store, so a process crash mid-retry can lose the id of an in-flight order"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The timeout behaviour the retry loop depends on is unverified against the real client. If `timeoutMs` is ignored, hung requests are unbounded. The `TimeoutError` name and `BrokerError.status` are inferred from hand-built test fakes.",
+     "evidence": "If the option is ignored, hung requests are unbounded. Check in the sandbox with a real `BrokerClient`, not only with the unit tests."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The rule that callers never resubmit on `OrderStateUnknownError` is enforced only by convention. Callers are outside this diff and unaudited, so any resubmit creates a second live order under a fresh id.",
+     "evidence": "Callers of `submitOrder` are not in this diff, so they must be audited before enabling the flag."
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The only control on enabling live-money retries is an environment variable with no startup check or allowlist. The PR relies on a human checklist, so a config copied from another environment could enable the path.",
+     "evidence": "The guard against premature enablement is the default-off flag plus the recorded preconditions, not code."
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "No compliance, broker-agreement, or order-handling sign-off is recorded for automated retry and possible duplicate submission on a live brokerage account.",
+     "evidence": "ABSENT: no compliance or broker-agreement sign-off for retrying order submission on a live brokerage account."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Every `OrderStateUnknownError` requires manual operator lookup. The alert and reconciliation that would reduce this load are not built, so volume during a degraded open could exceed operator capacity.",
+     "evidence": "an operator must check the logged id after every `OrderStateUnknownError`"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Backoff has no jitter, so orders that fail together retry in lockstep. Each order can make up to 3 attempts, which amplifies load on a degraded broker.",
+     "evidence": "await sleep(250 * 2 ** (attempt - 1));"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "A submit can block its caller for about 12.75s during the open, and a late success may fill at a price the strategy no longer wants. The PR sets no latency budget or price/time check before a retry.",
+     "evidence": "The total retry span is about 12.75s (3 x 4s timeout plus 250ms and 500ms backoff)."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The title promises lot-size rounding, but `sizing.ts` is unchanged and the diff adds only regression tests. The title misstates the scope.",
+     "evidence": "PR #412: Retry transient broker errors on order submit ... `sizing.ts` is intentionally unchanged."
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "No test covers non-multiple headroom with `lotSize > 1`. The only non-multiple case uses `lotSize: 1`, and the `lotSize: 10` case divides evenly.",
+     "evidence": "const input = { maxNotional: 10_000, price: 33, currentQty: 0, lotSize: 1 }; ... lotSize: 10 })).toBe(200)"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The shared `jest.fn` sleep mock is never reset between tests. The warn spy is restored only if its assertion passes, so a failure leaks the mock into later tests.",
+     "evidence": "const opts = { retryEnabled: true, sleep: jest.fn().mockResolvedValue(undefined) }; ... warn.mockRestore();"
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 171910,
+    "tokOut": 53724,
+    "usd": 0.05948069,
+    "critMs": 94679
+   },
+   "wallMs": 102155
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Merge gate is unmet. The flag-on path passes a third argument `{ timeoutMs: 4000 }` to broker.post, client.ts is unchanged, and the diff does not show that post accepts it. If post is two-argument, the TypeScript build fails on main even with the flag off, and no typecheck has been run or recorded.",
+     "evidence": "Typecheck result (to be filled in by the author before merge): **PENDING.** Record the command run, the commit SHA, and pass/fail here."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "HTTP 429 (rate limit) is a 4xx other than 408, so it is classified as a definitive rejection, never retried, and rethrown. Rate limiting is a plausible transient in the first minutes after the open, which is the failure mode this PR targets, so such orders are still dropped. The policy should be decided explicitly before enablement.",
+     "evidence": "const RETRYABLE_STATUS = new Set([408, 502, 503, 504]); ... err.status >= 400 && err.status < 500 && err.status !== 408"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Nothing verifies that broker.post honors timeoutMs or that timeouts surface as name === 'TimeoutError'. If the option is ignored, hung requests are unbounded during the open. No flag-on test asserts the third argument, so the suite can pass while the bound is absent.",
+     "evidence": "`src/broker/client.ts` is not changed in this PR, and the diff does not show whether `post` accepts a third argument. Only the flag-off test checks arity: expect(post.mock.calls[0]).toHaveLength(2)"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The load-bearing idempotency assumption, that the broker dedupes or rejects a repeated client_order_id, is design intent with no sandbox result or cited doc. A non-deduping broker turns each ambiguous retry into a second live order that breaches maxNotional. This cannot block a dark merge, but merging must not be read as validating it.",
+     "evidence": "That assumption is unverified, and no sandbox result is recorded yet. ... A duplicate fill would push exposure past `maxNotional`."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "sizeBuy sees only filled currentQty, so in-flight or ambiguous orders consume no headroom. Two same-symbol submits can each size to the full cap and breach maxNotional. The added sizing tests pin cap behavior for filled quantity only and give false assurance about this bypass.",
+     "evidence": "`sizeBuy` sees only filled `currentQty`, so headroom consumed by an in-flight or ambiguous order is invisible to it ... the sizing tests do not cover it."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Reconciliation, the durable ambiguous-id store, and alerts on order_state_unknown and order_submit_success_after_ambiguous are all unbuilt. Detection depends on operators reading logs, and a process crash mid-retry loses the only record of a possibly live order.",
+     "evidence": "there is no durable store, so a process crash mid-retry can lose the id of an in-flight order ... we do not query the broker by id or page anyone"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "With the flag on, first-attempt 500s, timeouts, and resets change from a raw BrokerError to OrderStateUnknownError. Callers that catch BrokerError will silently stop handling these, and callers are outside this diff and unaudited.",
+     "evidence": "In those cases `submitOrder` throws `OrderStateUnknownError` ... instead of the raw error. ... Callers of `submitOrder` are not in this diff, so they must be audited before enabling the flag."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Enablement is one-way: disabling the flag does not recall orders already sent, and the code does not track them. The only guard is an env var plus prose preconditions the code cannot check, so a single config change can turn on the duplicate-order path.",
+     "evidence": "Enablement is effectively one-way until reconciliation exists: disabling does not undo orders already sent, and the code does not track them. The guard against premature enablement is the default-off flag plus the recorded preconditions, not code."
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Retries use a fixed, unjittered backoff with no retry budget or circuit breaker. Concurrent submits failing in the same burst of 502/503/504s retry in lockstep, adding load to a broker already degraded at the open.",
+     "evidence": "await sleep(250 * 2 ** (attempt - 1)); ... This adds a bounded retry (3 attempts, exponential backoff, ...)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "A success after an earlier ambiguous attempt returns the same SubmittedOrder shape as a clean fill. Downstream position logic cannot distinguish a possible duplicate from a normal fill; the only signal is a warn log.",
+     "evidence": "If an attempt succeeds after an earlier ambiguous one, the order is returned normally, but a `order_submit_success_after_ambiguous` warning is logged"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Any non-BrokerError failure is classified as ambiguous order_state_unknown, including failures before the request is sent (serialization, local DNS, auth setup). This produces false unknown-state alerts and reconciliation load for orders never sent.",
+     "evidence": "or any non-`BrokerError` (including a rejection with `null` or `undefined`). In those cases `submitOrder` throws `OrderStateUnknownError`"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The retry warning has no `event` field, unlike the error and success-after-ambiguous logs, so alerts keyed on `event` will miss retry activity during the open.",
+     "evidence": "log.warn(\"order submit retry\", {\n          symbol: intent.symbol,\n          clientOrderId,\n          attempt,\n        });"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The title says 'lot-size rounding', but the rounding change was dropped and sizing.ts is unchanged. Only regression tests were added, so the title misdescribes what merges.",
+     "evidence": "TITLE: Order-submit retries and lot-size rounding ... `sizing.ts` is intentionally unchanged."
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 173946,
+    "tokOut": 62693,
+    "usd": 0.06437239,
+    "critMs": 88147
+   },
+   "wallMs": 121522
+  }
+ ],
+ "artifact": "PR #412: Retry transient broker errors on order submit\n\n**Status: BLOCKED. Do not merge until the typecheck result is recorded below. Even after that, do not enable.** The code ships behind a flag that is off by default, so once the typecheck precondition is met, merging and deploying it does not change live behavior. `ORDER_SUBMIT_RETRY=1` must not be set in production until every item under \"Enable preconditions\" below is done and recorded in this PR. Merge and enablement are separate decisions. This PR only asks for the merge, and only after the typecheck result below is posted. Until then this PR is blocked, not ready.\n\n**Merge precondition: typecheck (currently NOT MET, no result recorded).** The flag-on path calls `broker.post(\"/v2/orders\", body, { timeoutMs: 4000 })`. `src/broker/client.ts` is not changed in this PR, and the diff does not show whether `post` accepts a third argument. The unit tests cast the broker to `any`, so they cannot catch a signature mismatch. If `post` is two-argument, the TypeScript build fails, and it fails on main even with the flag off, because the build is type-level and independent of the flag. Before merging, CI (or a local `tsc --noEmit`) must pass on this branch, and that result must be recorded in this PR. This PR must not merge until that result is posted. If it fails, the signature must be fixed in a separate change to `client.ts` before this merges. Do not work around a failure with a cast or `any` in `submit.ts`, because that would hide the mismatch rather than fix it.\n\nTypecheck result (to be filled in by the author before merge): **PENDING.** Record the command run, the commit SHA, and pass/fail here. The review objection that this gate is unmet is correct as of now: no typecheck has been run or recorded for this branch. It is the gate this PR already states, and the merge stays blocked until the result is posted.\n\nDuring the first minutes after the open the broker intermittently returns 502/503/504 or hangs past our timeout, and we drop the order on the floor.\nThis adds a bounded retry (3 attempts, exponential backoff, definitive 4xx rejections are never retried) around the submit call, gated by the `ORDER_SUBMIT_RETRY` flag.\n\n**Idempotency (design intent, not yet proven).** The `client_order_id` is generated once per `submitOrder` call, before the loop, and reused on every attempt. The design assumes the broker dedupes or rejects a repeated id, so a retry after an ambiguous outcome cannot create a second live order. **That assumption is unverified, and no sandbox result is recorded yet.** It is an enable gate, not a merge gate: with the flag off, no retry occurs and the assumption is never exercised. Until it is confirmed, this PR must not be enabled. A duplicate fill would push exposure past `maxNotional`.\n\n**Error contract for callers.** Only a definitive 4xx `BrokerError` on a first attempt proves the order was not accepted. HTTP 408 Request Timeout is a 4xx but is **not** definitive: the server may have processed the request, so it is treated like a timeout (retryable, ambiguous). Anything else leaves the order's state at the broker unknown: a timeout, a 408, any 5xx (including 500), a connection reset, a socket hang-up, or any non-`BrokerError` (including a rejection with `null` or `undefined`). In those cases `submitOrder` throws `OrderStateUnknownError` (carries `clientOrderId` and the underlying `cause`) instead of the raw error. This applies when:\n- A retryable failure exhausts retries.\n- A non-retryable but ambiguous failure occurs, such as a 500 or a network error. It is not retried but is still reported as unknown.\n- A later attempt gets a 4xx, for example a duplicate-id rejection. It is not treated as \"order rejected, safe to resubmit\"; it may mean an earlier attempt landed.\n\nA 4xx `BrokerError` (other than 408) on the first attempt, with no prior ambiguous attempt, is thrown unchanged: the broker explicitly rejected it.\n\n**Success after an ambiguous attempt.** If an attempt succeeds after an earlier ambiguous one, the order is returned normally, but a `order_submit_success_after_ambiguous` warning is logged with the `clientOrderId`. If the broker dedupes by id this is expected and harmless; if it does not, the earlier attempt may also have landed, and operators can find the id to reconcile. The client cannot detect a duplicate by itself.\n\n**Callers must not blindly resubmit on `OrderStateUnknownError`.** They must look up `clientOrderId` at the broker first. Any caller that resubmits on a thrown error would create a second live order under a fresh `clientOrderId`, which a lookup by the original id cannot catch. Callers of `submitOrder` are not in this diff, so they must be audited before enabling the flag.\n\n**Enable preconditions (all required, none done yet):**\n- Broker dedupes or rejects on a repeated `client_order_id`, and for how long. The total retry span is about 12.75s (3 x 4s timeout plus 250ms and 500ms backoff). Source to cite: broker API docs or a sandbox test. Also record what status/body the broker returns for a duplicate id.\n- `BrokerClient.post` accepts `{ timeoutMs }`, a timeout surfaces as an error with `name === \"TimeoutError\"`, and `BrokerError` exposes the HTTP code as `.status`. `src/broker/client.ts` is not changed in this PR. If the option is ignored, hung requests are unbounded. Check in the sandbox with a real `BrokerClient`, not only with the unit tests. (A timeout with an unexpected name still yields `OrderStateUnknownError`, but it would not be retried.)\n- Callers of `submitOrder` audited: none retries or resubmits on any thrown error.\n- An alert exists on the structured log event `order_state_unknown` (emitted on every `OrderStateUnknownError`) and on `order_submit_success_after_ambiguous`, so detection does not depend on someone reading logs.\n- Reconciliation exists (see below), or at minimum an operator is actively watching and checks every logged id.\n- In-flight exposure is handled (see \"Sizing\" below).\n\n**Known gap: no reconciliation.** A client-side timeout does not cancel the request at the broker, so after exhaustion the order may still be in flight and fill later. We throw `OrderStateUnknownError` and log `clientOrderId`, but we do not query the broker by id or page anyone. That reconciliation (query by id, alert) is a required follow-up, not optional. Until it exists, an operator must check the logged id after every `OrderStateUnknownError`, which is another reason to enable the flag only with someone watching, not unattended at the open. Ambiguous ids live only in logs and in process memory; there is no durable store, so a process crash mid-retry can lose the id of an in-flight order. A durable record of ambiguous ids belongs to the same required follow-up and is part of the reconciliation precondition above.\n\n**Rollout.**\n- The flag `ORDER_SUBMIT_RETRY` defaults to off. With it off, `submitOrder` makes a single attempt with no timeout option, as before.\n- Merge and deploy dark, only after the typecheck precondition above is met and recorded. Enable only after all enable preconditions above are met.\n- Unsetting the flag and restarting disables retries without a code revert. **Enablement is effectively one-way until reconciliation exists**: disabling does not undo orders already sent, and the code does not track them. Anything sent while the flag was on must be reconciled by id.\n- The guard against premature enablement is the default-off flag plus the recorded preconditions, not code. The code cannot verify external facts (broker dedupe, caller behavior, alert existence), so a startup check would only be a second env var and add no real safety. Enabling is a deliberate operator decision that must reference the completed preconditions in this PR.\n\n**Sleep helper.** The backoff uses a local `defaultSleep` in `submit.ts`, injectable via options for tests, so this PR does not depend on a `../util/sleep` module.\n\n**Test limits.** The unit tests use hand-built fakes (`BrokerError` via `Object.create` with a set `status`, a renamed `Error` for timeouts). They verify the retry logic given those error shapes. They do not prove the real client produces those shapes, which is what the sandbox check covers. They also cast the broker to `any`, so they do not check the `post` signature; the typecheck precondition covers that.\n\n**Sizing.** `sizing.ts` is intentionally unchanged. An earlier draft of this PR changed `floor` to `ceil`, which could push notional above `maxNotional`. That change was dropped. This PR adds only regression tests that pin the cap behavior, including a non-multiple case.\nKnown limitation (enable gate, not a merge gate, since the flag is off): `sizeBuy` sees only filled `currentQty`, so headroom consumed by an in-flight or ambiguous order is invisible to it. Two same-symbol submits could each size to the full cap. Before enabling, new sizing for a symbol must be blocked while an `OrderStateUnknownError` for that symbol is unreconciled. That is not implemented here, and the sizing tests do not cover it.\n\n```diff\ndiff --git a/src/router/submit.ts b/src/router/submit.ts\nindex 3a1f0c2..8be71d4 100644\n--- a/src/router/submit.ts\n+++ b/src/router/submit.ts\n@@ -1,18 +1,93 @@\n import { randomUUID } from \"node:crypto\";\n import { BrokerClient, BrokerError } from \"../broker/client\";\n import { OrderIntent, SubmittedOrder } from \"../types\";\n import { log } from \"../log\";\n\n+// 408 is a 4xx but ambiguous (server may have processed it), so it is retried.\n+const RETRYABLE_STATUS = new Set([408, 502, 503, 504]);\n+const MAX_ATTEMPTS = 3;\n+\n+/**\n+ * Thrown when an attempt ended ambiguously, so the order may be live at\n+ * the broker. Callers must reconcile by clientOrderId, never blindly resubmit.\n+ */\n+export class OrderStateUnknownError extends Error {\n+  constructor(\n+    public readonly clientOrderId: string,\n+    public readonly cause: unknown,\n+  ) {\n+    super(`order state unknown for clientOrderId=${clientOrderId}`);\n+    this.name = \"OrderStateUnknownError\";\n+  }\n+}\n+\n+export interface SubmitOptions {\n+  retryEnabled?: boolean;\n+  sleep?: (ms: number) => Promise<void>;\n+}\n+\n+const defaultSleep = (ms: number) =>\n+  new Promise<void>((resolve) => setTimeout(resolve, ms));\n+\n export async function submitOrder(\n   broker: BrokerClient,\n   intent: OrderIntent,\n+  opts: SubmitOptions = {},\n ): Promise<SubmittedOrder> {\n-  const clientOrderId = randomUUID();\n-  const res = await broker.post(\"/v2/orders\", {\n-    symbol: intent.symbol,\n-    qty: intent.qty,\n-    side: intent.side,\n-    type: \"limit\",\n-    limit_price: intent.limitPrice,\n-    client_order_id: clientOrderId,\n-  });\n-  return { id: res.id, clientOrderId, status: res.status };\n+  const retryEnabled =\n+    opts.retryEnabled ?? process.env.ORDER_SUBMIT_RETRY === \"1\";\n+  const sleep = opts.sleep ?? defaultSleep;\n+  // Generated once and reused on every attempt. Intended to let the broker\n+  // dedupe retries; that broker behavior is NOT yet verified (see PR notes).\n+  const clientOrderId = randomUUID();\n+  const body = {\n+    symbol: intent.symbol,\n+    qty: intent.qty,\n+    side: intent.side,\n+    type: \"limit\",\n+    limit_price: intent.limitPrice,\n+    client_order_id: clientOrderId,\n+  };\n+\n+  if (!retryEnabled) {\n+    // Legacy behavior: single attempt, no timeout option.\n+    const res = await broker.post(\"/v2/orders\", body);\n+    return { id: res.id, clientOrderId, status: res.status };\n+  }\n+\n+  let ambiguous = false; // a prior attempt may have landed at the broker\n+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {\n+    try {\n+      const res = await broker.post(\"/v2/orders\", body, { timeoutMs: 4000 });\n+      if (ambiguous) {\n+        // An earlier attempt may also have landed; surface the id.\n+        log.warn(\"order submit succeeded after ambiguous attempt\", {\n+          event: \"order_submit_success_after_ambiguous\",\n+          symbol: intent.symbol,\n+          clientOrderId,\n+          attempt,\n+        });\n+      }\n+      return { id: res.id, clientOrderId, status: res.status };\n+    } catch (err) {\n+      // Only an explicit 4xx (other than 408) from the broker proves the\n+      // order was not accepted. Everything else (408, 500, timeout, reset,\n+      // unknown) is ambiguous.\n+      // `err` may be anything, including null/undefined, so read `name` safely.\n+      const errName = (err as { name?: unknown } | null | undefined)?.name;\n+      const definitiveReject =\n+        err instanceof BrokerError &&\n+        err.status >= 400 && err.status < 500 && err.status !== 408;\n+      const retryable =\n+        (err instanceof BrokerError && RETRYABLE_STATUS.has(err.status)) ||\n+        errName === \"TimeoutError\";\n+      if (!retryable || attempt === MAX_ATTEMPTS) {\n+        const unknownState = ambiguous || !definitiveReject;\n+        log.error(\"order submit failed\", {\n+          event: unknownState ? \"order_state_unknown\" : \"order_submit_rejected\",\n+          symbol: intent.symbol,\n+          clientOrderId,\n+          attempt,\n+          retryable,\n+          priorAttemptAmbiguous: ambiguous,\n+        });\n+        // If any attempt was ambiguous, the order may be live: a 4xx after\n+        // an ambiguous attempt may be a duplicate-id rejection.\n+        if (unknownState) {\n+          throw new OrderStateUnknownError(clientOrderId, err);\n+        }\n+        throw err;\n+      }\n+      ambiguous = true;\n+      log.warn(\"order submit retry\", {\n+        symbol: intent.symbol,\n+        clientOrderId,\n+        attempt,\n+      });\n+      await sleep(250 * 2 ** (attempt - 1));\n+    }\n+  }\n+  // Unreachable: the loop always returns or throws.\n+  throw new Error(\"submitOrder: retry loop exited unexpectedly\");\n }\ndiff --git a/src/router/submit.test.ts b/src/router/submit.test.ts\nnew file mode 100644\nindex 0000000..5c1d9e4\n--- /dev/null\n+++ b/src/router/submit.test.ts\n@@ -0,0 +1,141 @@\n+import { submitOrder, OrderStateUnknownError } from \"./submit\";\n+import { BrokerError } from \"../broker/client\";\n+import { log } from \"../log\";\n+\n+const intent = { symbol: \"ABC\", qty: 10, side: \"buy\", limitPrice: 100 } as any;\n+const opts = { retryEnabled: true, sleep: jest.fn().mockResolvedValue(undefined) };\n+\n+// NOTE: these fakes assume BrokerError exposes `.status` and timeouts are\n+// named \"TimeoutError\". They do not prove the real client does; that is\n+// checked against the broker sandbox before the flag is enabled.\n+function brokerErr(status: number): Error {\n+  const e = Object.create(BrokerError.prototype);\n+  e.status = status;\n+  return e;\n+}\n+\n+function timeoutErr(): Error {\n+  const e = new Error(\"timeout\");\n+  e.name = \"TimeoutError\";\n+  return e;\n+}\n+\n+function fakeBroker(post: jest.Mock) {\n+  return { post } as any;\n+}\n+\n+test(\"retries 503 and reuses the same client_order_id\", async () => {\n+  const post = jest\n+    .fn()\n+    .mockRejectedValueOnce(brokerErr(503))\n+    .mockResolvedValueOnce({ id: \"o1\", status: \"accepted\" });\n+  const out = await submitOrder(fakeBroker(post), intent, opts);\n+  expect(post).toHaveBeenCalledTimes(2);\n+  const ids = post.mock.calls.map((c) => c[1].client_order_id);\n+  expect(ids[0]).toBe(ids[1]);\n+  expect(out.clientOrderId).toBe(ids[0]);\n+});\n+\n+test(\"retries a timeout with a stable client_order_id\", async () => {\n+  const post = jest\n+    .fn()\n+    .mockRejectedValueOnce(timeoutErr())\n+    .mockResolvedValueOnce({ id: \"o1\", status: \"accepted\" });\n+  await submitOrder(fakeBroker(post), intent, opts);\n+  expect(post).toHaveBeenCalledTimes(2);\n+  expect(post.mock.calls[0][1].client_order_id).toBe(post.mock.calls[1][1].client_order_id);\n+});\n+\n+test(\"first-attempt 4xx is not retried and is thrown unchanged\", async () => {\n+  const err = brokerErr(422);\n+  const post = jest.fn().mockRejectedValue(err);\n+  await expect(submitOrder(fakeBroker(post), intent, opts)).rejects.toBe(err);\n+  expect(post).toHaveBeenCalledTimes(1);\n+});\n+\n+test(\"408 is ambiguous, not a definitive rejection: retried, then OrderStateUnknownError\", async () => {\n+  const post = jest.fn().mockRejectedValue(brokerErr(408));\n+  await expect(submitOrder(fakeBroker(post), intent, opts)).rejects.toBeInstanceOf(\n+    OrderStateUnknownError,\n+  );\n+  expect(post).toHaveBeenCalledTimes(3);\n+});\n+\n+test(\"first-attempt 500 is ambiguous: not retried, OrderStateUnknownError\", async () => {\n+  const post = jest.fn().mockRejectedValue(brokerErr(500));\n+  await expect(submitOrder(fakeBroker(post), intent, opts)).rejects.toBeInstanceOf(\n+    OrderStateUnknownError,\n+  );\n+  expect(post).toHaveBeenCalledTimes(1);\n+});\n+\n+test(\"first-attempt network error is ambiguous: OrderStateUnknownError\", async () => {\n+  const post = jest.fn().mockRejectedValue(new Error(\"ECONNRESET\"));\n+  await expect(submitOrder(fakeBroker(post), intent, opts)).rejects.toBeInstanceOf(\n+    OrderStateUnknownError,\n+  );\n+  expect(post).toHaveBeenCalledTimes(1);\n+});\n+\n+test(\"rejection with undefined/null is ambiguous: OrderStateUnknownError, not a TypeError\", async () => {\n+  for (const bad of [undefined, null]) {\n+    const post = jest.fn().mockRejectedValue(bad);\n+    await expect(submitOrder(fakeBroker(post), intent, opts)).rejects.toBeInstanceOf(\n+      OrderStateUnknownError,\n+    );\n+    expect(post).toHaveBeenCalledTimes(1);\n+  }\n+});\n+\n+test(\"4xx after an ambiguous attempt surfaces as OrderStateUnknownError\", async () => {\n+  const post = jest\n+    .fn()\n+    .mockRejectedValueOnce(timeoutErr())\n+    .mockRejectedValueOnce(brokerErr(422));\n+  const p = submitOrder(fakeBroker(post), intent, opts);\n+  await expect(p).rejects.toBeInstanceOf(OrderStateUnknownError);\n+  expect(post).toHaveBeenCalledTimes(2);\n+});\n+\n+test(\"success after an ambiguous attempt is logged for reconciliation\", async () => {\n+  const warn = jest.spyOn(log, \"warn\").mockImplementation(() => undefined);\n+  const post = jest\n+    .fn()\n+    .mockRejectedValueOnce(timeoutErr())\n+    .mockResolvedValueOnce({ id: \"o1\", status: \"accepted\" });\n+  await submitOrder(fakeBroker(post), intent, opts);\n+  expect(warn).toHaveBeenCalledWith(\n+    \"order submit succeeded after ambiguous attempt\",\n+    expect.objectContaining({ event: \"order_submit_success_after_ambiguous\" }),\n+  );\n+  warn.mockRestore();\n+});\n+\n+test(\"gives up after 3 attempts with OrderStateUnknownError carrying the id\", async () => {\n+  const post = jest.fn().mockRejectedValue(brokerErr(502));\n+  const err: any = await submitOrder(fakeBroker(post), intent, opts).catch((e) => e);\n+  expect(err).toBeInstanceOf(OrderStateUnknownError);\n+  expect(err.clientOrderId).toBe(post.mock.calls[0][1].client_order_id);\n+  expect(post).toHaveBeenCalledTimes(3);\n+});\n+\n+test(\"flag off: single attempt, no timeout option, original error\", async () => {\n+  const err = brokerErr(503);\n+  const post = jest.fn().mockRejectedValue(err);\n+  await expect(\n+    submitOrder(fakeBroker(post), intent, { retryEnabled: false }),\n+  ).rejects.toBe(err);\n+  expect(post).toHaveBeenCalledTimes(1);\n+  expect(post.mock.calls[0]).toHaveLength(2);\n+});\ndiff --git a/src/risk/sizing.test.ts b/src/risk/sizing.test.ts\nindex 19be4c2..2d0a7e1 100644\n--- a/src/risk/sizing.test.ts\n+++ b/src/risk/sizing.test.ts\n@@ -3,6 +3,22 @@ import { sizeBuy } from \"./sizing\";\n test(\"no headroom when at cap\", () => {\n   expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 100, lotSize: 1 })).toBe(0);\n });\n+\n+test(\"sizes to the cap in whole lots\", () => {\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 })).toBe(100);\n+  expect(sizeBuy({ maxNotional: 10_000, price: 50, currentQty: 0, lotSize: 10 })).toBe(200);\n+});\n+\n+test(\"never exceeds maxNotional when headroom is not a lot multiple\", () => {\n+  const input = { maxNotional: 10_000, price: 33, currentQty: 0, lotSize: 1 };\n+  const qty = sizeBuy(input);\n+  expect(qty).toBe(303);\n+  expect(qty * input.price).toBeLessThanOrEqual(input.maxNotional);\n+});\n+\n+test(\"short position frees headroom for the cover\", () => {\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: -20, lotSize: 1 })).toBe(120);\n+});\n```",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 50262,
+  "tokOut": 53646,
+  "usd": 0.73748,
+  "critMs": 285728
+ },
+ "status": "cap"
+}

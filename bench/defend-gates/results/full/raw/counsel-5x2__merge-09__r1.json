@@ -1,0 +1,125 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-09",
+ "rep": 1,
+ "wallMs": 445656,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PlugCloud signing format (header names, v1= prefix, timestamp.body input, hex encoding, seconds unit) is stated as vendor fact with no vendor doc or captured real delivery. The tests sign with the same helper they verify with, so a wrong scheme would reject every legitimate delivery and the tests would still pass.",
+   "evidence": "\"PlugCloud signs every delivery with X-PC-Timestamp and X-PC-Signature: v1=<hex HMAC-SHA256 of \\\"<timestamp>.<raw body>\\\">\" / ABSENT: vendor doc link, captured real delivery, or interop fixture; tests use TS = \"1700000000\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The 5-minute staleness rule can permanently drop valid readings. A vendor retry or backlog redelivery after the window gets a 401, and the artifact does not say whether the vendor retries 401s or buffers undelivered batches. The idempotency argument covers duplicates, not rejected data.",
+   "evidence": "\"rejects deliveries more than 5 minutes old or in the future, and returns a bare 401 on any failure\" / \"a redelivered batch is harmless\" / ABSENT: vendor retry or buffering behaviour for 401s"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Every rejection is handled by a log.warning and a 401 with no counter, metric, or alert. A wrong secret, a clock-skewed host, or a bad rotation silently drops home energy readings with no operator-visible signal.",
+   "evidence": "log.warning(\"plugcloud webhook rejected: %s\", exc) followed by raise HTTPException(status_code=401, ...) / ABSENT: metric, alert, or health indicator for 401 rate"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The artifact promises that startup fails when the secret is missing or short, but no test exercises the validator or any startup path, and the route obtains settings through Depends(get_settings), whose implementation is not in the diff. If construction is lazy, a bad config surfaces as a per-request 500 instead of a boot failure.",
+   "evidence": "\"startup fails if it is missing or short\" / \"settings: Settings = Depends(get_settings)\" / ABSENT: test of _secret_long_enough, lifespan hook, or eager Settings() call"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "plugcloud_secret is a required no-default field on the shared Settings class, so any other process that constructs Settings without it (CLI, migrations, workers, scripts) fails with ValidationError. Only the conftest fixture was updated, and no call-site audit is shown.",
+   "evidence": "\"plugcloud_secret: SecretStr\" (no default) / \"Settings(database_url=TEST_DB_URL, plugcloud_secret=\\\"t\\\" * 32)\" is the only construction shown / ABSENT: grep of Settings() call sites or scoped requirement"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Only one secret is accepted with no overlap window, so rotation or a rollout mismatch requires vendor and operator to switch at the same instant. The PR gives no cut-over or upgrade procedure, and the release-note announcement is not part of the diff.",
+   "evidence": "signing.verify(secret, body, ...) takes one secret; plugcloud_secret: SecretStr / \"New required env vars are announced in release notes\" / ABSENT: cut-over procedure or dual-key acceptance"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The full unauthenticated body is read into memory before any signature check. The 1 MB cap exists only in the external reverse proxy, so direct access to the app port or a proxy misconfiguration allows unbounded pre-auth buffering.",
+   "evidence": "body = await request.body() (no size check) / \"the reverse proxy caps request bodies at 1 MB\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "A captured valid delivery can be replayed within the 5-minute window. Harmlessness holds only for identical content; a replayed older batch could overwrite a later correction for the same (device_id, measured_at) key, and the upsert conflict rule is not stated.",
+   "evidence": "\"Readings are already upserted by (device_id, measured_at), so a redelivered batch is harmless\" / ABSENT: nonce, delivery ID, or conflict semantics"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The PR says every failure returns a bare 401, but the handler returns a detail string. The description and code disagree, and no test checks the response body.",
+   "evidence": "\"returns a bare 401 on any failure\" vs raise HTTPException(status_code=401, detail=\"invalid signature\") from None"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The secret validator checks only length, so a 32-character low-entropy value such as 'a'*32 passes and operators receive no warning.",
+   "evidence": "if len(v.get_secret_value()) < 32: raise ValueError(\"must be at least 32 characters\")"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "removeprefix(\"v1=\") is a no-op when the prefix is absent, so a bare hex signature is accepted. This weakens version pinning and complicates a future v2 scheme.",
+   "evidence": "signature.removeprefix(\"v1=\").encode()"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Depends(get_db) is resolved before the signature check, so unsigned POSTs may acquire a DB dependency before rejection. Whether this exhausts the pool depends on get_db, which is not shown.",
+   "evidence": "async def plugcloud_webhook(request: Request, db: Database = Depends(get_db), settings: Settings = Depends(get_settings))"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "verify() uses server wall-clock time. A home host without NTP that drifts more than 5 minutes rejects every delivery, and the artifact gives no clock-sync requirement or alert.",
+   "evidence": "current = time.time() if now is None else now / ABSENT: clock-sync requirement"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Route tests cover only the unsigned 401 and the valid 202, and they depend on wall-clock time. Stale, tampered, malformed-header, and 422 paths are tested only at unit level or not at all.",
+   "evidence": "ts = str(int(time.time())); test_route_rejects_unsigned_and_accepts_signed asserts only the unsigned 401 and signed 202"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "No test pairs a valid signature computed for one timestamp with a different X-PC-Timestamp header, which is the case the signed-timestamp binding exists to stop.",
+   "evidence": "Parametrized cases vary body, secret, staleness, and missing headers, but not a timestamp swapped under a fixed signature"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The test comment is wrong: the 5000-digit case is rejected by the 12-digit regex before int() runs, not by int()'s digit limit.",
+   "evidence": "(BODY, \"9\" * 5000, \"v1=00\", 1700000000), # would overflow int() digit limit / _TIMESTAMP_RE = re.compile(r\"[0-9]{1,12}\")"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "request.headers.get() returns the first value for duplicate X-PC-Signature headers, and the contract for duplicates is undefined and untested.",
+   "evidence": "request.headers.get(\"x-pc-signature\") / ABSENT: test or contract for duplicate headers"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Removing the typed PlugCloudBatch parameter drops the request body schema from OpenAPI docs and any generated client that depended on it.",
+   "evidence": "Diff removes \"batch: PlugCloudBatch\" from the signature and reads request.body() instead"
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 110328,
+  "tokOut": 51012,
+  "usd": 0.04580829,
+  "critMs": 85903
+ }
+}

@@ -1,0 +1,77 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "merge-04",
+ "rep": 1,
+ "wallMs": 204217,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The up migration adds an empty `private_notes` column and drops `notes` without copying any data, so every existing user note is destroyed when the migration auto-runs on merge. The PR calls this a 'pure rename, no data change', which is false. Notes cannot be recovered elsewhere.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The down migration is not a real rollback. It adds an empty `notes` column and drops `private_notes`, so notes written after deploy are lost and the original notes are already gone. The claim that it 'restores the old name' is misleading. No backup or snapshot step exists before the destructive DROP.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN notes text;\nALTER TABLE user_recipes DROP COLUMN private_notes;"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "A true metadata-only `RENAME COLUMN` was available and would preserve data. Even then, the migration is not sequenced expand/contract. Old app instances still select `ur.notes` during a rolling deploy and will error once the column is renamed or dropped. No deploy ordering is given.",
+   "evidence": "ABSENT: no RENAME COLUMN, no backfill before DROP, and no expand/contract or deploy-ordering plan"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The DDL takes an ACCESS EXCLUSIVE lock on a ~140M-row table with no lock_timeout. If a long-running query holds a conflicting lock, the ALTER queues and blocks all reads and writes on user_recipes, stalling the API past its 300ms p99 budget.",
+   "evidence": "BEGIN; ALTER TABLE user_recipes ADD COLUMN private_notes text; ALTER TABLE user_recipes DROP COLUMN notes; COMMIT; (no SET lock_timeout)"
+  },
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "The handler removes LIMIT/OFFSET from SQL and loads the user's entire saved set (200k+ rows joined to recipes, including notes) on every page request, then slices in memory. Latency and memory grow with total saves rather than page size, which will breach the 300ms p99 budget for heavy users. This is not real keyset pagination.",
+   "evidence": "WHERE ur.user_id = $1 ORDER BY ur.saved_at DESC, ur.id DESC`, [userId], ... const page = rows.slice(start, start + limit);"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "No index supports the (user_id, saved_at, id) ordering on a 140M-row table, so each request does a scan and sort. Keyset pagination needs that index.",
+   "evidence": "ABSENT: no CREATE INDEX on user_recipes(user_id, saved_at DESC, id DESC) in the migrations"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "An unknown or stale cursor (for example, a recipe unsaved between pages) makes findIndex return -1, so start becomes 0 and the response silently restarts from page one. Clients can loop or see duplicates, which is the scroll-while-saving problem this change claims to fix. It is untested.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The `limit` value is not validated for negatives or fractions. A negative or fractional limit with a cursor can yield an empty page while `start + limit < rows.length` is true, so `page[page.length - 1].id` throws a TypeError and returns a 500.",
+   "evidence": "const limit = Math.min(Number(req.query.limit) || 50, 100); ... start + limit < rows.length ? page[page.length - 1].id : null;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Removing `offset` with no compatibility path means clients still sending it silently get page one every time, causing loops or duplicates. The response key also changes from `notes` to `private_notes`, with no client change in the PR and no audit of other readers of `notes`.",
+   "evidence": "-  const offset = Math.max(Number(req.query.offset) || 0, 0);  /  SELECT ... ur.private_notes  /  ABSENT: no client diff or reference audit for `notes`"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "The stated goal is that private_notes must never appear on shared views, but nothing in the diff enforces it. The rename only changes a name.",
+   "evidence": "ABSENT: any guard, view, or projection rule excluding private_notes from shared-collection queries"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 61559,
+  "tokOut": 27353,
+  "usd": 0.08812858000000001,
+  "critMs": 28102
+ }
+}

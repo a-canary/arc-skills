@@ -1,0 +1,129 @@
+{
+ "approach": "rubric-stop-early",
+ "case": "plan-10",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Purged users' personal data stays in Postgres snapshots for 35 days after purge. The plan discloses retention for invoices and logs but not for backups, and it does not say backups are restricted or put beyond use.",
+     "evidence": "\"Postgres snapshots roll off after 35 days and are not edited.\" ABSENT: privacy policy disclosure of backup retention, and access controls or 'beyond use' rules for backup data after purge."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3849,
+    "tokOut": 2802,
+    "usd": 0.00199865,
+    "critMs": 12967
+   },
+   "wallMs": 74168
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The purge deletes the account's rows in one transaction and only afterwards calls processors that need data from those rows. The Sign in with Apple refresh token and the Stripe customer link are probably stored on the user or related rows, so they would be gone before the revoke and detach calls run. The plan does not say where these tokens are kept or when they are read.",
+     "evidence": "\"each account is one DB transaction across `users` and the 23 tables that reference it.\" ... \"After the DB transaction commits: ... Sign in with Apple users: `POST /auth/revoke` for their refresh token.\" ABSENT: where the Apple refresh token and Stripe customer ID are stored, and whether they are read before the transaction deletes them."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4027,
+    "tokOut": 4253,
+    "usd": 0.00275975,
+    "critMs": 20242
+   },
+   "wallMs": 40084
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The purge steps contradict each other on when the purge_outbox row is written. Step 1 says the job writes it before any deletion, and step 2 says the transaction inserts it. With the 'one per account' rule, the second insert either violates that rule or fails, and a crash between steps leaves an outbox row for a live account, so a re-run is not clearly safe.",
+     "evidence": "\"Before any deletion, the job writes a `purge_outbox` row (one per account)\" and \"The transaction also inserts the `purge_outbox` row, so either both the outbox row and the deletion commit, or neither does.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4438,
+    "tokOut": 2748,
+    "usd": 0.00208945,
+    "critMs": 12666
+   },
+   "wallMs": 133850
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The erasure scope rests on a claim the artifact itself contradicts. It says no other system holds user-level data beyond the five listed processors, but it also describes Sentry error reports, application logs, and Zendesk deletion tickets, none of which are in the purge list. The transactional email and push providers that send the deletion and confirmation emails are not mentioned at all. Art. 17 erasure would be incomplete for these systems.",
+     "evidence": "\"No other system holds user-level data beyond the processors below (data inventory DPI-2026, reviewed Sep 2026).\" ... \"Application logs and Sentry error reports have 30-day retention (privacy policy §7).\" ABSENT: Sentry, log stores, transactional email provider, push provider (device tokens), and Zendesk ticket content in the purge or processor lists."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4668,
+    "tokOut": 2717,
+    "usd": 0.00211995,
+    "critMs": 13787
+   },
+   "wallMs": 22349
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The plan says nothing else is kept beyond invoices and time-limited copies, yet the `deleted_accounts` table keeps purged user IDs and dates indefinitely with no retention period. A stable user ID that can be linked back to a person is personal data under GDPR, so calling it 'no PII' is wrong and the table is an unlimited retention exception the plan does not disclose or bound.",
+     "evidence": "\"Table `deleted_accounts` keeps only purged user IDs and dates (no PII)\" vs. \"Nothing else is kept except the time-limited copies listed below (backups, logs, Sentry).\" ABSENT: a retention period for `deleted_accounts`, a lawful basis, and a §7 disclosure for it."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5323,
+    "tokOut": 1827,
+    "usd": 0.0018059500000000002,
+    "critMs": 8859
+   },
+   "wallMs": 87991
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The outbox row is deleted when the 7-day retry window ends, even if processor calls have failed. That row holds the only copy of the identifiers needed to retry (Apple refresh token, Stripe customer ID, Amplitude, Customer.io and Zendesk IDs). The `purge-failed` ticket tracks failures by user ID, not by those identifiers, so a processor that still holds data after day 21 cannot be completed by the job or by support as specified. This undercuts the Art. 17 claim that the worst case stays inside the one-month deadline.",
+     "evidence": "\"the row is deleted when all processor calls for that account succeed or the 7-day retry window ends (failures are tracked in the `purge-failed` ticket by ID, not by token)\" and \"anything still failing opens a `purge-failed` ticket for the privacy lead\". ABSENT: a specified path to complete a failed processor deletion after the outbox row is removed (for example, retaining the processor IDs on the ticket or in a restricted store until the processor confirms)."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5790,
+    "tokOut": 4367,
+    "usd": 0.0031693500000000005,
+    "critMs": 21216
+   },
+   "wallMs": 59809
+  }
+ ],
+ "artifact": "# Plan: self-serve account deletion\n\nOwners: 2 engineers (1 backend, 1 web/mobile) · 3 weeks · Epic PAR-2207\n\n## 1. Why\n- iOS build 4.18 was rejected under App Store guideline 5.1.1(v) (apps with account creation must offer in-app account deletion). All iOS releases are blocked until this ships.\n- Support handled 1,140 deletion requests/month (Aug–Sep average, Zendesk tag `delete-account`). Median time to completion is 6 days; each takes ~9 min of agent time and a manual Rails console script.\n- Google Play's data-safety form requires a web link where users can request deletion; today we list a support email address.\n\n## 2. User flow (web, iOS, Android)\n- Entry: Settings → Account → \"Delete account\" on all three clients, plus the web page parlo.app/account/delete, linked from the Play listing and the help centre.\n- Screen 1, \"What happens when you delete your account\":\n  - Progress, streaks, courses, club messages and leaderboard history are permanently deleted 14 days after you confirm.\n  - \"Download my data first\" links to the existing data export (emailed ZIP). An export requested here is still delivered after you confirm deletion.\n  - Billing records we must keep by law are kept (§4).\n  - Subscription notice, only when relevant (§3).\n  - No retention offer, discount or survey. One button: \"Continue\".\n- Screen 2: re-authenticate. Password users enter their password; Apple/Google sign-in users re-authenticate with that provider. Re-auth is valid for 10 minutes; if it expires the user re-auths and returns to the same step without losing anything.\n- Screen 3: \"Delete my account\" (destructive style) and \"Cancel\". On confirm:\n  - All sessions and refresh tokens are revoked.\n  - The account is deactivated: hidden from leaderboards, friends and clubs (club messages included); push and marketing email are paused.\n  - Email to the account address: \"Your Parlo account will be deleted on {date}. Changed your mind? Log in before then, or use this link.\" The link is single-use, signed, valid until the purge.\n- Users who cannot log in use parlo.app/account/delete: we email a confirmation link to the account address, and clicking it counts as re-auth. The page never reveals whether an address has an account (\"If an account exists, we've sent a link\").\n- Logging in during the 14 days shows \"Your account is scheduled for deletion on {date}\" with \"Keep my account\", which restores the account exactly as it was, including notification and marketing preferences.\n- Accessibility: native components only; the destructive button has a full-text label; flow tested with VoiceOver, TalkBack, keyboard-only web and Dynamic Type XXL / 200% font scale.\n\n## 3. Subscriptions\n- Web (Stripe): at confirm, the subscription is set to `cancel_at_period_end`, so it never renews during the grace period. \"Keep my account\" unsets it. At purge, any still-active subscription is cancelled. Refunds follow the existing refund policy, linked from screen 1; nothing changes there.\n- App Store / Google Play: we cannot cancel these. If the user has an active store subscription, screen 1 says \"Deleting your account does not cancel your App Store subscription\" (or Google Play) with a \"Manage subscription\" button deep-linking to the platform page, before \"Continue\".\n\n## 4. Purge (day 14)\n- Nightly `AccountPurgeJob` processes accounts whose grace period has ended. Each account is purged in two steps, and the `purge_outbox` row is written in exactly one place, inside the deletion transaction:\n  1. DB transaction: one transaction that (a) inserts the `purge_outbox` row (one per account, unique on user ID) holding what the processor calls need, read from the live rows in the same transaction: Apple refresh token (encrypted), Stripe customer ID, Amplitude user ID, Customer.io customer ID, Zendesk end-user ID, plus the user ID at the transactional email and push providers if those differ from the above (see the week-1 audit below); and (b) deletes from `users` and the 23 tables that reference it. These are the only fields copied; the row has no other PII. Each processor's identifier is cleared from the row as soon as that processor's call succeeds, and the row is deleted when every processor call for that account has succeeded. The row is never deleted on a timer: if a call is still failing when the 7-day retry window ends, the row (holding only the identifiers for the still-failing processors) is kept until the privacy lead confirms completion (see failure handling below). Either both the outbox row and the deletion commit, or neither does, so a crash or rollback leaves no outbox row for a live account.\n  2. Processor calls, driven from `purge_outbox` after commit (below). They never read the deleted rows.\n- Re-run safety: the job selects accounts by \"user row still exists and grace period ended\". If it crashes before commit, nothing was written and the next run repeats the whole transaction. If it crashes after commit, the user row is gone so the account is not selected again, and the processor calls resume from the existing `purge_outbox` row. The unique constraint on user ID in `purge_outbox` means a duplicate insert can never succeed silently.\n- Purge registry: `config/purge_registry.yml` lists every table with a `user_id` or `*_user_id` column and its action (delete, or nullify for rows owned by someone else). A CI test fails if any such column in `db/schema.rb` is missing from the registry, so new tables cannot be forgotten. The registry also covers the columns that hold these external identifiers and push device tokens (deleted with the user rows). `purge_outbox` and `deleted_accounts` are exempt from deletion by the job: `purge_outbox` is removed only by the outbox cleanup above, and `deleted_accounts` only by its own retention job (see Backups below).\n- Kept: invoice records (amount, date, VAT, billing name and country) for the statutory retention period under §147 AO, then removed by the existing invoice retention job; disclosed in privacy policy §7. Nothing else is kept except the time-limited copies listed below (backups, logs, Sentry) and the short-lived `deleted_accounts` suppression record, which is also listed below.\n- Week-1 data-inventory audit (blocking for the purge design): DPI-2026 (reviewed Sep 2026) predates this plan and does not cover every system this flow touches. Before build starts, the backend engineer and privacy lead re-check it against every system that receives user identifiers, specifically the transactional email provider, the push provider (APNs/FCM device registrations), Zendesk ticket content, Sentry and the log stores, and record the outcome in DPI-2026. Any system found holding user-level data is added to the list below or to the retained-with-limit list, and the launch is blocked until the list is complete.\n- Processors, called after the DB transaction commits, using the identifiers in `purge_outbox`:\n  - Amplitude: user deletion API.\n  - Customer.io: `DELETE /customers/{id}`.\n  - Zendesk: end-user permanent deletion, which also removes tickets requested by that user. The staging run verifies that no ticket content remains for a deleted end user; if the API leaves any, the job redacts it explicitly. Our own `delete-account` request tickets are covered by this too.\n  - Stripe: detach payment methods and redact customer metadata; invoices stay as required. Uses the stored Stripe customer ID.\n  - Sign in with Apple users: `POST /auth/revoke` for their refresh token, read from the outbox row.\n  - Transactional email provider (sends the confirmation and reminder emails): delete the recipient/contact record and suppress further sends, using the ID in the outbox row. If this is Customer.io, the call above covers it.\n  - Push provider: deregister the user's device tokens at deactivation (already in the DB tables) and again at purge; no user-level data is kept after that.\n- Failure handling: each call retries with exponential backoff for up to 7 days. If a call has still failed after 3 days, the job opens a `purge-failed` ticket for the privacy lead. The ticket references the `purge_outbox` row ID and the failing processor names, never the identifiers or tokens themselves, so the ticket system holds no extra personal data. The outbox row is the single restricted store for those identifiers (encrypted at rest, access limited to the job and the privacy lead via an admin action that is logged). After the 7-day window the automatic backoff ends, but the row is kept and the privacy lead can trigger a manual retry from the admin action, or complete the deletion by hand in the processor's console using the identifiers in the row, then mark that processor complete, which clears its identifier. Tickets still open at day 21 are escalated, leaving about nine days of the one-month Art. 17 deadline for manual completion. A dashboard shows pending, completed and failed per processor, and the age of every retained outbox row. The row is deleted only when every processor is confirmed complete.\n- Retained with a limit, not individually purged:\n  - Backups: Postgres snapshots roll off after 35 days and are not edited, so purged users' data remains in them for up to 35 days after purge. This is disclosed in privacy policy §7 (to be updated as part of this epic; the wording is a launch blocker, owner: privacy lead). Until a snapshot ages out, it is held \"beyond use\": access is limited to the infrastructure on-call group via the existing break-glass role, every access is logged, and snapshots are used only for disaster recovery, never for analytics, support or any other query.\n  - `deleted_accounts` (restore suppression list): keeps only the purged user ID and purge date. The user ID is a pseudonymous identifier and is treated as personal data, not as \"no PII\"; it is minimal, is not linked to email, name or any other attribute, and is never used for any purpose other than restores. Purpose and lawful basis: preventing the restoration of erased data after a backup restore, which is how we honour Art. 17 and demonstrate it (Art. 5(2)); legitimate interest, Art. 6(1)(f), with the data subject's interest protected because the record only exists to keep their data erased. Retention: each row is deleted 40 days after its purge date (35-day maximum snapshot age plus a 5-day margin), by a nightly `DeletedAccountsCleanupJob`. By then no snapshot that could contain the user can still exist, so the row is no longer needed. The restore runbook re-applies purges from this table before a restored database is exposed to any user or service, so a restore cannot resurrect a deleted account. The table, purpose, basis and 40-day period are disclosed in privacy policy §7 as part of the same wording update (launch blocker, owner: privacy lead). The cleanup job's behaviour (rows older than 40 days removed, newer rows kept) is covered by a test, and the table is listed in DPI-2026.\n  - Application logs and Sentry error reports have 30-day retention (privacy policy §7), so they may still contain a purged user's ID, and possibly email or IP address, for up to 30 days after purge. They are used only for debugging and security investigation, never for analytics or profiling. The week-1 audit confirms what identifiers they carry; where they carry email addresses or message content, we add scrubbing before launch. The §7 wording update covers these as well.\n  - Delivery logs at the transactional email and push providers follow the providers' own retention. The audit records those periods, and they are disclosed in §7 if they exceed 30 days.\n- After purge the email address can be used to register a new, empty account.\n\n## 5. Abuse\n- A stolen session alone cannot delete an account: re-auth is required.\n- The confirmation email gives the real owner 14 days to cancel even if their password was used.\n- Web requests are rate-limited to 5/hour per IP and 3/day per email address.\n\n## 6. Rollout and rollback\n- Feature flag `account_deletion` per client. Week 3: staff accounts (60) first, then 100%, then App Store resubmission the same week.\n- The first real purge batch (14 days after launch) runs in dry-run mode first; the privacy lead checks the account list and per-table row counts before it runs live.\n- Rollback: flag off hides the entry points only. Requests already confirmed are still purged on schedule (the purge job ignores the flag), \"Keep my account\" and the email cancel link keep working, and new requests go back to the current manual support process. No confirmed request is lost.\n- Tests: request spec per registry table; staging run with 500 synthetic accounts across password / Apple / Google sign-in and Stripe test-mode subscriptions, including a check that processor calls succeed after the user rows are gone (Apple revoke and Stripe detach driven purely from `purge_outbox`), and a check that no Zendesk ticket content, email-provider contact or push registration remains for purged accounts; crash-injection test that kills the job before and after the transaction commit and verifies a re-run leaves exactly one outbox row per purged account and none for live accounts; failure-injection test that keeps one processor failing past the 7-day window and verifies the outbox row survives with only that processor's identifier, the `purge-failed` ticket references the row ID, and a manual retry from the admin action completes the call and then deletes the row; Apple sandbox revoke; restore-runbook drill on a staging snapshot, including a check that purges are re-applied before the restored database is exposed; `deleted_accounts` cleanup test (rows older than 40 days removed, newer rows kept).\n\n## 7. Success measures\n- Deletion support tickets < 100/month by end of December (from 1,140).\n- 100% of purges complete within 21 days of confirmation, or have an open, escalated `purge-failed` ticket and a retained outbox row (dashboard); zero accounts with an unresolved processor deletion at 30 days.\n- \"Keep my account\" rate tracked, no target.",
+ "fixerUsage": {
+  "calls": 6,
+  "tokIn": 24830,
+  "tokOut": 22820,
+  "usd": 0.3274959999999999,
+  "critMs": 127525
+ },
+ "status": "running"
+}

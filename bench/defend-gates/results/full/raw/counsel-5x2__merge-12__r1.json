@@ -1,0 +1,83 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-12",
+ "rep": 1,
+ "wallMs": 519988,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Each bookClass call pins a pool connection from db.connect() through BEGIN, the FOR UPDATE wait, and the insert. A burst on one hot class can hold the whole pool and delay bookings for other classes and other endpoints. The 'without affecting other classes' claim holds only at the row-lock level. Pool size and acquisition timeout are not stated, so saturation can become an unbounded hang.",
+   "evidence": "const client = await db.connect(); ... 'SELECT capacity, ... FROM classes WHERE id = $1 FOR UPDATE' / ABSENT: pool max, connectionTimeoutMillis, or a contention test"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Time spent waiting on the class-row lock counts toward the 5s statement_timeout. Requests queued behind a hot class can fail with a Postgres error. The catch rethrows, and the route forwards it to next(err), which returns a generic 500 during the exact spike this PR targets. Members retry into the same lock. No lock_timeout, error mapping to a clean 409, or metric is added, and no test covers this path.",
+   "evidence": "catch (err) { await client.query('ROLLBACK')...; throw err; } / route catch calls next(err) / 'The pg pool sets statement_timeout=5s' / ABSENT: lock-wait timeout handling or test"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "No-oversell and no-duplicate guarantees hold only if every writer to bookings takes the same class-row lock. The schema has no capacity or uniqueness constraint, and the PR does not show an inventory of other INSERT INTO bookings paths (admin add, import, waitlist promotion). A future or existing unlocked writer can reintroduce overselling with no visible signal.",
+   "evidence": "No schema change. bookLocked is the only locked insert path shown / ABSENT: grep or audit of other bookings writers, or a partial unique index on (class_id, member_id) WHERE cancelled_at IS NULL"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The headline fix rests on the 'never oversells' test, but nothing shows it fails on the pre-PR count-then-insert code. Promise.all over a pool may not interleave the old count and insert, so the test could pass on buggy code and give false confidence. No forced-interleaving test is provided.",
+   "evidence": "it('never oversells when members book concurrently' ... seedMembers(db, 12) ... toHaveLength(3) / ABSENT: run against old code or forced-interleaving test"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "now() returns the transaction start time, not the time the FOR UPDATE lock is granted. A request that begins before starts_at and waits on the lock past it can still be booked. The window is bounded by the lock wait, but the PR describes this as 'the database clock' without qualification. clock_timestamp() or a post-lock re-check would close it.",
+   "evidence": "(cancelled_at IS NOT NULL OR starts_at <= now()) AS closed ... FOR UPDATE; 'started or cancelled classes are rejected using the database clock'"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The ROLLBACK-failure branch that destroys the client via release(broken) has no test. A regression could return a poisoned connection to the pool silently.",
+   "evidence": "client.release(broken); // a client that could not roll back is destroyed, not reused / ABSENT: test forcing ROLLBACK to fail"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Client-visible contract changes ship without a versioning or announcement note: duplicate bookings return 200 instead of 201, and bookings for started or cancelled classes now return 409 class_closed where they previously succeeded. Clients that branch on 201 or assume open-class bookings always succeed may misread these responses.",
+   "evidence": "return res.status(result.created ? 201 : 200)... / case 'closed': return res.status(409).json({ error: 'class_closed' })"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Malformed-id validation lives only in the route, and bookClass still passes raw ids to Postgres. Other callers get a uuid-syntax 500 rather than not_found. The hand-written regex is a second source of truth for id validity.",
+   "evidence": "if (!UUID_RE.test(classId)) return res.status(404)... / bookClass(db, memberId, classId) has no guard"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The PR bundles four behaviour changes (overselling lock, idempotent 200, closed-class 409, malformed-id 404) under a title about overselling. This makes review and selective rollback harder.",
+   "evidence": "Title: 'bookings: stop overselling classes under concurrent requests' / 'Also: booking the same class twice returns the existing booking (200)...'"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The count and duplicate-check queries run while the lock is held, and the PR shows no index on bookings(class_id) or (class_id, member_id). A sequential scan over an unbounded bookings table would lengthen lock hold time under burst. Schema is not shown, so this is unconfirmed.",
+   "evidence": "SELECT count(*)::int AS n FROM bookings WHERE class_id = $1 AND cancelled_at IS NULL / ABSENT: index definitions on bookings"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Logging covers only successful bookings. There is no timing or contention signal for lock wait, pool wait, or lock-timeout failures, so the contention this change creates would be invisible to operations until members report errors.",
+   "evidence": "log.info({ bookingId: result.bookingId, classId, created: result.created }, 'class booked') (no timing)"
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 96569,
+  "tokOut": 42826,
+  "usd": 0.0407246,
+  "critMs": 71609
+ }
+}

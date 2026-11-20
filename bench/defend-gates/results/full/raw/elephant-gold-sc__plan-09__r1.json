@@ -1,0 +1,59 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "plan-09",
+ "rep": 1,
+ "wallMs": 458376,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The check that justifies moving dedup from global to per-partition cannot detect the condition it targets. The cited 4.2B rows match the already-deduplicated fct table, which has one row per event_id. A 0 result is therefore vacuous, and it must be run on raw.events. The only ongoing guard is a weekly test, so a violation could double count in dashboards and the customer export for up to 7 days. The plan itself reports offline replays arriving weeks late, and the event_time clamp is relative to ingested_at, so replays may land on a different event_date.",
+   "evidence": "\"Checked over all 4.2B rows: 0 such `event_id`s (query linked in DATA-412).\" / \"SDK retries happen within minutes of the original send.\" / \"New dbt test `unique_event_id` runs weekly\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Erasure loses the self-healing of the full refresh. If privacy-svc deletes from raw.events and then fails on fct_page_events, the erased rows remain in partitions older than the ~31-day rebuild window. No later run touches those partitions, and the plan defines no retry, alert, reconciliation or production verification for the second delete.",
+   "evidence": "\"privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`. Rebuilds read only `raw.events`\" ABSENT: retry, alert, or sweep for residual erased rows"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "fct_page_events_v2 is backfilled with full history and run for 7 parity nights, but it is not in the retention or erasure table lists. Only the legacy table is added. Erasures during the parity window can leave older v2 partitions unerased, and the swap then promotes them to the live table. The plan also never says v2 is dropped after the swap.",
+   "evidence": "\"For those 30 days the retention and erasure jobs include `fct_page_events_legacy` in their table lists.\" ABSENT: v2 coverage or disposition"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The swap mechanism is unverified. `bq cp -f` of a partitioned, clustered v2 over an existing unpartitioned table may be rejected for a partitioning-spec mismatch. The claim that the copy is atomic for readers is asserted, and the prototype did not test it. There is no procedure if a step fails midway, and no check that the legacy backup succeeded before the destructive overwrite. If the PR merge lags, a nightly full-refresh run could overwrite the swapped table.",
+   "evidence": "\"`bq cp -f fct_page_events_v2 fct_page_events`. A same-region copy job is free and replaces the table atomically for readers.\" ABSENT: swap rehearsal, failure handling between steps"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The cost table omits the nightly parity test, which fingerprints all columns of two ~1.9 TiB tables, and the weekly uniqueness test. It also omits storage for the extra copies and the full-refresh v1 runs during the parity nights. The claim that month 1 is below today's spend is therefore unsupported. Steady-state savings are not in doubt. The Looker 'after' figure is extrapolated from the top 20 queries only, and the export has no cost line.",
+   "evidence": "\"Month 1 is ~$1,960, still below today.\" / \"One-time backfill + 7 parity nights | — | ~$76\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The plan never confirms that ingested_at is a column of fct_page_events, although the high-water mark is derived from \"max ingested_at already in the table\" while columns are stated to be unchanged. The 2 h overlap is justified only by a p99.9 of 4 min, and nothing reconciles the fact table against raw once legacy is dropped.",
+   "evidence": "\"max `ingested_at` already in the table − 2 h\" vs \"Columns, types, grain and dedup logic ... are unchanged\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Monitoring covers only job failure. There is no freshness or watermark-advance alert, no bytes-billed cap, and no test of the event_time clamp that bounds the 31-day read window. Separately, the legacy rebuild holds the shared lock for hours and its lock participation is unstated, which may delay erasures. Rollback is only as fresh as the last legacy run.",
+   "evidence": "\"Failure alerting is the existing dbt Cloud job alert to #data-oncall.\" / \"It runs as a separate dbt Cloud job after the main job\""
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 73121,
+  "tokOut": 74231,
+  "usd": 0.15770652,
+  "critMs": 98390
+ }
+}

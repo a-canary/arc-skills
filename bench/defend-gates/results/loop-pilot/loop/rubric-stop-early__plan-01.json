@@ -1,0 +1,110 @@
+{
+ "approach": "rubric-stop-early",
+ "case": "plan-01",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "Migration 0042 irreversibly drops positions.roll_history on prod, keeping only 90 days of roll history, with no rollback path. The same section says roll_eod.py remains as the fallback through week 4, but that script depends on the column being dropped, so the fallback is broken by the migration it is meant to protect against.",
+     "evidence": "\"Migration 0042 runs in-place against prod Monday 08:00 ET\" / \"Backfill copies roll_history entries from the last 90 days into rolls; older entries are not needed\" / \"In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.\" / \"roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4.\" ABSENT: a rollback or down-migration, a pre-migration snapshot or backup, and a statement that roll_eod.py no longer reads roll_history."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3004,
+    "tokOut": 885,
+    "usd": 0.00087115,
+    "critMs": 3997
+   },
+   "wallMs": 5812
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The chain_poller design cannot run on the vendor tier the plan selects. It needs 160 requests/min during RTH, but the chosen Starter tier allows 5 req/min and returns 15-minute-delayed option quotes. Polling would be throttled almost immediately, and the intraday triggers would fire on quotes up to 15 minutes old, which defeats the plan's core premise.",
+     "evidence": "\"chain_poller (new): every 15 s, fetch a real-time option chain snapshot for each held underlying... 40 underlyings => 160 requests/min during RTH.\" and \"| Starter | $79 | 5 req/min | 15-min delayed |\" and \"We stay on Starter.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3512,
+    "tokOut": 978,
+    "usd": 0.0010192500000000002,
+    "critMs": 9505
+   },
+   "wallMs": 10637
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The headline +3.8% net APR improvement over EOD rolling has no backtest, paper data, or cited analysis behind it. The rationale rests on anecdotal \"desk notes\" and an unsourced claim that intraday rolling is \"standard practice,\" yet the success criterion in §6 is set to exactly this number.",
+     "evidence": "\"Expected impact: +3.8% net APR vs. EOD rolling (see §2).\" §2 cites only \"Desk notes from the last two quarters list several days where a mid-session roll 'would have been better'\" and \"standard practice among the option-income funds we follow.\" ABSENT: any backtest, replay of historical chains, or paper-mode estimate supporting the 3.8% figure."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4232,
+    "tokOut": 1094,
+    "usd": 0.0012212500000000001,
+    "critMs": 5082
+   },
+   "wallMs": 6166
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The request-budget math is internally inconsistent. The plan says polling leaves 20 req/min of headroom under the 100 req/min limit for order re-pricing and retries, but the shared limiter caps total vendor requests at 90/min. With 80 req/min of polling, the real headroom is 10 req/min, not 20, and re-pricing and retries share that smaller pool. Starvation of re-pricing quotes could leave roll orders stuck or stale.",
+     "evidence": "\"leaves 20 req/min of headroom under the 100 req/min limit for order re-pricing quotes (§3 order_router) and retries. A shared token-bucket limiter caps total vendor requests at 90/min.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4723,
+    "tokOut": 1645,
+    "usd": 0.00159495,
+    "critMs": 8201
+   },
+   "wallMs": 8834
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The vendor decision is internally inconsistent. §4 says Starter 'cannot support this design' and is 'not an option for v2', but owner option 1 says the poller reads from the broker and 'we stay on Starter ($139)'. If the poller reads from the broker, it is unclear whether the $139 Optiq Starter fee is still paid, so the cost of option 1 is ambiguous and the owner cannot make the gating decision from this text.",
+     "evidence": "\"Starter is therefore not an option for v2.\" versus \"1. Confirm the existing broker API client can supply real-time option chains... If so, we stay on Starter ($139) and the poller reads from the broker instead of Optiq.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4971,
+    "tokOut": 2896,
+    "usd": 0.00227005,
+    "critMs": 13703
+   },
+   "wallMs": 14824
+  }
+ ],
+ "artifact": "# Plan: Auto-Roller v2 — intraday roll decisions\n\nOwner: trading-infra | Build: 4 weeks, 2 engineers | Status: ready for dispatch for the §5 migration work; chain_poller work is blocked on the §4 data-vendor decision\n\n## Summary\nReplace the end-of-day roll script (roll_eod.py) with an intraday engine that rolls short calls the moment a roll trigger fires, instead of waiting for the 15:45 ET batch.\nHypothesis (unvalidated): intraday rolling improves net APR vs. EOD rolling. No backtest or paper data supports a specific figure yet; the earlier +3.8% number was an unsupported placeholder and has been removed as a target (see §2 and §6).\n\n## 1. Roll triggers (unchanged semantics, new timing)\n- Short call delta >= 0.70, or\n- DTE <= 5 and extrinsic value < $0.10, or\n- Underlying gaps > 4% through strike within the session.\nRoll target: same strike +1 expiry, or next strike up if the credit is >= $0.05. No change to contract counts (position sizing is out of scope).\n\n## 2. Rationale\nRolling at the close means we may roll after the intraday mean-reversion has already happened. On high-volatility days the short leg is sometimes cheaper to buy back mid-morning, after the opening spike fades. Desk notes from the last two quarters list several days where a mid-session roll \"would have been better\". These notes are anecdotal; they motivate the hypothesis but do not quantify it. The expected benefit also includes avoiding the wide closing spreads we see after 15:30, which is likewise unmeasured.\n\nEvidence status: there is no backtest, historical chain replay, or paper-mode estimate behind any APR improvement figure. Claims that intraday rolling is common among option-income funds are unsourced and are not relied on as justification. The improvement is to be measured, not assumed:\n- Before week 4 go-live, use the week 2-3 paper-mode data (RollIntent timing and prices vs. EOD decisions) to estimate the per-roll price difference, including transaction costs and spreads at the intent time. If a historical chain replay is feasible with data already in hand, run it too.\n- Go-live of ROLLER_V2=true (§6) is conditional on the owner reviewing that estimate and confirming it is positive net of costs.\n\n## 3. Architecture\n- chain_poller (new): every 60 s, fetch a real-time option chain snapshot for each held underlying (front expiry + next expiry). 40 underlyings x 2 expiries = 80 requests/min during RTH. A shared token-bucket limiter caps total vendor requests at 90/min (below the 100 req/min vendor limit, leaving 10 req/min of vendor-side margin). That leaves a budget of 10 req/min under the limiter for order re-pricing quotes (§3 order_router) and retries. To keep re-pricing from being starved by polling, the limiter reserves those 10 req/min for order_router and retries, and re-pricing requests take priority over poll requests. Re-pricing is bounded by the §7 limit of 8 roll orders per account per day, each re-priced at most 3 times, so worst-case demand is 24 re-pricing quote requests per day, far below the reserved budget. If a poll request is delayed by the limiter, that underlying's snapshot ages. All §1 triggers are evaluated on 60 s-old-at-most snapshots; none require 15 s resolution. If a snapshot is older than 120 s or the vendor returns throttling errors, roll_engine stops emitting intents (same behavior as the broker-outage guard in §7).\n- roll_engine (new): consumes snapshots, evaluates §1 triggers, emits RollIntent rows.\n- order_router (existing broker client, extended): turns RollIntent into a single combo order (buy-to-close + sell-to-open) with a limit at mid minus 1 tick, re-priced every 20 s up to 3 times, then cancelled.\n- Postgres: new tables roll_intents, rolls; positions table changes in §5.\n\n## 4. Market data vendor — DECISION REQUIRED BEFORE chain_poller WORK STARTS\nCurrent vendor: Optiq Data. Plan tiers:\n\n| Tier    | Price/mo | Rate limit   | Option quotes   | Total with $60 VPS |\n|---------|----------|--------------|-----------------|--------------------|\n| Starter | $79      | 5 req/min    | 15-min delayed  | $139               |\n| Growth  | $199     | 100 req/min  | real-time       | $259               |\n| Pro     | $499     | unlimited    | real-time       | $559               |\n\nStarter cannot support this design: it allows 5 req/min (the poller needs ~80) and its quotes are 15 minutes delayed, so intraday triggers would fire on stale data. Starter is therefore not an option for v2.\n\nThe minimum tier that works is Growth (80 req/min polling fits under the 90 req/min limiter cap and the 100 req/min vendor limit). Growth brings total monthly spend to $259, which is $9 over the agreed $250 cap. The cap is an agreed constraint and this plan does not override it. Before week 1 poller work begins, the owner must choose one of:\n1. Confirm the existing broker API client can supply real-time option chains at ~80 req/min within its limits (engineers verify in the first 2 days). If so, we stay on Starter ($139) and the poller reads from the broker instead of Optiq.\n2. Cut at least $9/month from infra (e.g., a smaller VPS plan) so Growth + infra stays <= $250.\n3. Explicitly approve a cap exception for Growth ($259/month).\n\nIf none of these is approved, v2 is not built and roll_eod.py remains the production path. Pro is out of scope on cost grounds.\n\n## 5. Data model migration (week 1)\npositions.roll_history (JSONB array of every roll since account inception) is supplemented by a normalized rolls table. The migration is additive and reversible; the old column is not dropped in this build window. This work does not depend on the §4 decision and can start immediately.\n- Pre-migration backup: before migration 0042, take a full `pg_dump` of prod (custom format) and a separate copy of `positions` (including roll_history). Restore the dump into a scratch database and verify it before proceeding. Keep the backup for at least 90 days.\n- Migration 0042 (additive only) runs against prod Monday 08:00 ET (pre-market). It creates the rolls table and backfills it from roll_history for the full history since account inception, not just 90 days. It does not alter or drop roll_history.\n- Backfill verification (go/no-go before enabling any v2 code): per position, the count of rolls rows must equal the length of the roll_history array, and a checksum over (date, strikes, expiries, credit) must match. Any mismatch aborts the rollout.\n- Down-migration 0042_down: drops the rolls table (and roll_intents). Because roll_history is untouched, this restores the prior state exactly. It is rehearsed against the scratch restore before the prod run.\n- Dual-write: while ROLLER_V2 is in use, every roll written to rolls is also appended to positions.roll_history in the same transaction, so roll_eod.py always sees current history and the fallback path remains valid. roll_eod.py continues to read roll_history unchanged.\n- roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4, and is verified in paper mode (week 2-3) to run correctly against the post-migration schema.\n- Column removal is a separate, later migration (0043), out of scope for this build. It may be run only after roll_eod.py is retired, after at least 30 live days without fallback, after a fresh backup, and with explicit sign-off from the owner.\n\n## 6. Rollout\n- Week 1: migration; §4 vendor decision resolved (gate for chain_poller); chain_poller, roll_engine skeleton.\n- Week 2-3: paper mode (RollIntent written, no orders) alongside roll_eod.py; compare intents vs. EOD decisions daily. Also record observed vendor request rate and snapshot age to confirm the 80 req/min polling budget, the 10 req/min re-pricing reserve, and the staleness guard hold. Use this data to produce the net-of-costs improvement estimate required in §2.\n- Week 4: owner reviews the §2 estimate; if positive net of costs, ROLLER_V2=true on 5 underlyings, then all 40. If not, v2 stays in paper mode and roll_eod.py remains production.\n- Success criterion: over the first 30 live days, realized net APR is no worse than the EOD baseline, and the realized difference is compared against the §2 paper-mode estimate. No specific improvement target is set until that estimate exists; the owner sets the target after reviewing it.\n\n## 7. Risks and mitigations\n- Runaway order loop: order_router enforces max 1 roll per contract per day and max 8 roll orders per account per day; both are hard limits checked before submit, plus a ROLLER_KILL env switch read on every loop.\n- Partial fills on combo: combo orders are all-or-none at the broker; a rejected combo leaves the original short call untouched.\n- Broker API outage: roll_engine stops emitting intents when the last successful broker heartbeat is > 60 s old.\n- Data vendor throttling or staleness: the shared rate limiter keeps requests under 90/min, reserves 10 req/min for order re-pricing and retries with priority over polling, and roll_engine stops emitting intents when snapshots are older than 120 s (§3).\n- Migration failure or data divergence: covered by the pre-migration backup, backfill verification, tested down-migration, and dual-write in §5; roll_history is never dropped within this build.\n- Unproven benefit: the improvement is unvalidated until the §2 estimate exists; mitigated by the week 4 go/no-go gate and by keeping roll_eod.py as the fallback.",
+ "fixerUsage": {
+  "calls": 4,
+  "tokIn": 13309,
+  "tokOut": 12517,
+  "usd": 0.17839,
+  "critMs": 77474
+ },
+ "status": "cap"
+}

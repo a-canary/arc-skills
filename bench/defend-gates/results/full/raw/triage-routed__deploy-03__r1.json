@@ -1,0 +1,83 @@
+{
+ "approach": "triage-routed",
+ "case": "deploy-03",
+ "rep": 1,
+ "wallMs": 282303,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Backend rollback to 2.14 leaves streak_events stale. 2.14 updates only streak_count, so completions made after rollback never reach the event log. The artifact gives no reconciliation or re-roll-forward procedure, and its 'verified in staging' claim covers only a 3.2 client against the 2.14 API, not 2.15 writes followed by a rollback.",
+   "evidence": "\"schema is additive and `streak_count` remains authoritative-compatible, so 2.14 runs against the migrated database unchanged (verified in staging).\" ABSENT: reconciliation of streak_events written during the 2.15 window, and the re-roll-forward path."
+  },
+  {
+   "lens": "logic",
+   "severity": "major",
+   "claim": "Rollout sequencing is not gated on backfill completion. Remote config moves to 1% after the backend deploy and the backfill start, with no requirement that the backfill finish first, so sync can run over a partially populated streak_events table and compute wrong streaks.",
+   "evidence": "\"Backfill job starts after full deploy.\" / \"Remote config `streak_sync_v2`: 1% → 10% → 50% → 100%\" with no gate tied to backfill completion or error rate."
+  },
+  {
+   "lens": "logic",
+   "severity": "major",
+   "claim": "The rollout gate does not guard the compatibility path. streak_mismatch_total compares server against client recompute, not streak_count against streak_events. Divergence that breaks 3.1 clients, which read streak_count from /v2/habits, would not trip any gate.",
+   "evidence": "\"`streak_mismatch_total` (server vs client recompute) < 0.1% of synced users\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The dual-write to habits.streak_count and streak_events has no stated transaction boundary, retry policy, or partial-failure reconciliation. If one write succeeds and the other fails, 3.1 and 3.2 clients will disagree.",
+   "evidence": "\"`habits.streak_count` is **kept** and dual-written by 2.15\" — ABSENT: transaction boundary, retry policy, or partial-write reconciliation."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The backfill inserts 18.4M streak_events rows with no stated rollback or cleanup procedure. The artifact also gives no compensating action for streak-saver repairs or sync-written events recorded while streak_sync_v2 was on, so turning the flag off does not restore prior state.",
+   "evidence": "\"Backfill job starts after full deploy.\" / \"Rollback: ... set `streak_sync_v2` to 0%\" — ABSENT: backfill rollback, and compensation for saver repairs written while the flag was on."
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The backfill runs against the shared production database right after full deploy, with no stated throttling, impact check, or live-traffic load test. The 22-minute runtime was measured only on a snapshot. Dual-writes that double write load on every completion are also untested at production concurrency.",
+   "evidence": "\"dry-run on prod snapshot: 18.4M rows, 22 min, 0 mismatches vs `streak_count`\" / \"canary 10% of pods for 1h, then full\" — ABSENT: live-traffic write-load or replication-lag evidence."
+  },
+  {
+   "lens": "logic",
+   "severity": "minor",
+   "claim": "The backfill reconstructs only each habit's current streak, not history. The 0-mismatch result comes from a single snapshot dry run, so gaps or resets in long-running habits are not tested against live data.",
+   "evidence": "\"one `streak_events` row per day of each habit's current streak\" and \"0 mismatches vs `streak_count`\" (single dry run on snapshot)."
+  },
+  {
+   "lens": "logic",
+   "severity": "minor",
+   "claim": "The streak-saver write path is not specified. The artifact does not say how a repaired day is recorded in streak_events, how it interacts with the dual-written streak_count, or how the 30-day window is counted.",
+   "evidence": "\"Streak saver: limit 1 per 30 days enforced server-side | staging | Pass\" — ABSENT: how a repair is written to streak_events and streak_count."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Step advancement relies on manual checks at 24h intervals. No alert thresholds, on-call owner, or automated halt is defined, and the canary has no success criteria before full deploy.",
+   "evidence": "\"Gates to advance each step: ...\" — ABSENT: alert thresholds, on-call owner, automated rollback trigger. \"canary 10% of pods for 1h, then full\" — ABSENT: canary success criteria."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "When a 3.2 client hits a 2.14 backend, sync is silently disabled. No production observability is defined to count affected users, so this degradation cannot be told apart from a real sync failure.",
+   "evidence": "\"3.2 client against 2.14 API (server rollback scenario) | staging | Pass (sync silently disabled, local streak shown)\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "streak_events grows without bound, at one row per habit per day, and no retention, partitioning, or index plan is given. The p95 < 250ms gate was measured only at current data volume.",
+   "evidence": "\"New table `streak_events (user_id, habit_id, day, source_device, created_at)`\" — ABSENT: retention, partitioning, index definitions. \"streaks-svc p95 < 250ms\" with no load-test evidence in the QA table."
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 25206,
+  "tokOut": 13157,
+  "usd": 0.01150905,
+  "critMs": 46378
+ }
+}

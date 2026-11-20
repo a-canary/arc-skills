@@ -1,0 +1,167 @@
+{
+ "approach": "rubric-stop-early",
+ "case": "plan-02",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "blocker",
+     "claim": "The weekly public CC-BY export publishes each response's ranking alongside zip, birth_year, gender, ward, verified flag, and created_at. Those quasi-identifiers can re-identify residents, and a CC-BY dump on data.ourtown.org cannot be recalled once copied. Removing resident_id does not de-identify these rows.",
+     "evidence": "\"one CSV per poll on data.ourtown.org with columns ward, zip, birth_year, gender, ranking, verified, created_at. resident_id is removed before export.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2760,
+    "tokOut": 584,
+    "usd": 0.00067185,
+    "critMs": 2918
+   },
+   "wallMs": 42443
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "blocker",
+     "claim": "The plan repurposes a county voter registration file, including mobile numbers, to send automated SMS to about 142,000 people who never opted in to OurTown. Voter-file contact data is collected for election administration, not for civic-app marketing, so this is a purpose-limitation violation and an irreversible disclosure of personal data to a third-party messaging vendor.",
+     "evidence": "\"Purchase the county voter registration file from the County Clerk ($400, includes mobile numbers where provided). Load numbers into Twilio and send an automated SMS to every registered voter in the city (~142,000)\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3087,
+    "tokOut": 977,
+    "usd": 0.0009337500000000001,
+    "critMs": 6039
+   },
+   "wallMs": 20606
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Verified ranking responses can be linked to a named resident record holding address, zip, birth_year and gender, and the plan never says the link is severed. Ranking data plus demographics in one store creates a linkability risk that the stated 'never copied' rule does not cover.",
+     "evidence": "poll_responses(id, poll_id, resident_id null, ranking jsonb, ward, verified bool, created_at) ... Verified residents already have address, zip, birth_year, gender ... Demographic fields ... are never copied into poll_responses or any export. ABSENT: whether resident_id is nulled for verified responses, who can query the joined tables, and whether the link is retained."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3352,
+    "tokOut": 1574,
+    "usd": 0.0012852500000000002,
+    "critMs": 7549
+   },
+   "wallMs": 24357
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The claimed severance of the resident-to-ranking link does not hold against DB admins. The verified-response path inserts `poll_participation` (with resident_id) and `poll_responses` (with ward, verified, created_at) in one transaction, so both rows share the same Postgres xmin, and xmin is readable by any role with SELECT. DB admins can read both tables, so they can join on xmin (or on created_at and ward) to re-link a named resident to their ranking, and ward is derivable from the resident's address in `residents`.",
+     "evidence": "\"Nothing joins the two rows. `poll_participation` has no timestamp and no response id, so timing or insertion order cannot re-link them.\" ... \"Direct read access to `poll_participation` and `residents` is limited to the DB admins and is audit-logged.\" ABSENT: any mitigation for transaction-level correlation (xmin/ctid/commit timestamps), such as separate transactions with decoupled writes, column-level revocation of xmin, or an audit that tests re-linkability at the DB layer."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3845,
+    "tokOut": 1439,
+    "usd": 0.00131635,
+    "critMs": 8685
+   },
+   "wallMs": 85112
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The one-response-per-device and retry-idempotency controls have no backing storage in the design. Unverified responses are limited to one per device fingerprint, but no table stores a fingerprint. Retries of Transaction B are said to be idempotent via a submission token that is never stored, so a retried write cannot be deduplicated. Ballot stuffing or duplicate rankings can therefore enter the public 'all responses' tally and the CC-BY export.",
+     "evidence": "\"Rate limit: 1 response per poll per device fingerprint + 1 per verified resident (enforced through `poll_participation`)\" and \"the retry is idempotent per client submission token that is never stored.\" ABSENT: any fingerprint column in poll_response_staging or poll_responses, and any dedupe key that survives the flush."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4570,
+    "tokOut": 2144,
+    "usd": 0.00181385,
+    "critMs": 10616
+   },
+   "wallMs": 21801
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Client-supplied input is written directly into poll_response_staging and then into tallies and the public export. The plan specifies no server-side validation that ranking entries match the poll's frozen options, that each ranking is a valid permutation, that ward is a real ward value, or that payload size is bounded.",
+     "evidence": "\"Unverified responses are accepted; ward is self-selected for unverified users\" and \"poll_response_staging(poll_id, ranking jsonb, ward, verified bool)\". ABSENT: validation rules for ranking and ward on the write path."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5423,
+    "tokOut": 2418,
+    "usd": 0.00212145,
+    "critMs": 11533
+   },
+   "wallMs": 68088
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The 'severed link' is not severed for anyone with DB read access. poll_participation holds (poll_id, resident_id) for verified residents, residents holds address (so ward), and poll_responses holds (poll_id, ward, verified, week_bucket, ranking). Joining on poll and ward recovers the ranking for any ward where a verified resident is the only verified response that week. The DB-layer audit is also scoped to 'better than chance within the batch', which does not cover this join.",
+     "evidence": "\"poll_participation(poll_id, resident_id)\" and \"Verified residents already have address, zip, birth_year, gender\" and \"ward is derived from address for verified users\" and \"Ward is the only geographic or demographic dimension in results, dashboards and exports\" and \"must fail to link any resident, device or token to a ranking better than chance within the batch\". ABSENT: any minimum-cell rule for the DB-level join, or a test that checks ward-level cells of size 1 for verified responses. The <10 'other' merge is applied only at export time."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 6104,
+    "tokOut": 2317,
+    "usd": 0.0022071499999999997,
+    "critMs": 12085
+   },
+   "wallMs": 27499
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The close-time merge contradicts the plan's own k-anonymity invariant. The plan says the merge ensures no stored cell below 10 exists, but it then writes sub-10 'other' cells anyway. A small (poll_id, 'other', verified) cell exposes rankings, and the plan's own ward-cell review test would fail on it.",
+     "evidence": "\"the final flush writes any rows still held with `ward` set to the \"other\" bucket, which is merged across wards, so no stored cell below 10 exists. If the merged \"other\" cell is itself below 10 for a verified or unverified group, its rows are written with ward \"other\" together with the rest of that group\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 7039,
+    "tokOut": 1890,
+    "usd": 0.00218065,
+    "critMs": 9249
+   },
+   "wallMs": 88824
+  }
+ ],
+ "artifact": "# Ward Voice: build plan\n\nTeam: 2 backend, 1 frontend | Duration: 5 weeks | Target launch: before the FY27 budget hearings\n\n## 1. Background\nQ3 resident survey (n = 1,240, in-app + library kiosks). \"What would make OurTown more useful to you?\" (multi-select):\n- See how my council member voted on each item, and their stated reason: 61%\n- Get notified before items that affect my street or neighborhood: 44%\n- Plain-language summaries of agenda items: 37%\n- Polls on upcoming items: 9%\nCouncil staff have also told us they lack a structured way to hear from residents between public-comment sessions.\n\n## 2. What we're building\nWard Voice lets staff attach a ranked-choice poll to any agenda item (e.g. \"Rank these 5 options for the Elm St. corridor\"). Residents rank options; results are shown per ward with instant-runoff tallies. Ward Voice gives residents a direct voice on the items council is actually deciding, and is the centerpiece of the FY27 roadmap.\n\n## 3. Data model\n- polls(id, agenda_item_id, options jsonb, opens_at, closes_at)\n- poll_responses(id, poll_id, resident_id null, ranking jsonb, ward, verified bool, week_bucket). There is no exact timestamp column; only a coarse week bucket is stored.\n- poll_participation(poll_id, resident_id), with a unique constraint on the pair. It exists only to enforce one response per verified resident per poll. It has no response id, no ranking and no timestamp.\n- poll_device_limit(poll_id, device_hash), with a unique constraint on the pair. It enforces one response per device per poll, for verified and unverified submissions alike. `device_hash` is an HMAC of the device fingerprint under a per-poll secret key, so raw fingerprints are never stored. It has no resident id, no response id, no ranking and no timestamp. The per-poll key is destroyed when the poll closes, so hashes cannot be recomputed or matched across polls afterwards. Rows are deleted at the end of the poll's retention period.\n- poll_submission_token(poll_id, token_hash), with a unique constraint on the pair. `token_hash` is an HMAC of the random client-generated submission token. It exists only to make retries of Transaction B idempotent. It has no resident id, no ranking and no timestamp.\n- poll_response_staging(poll_id, ranking jsonb, ward, verified bool). It is a holding table with no resident id, no timestamp, no device hash, no token and no sequence-derived ordering that survives the flush (see below).\n- residents: unchanged. Verified residents already have address, zip, birth_year, gender (collected at optional verification for the jury-pool-style demographic balance reports).\nUnverified responses are accepted; ward is self-selected for unverified users and derived from address for verified users.\n- **The link between a resident and their ranking is severed, including at the transaction level.** `poll_responses.resident_id` is always NULL, for verified and unverified responses alike. The column stays in the schema for compatibility but is never written, and a DB constraint enforces `resident_id IS NULL`.\n- **Server-side validation of client input.** All client-supplied values are untrusted and are validated on the server before Transaction A runs, so an invalid submission consumes no device-limit, participation or token row. The same checks are enforced again at the DB layer and re-run by the flush job as defense in depth:\n  - Request body is capped (e.g. 4 KB) and rejected if larger; `ranking` must be a JSON array of at most N entries, where N is the number of options on the poll.\n  - Each ranking entry must be an option ID that exists in the poll's frozen `options`. No duplicates are allowed, and the ranking must be a non-empty ordered subset of the options (partial rankings are allowed for IRV; unknown IDs or extra keys are rejected). Entries must be IDs only, with no free text, so nothing user-authored reaches the tallies, results page or export.\n  - `ward` must be one of the city's defined ward values (an enum/foreign key to a wards table). The \"other\" bucket is never a submitted value; it is written only by the flush job's small-cell rule below (and by the export-time merge). For verified residents, the ward submitted by the client is ignored and the server-derived ward is used.\n  - The poll must exist and be open (`opens_at <= now < closes_at`) at submission time, and `verified` is set by the server from the authenticated session, never taken from the client payload.\n  - The staging and `poll_responses` tables carry CHECK constraints for ranking shape (JSON array, length bounds) and a foreign key on ward; the flush job drops and alerts on any staging row that fails re-validation instead of inserting it.\n  - Validation failures return a generic 4xx and are counted in metrics without logging the payload.\n- **Decoupled writes.** The verified submit path never writes the participation row and the response row in the same transaction, because they would share a Postgres xmin (and adjacent ctid/commit timestamp) that any role with SELECT could use to re-link them. Instead:\n  1. Transaction A (participation role) inserts the `poll_device_limit` row and, for verified residents, the `poll_participation` row. Duplicates on either unique constraint are rejected. It commits.\n  2. Transaction B (separate DB role and connection) inserts the `poll_submission_token` row and the staging row (ranking, ward, verified flag) in one transaction. It carries no resident id and no device hash. If the token already exists, the unique constraint rejects the insert and B is treated as already done. Because the token row and the staging row commit atomically, a crash cannot consume a token without storing a ranking or store a ranking without its token. If B fails, the client retries B with the same payload and token. Participation and device-limit rows are not rolled back, and the retry is idempotent, so a retried write cannot create a second ranking.\n  3. A batch job flushes staging into `poll_responses` at most hourly, and only when a batch has at least 20 rows. It inserts in random order, in its own transactions, with `week_bucket` set to the current week, then deletes the staging rows. Response rows therefore share an xmin only with other residents' responses from the same batch, never with a participation, device-limit or token row, and insertion order and ctid order carry no submission order. The token row shares an xmin only with a staging row that is deleted at flush, and it is never copied into `poll_responses`, so no token links to a final response row. Token rows are kept until the poll's retention period ends so late retries remain idempotent, then deleted.\n  4. Unverified responses follow steps 1 (device-limit row only), 2 and 3 as well, so the verified and unverified paths are indistinguishable by write pattern.\n- **Small-cell rule at the DB layer (ward-join protection).** `poll_participation` plus `residents.address` yields a resident's ward, and `poll_responses` stores (poll_id, ward, verified). A join on poll and ward would therefore expose the ranking of any verified resident who is alone in their ward cell. To prevent this, the minimum-cell rule is enforced when rows are written to `poll_responses`, not only at export:\n  - The flush job writes a row only if its (poll_id, ward, verified) cell would hold at least 10 rows in `poll_responses` after the flush (counting rows already stored plus the rows being flushed in the same batch). Rows in smaller cells stay in staging and are re-evaluated at each flush.\n  - When a poll closes, the final flush writes any rows still held with `ward` set to the \"other\" bucket, which is merged across wards, so no stored cell below 10 exists. If the merged \"other\" cell is itself below 10 for a verified or unverified group, its rows are written with ward \"other\" together with the rest of that group, and the poll's export and per-ward results follow the existing suppression rules (section 4).\n  - `week_bucket` does not enter the join: `poll_participation` has no time value, so the only usable join keys are poll_id and ward, and the cell rule on (poll_id, ward, verified) covers it.\n  - Live per-ward results use only `poll_responses`, so they never show a ward cell below 10 either. Responses held in staging appear in results only after they are flushed.\n  - A cell of at least 10 narrows a ranking to a group of 10 or more candidates, not to one resident. This is a k-anonymity bound; it is not a guarantee against an attacker who also knows a group's rankings by other means, and the privacy review records it as accepted residual risk.\n- Demographic fields (zip, birth_year, gender) stay in `residents` and are never copied into `poll_responses` or any export. Because the ranking-to-resident link does not exist, ranking data cannot be joined to demographics by anyone, including staff and engineers, other than through the ward-cell bound above.\n- Access: only the participation service role can write `poll_participation` and `poll_device_limit`, only the response service role can write `poll_submission_token`, staging and `poll_responses`, and no role or report has a join path from `poll_participation`, `poll_device_limit` or `poll_submission_token` to `poll_responses` other than the ward join bounded by the small-cell rule. Direct read access to `poll_participation`, `poll_device_limit`, `poll_submission_token` and `residents` is limited to the DB admins and is audit-logged. Participation rows are deleted when the poll's data-retention period ends.\n- **Residual risk, stated plainly.** xmin and ctid cannot be revoked per column in Postgres, which is why we decouple writes rather than hide them. A DB admin who can also read WAL, `pg_stat_statements`, application logs or connection logs could still try to correlate timing. Mitigations: statement and parameter logging is disabled on the app roles, WAL/log access is restricted to the same audited admin group, and `track_commit_timestamp` stays off. The hourly batch and 20-row minimum also bound how precisely timing can be correlated.\n- **Device limit is a soft control.** Device fingerprints can be evaded (new browser, cleared storage), so the per-device limit raises the cost of casual duplicate voting but does not stop a determined actor. The backstop is that unverified responses are always tallied separately from verified ones (section 5), and verified responses are strictly one per resident.\n\n## 4. Results and open data\n- Live results page: instant-runoff rounds, split into \"verified\" and \"all responses\" columns.\n- Open-data export (weekly, public, CC-BY): one CSV per poll on data.ourtown.org with columns **ward, ranking, verified, week_bucket** only. Removed before export: resident_id, zip, birth_year and gender. Device hashes and token hashes live in separate tables and are never exported. No exact timestamp exists to export, only the coarse week bucket. Free of direct and quasi-identifiers beyond ward.\n- Small-cell suppression: a poll is exported only once it has closed and has at least 50 responses, and any ward with fewer than 10 responses is merged into an \"other\" bucket. This is the same threshold the DB layer enforces at flush time (section 3), so the stored data and the export agree. Rankings are exported as-is, but rows are shuffled so file order doesn't reveal submission order.\n- Demographic breakdowns of poll responses (age band, gender, zip) are not offered. They would require linking rankings to resident records, which the data model deliberately prevents. Ward is the only geographic or demographic dimension in results, dashboards and exports.\n- Before the first public export, a privacy review must pass; the export job ships disabled until sign-off. The review consists of:\n  - a re-identification test on a sample export;\n  - a check that no query path links `poll_participation`, `poll_device_limit`, `poll_submission_token` or `residents` to `poll_responses`, other than the ward join bounded by the small-cell rule;\n  - a DB-layer re-linkability audit, run as a DB admin on a populated staging copy, that attempts to join participation, device-limit and token rows to responses via xmin, ctid, physical row order, commit timestamps, ward and week_bucket. It must fail to link any resident, device or token to a ranking better than chance within the batch;\n  - a ward-cell test on the same staging copy, run as a DB admin, that joins `poll_participation` and `residents` (ward from address) to `poll_responses` on poll_id and ward, and fails the review if any (poll_id, ward, verified) cell in `poll_responses` has fewer than 10 rows. The test data must include seeded scenarios with a single verified resident in a ward, a ward that stays under 10 until poll close, and a poll closing with held rows, and must confirm those rows end up in the \"other\" bucket rather than in a small ward cell.\n- Council staff get a PDF summary emailed Monday 07:00 and access to the same suppressed CSV as the public. They do not receive row-level demographics.\n\n## 5. Abuse and integrity\n- Rate limit: 1 response per poll per device (enforced through the unique constraint on `poll_device_limit`) + 1 per verified resident (enforced through `poll_participation`); unverified responses over 3/min from one IP are queued for review.\n- Retries are deduplicated through `poll_submission_token`, so network retries cannot add duplicate rankings to the tallies or the export.\n- Results always show verified and unverified tallies separately, so a brigade of unverified responses cannot masquerade as verified sentiment.\n- Staff cannot edit or delete responses; poll options are frozen once the first response arrives.\n- Input validation (section 3) is the gate for everything that reaches tallies and the export: malformed rankings, unknown options, invalid wards and oversized payloads are rejected, and the tally and export jobs only read rows that passed validation.\n\n## 6. Outreach (launch week)\nTo reach residents beyond our current user base, we use only opt-in and public channels. We do not acquire the county voter registration file or send unsolicited SMS to registered voters: voter-file contact data was collected for election administration, and using it for outreach would be a purpose-limitation violation and would disclose it to a third-party vendor without consent.\n- Notify existing OurTown users who have opted in to notifications (in-app and email), per their saved preferences.\n- Place poll links and QR codes on printed and posted council agenda notices, at library kiosks, and at city hall, with the city's permission.\n- Ask the city clerk's office, council members, and neighborhood associations to share the poll link through their own newsletters, social accounts, and mailing lists, which residents have already chosen to join.\n- Offer an optional \"text me when a poll opens\" sign-up on the poll page and kiosks, with explicit consent captured at sign-up and STOP honored. Only numbers residents give us directly are used.\n\n## 7. Timeline\n- Week 1: data model (including severed-link constraint, participation, device-limit and submission-token tables, staging table, separate DB roles and the batch flush job with its (poll_id, ward, verified) minimum-cell-of-10 rule and close-time \"other\" merge, and DB CHECK/FK constraints for ranking and ward), poll authoring UI for staff.\n- Week 2: resident ranking UI (mobile-first, drag or tap-to-rank), including client submission token generation and retry of Transaction B, and server-side validation of ranking, ward, payload size and poll-open state with tests for malformed and hostile payloads.\n- Week 3: IRV tally, results page, abuse controls (device-hash limit with per-poll key handling, token dedupe tests), flush-job tests for held small cells and close-time merge.\n- Week 4: open-data export (with suppression and privacy review, including the DB-layer re-linkability audit and the ward-cell test), staff PDF, opt-in notification wiring and QR/short-link outreach materials, consent-based SMS sign-up.\n- Week 5: accessibility pass, load test (target 5k concurrent), launch.\n\n## 8. Success metrics\n- 6,000 poll responses in the first 30 days.\n- 30% of responses from residents not previously active on OurTown. With opt-in-only outreach, reach will be slower than a mass text; we will review this target at the end of week 2 post-launch and adjust through partner channels rather than by widening contact methods.",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 25317,
+  "tokOut": 25867,
+  "usd": 0.35990999999999995,
+  "critMs": 163630
+ },
+ "status": "cap"
+}

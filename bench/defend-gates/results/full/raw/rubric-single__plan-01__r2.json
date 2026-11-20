@@ -1,0 +1,137 @@
+{
+ "approach": "rubric-single",
+ "case": "plan-01",
+ "rep": 2,
+ "wallMs": 96257,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "The plan's data tier cannot support its own design, and the cost math is wrong. The 160 req/min polling load exceeds Starter (5 req/min) and Growth (100 req/min), so only Pro ($499 + $60 VPS = $559/mo) would work, which breaks the $250 cap.",
+   "evidence": "'40 underlyings => 160 requests/min during RTH' vs 'We stay on Starter. Monthly run cost: Optiq Starter $79 + existing VPS $60 = $139, comfortably inside the $250 cap.'"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Starter quotes are 15-minute delayed, so the intraday triggers (delta >= 0.70, gap > 4% through strike, extrinsic < $0.10) and the mid-session re-pricing would act on stale data. The core premise of intraday rolling is defeated by the chosen tier.",
+   "evidence": "'Starter | $79 | 5 req/min | 15-min delayed' and 'rolls short calls the moment a roll trigger fires'"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The migration drops a production column in the same transaction as a partial backfill, with no rollback. Entries older than 90 days are permanently lost, including any tax or audit history, and the claim that they are not needed is unverified. The fallback roll_eod.py path, which must run through week 4, likely still depends on roll_history.",
+   "evidence": "'In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.' and 'older entries are not needed by roll_engine' and 'roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4.'"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The +3.8% net APR improvement is the headline success metric, but no backtest, simulation, or prototype is cited. The rationale rests on anecdotal 'desk notes' and an appeal to other funds, and the plan does not show that intraday fills would beat close-based fills after spreads and slippage.",
+   "evidence": "'Expected impact: +3.8% net APR vs. EOD rolling (see §2).' and 'Desk notes from the last two quarters list several days where a mid-session roll \"would have been better\".' and 'Intraday rolling is also standard practice among the option-income funds we follow.'"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "With a 60 s heartbeat cutoff, the engine goes silent during a broker outage, but nothing covers open short calls that cannot be rolled. There is no alerting, no defined behavior for assignment risk near ex-dividend or expiry, and no ops runbook. Chain polling every 15 s also has no timeout, retry, or backoff spec.",
+   "evidence": "'roll_engine stops emitting intents when the last successful broker heartbeat is > 60 s old.' and ABSENT: alerting, paging, or manual-intervention procedure during broker or vendor outage."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The kill switch and order limits are enforced in-process only. The kill switch is an env var with unspecified fail-open or fail-closed behavior, and the 8-roll/day account cap can silently block rolls across 40 underlyings with no defined priority.",
+   "evidence": "'a ROLLER_KILL env switch read on every loop.' and 'max 8 roll orders per account per day' (ABSENT: behavior when the cap is hit, and whether ROLLER_KILL fails closed)."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The roll target has no credit floor on the same-strike, next-expiry roll. A debit roll is accepted unless it is on the strike-up path, which can add premium cost or leave the position exposed with no stated loss limit, contrary to the 'capped drawdown' mission.",
+   "evidence": "'Roll target: same strike +1 expiry, or next strike up if the credit is >= $0.05.'"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The combo order is priced at mid minus 1 tick, re-priced every 20 s, and cancelled after 3 attempts. The plan does not say what happens to the original short call when a combo is cancelled unfilled, or whether the position can be left naked in a partial state.",
+   "evidence": "'a limit at mid minus 1 tick, re-priced every 20 s up to 3 times, then cancelled.'"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "major",
+   "claim": "All market data depends on one vendor with no alternate source, no stated exit path, and no data-residency or export terms. The plan's own tier data shows the vendor cannot meet the need within budget.",
+   "evidence": "'Current vendor: Optiq Data.' and ABSENT: secondary vendor, data export, or contract exit terms."
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The poll load scales linearly with holdings, and the spec gives no quota handling. Adding underlyings or a second expiry would exceed any tier silently.",
+   "evidence": "'40 underlyings => 160 requests/min during RTH.'"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Automated options order submission for a family office is not reviewed against the broker or vendor ToS, and the Starter tier may restrict automated trading or redistribution. The plan does not mention any review.",
+   "evidence": "ABSENT: broker or vendor ToS review for automated order submission and data use."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Scope is large for 4 weeks and 2 engineers, covering a new poller, a new engine, a broker combo router, a migration, and a paper-mode comparison. The plan has no test or acceptance plan for the combo-order state machine.",
+   "evidence": "'Build: 4 weeks, 2 engineers' and ABSENT: test strategy for order_router state transitions."
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "Automated order placement across ~40 positions has no documented credential scoping, audit log of submitted orders, or independent check beyond in-process limits.",
+   "evidence": "ABSENT: credential scope, order audit trail, or independent control on order_router."
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "No personal data handling is described, but the rolls and roll_intents tables store account-level trade history, and no retention or access policy is given.",
+   "evidence": "'Postgres: new tables roll_intents, rolls' and ABSENT: retention or access policy for trade records."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Rollback from the v2 engine back to EOD after the 40-underlying cutover is not specified, and it may be blocked by the dropped column.",
+   "evidence": "'Week 4: ROLLER_V2=true on 5 underlyings, then all 40.' and ABSENT: rollback procedure after the migration."
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "No UI or display surface is described, so there is nothing to render. Ops visibility into live roll intents is also unspecified.",
+   "evidence": "ABSENT: dashboard or display for roll_intents."
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "The plan targets an operator-facing income goal, but it does not state how the operator approves or overrides intraday rolls before orders go out.",
+   "evidence": "ABSENT: operator approval or override step."
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "No latency budget is given for the trigger-to-order path, so the claimed intraday advantage has no measurable target.",
+   "evidence": "ABSENT: end-to-end latency target from trigger to order submission."
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "No user-facing interface is described, so no accessibility concerns apply.",
+   "evidence": "ABSENT: any interface requiring accessibility review."
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The week 2-3 paper-mode comparison cannot validate fills or slippage, and it runs on the same delayed Starter data, so it would not validate the core premise.",
+   "evidence": "'Week 2-3: paper mode (RollIntent written, no orders) alongside roll_eod.py; compare intents vs. EOD decisions daily.'"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 2991,
+  "tokOut": 4747,
+  "usd": 0.00240359,
+  "critMs": 22050
+ }
+}

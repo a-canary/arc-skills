@@ -1,0 +1,179 @@
+{
+ "approach": "elephant-gold",
+ "case": "plan-05",
+ "rep": 2,
+ "wallMs": 188450,
+ "verdict": "ATTACKS",
+ "confidence": 0.88,
+ "attacks": [
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "The nightly job's capacity claim fails at the plan's own sizing. The 41-minute staging run covered 12,000 users, and 30% of 2.1M MAU is about 630k, roughly 52x larger. Linear scaling gives about 36 hours per run, which overruns the 02:00 UTC window and overlaps the next run.",
+   "evidence": "\"Staging run: 12,000 synthetic pantry users completed in 41 minutes.\" / \"Adoption assumption for sizing: 30% of MAU create a pantry within 90 days.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The job brute-forces every pantry user against all 340k recipes each night, about 2.1e11 pair evaluations at the sizing assumption. It has no candidate pruning, inverted index, ingredient prefilter, or incremental/dirty-user scoring, so cost is paid nightly whether or not a pantry changed.",
+   "evidence": "\"for each user with a pantry, score every recipe in the catalog (340k recipes) in a single SQL statement joining pantry_items x recipe_ingredients on the primary\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The heavy scoring join and about 31M upserts run on the single primary that serves live writes, with no replica routing, batching, lock or statement timeout, or isolation. 02:00 UTC is mid-evening for most US users, so contention with live traffic is likely.",
+   "evidence": "\"PantryMatchJob (Sidekiq, nightly 02:00 UTC) ... in a single SQL statement joining pantry_items x recipe_ingredients on the primary, then upsert the top 50\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "A single statement with no batching, checkpointing, retry policy, or dead-letter handling can fail midway through the upsert. Users would be left with a mix of fresh and stale pantry_matches rows, and the plan defines no recovery path.",
+   "evidence": "\"score every recipe in the catalog (340k recipes) in a single SQL statement ... then upsert the top 50 into pantry_matches.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "There is no kill switch, feature flag, rollback, runtime budget, or cost ceiling for the job or the carousel. The beta-to-100% step in week 6 has no gate, so a runaway job or adoption above 30% cannot be contained without a release.",
+   "evidence": "\"Week 6: beta to 5% of users, then 100%.\" / ABSENT: feature flag, rollback plan, compute or DB cost estimate, runtime budget, timeout"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "No observability is specified for PantryMatchJob: no success or failure metric, duration alert, staleness signal on computed_at, or retry policy. A silent failure would appear only as declining engagement.",
+   "evidence": "ABSENT: alerting, job success/failure metrics, retry policy, or staleness monitoring for PantryMatchJob"
+  },
+  {
+   "lens": "authz",
+   "severity": "major",
+   "claim": "The plan states no authorization model for pantry CRUD or pantry_matches reads. Without explicit ownership scoping, an IDOR on those endpoints could expose one user's household inventory to another.",
+   "evidence": "ABSENT: ownership checks or scoping for pantry endpoints. \"Users add items with a form\""
+  },
+  {
+   "lens": "privacy-retention-deletion",
+   "severity": "major",
+   "claim": "pantry_items and pantry_matches are persistent per-user household records with no retention period, no deletion path, and no statement of what happens on account deletion or data-subject access/deletion requests (GDPR/CCPA). This is a compliance gap before build, given the 78% US and non-US remainder.",
+   "evidence": "\"New table pantry_matches(user_id, recipe_id, score, computed_at), top 50 per user.\" / ABSENT: retention, deletion, consent basis, or data-subject rights for pantry tables"
+  },
+  {
+   "lens": "privacy-analytics-collection",
+   "severity": "major",
+   "claim": "Week 5 adds analytics events, but the plan does not define which events, which pantry fields they carry, whether they carry user identifiers, their retention, or the consent mechanism (e.g., EU ePrivacy) for analytics tied to cooking and pantry activity.",
+   "evidence": "\"Week 5: notifications, analytics events.\" / ABSENT: event schema, identifiers, retention, consent handling"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The scoring rule is underspecified and untestable. 'Weighted by expiry proximity' has no weighting function, quantities and units are not considered (a 2-cup need could be matched by 1 tbsp), items without expiry dates are unhandled, and expired items are not excluded, so they could still be recommended.",
+   "evidence": "\"Score = (pantry ingredients used / recipe ingredients) weighted by expiry proximity, with pantry staples (salt, oil, water, pepper) always counted as present.\" / ABSENT: handling of expired or undated items"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "major",
+   "claim": "The feature delivers no value until users enter 15 expiry-dated items through a per-item form. That contradicts the top churn reason (38%, 'too much setup / typing') and the stated 'as little effort as possible' mission, and the plan does not reconcile the conflict.",
+   "evidence": "\"Pantry Match unlocks once a user has entered at least 15 items with expiry dates.\" / \"Too much setup / typing to get useful suggestions — 38%\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The core value hypothesis, that pantry-based suggestions will fix the 22% 'missing ingredients' churn reason, is asserted without user research, prototype, or ranking-quality evaluation. Nothing shows users will maintain a pantry inventory or that the scorer produces useful rankings.",
+   "evidence": "\"Pantry Match targets reason #2: suggest recipes that use what the user already has.\" / ABSENT: prototype, quality evaluation, or user validation"
+  },
+  {
+   "lens": "ui",
+   "severity": "major",
+   "claim": "The progress counter reads 'items added' but the unlock gate counts only items with expiry dates. Users who enter undated items will see progress that stalls with no explanation.",
+   "evidence": "\"the tab shows a progress bar (\\\"7 of 15 items added\\\")\" vs. \"unlocks once a user has entered at least 15 items with expiry dates\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "Six-week scope covers three platforms, a data model, a scoring engine, a nightly job, a carousel, notifications, analytics, and a beta, with no module boundaries or ownership split. Beta expands to 100% within week 6, leaving no time to act on beta results, and independent rollback of any piece is unclear.",
+   "evidence": "\"Squad: Discovery (3 eng + 1 mobile) | 6 weeks\" / \"Week 6: beta to 5% of users, then 100%.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Changing the pantry schema, units, or expiry fields after users have entered data has no migration, backfill, or reversal plan. Destructive migrations would hit live pantries.",
+   "evidence": "ABSENT: migration strategy for ingredient, quantity, unit, or expiry fields once user data exists"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Push notifications are an irreversible public action. Week 5 has no staged rollout, kill switch, or verification of the daily cap before pushes go out.",
+   "evidence": "\"Optional 'use it before it goes bad' push when a pantry item is 2 days from expiry.\" / ABSENT: kill switch or rollout gating for notifications"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "major",
+   "claim": "The plan states no accessibility requirements for the autocomplete item form, the progress bar (visual only), the horizontal carousel, or the quantity prompt, on iOS, Android, or web. Screen reader labels, keyboard operation, focus order, and accessible value text are all unspecified.",
+   "evidence": "ABSENT: accessibility requirements for \"Users add items with a form: ingredient (autocomplete ...)\" and \"the tab shows a progress bar\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The 30% adoption figure drives all capacity sizing but has no cited source. The success target of 25% unlocking within 60 days is a different metric, and the plan does not reconcile the two.",
+   "evidence": "\"Adoption assumption for sizing: 30% of MAU create a pantry within 90 days.\" / \"25% of MAU unlock Pantry Match within 60 days.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Stale matches are not removed. Recipes that drop out of the top 50, and users whose pantry empties, would keep old rows unless delete-or-replace semantics are defined. Nightly full rewrites also cause table churn and bloat.",
+   "evidence": "\"New table pantry_matches(user_id, recipe_id, score, computed_at), top 50 per user.\" / ABSENT: delete/replace semantics"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "Expiry dates are only prompted at entry, not updated after cooking, yet the 2-day expiry push depends on them being current. Quantities drift too, and the matcher does not account for quantity sufficiency.",
+   "evidence": "\"Users are asked to update quantities after cooking\" vs. \"when a pantry item is 2 days from expiry\""
+  },
+  {
+   "lens": "trust boundaries",
+   "severity": "minor",
+   "claim": "Free-text ingredient, quantity, unit, and date values flow into writes and the scoring SQL, and the plan does not say they must be validated against catalog IDs or bound as parameters.",
+   "evidence": "\"ingredient (autocomplete over our 9,400-ingredient catalog), quantity, unit, expiry date\" / ABSENT: validation or parameterization requirement"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "The push delivery path has no named provider, residency statement, or exit plan. The data residency of pantry data is also unstated.",
+   "evidence": "\"Optional 'use it before it goes bad' push\" / ABSENT: provider, residency, or exit statement"
+  },
+  {
+   "lens": "hidden coupling",
+   "severity": "minor",
+   "claim": "Matching reuses the shared ingredient_aliases table without saying who owns it or whether changes to it would silently change Pantry Match scores and other features.",
+   "evidence": "\"Ingredient normalization reuses the existing ingredient_aliases table (e.g. \\\"scallion\\\" = \\\"green onion\\\").\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Nothing prevents the carousel from repeating the same recipes, the churn reason #3 (15%). The score has no rotation or repeat suppression.",
+   "evidence": "ABSENT: diversity, rotation, or repeat-suppression logic in the score definition"
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "A freshly added pantry item is not reflected until the next 02:00 UTC run, up to about 24 hours later. The plan sets no latency target and no mitigation for a 'cook tonight' flow.",
+   "evidence": "\"PantryMatchJob (Sidekiq, nightly 02:00 UTC)\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The +3 pt retention success metric compares unlockers with a 'matched control' whose assignment is undefined. Users who build a pantry are likely more engaged to begin with, so selection bias is unhandled.",
+   "evidence": "\"+3 pts 30-day retention for users who unlock vs. matched control\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The push eligibility sweep is not described as batched, and the plan does not say how missing or wrong user time zones affect quiet-hours enforcement.",
+   "evidence": "\"max 1 push per user per day, respects existing quiet hours (21:00-08:00 local).\""
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 47729,
+  "tokOut": 22187,
+  "usd": 0.014508020000000002,
+  "critMs": 44058
+ }
+}

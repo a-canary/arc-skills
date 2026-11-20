@@ -1,0 +1,65 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "merge-04",
+ "rep": 1,
+ "wallMs": 209620,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The up migration adds an empty `private_notes` column and drops `notes` without copying data, so every user's notes are destroyed on auto-deploy. The PR's 'pure rename, no data change' is false. The notes are unrecoverable elsewhere.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The down migration recreates an empty `notes` column and drops `private_notes`, so it cannot restore data. Combined with auto-run on merge, this is a one-way door. A real `RENAME COLUMN` would preserve data, and the description's claim that the down migration 'restores the old name' is also false.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN notes text;\nALTER TABLE user_recipes DROP COLUMN private_notes;"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Migrations run on deploy while old app instances still select `ur.notes`. Once the drop commits, those instances error on every saved-recipes request. There is no expand/contract sequencing. The response key also changes from `notes` to `private_notes` with no client coordination shown.",
+   "evidence": "-    `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.notes`\n+    `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.private_notes`"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "ALTER TABLE on the ~140M-row table takes an ACCESS EXCLUSIVE lock during an automatic deploy. It can queue behind long reads and then block all reads and writes on user_recipes. No lock_timeout or staged approach is present.",
+   "evidence": "BEGIN;\nALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;\nCOMMIT;"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The handler removes LIMIT and loads every saved row for the user (200k+ for heavy users) with a join and sort on each request, then slices in memory. This is O(N) per page and will blow the 300ms p99 budget and cause memory spikes. Pagination should be a keyset WHERE plus LIMIT in SQL.",
+   "evidence": "WHERE ur.user_id = $1\n      ORDER BY ur.saved_at DESC, ur.id DESC`,\n    [userId],\n  );\n ... const page = rows.slice(start, start + limit);"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "If the cursor id is no longer in the list (the recipe was unsaved between pages), `findIndex` returns -1, so `start` becomes 0 and the client silently gets the first page again. This causes duplicates or an infinite loop, and there is no not-found handling.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The `offset` parameter is removed with no compatibility path or error. Clients still sending offset (stale bundles, mismatched deploy) silently receive page 1 forever. The claim that the client already sends `cursor` is unsupported by any client diff shown.",
+   "evidence": "-  const offset = Math.max(Number(req.query.offset) || 0, 0);  ... The client already sends `cursor` from the previous page's `nextCursor`."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Tests cover only the happy path: no stale or invalid cursor, no migration data-preservation check. A negative `limit` is also not clamped.",
+   "evidence": "const limit = Math.min(Number(req.query.limit) || 50, 100);"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 21172,
+  "tokOut": 12257,
+  "usd": 0.055166179999999995,
+  "critMs": 22490
+ }
+}

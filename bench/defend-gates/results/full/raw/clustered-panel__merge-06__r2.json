@@ -1,0 +1,101 @@
+{
+ "approach": "clustered-panel",
+ "case": "merge-06",
+ "rep": 2,
+ "wallMs": 228004,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The single upstream 429 retry has no retry budget, no jitter, and no global or per-tenant bound. During a provider-wide throttle every affected request re-sends after a sleep, which roughly doubles upstream volume and synchronizes retries. The retry also bypasses the tenant bucket, so it works against the stated goal of stopping tenants from pushing each other into 429s.",
+   "evidence": "if (res.status === 429) { ... await new Promise((r) => setTimeout(r, delay)); res = await upstream.chat(req.body, { signal: req.signal }); }"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The new default of 20 rps / burst 40 applies to all ~120 tenants with no feature flag, shadow mode, or staged rollout. Any tenant already running above 20 rps, including the batch job at 400 rps, will be throttled on deploy, and the only rollback is a redeploy. The PR does not mention this trade-off.",
+   "evidence": "This adds an in-process token bucket per tenant (limits from tenant config, default 20 rps / burst 40) and returns 429 with Retry-After when a tenant is over."
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The route and retry behaviour is untested. The added tests cover only TenantLimiter.take and tenant isolation. Nothing verifies the route's 429 response and Retry-After header, the 5s cap and fallback in retryAfterMs, the single upstream retry, non-429 pass-through, or LRU eviction, even though the PR description claims each of these.",
+   "evidence": "test(\"tenants are isolated\", () => { ... });  // no completions route, retryAfterMs, or LRU tests"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The retry sleep is a bare setTimeout that ignores req.signal. If the client disconnects during the up-to-5s wait, the gateway still sends a second upstream request for a caller that is gone, and total request latency has no overall deadline.",
+   "evidence": "await new Promise((r) => setTimeout(r, delay)); res = await upstream.chat(req.body, { signal: req.signal });"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The first 429 response body is never consumed or cancelled before the retry. Depending on the upstream client, this may hold a socket or connection-pool slot during the sleep. The artifact does not show the client, so this cannot be confirmed from the diff.",
+   "evidence": "ABSENT: no res.body cancel or drain on the 429 branch before the retry sleep."
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The rate-limit log line includes a truncated, unsalted SHA-256 of the raw tenant API key. The brief says keys must never appear in logs. A hash of a high-entropy key is not practically reversible, so the risk is low, but the log still carries key-derived material where logging tenant.id alone would serve debugging.",
+   "evidence": "{ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "ratePerSec and burst are not validated. A zero ratePerSec makes the wait computation divide by zero, returning Infinity, and the route then sends Retry-After: \"Infinity\", which is not a valid header value.",
+   "evidence": "return Math.ceil(((1 - b.tokens) / limits.ratePerSec) * 1000);  ...  .header(\"Retry-After\", String(Math.ceil(waitMs / 1000)))"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "retryAfterMs does not parse the HTTP-date form of Retry-After. Such a value yields NaN and falls back to a fixed 1000 ms, so the upstream's requested delay is not honoured. An empty header becomes 0 ms and retries immediately. Neither case is tested.",
+   "evidence": "const secs = Number(header);\n  if (!Number.isFinite(secs) || secs < 0) return 1_000;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The limiter uses wall-clock Date.now(). A backwards clock step produces negative elapsed time, which can drain tokens and lock a tenant out for longer than intended. A monotonic clock is the appropriate source.",
+   "evidence": "constructor(private now: () => number = Date.now) {}  ...  const elapsedSec = (nowMs - b.updatedMs) / 1000;"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "When the LRU evicts an idle tenant, its next request starts with a full burst. A throttled tenant can therefore regain its full burst by going idle until it is evicted. This needs more than 10k tenants to occur, but the eviction behaviour is neither documented nor tested.",
+   "evidence": "private buckets = new LRUCache<string, Bucket>({ max: 10_000 });  ...  ?? { tokens: limits.burst, updatedMs: nowMs };"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Operability relies on logs only. There is no metric or alert for tenant 429 rate, upstream 429 rate, or retry outcomes, so a misconfigured limit or retry storm can only be found by grepping logs.",
+   "evidence": "req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, \"tenant rate limited\")"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Every rejected request emits an info-level log line. Under the overload scenario the PR describes, one tenant at 400 rps adds a log line per rejected request at the moment the system is already overloaded.",
+   "evidence": "req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, \"tenant rate limited\");"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Per-tenant limits do not bound aggregate load on the shared upstream. With ~120 tenants each at their own limit, total upstream volume can still exceed provider quota. The PR does not state whether a global ceiling is intentionally out of scope.",
+   "evidence": "ABSENT: no global or aggregate bucket; the only limit is per tenant."
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "The 429 message is generic and does not say which limit was hit or what the current limit is, so clients cannot tell whether to back off or request more quota. Retry-After is also rounded up to whole seconds.",
+   "evidence": "{ error: { type: \"rate_limited\", message: \"tenant rate limit exceeded\" } }"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 22401,
+  "tokOut": 19579,
+  "usd": 0.01178122,
+  "critMs": 38209
+ }
+}

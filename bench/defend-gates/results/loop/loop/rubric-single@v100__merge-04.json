@@ -1,0 +1,358 @@
+{
+ "approach": "rubric-single@v100",
+ "case": "merge-04",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The up migration drops the original `notes` column before copying its data into the new column, so all user-written notes are permanently deleted. The PR claims 'no data change' but the SQL performs a destructive drop.",
+     "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;"
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The cursor pagination fetches every matching row for the user (`rows = SELECT ... WHERE user_id = $1` with no LIMIT) and then slices in application memory. For heavy users with >200k saved recipes this allocates hundreds of thousands of objects per page request and will exceed the 300ms p99 budget.",
+     "evidence": "const { rows } = await db.query<SavedRow>(... ORDER BY ur.saved_at DESC, ur.id DESC, [userId]);\nconst start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+    },
+    {
+     "lens": "scale",
+     "severity": "blocker",
+     "claim": "Same root cause as above: loading the full per-user result set on every page request is O(N) memory and O(N) transfer from Postgres for users with large collections, making the endpoint unusable at the stated scale.",
+     "evidence": "const page = rows.slice(start, start + limit);"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The cursor is matched by `findIndex(r => r.id === cursor)` against the full in-memory array with no validation that the cursor belongs to the authenticated user, is a valid UUID, or still exists; an invalid or foreign cursor silently returns the first page (findIndex returns -1, start becomes 0).",
+     "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "There is no timeout or partial-failure handling for the unbounded query; a single heavy-user request can block the DB connection and Express handler for seconds, degrading the service for all users.",
+     "evidence": "const { rows } = await db.query<SavedRow>(... [userId]);"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1943,
+    "tokOut": 490,
+    "usd": 0,
+    "critMs": 60628
+   },
+   "wallMs": 60628
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "The column-rename migration runs before the new app code is live (migrations run automatically on deploy after merge). Old app instances still running the pre-rename code will query `user_recipes.notes`, which no longer exists, producing 500 errors across all users until the rollout finishes. The PR itself admits this but treats it as a scheduling concern rather than a design flaw.",
+     "evidence": "\"The rename briefly takes an ACCESS EXCLUSIVE lock, and app instances still running the old code will error on `notes` until the rollout finishes, so this should deploy during a low-traffic window.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "Migration 0088 uses `CREATE INDEX CONCURRENTLY` on a 140M-row table, which can take a very long time and may fail partway (leaving an INVALID index). If it fails, the migration framework will mark the migration as failed and subsequent deploys will be blocked. If it succeeds but is slow, it will hold significant I/O bandwidth and potentially impact the API p99 budget of 300ms for all other queries during the build. There is no timeout, monitoring, or fallback mentioned.",
+     "evidence": "\"A new index on `(user_id, saved_at DESC, id DESC)` is added in a separate migration, built with `CREATE INDEX CONCURRENTLY` so it does not block writes on the 140M-row table.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The cursor encodes `saved_at` as Postgres text (`ur.saved_at::text`), but the comparison in the query uses `$3::timestamptz`. Postgres text representation of timestamptz can vary based on server timezone settings and precision (e.g., `2024-01-15 10:30:00.123456` vs `2024-01-15 10:30:00.123456+00`). If the server timezone changes or if the text representation is not exactly what Postgres expects for `::timestamptz` casting, the cursor comparison will fail or produce incorrect results. Using an ISO 8601 string or epoch milliseconds would be more robust.",
+     "evidence": "`ur.saved_at::text AS cursor_ts` and `keyset = \"AND (ur.saved_at, ur.id) < ($3::timestamptz, $4::uuid)\";`"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The `decodeCursor` function validates the cursor format but does not verify that the cursor was actually issued by this server. A client could craft a cursor with an arbitrary `saved_at` timestamp and a valid UUID, causing the query to skip to an arbitrary position in the user's list. While this doesn't leak other users' data (due to `user_id = $1`), it allows a malicious or buggy client to skip items or cause unexpected query behavior. The cursor should be signed or at least validated against the user's actual data range.",
+     "evidence": "`function decodeCursor(raw: string): { t: string; i: string } | null { try { const v = JSON.parse(Buffer.from(raw, \"base64url\").toString(\"utf8\")); if (typeof v?.t === \"string\" && typeof v?.i === \"string\" && UUID_RE.test(v.i) && !Number.isNaN(Date.parse(v.t))) { return { t: v.t, i: v.i }; } } catch { } return null; }`"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The PR states \"Because the query is bounded and index-backed, I did not add a separate statement timeout.\" However, the query joins `user_recipes` with `recipes`, and if the `recipes` table has a large number of rows or the join is not properly indexed, the query could still be slow. Additionally, the `LIMIT 101` (limit + 1) pattern means that for users with 200k+ saved recipes, the query will always read 101 rows from the index, which is fine, but if the index is not used (e.g., due to planner misestimation), the query could scan the entire table. A statement timeout should be added as a safety net.",
+     "evidence": "\"Because the query is bounded and index-backed, I did not add a separate statement timeout.\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The PR bundles two unrelated changes (column rename and pagination) into a single PR. This makes it harder to review, test, and roll back independently. If the pagination change has issues, the column rename is also affected, and vice versa. These should be separate PRs.",
+     "evidence": "\"Two small changes bundled because they touch the same table.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The PR claims that offsets were \"drifting when users saved recipes while scrolling,\" but does not provide evidence of this issue (e.g., user reports, logs, or a reproduction). While keyset pagination is generally superior to offset pagination, the claim that offsets were causing problems should be backed up with data.",
+     "evidence": "\"Offsets were drifting when users saved recipes while scrolling.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3121,
+    "tokOut": 1324,
+    "usd": 0,
+    "critMs": 67154
+   },
+   "wallMs": 88276
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The migration runner is expected to auto-run migrations on deploy, but the index migration is non-transactional (CREATE INDEX CONCURRENTLY cannot run in a transaction). If the runner wraps migrations in BEGIN/COMMIT (the norm), the migration will fail at deploy, breaking the auto-deploy contract. The runbook says to build it by hand before merging, but that's a manual pre-merge step that contradicts the 'migrations run automatically on deploy' context.",
+     "evidence": "CONTEXT: 'Migrations run automatically on deploy after merge to main.' vs PR: 'That file intentionally has no BEGIN/COMMIT, because concurrent index builds cannot run inside a transaction.'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The cursor pagination query uses `(ur.saved_at, ur.id) < ($3::timestamptz, $4::uuid)` for DESC ordering, which is correct for keyset pagination with DESC. However, the test for 'does not repeat or skip items when a recipe is saved mid-scroll' saves recipe r6 (presumably newest) and expects the next page to still be r3,r2. With keyset pagination, if r6 has a saved_at equal to or greater than r4's saved_at, it would appear at the start of the next page, not be skipped. The test assumes r6 is inserted but doesn't verify the actual saved_at timestamps used, so it may not actually test the mid-scroll insert case correctly.",
+     "evidence": "Test: 'does not repeat or skip items when a recipe is saved mid-scroll' saves r6 then expects next page to be ['r3','r2'], but if r6 has a newer saved_at than r4, it should appear on the next page, not be skipped."
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "For the heaviest users with 200k+ saved recipes, each page fetch returns limit+1 rows. At limit=100, that's 101 rows per request, which is fine. However, the client will need to make 2000+ requests to page through all recipes. This is acceptable for cursor pagination but worth noting.",
+     "evidence": "CONTEXT: 'heaviest users have more than 200k saved recipes'"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3493,
+    "tokOut": 504,
+    "usd": 0,
+    "critMs": 38854
+   },
+   "wallMs": 45812
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The manual index pre-build is a merge-gating precondition that lives entirely outside the repo; if a future deploy runs this migration against a database where the index was never built by hand, CREATE INDEX CONCURRENTLY will run automatically on the 140M-row table at deploy time, blocking the API and breaching the 300ms p99 budget.",
+     "evidence": "\"do not merge until the index is valid\" and \"build this by hand off-peak first\" — the migration itself still executes CREATE INDEX CONCURRENTLY if the index does not exist."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The migration runner's ability to execute non-transactional files is unconfirmed at merge time; if the runner wraps the file in a transaction, the migration fails and the deploy breaks, but there is no automated check or directive in the artifact to prevent this.",
+     "evidence": "\"confirm how the runner handles non-transactional files ... and add that directive to the migration if it needs one\" — the confirmation is deferred to pre-merge human action with no enforcement."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "On a failed concurrent index build, IF NOT EXISTS will silently skip the INVALID index on retry, leaving the endpoint running without the index and potentially slow indefinitely; the artifact acknowledges this but relies on a manual runbook rather than code to detect and fix it.",
+     "evidence": "\"IF NOT EXISTS skips an INVALID leftover from a failed build\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The down migration uses DROP INDEX CONCURRENTLY, which also cannot run inside a transaction; if the runner cannot handle non-transactional files for the up migration, it will equally fail on rollback, leaving no clean revert path.",
+     "evidence": "down migration: \"DROP INDEX CONCURRENTLY IF EXISTS user_recipes_user_saved_idx;\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The cursor is not signed and encodes the row's saved_at and id; while scoped to user_id, a user could craft cursors to probe the existence of specific saved_at timestamps or infer save patterns of their own data over time — low risk but worth noting since the PR explicitly discusses security.",
+     "evidence": "\"The cursor is deliberately not signed. It is only a position within the caller's own list\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "decodeCursor uses Date.parse(v.t) for validation, which accepts a wide variety of date formats beyond the Postgres timestamptz text format; a cursor with a valid date but non-Postgres format would pass validation and then fail at the SQL cast, returning 500 instead of 400.",
+     "evidence": "\"!Number.isNaN(Date.parse(v.t))\" as the only format validation before passing to $3::timestamptz"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3844,
+    "tokOut": 624,
+    "usd": 0,
+    "critMs": 53266
+   },
+   "wallMs": 64056
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "The manual index build is a one-way door: if the CONCURRENTLY build fails mid-way, the leftover INVALID index blocks every future build with the same name, and the guard migration will permanently fail deploys until someone remembers to drop it by hand. There is no automated recovery path in the deploy pipeline.",
+     "evidence": "'If the build failed and left an invalid index, run DROP INDEX CONCURRENTLY user_recipes_user_saved_idx and rebuild.'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The guard migration checks for the index by name in pg_class, but does not verify the index columns match what the query needs. A hand-built index with the wrong column order (e.g., (user_id, id DESC, saved_at DESC)) would pass the guard but not support the keyset query efficiently, shipping the endpoint slow without failing the deploy.",
+     "evidence": "'IF NOT EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname = 'user_recipes_user_saved_idx' ...)'"
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The 140M-row index build is entirely off-peak manual work with no time estimate or resource guidance. For a table this size, a CONCURRENTLY build can take hours and generate significant WAL traffic and I/O, potentially impacting production users during the build window. No budget or duration analysis is provided.",
+     "evidence": "'Build the index by hand off-peak: CREATE INDEX CONCURRENTLY user_recipes_user_saved_idx ON user_recipes (user_id, saved_at DESC, id DESC);'"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "The down migration is a no-op that leaves the index in place, but the old offset-based code path is completely removed. Rolling back the deploy would leave the database with an unused index and no code that benefits from it, while the migration history shows a guard that would pass. This creates a confusing state where the 'rolled back' system still has migration artifacts.",
+     "evidence": "'-- No-op: the up migration is a guard and creates nothing. The index is harmless to keep.'"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The cursor validation uses Date.parse() which is lenient and accepts many non-standard date formats. While the timestamptz::text format is documented, a hand-crafted cursor with an unusual but parseable date string could potentially cause unexpected behavior in the Postgres cast.",
+     "evidence": "'!Number.isNaN(Date.parse(v.t))'"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4100,
+    "tokOut": 563,
+    "usd": 0,
+    "critMs": 41050
+   },
+   "wallMs": 72625
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The statement_timeout is set to 1000ms but the PR's API p99 budget is 300ms; the timeout does not protect the budget and will cause 1-second request stalls before failing.",
+     "evidence": "await client.query(\"SET LOCAL statement_timeout = 1000\")"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "No timeout is set on client.query(\"BEGIN\") or client.query(\"COMMIT\"). A hung BEGIN (e.g., during connection pool exhaustion or replication lag) will block indefinitely, holding a connection from the pool forever and eventually exhausting the pool.",
+     "evidence": "await client.query(\"BEGIN\");"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The code assumes db is a pg Pool with client.release(). If db is a pg.Client or any other client type, release() will throw or not exist, causing every request to fail with an unhandled error.",
+     "evidence": "client.release();"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The finally block calls client.release() unconditionally, but if the client was already released or is in an error state, this could throw or leak.",
+     "evidence": "finally { client.release(); }"
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The index build on a 140M-row table is not rehearsed or measured. The build could take hours, generate massive WAL volume, and cause replication lag or disk exhaustion, with no budget or capacity planning.",
+     "evidence": "I have not measured the build duration on a 140M-row table, and I'm not going to guess at one."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The cursor comparison uses (ur.saved_at, ur.id) < ($3::timestamptz, $4::uuid), but the index is on (user_id, saved_at DESC, id DESC). The row comparison operator < does not match the DESC ordering of the index, which could cause a sequential scan or incorrect results if the planner is not careful.",
+     "evidence": "AND (ur.saved_at, ur.id) < ($3::timestamptz, $4::uuid)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The UUID_RE regex allows uppercase hex digits, but UUIDs in Postgres are typically lowercase. While not a bug, it could lead to cursor encoding/decoding mismatches if the system generates lowercase UUIDs and clients send uppercase.",
+     "evidence": "const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The cursor is not signed, as documented. While the PR argues this is safe because user_id is always applied, a malicious client could craft a cursor to probe the existence of specific recipe IDs for their own user, potentially leaking information about what recipes they have saved.",
+     "evidence": "The cursor is deliberately not signed."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR claims the index guard will fail the deploy if the index is missing or invalid, but the guard only checks for the index's existence and validity. It does not verify that the index is actually being used by the query planner for the new keyset query.",
+     "evidence": "The guard keeps it from shipping before the index is valid and correctly defined."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR claims that the old offset code will still benefit from the new index after a rollback, but the old code orders by saved_at DESC only, not by (saved_at, id), so the index may not be used efficiently.",
+     "evidence": "and the pre-keyset offset query (user_id filter, saved_at DESC order) still uses its leading columns after a rollback."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The down migration is a no-op, meaning the index will remain after a rollback. While documented, this could be surprising to operators and may lead to confusion about the system's state.",
+     "evidence": "No-op: the up migration is a guard and creates nothing."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The manual index build and validation process adds operational complexity and requires careful coordination between deployment and database operations. This increases the risk of human error.",
+     "evidence": "Complete the rehearsal and capacity checks above, then build the index by hand off-peak"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The query fetches limit + 1 rows to determine if there are more pages. For large limit values (up to 100), this could be inefficient, especially if the index is not perfectly aligned with the query.",
+     "evidence": "const params: unknown[] = [userId, limit + 1];"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5028,
+    "tokOut": 1353,
+    "usd": 0,
+    "critMs": 74868
+   },
+   "wallMs": 97772
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The PR states that `SET LOCAL statement_timeout = 250` is scoped to the query, but it actually applies to the entire transaction (BEGIN to COMMIT). If the transaction includes slow operations, they will be affected. The PR should clarify this.",
+     "evidence": "The transaction uses a connection checked out with `db.connect()`... `SET LOCAL statement_timeout = 250` as a safety net."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The PR uses `(ur.saved_at, ur.id) < ($3::timestamptz, $4::uuid)` for the keyset comparison. While correct, this relies on Postgres's row comparison semantics, which might be confusing for future maintainers. A clearer alternative would be to use explicit `AND` conditions.",
+     "evidence": "`keyset = \"AND (ur.saved_at, ur.id) < ($3::timestamptz, $4::uuid)\";`"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The PR does not include any documentation for the new `nextCursor` field in the API response. Clients will need to be updated to handle this new field, and this should be documented in the API spec.",
+     "evidence": "`res.json({ items, nextCursor });`"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5507,
+    "tokOut": 299,
+    "usd": 0,
+    "critMs": 29830
+   },
+   "wallMs": 46739
+  }
+ ],
+ "artifact": "PR #1907: Cursor pagination for saved recipes\n\nThis PR now contains only the pagination change. The `notes` → `private_notes` rename is removed (see \"Deferred: notes rename\").\n\n1. **Deferred: notes rename.** A plain `RENAME COLUMN` runs automatically on deploy, before the new code is live. Old instances would then 500 on `notes` for every user until the rollout finished, and a low-traffic window doesn't fix that. Notes are user-written and can't be recovered, so I'm not trading safety for speed here. The rename will come back as a separate expand/contract series before the shared-collections work:\n   - add `private_notes`;\n   - dual-write, and backfill in batches;\n   - switch reads;\n   - drop `notes` in a later release.\n   \n   This PR keeps using `notes`.\n2. `GET /api/recipes/saved` moves from offset to keyset (cursor) pagination. Offsets were drifting when users saved recipes while scrolling.\n   - The query is bounded by `LIMIT` and uses a `(saved_at, id)` row comparison. Only one page of rows is read from Postgres per request, regardless of how many recipes the user has saved.\n   - The query fetches `limit + 1` rows to learn whether another page exists. That is one extra row on top of at most 100, read from the same index range scan, so the cost is negligible and does not depend on the index being \"perfectly aligned\" beyond the definition the guard already enforces.\n   - `nextCursor` is an opaque base64url token encoding the last item's `saved_at` (as Postgres text, to keep microsecond precision) and `id`. The client already echoes it back unchanged.\n   - Why the text form is safe: `timestamptz::text` always includes the UTC offset (e.g. `2024-01-15 10:30:00.123456+00`), and the `$3::timestamptz` cast parses that offset. The round trip is therefore exact and independent of the server or session timezone.\n   - A malformed cursor returns 400 instead of silently restarting at page 1.\n   - The cursor is deliberately not signed. It is only a position within the caller's own list, because `user_id = $1` is always applied. A hand-crafted cursor can only move the caller's own view to a different point in their own data, which they could already do with the old `offset` parameter. It cannot expose anything else, so a signing key would add operational burden for no security gain.\n   - The query runs in a short transaction with `SET LOCAL statement_timeout = 250` as a safety net. The timeout is set below the 300ms p99 budget so a bad plan fails fast instead of stalling a request past the budget and piling up connections. The query is bounded and the join to `recipes` is on its primary key, so with the index in place it should be far under this limit.\n   - The transaction uses a connection checked out with `db.connect()`, which assumes `db` is the shared `pg` Pool (the existing `db.query` call is consistent with that). `client.release()` runs in a `finally`, so the connection always returns to the pool, including on error. `BEGIN` and `COMMIT` are single local round trips with no planner work. Pool acquisition timeouts are a property of the pool configuration, not of this route, and this PR does not change them.\n   - Mid-scroll saves: the list is ordered newest first and the cursor points at the last item already seen, so the next page contains only rows strictly older than it. A recipe saved mid-scroll gets a newer `saved_at`, sorts before the cursor, and is correctly excluded from later pages. It shows up when the list is reloaded from the top. This is what the mid-scroll test asserts.\n3. **Index.** The index is `user_recipes_user_saved_idx` on `(user_id, saved_at DESC, id DESC)`. It is built by hand, and the auto-run migration only verifies it. The migration never builds an index.\n   - **Why.** `CREATE INDEX CONCURRENTLY` cannot run inside a transaction, so it depends on a runner feature I can't guarantee. If it ran at deploy it would also run a long build on the 140M-row table in the deploy path. Keeping the build out of the migration removes both risks, and a failed concurrent build leaving an INVALID index (which `IF NOT EXISTS` would silently skip) can no longer slip through.\n   - **Migration 0087 is a transactional guard.** It is a catalog-only `DO` block that raises an exception unless `user_recipes_user_saved_idx` exists on `user_recipes`, is valid and ready, **and has the expected definition**: exactly three key columns `user_id`, `saved_at`, `id`, in that order, with `saved_at` and `id` descending, non-partial and with no expressions. A wrongly ordered or otherwise different hand-built index fails the deploy instead of shipping a slow endpoint. The guard takes no locks on the table and needs no special runner support. The deploy halts before the new code goes live, and the error message names the specific problem (missing, INVALID, or wrong definition) and the fix. This is enforced in code, not by a human checklist, and nothing in the deploy can build the index on the hot table.\n   - **What the guard does and does not prove.** The guard checks the catalog for existence, validity and definition. It cannot check from the catalog whether the planner will choose the index. With this exact definition the keyset query's `WHERE user_id = $1 AND (saved_at, id) < (...) ORDER BY saved_at DESC, id DESC` matches the index order, so no sort is needed. Planner choice is confirmed in the runbook with an `EXPLAIN` check (step 4) before merging.\n   - **Failure and recovery.** A failed concurrent build leaves an INVALID index that blocks a rebuild under the same name. This is deliberately a manual recovery, not an automated one: automatic drop-and-rebuild would put the long build back into the deploy path. The failure mode is safe. The runbook has you confirm validity before merging, and if it is ever missed, the guard fails the deploy and the old code keeps serving unchanged. Recovery is step 3 below (`DROP INDEX CONCURRENTLY`, then rebuild), and the guard's error message prints that command.\n   - **Down migration is a no-op.** The index is harmless to leave in place, and the down file contains no `CONCURRENTLY` statement, so rollback works on any runner. After a rollback the old offset code runs again. It filters on `user_id` and orders by `saved_at DESC`, which matches the index's leading columns `(user_id, saved_at DESC)`. The trailing `id DESC` column simply isn't needed for that query, so the index still serves it with no sort. Re-applying 0087 simply passes the guard again. To remove the index after a deliberate rollback, run `DROP INDEX CONCURRENTLY user_recipes_user_saved_idx` by hand.\n   - **Build cost and resource guidance.** I have not measured the build duration on a 140M-row table, and I'm not going to guess at one. The rehearsal below is a required runbook step that produces those numbers, and the build never runs in the deploy path, so an unexpectedly long or expensive build cannot affect a deploy. Before the production build:\n     - Rehearse it on a restored snapshot or staging copy of similar size to get real duration, WAL volume, and final index size, and use that to pick the window.\n     - Confirm free disk on the primary for the index plus the temporary sort and WAL, and that replicas have WAL headroom.\n     - Set `maintenance_work_mem` and `max_parallel_maintenance_workers` for the build session only (`SET`, not global), and keep them modest enough to leave I/O for production traffic.\n     - Watch replication lag, API p99, and I/O during the build. If p99 or lag degrades, cancel the build with `pg_cancel_backend` and follow step 3 to drop the INVALID leftover. Retry later.\n   - **Rollout runbook** (the guard fails the deploy if step 1 is skipped):\n     1. Complete the rehearsal and capacity checks above, then build the index by hand off-peak: `CREATE INDEX CONCURRENTLY user_recipes_user_saved_idx ON user_recipes (user_id, saved_at DESC, id DESC);`\n     2. Monitor the build via `pg_stat_progress_create_index`, plus replication lag and API p99.\n     3. Confirm `SELECT indisvalid FROM pg_index WHERE indexrelid = 'user_recipes_user_saved_idx'::regclass` returns true. If the build failed or was cancelled and left an invalid index, run `DROP INDEX CONCURRENTLY user_recipes_user_saved_idx` and rebuild.\n     4. Run `EXPLAIN (ANALYZE, BUFFERS)` of the keyset query for one of the heaviest users (200k+ saved recipes), with and without a cursor. Confirm it uses `user_recipes_user_saved_idx` with no separate Sort node and runs well under the 250ms statement timeout.\n     5. Merge. The guard migration passes and the deploy proceeds.\n   - The endpoint is correct without the index but slow. The guard keeps it from shipping before the index is valid and correctly defined, and the `EXPLAIN` check confirms the planner uses it.\n\n```diff\ndiff --git a/db/migrations/0087_saved_recipes_keyset_idx.up.sql b/db/migrations/0087_saved_recipes_keyset_idx.up.sql\nnew file mode 100644\nindex 0000000..d41b7c3\n--- /dev/null\n+++ b/db/migrations/0087_saved_recipes_keyset_idx.up.sql\n@@ -0,0 +1,39 @@\n+-- Guard only: does NOT build the index. user_recipes is ~140M rows, so the index is built\n+-- by hand off-peak with CREATE INDEX CONCURRENTLY (see PR runbook). That statement cannot\n+-- run in a transaction and must not run in the auto-deploy path.\n+-- This migration is transactional and catalog-only (no table locks). It fails the deploy\n+-- if the index is missing, INVALID, or not (user_id, saved_at DESC, id DESC).\n+DO $$\n+DECLARE\n+  idx record;\n+BEGIN\n+  SELECT i.indisvalid, i.indisready, i.indnkeyatts,\n+         (i.indpred IS NOT NULL) AS is_partial,\n+         (i.indexprs IS NOT NULL) AS has_exprs,\n+         (SELECT a.attname FROM pg_attribute a WHERE a.attrelid = i.indrelid AND a.attnum = i.indkey[0]) AS col0,\n+         (SELECT a.attname FROM pg_attribute a WHERE a.attrelid = i.indrelid AND a.attnum = i.indkey[1]) AS col1,\n+         (SELECT a.attname FROM pg_attribute a WHERE a.attrelid = i.indrelid AND a.attnum = i.indkey[2]) AS col2,\n+         (i.indoption[0] & 1) AS desc0,\n+         (i.indoption[1] & 1) AS desc1,\n+         (i.indoption[2] & 1) AS desc2\n+    INTO idx\n+    FROM pg_index i\n+    JOIN pg_class c ON c.oid = i.indexrelid\n+   WHERE c.relname = 'user_recipes_user_saved_idx'\n+     AND i.indrelid = 'user_recipes'::regclass;\n+\n+  IF NOT FOUND THEN\n+    RAISE EXCEPTION 'user_recipes_user_saved_idx is missing; build it by hand with CREATE INDEX CONCURRENTLY (see PR #1907 runbook) before deploying';\n+  END IF;\n+  IF NOT (idx.indisvalid AND idx.indisready) THEN\n+    RAISE EXCEPTION 'user_recipes_user_saved_idx is INVALID; run DROP INDEX CONCURRENTLY user_recipes_user_saved_idx and rebuild it by hand (see PR #1907 runbook) before deploying';\n+  END IF;\n+  IF idx.indnkeyatts <> 3 OR idx.is_partial OR idx.has_exprs\n+     OR idx.col0 IS DISTINCT FROM 'user_id'\n+     OR idx.col1 IS DISTINCT FROM 'saved_at'\n+     OR idx.col2 IS DISTINCT FROM 'id'\n+     OR idx.desc0 <> 0 OR idx.desc1 <> 1 OR idx.desc2 <> 1 THEN\n+    RAISE EXCEPTION 'user_recipes_user_saved_idx exists but is not (user_id, saved_at DESC, id DESC); drop it with DROP INDEX CONCURRENTLY and rebuild per the PR #1907 runbook';\n+  END IF;\n+END\n+$$;\ndiff --git a/db/migrations/0087_saved_recipes_keyset_idx.down.sql b/db/migrations/0087_saved_recipes_keyset_idx.down.sql\nnew file mode 100644\nindex 0000000..e52b9a4\n--- /dev/null\n+++ b/db/migrations/0087_saved_recipes_keyset_idx.down.sql\n@@ -0,0 +1,5 @@\n+-- No-op: the up migration is a guard and creates nothing. The index is harmless to keep,\n+-- and the pre-keyset offset query (user_id filter, saved_at DESC order) still uses its\n+-- leading columns after a rollback. Re-applying the up migration passes the guard again.\n+-- To remove it, run by hand: DROP INDEX CONCURRENTLY user_recipes_user_saved_idx;\n+SELECT 1;\ndiff --git a/server/routes/saved.ts b/server/routes/saved.ts\nindex 2c9f1ab..e7a50d3 100644\n--- a/server/routes/saved.ts\n+++ b/server/routes/saved.ts\n@@ -1,36 +1,86 @@\n import { Router } from \"express\";\n import { db } from \"../db\";\n import { requireUser } from \"../auth\";\n\n export const saved = Router();\n\n+type SavedRow = {\n+  id: string;\n+  recipe_id: string;\n+  title: string;\n+  saved_at: Date;\n+  notes: string | null;\n+  cursor_ts: string;\n+};\n+\n+const UUID_RE =\n+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\n+\n+function encodeCursor(row: SavedRow): string {\n+  return Buffer.from(JSON.stringify({ t: row.cursor_ts, i: row.id })).toString(\n+    \"base64url\",\n+  );\n+}\n+\n+function decodeCursor(raw: string): { t: string; i: string } | null {\n+  try {\n+    const v = JSON.parse(Buffer.from(raw, \"base64url\").toString(\"utf8\"));\n+    if (\n+      typeof v?.t === \"string\" &&\n+      typeof v?.i === \"string\" &&\n+      UUID_RE.test(v.i) &&\n+      !Number.isNaN(Date.parse(v.t))\n+    ) {\n+      return { t: v.t, i: v.i };\n+    }\n+  } catch {\n+    // fall through\n+  }\n+  return null;\n+}\n+\n saved.get(\"/api/recipes/saved\", requireUser, async (req, res) => {\n   const userId = req.user!.id;\n-  const limit = Math.min(Number(req.query.limit) || 50, 100);\n-  const offset = Math.max(Number(req.query.offset) || 0, 0);\n-  const { rows } = await db.query(\n-    `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.notes\n-       FROM user_recipes ur JOIN recipes r ON r.id = ur.recipe_id\n-      WHERE ur.user_id = $1\n-      ORDER BY ur.saved_at DESC\n-      LIMIT $2 OFFSET $3`,\n-    [userId, limit, offset],\n-  );\n-  res.json({ items: rows });\n+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);\n+\n+  let after: { t: string; i: string } | null = null;\n+  if (typeof req.query.cursor === \"string\" && req.query.cursor !== \"\") {\n+    after = decodeCursor(req.query.cursor);\n+    if (!after) {\n+      return res.status(400).json({ error: \"invalid cursor\" });\n+    }\n+  }\n+\n+  // Fetch limit + 1 rows to learn whether another page exists.\n+  const params: unknown[] = [userId, limit + 1];\n+  let keyset = \"\";\n+  if (after) {\n+    params.push(after.t, after.i);\n+    keyset = \"AND (ur.saved_at, ur.id) < ($3::timestamptz, $4::uuid)\";\n+  }\n+\n+  // Short transaction so the statement timeout is scoped to this query only.\n+  // Assumes `db` is the shared pg Pool. The timeout is kept under the 300ms p99 budget.\n+  const client = await db.connect();\n+  let rows: SavedRow[];\n+  try {\n+    await client.query(\"BEGIN\");\n+    await client.query(\"SET LOCAL statement_timeout = 250\");\n+    ({ rows } = await client.query<SavedRow>(\n+      `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.notes,\n+              ur.saved_at::text AS cursor_ts\n+         FROM user_recipes ur JOIN recipes r ON r.id = ur.recipe_id\n+        WHERE ur.user_id = $1 ${keyset}\n+        ORDER BY ur.saved_at DESC, ur.id DESC\n+        LIMIT $2`,\n+      params,\n+    ));\n+    await client.query(\"COMMIT\");\n+  } catch (e) {\n+    await client.query(\"ROLLBACK\").catch(() => {});\n+    throw e;\n+  } finally {\n+    client.release();\n+  }\n+\n+  const hasMore = rows.length > limit;\n+  const pageRows = hasMore ? rows.slice(0, limit) : rows;\n+  const nextCursor = hasMore ? encodeCursor(pageRows[pageRows.length - 1]) : null;\n+  const items = pageRows.map(({ cursor_ts, ...item }) => item);\n+\n+  res.json({ items, nextCursor });\n });\ndiff --git a/server/routes/saved.test.ts b/server/routes/saved.test.ts\nindex 91d0c3e..4b7f2a1 100644\n--- a/server/routes/saved.test.ts\n+++ b/server/routes/saved.test.ts\n@@ -12,9 +12,27 @@ describe(\"GET /api/recipes/saved\", () => {\n-  it(\"pages with offset\", async () => {\n-    const a = await get(\"/api/recipes/saved?limit=2&offset=0\");\n-    const b = await get(\"/api/recipes/saved?limit=2&offset=2\");\n-    expect(a.items.map((i) => i.id)).toEqual([\"r5\", \"r4\"]);\n-    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n+  it(\"pages with cursor\", async () => {\n+    const a = await get(\"/api/recipes/saved?limit=2\");\n+    expect(a.items.map((i) => i.id)).toEqual([\"r5\", \"r4\"]);\n+    const b = await get(`/api/recipes/saved?limit=2&cursor=${a.nextCursor}`);\n+    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n+    const c = await get(`/api/recipes/saved?limit=2&cursor=${b.nextCursor}`);\n+    expect(c.items.map((i) => i.id)).toEqual([\"r1\"]);\n+    expect(c.nextCursor).toBeNull();\n+  });\n+\n+  it(\"rejects a malformed cursor instead of restarting at page 1\", async () => {\n+    const res = await getRaw(\"/api/recipes/saved?limit=2&cursor=not-a-cursor\");\n+    expect(res.status).toBe(400);\n+  });\n+\n+  it(\"does not repeat or skip items when a recipe is saved mid-scroll\", async () => {\n+    const a = await get(\"/api/recipes/saved?limit=2\");\n+    // r6 is saved after the first page, so its saved_at is newer than r4's cursor\n+    // position. Ordering is newest-first and the cursor is strict \"<\", so r6 sorts\n+    // before the cursor and must not appear on or shift later pages.\n+    await saveRecipe(\"r6\");\n+    const b = await get(`/api/recipes/saved?limit=2&cursor=${a.nextCursor}`);\n+    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n   });\n });\n```",
+ "fixerUsage": {
+  "calls": 6,
+  "tokIn": 34942,
+  "tokOut": 39138,
+  "usd": 0.5311239999999999,
+  "critMs": 219021
+ },
+ "status": "cleared"
+}

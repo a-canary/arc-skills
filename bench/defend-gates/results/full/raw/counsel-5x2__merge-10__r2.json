@@ -1,0 +1,77 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-10",
+ "rep": 2,
+ "wallMs": 490463,
+ "verdict": "ATTACKS",
+ "confidence": 0.7,
+ "attacks": [
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The no-overlap guarantee depends on render and its upload stopping promptly when jobCtx is cancelled. Neither the render code nor a cancellation test is in the PR, and the object write is not checked against the lease. If render ignores ctx, a second worker can reclaim the job after locked_until and both can write the same key, with the duplicate-compute cost unquantified.",
+   "evidence": "\"the job context is cancelled at jobTimeout, so a live worker never outlives its lease\"; ABSENT: render/upload cancellation behaviour, a test that a cancelled render returns, or a lease check before the object write."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Poison jobs are reclaimed first on every lease expiry because the claim orders by created_at. The old startup reset had the same ordering, so this is not a regression, but the loop now recurs on the lease cycle. The PR explicitly defers the attempts cap to #215.",
+   "evidence": "\"ORDER BY created_at, id LIMIT 1\"; \"a poison-job attempts cap (#215) are separate changes\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Stale-holder fencing in Complete is only as strong as w.id's uniqueness per process incarnation. The diff never shows how w.id is generated. With replicas at 1 and Recreate the risk is latent, but the fence depends on this value.",
+   "evidence": "\"err = s.store.Complete(ctx, job.ID, w.id, ...)\"; ABSENT: definition of w.id."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Removing ResetRunning is safe only while Recreate prevents an old-binary reset from overlapping live leases. A later move to RollingUpdate would need that ordering gated or documented. This is a note for a future change, not a defect in this one.",
+   "evidence": "CONTEXT: \"strategy Recreate, so old and new worker versions never run at the same time\"; diff removes \"w.store.ResetRunning(ctx)\"."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "On shutdown the worker returns without calling Complete, so a render that finished just as ctx was cancelled is discarded and repeated later. The lease is held for up to about 3 minutes, which delays each Recreate rollout. The PR does not mention this behaviour change.",
+   "evidence": "\"if ctx.Err() != nil { return nil // shutting down: leave the lease to expire so another worker retries the job }\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "No index supports the claim predicate or the created_at, id sort. Each claim scans and sorts the queued and running rows. This is cheap at about 20k rows but grows with queue depth.",
+   "evidence": "\"ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz;\" (no CREATE INDEX)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Lease loss and reclaims are visible only as a Warn log, with no counter or alert. Duplicate renders and rising attempts counts would go unnoticed during rollouts.",
+   "evidence": "\"w.log.Warn(\\\"lease lost before completion\\\", \\\"job\\\", job.ID)\"; ABSENT: metric or alert."
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The migration has no down step and no rollback note. Code rollback is safe because the old Claim ignores the new nullable columns, but the schema change is not explicitly reversible.",
+   "evidence": "\"ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz;\"; ABSENT: down migration or rollback note."
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The title says more than one worker can run, but the body keeps replicas at 1 and defers scale-out. Release notes will read the title as delivered behaviour.",
+   "evidence": "TITLE: \"lease-based job claiming so more than one worker can run\" vs \"Replica count stays 1 here\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The concurrency test asserts only the total claim count, not that each job ID was claimed exactly once, so a double claim paired with a miss would pass. The worker's shutdown and ErrLeaseLost branches have no test.",
+   "evidence": "\"if n := claims.Load(); n != 40 {\"; ABSENT: per-ID uniqueness assertion and worker tests."
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 107004,
+  "tokOut": 59259,
+  "usd": 0.04566268999999999,
+  "critMs": 100275
+ }
+}

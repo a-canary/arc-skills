@@ -1,0 +1,521 @@
+{
+ "approach": "rubric-single@v100",
+ "case": "merge-07",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "partition_date() now uses local time (America/Los_Angeles) instead of UTC, so the dt= partition will be wrong (off by 7–8 hours) for the 01:30 UTC scheduled run and any downstream consumer expecting UTC dates.",
+     "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")"
+    },
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "shell=True with interpolated partner and src.stem allows command injection: partners choose their own filenames and a file like `x;rm -rf /`.csv` (or a partner name containing shell metacharacters) will execute arbitrary commands as the worker user.",
+     "evidence": "+        f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\",\n+        shell=True,"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The _SUCCESS marker is written even when failed > 0, so downstream dashboards will treat a partially-failed (or fully-failed) partner run as complete and read missing or stale files.",
+     "evidence": "+    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")\n+    log.info(\"partner=%s dt=%s ok=%d failed=%d\", partner, dt, ok, failed)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The destination path changed from raw/{partner}/dt={dt}/{file}.csv.gz to raw/{partner}/dt={dt}/{file}/{chunk}.csv.gz, breaking any downstream reader, dashboard, or query that expects the old flat layout.",
+     "evidence": "-        blob = bucket.blob(f\"raw/{partner}/dt={dt}/{src.stem}.csv.gz\")\n+    dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "normalise_row(row) is now called with a dict, but the previous code used df.apply(normalise_row, axis=1) which passes a pandas Series; if normalise_row depends on Series methods or index, every row will fail or produce wrong output.",
+     "evidence": "-        df = df.apply(normalise_row, axis=1, result_type=\"expand\")\n+            norm = normalise_row(row)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The CSV header is only written to the first chunk; chunks 2..N have no header, which breaks any consumer that opens a chunk independently (the old single-object output always had a header).",
+     "evidence": "+            if writer is None:\n+                writer = csv.DictWriter(out, fieldnames=list(norm.keys()))\n+                writer.writeheader()"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "work_dir is never cleaned up on task failure: if the Airflow task is killed mid-run, partial .csv.gz chunks are left behind and will be re-globbed or re-uploaded on the next retry, causing duplicate data.",
+     "evidence": "+            for chunk in _write_chunks(src, work_dir):\n+                _upload(chunk, partner, dt, src.stem)\n+                chunk.unlink()"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "chunk.unlink() is called immediately after upload, but gsutil composite uploads can be asynchronous or buffered; there is no completion check beyond the subprocess exit code, risking upload of a partially-written file or unlink before upload finishes under load.",
+     "evidence": "+                _upload(chunk, partner, dt, src.stem)\n+                chunk.unlink()"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The change replaces the Python GCS client with gsutil, creating a new runtime dependency on the gsutil binary being installed and configured on every worker; if it is missing, the entire ingest silently fails per-file with no clear error.",
+     "evidence": "+import subprocess\n+\n+    subprocess.run(\n+        f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\","
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR claims gsutil parallel composite uploads are 'much faster than the client library for multi-GB objects' but provides no benchmark or reference; for 3.1 GB files the GCS client library also supports resumable uploads and this assumption is unvalidated.",
+     "evidence": "then push them with gsutil (parallel composite uploads are much faster than the client library for multi-GB objects)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The gzip text mode ('wt') may not produce identical output to pandas' gzip compression ('gzip'), potentially breaking byte-level checksums or consumers expecting specific gzip headers.",
+     "evidence": "+                out = gzip.open(path, \"wt\", newline=\"\")"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1679,
+    "tokOut": 1076,
+    "usd": 0,
+    "critMs": 61686
+   },
+   "wallMs": 99862
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "normalise_row is now passed a plain dict instead of a pandas Series; if it uses positional or Series-specific access, every row will fail or be silently wrong. The PR itself flags this as unverified.",
+     "evidence": "\"normalise_row now receives a dict per row where it used to receive a pandas Series. I have not confirmed that it uses only key access.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Chunk headers are derived from the first normalised row's keys. If field order or presence varies across rows, chunks will have inconsistent schemas, breaking downstream CSV parsing and partition-level reads.",
+     "evidence": "\"writer = csv.DictWriter(out, fieldnames=list(norm.keys()))\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "If a file fails partway through upload, previously-uploaded chunks for that file remain in the bucket. The task raises an exception, so no _SUCCESS marker is written, but orphaned partial chunks persist and may be read by downstream jobs that list the partition.",
+     "evidence": "\"for chunk in chunks: _upload(chunk, partner, dt)\" ... \"raise RuntimeError(f\"partner={partner} dt={dt}: {failed} file(s) failed\")\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The PR claims \"a retry overwrites objects rather than duplicating them\" but this is only true if the same file produces the same chunk boundaries and names on retry. If the source file changes between runs (e.g., partner re-uploads), chunk content changes but the deterministic names still overwrite — potentially leaving stale chunks from the prior run if the new run produces fewer chunks.",
+     "evidence": "\"Chunk names are deterministic, so a retry overwrites objects rather than duplicating them.\""
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "major",
+     "claim": "Downstream readers that glob *.csv.gz will now see multiple chunk files per source file, each with its own header row. This doubles header overhead and requires downstream code to skip headers in every chunk, not just the first file. The PR acknowledges readers \"need updating\" but this is a breaking change to the partition contract.",
+     "evidence": "\"Readers that expect the exact old object name need updating, since a file can now span several chunks.\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "gsutil is invoked with a fixed threshold flag via command-line arguments. While filenames are safe (argument list), the threshold value is hardcoded and could be overridden by environment or gsutil configuration files on the worker, leading to inconsistent upload behavior.",
+     "evidence": "\"-o\", \"GSUtil:parallel_composite_upload_threshold=150M\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The CHUNK_ROWS constant is hardcoded to 500,000 with no configuration or documentation of why this value was chosen. Tuning will require a code change and redeploy.",
+     "evidence": "CHUNK_ROWS = 500_000"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2209,
+    "tokOut": 647,
+    "usd": 0,
+    "critMs": 47101
+   },
+   "wallMs": 47101
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "normalise_row is called with a plain dict but its contract is unverified; it may use pandas Series methods that do not exist on dict, causing runtime failures or silent misnormalisation.",
+     "evidence": "Review notes: 'normalise_row now receives a dict per row where it used to receive a pandas Series. I have not confirmed that it uses only key access... This must be verified before merge.'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Stale chunks from a failed run can persist when _delete_remote_chunks itself fails on retry, leaving a partial or inconsistent partition that readers may process despite the absence of _SUCCESS.",
+     "evidence": "Review notes: 'If a file fails after it has started uploading, its already-uploaded chunks are deleted on a best-effort basis (a cleanup failure is logged).'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The regex prefix match for chunk deletion could match unintended objects if a partner file stem ends with digits and a hyphen, creating a naming collision with the NNNN chunk suffix pattern.",
+     "evidence": "Review notes: 'matched with an exact regex on the stem... so partner-chosen names containing *, ? or [ are safe' — but does not address stems like 'file-1' matching 'file-1-0000.csv.gz'."
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The gsutil invocation uses -q (quiet) which suppresses error output, making debugging upload failures harder in production without additional logging.",
+     "evidence": "diff: 'gsutil', '-q', '-o', 'GSUtil:parallel_composite_upload_threshold=150M', 'cp'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "No timeout is set on the gsutil subprocess call, so a hung upload could block the entire ingest task indefinitely.",
+     "evidence": "diff: subprocess.run([...], check=True) — no timeout parameter"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Each chunk gets its own header row, increasing storage and downstream processing cost slightly, though the author claims it is negligible.",
+     "evidence": "Review notes: 'The extra header per 500k rows is negligible.'"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The work_dir parameter is added to ingest_partner but its cleanup responsibility is unclear — callers must ensure it exists and is cleaned up.",
+     "evidence": "diff: def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None:"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2884,
+    "tokOut": 718,
+    "usd": 0,
+    "critMs": 42284
+   },
+   "wallMs": 42284
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "normalise_row is called with a csv.DictReader dict instead of a pandas Series, and the PR itself admits this is an open merge blocker with no parity test. If normalise_row uses any Series method or positional indexing, every row will be mis-normalised or crash, producing silently wrong data in the raw partition.",
+     "evidence": "\"normalise_row now receives a dict per row where it used to receive a pandas Series. I have not confirmed that it uses only key access... This must be verified before merge... The gate's objection on this point is correct, and this PR does not claim to resolve it.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "The PR author explicitly states the gate's objection is correct and the PR does not resolve it, yet is submitting for merge. A PR that self-declares an unresolved merge blocker must not cross the gate.",
+     "evidence": "\"The gate's objection on this point is correct, and this PR does not claim to resolve it.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The old pandas path used dtype=str, preserving raw strings. csv.DictReader also returns strings, but the old path's df.apply(..., result_type=\"expand\") would flatten a dict-valued normalise_row output into columns, whereas the new path expects normalise_row to return a flat dict whose keys are column names. If normalise_row returned a nested structure that expand handled, the new path breaks schema assumptions.",
+     "evidence": "diff: \"df.apply(normalise_row, axis=1, result_type=\\\"expand\\\")\" vs new: \"norm = normalise_row(row)\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "gsutil is not vendored or version-pinned; the job depends on the binary being present on the worker image at the exact version supporting the GSUtil:parallel_composite_upload_threshold option. If the image drifts or the option changes, uploads fail silently (non-zero exit) and the task fails without a clear signal that the tooling changed.",
+     "evidence": "diff: \"if shutil.which(\\\"gsutil\\\") is None: raise RuntimeError(\\\"gsutil binary not found on PATH\\\")\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "CHUNK_ROWS is 500k per file per run, but with many partner files the total local disk usage in work_dir before cleanup could be substantial. The chunks are only deleted in the finally block after upload, so a large run holds all chunks in memory/disk simultaneously. For 100 files at 3GB each, that's 300GB of local temp files.",
+     "evidence": "diff: chunks are written to work_dir, uploaded, then deleted in finally block per file"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "gsutil parallel composite uploads with 150M threshold may create more GCS objects temporarily than the Google Cloud Storage Python client's resumable upload, increasing storage API call costs and object count during upload.",
+     "evidence": "diff: \"-o GSUtil:parallel_composite_upload_threshold=150M\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The PR mixes streaming CSV parsing, gzip compression, subprocess gsutil invocation, and GCS blob management in one module, increasing complexity compared to the previous pandas one-liner. The cleanup logic (delete-then-upload) adds operational risk.",
+     "evidence": "diff: entire file rewritten from 52 to 123 lines with complex error handling"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3306,
+    "tokOut": 929,
+    "usd": 0,
+    "critMs": 55767
+   },
+   "wallMs": 80442
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "Partner-chosen filenames can collide with or overwrite other partners' data because the remote object path is only partitioned by partner and date, not by a unique identifier. A malicious or buggy partner could name a file to collide with another partner's expected output or overwrite existing chunks.",
+     "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{local.name}\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The per-file delete-then-upload pattern creates a window where downstream readers could see an incomplete or missing partition if _SUCCESS is written before all chunks are fully committed to GCS. GCS uploads are not atomic across multiple objects, and the code does not use a staging directory or transactional semantics.",
+     "evidence": "touched_remote = True\n            _delete_remote_chunks(partner, dt, src.stem)\n            for chunk in chunks:\n                _upload(chunk, partner, dt)"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Processing files sequentially with a 1-hour timeout per chunk means a single large or slow file can block the entire job for hours, potentially causing the Airflow task to miss its SLA or be killed by the scheduler, leaving the partition incomplete without _SUCCESS.",
+     "evidence": "for src in sorted(drop_dir.glob(\"*.csv\")):\n        chunks: list[Path] = []"
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The delete-then-upload pattern on retries or re-runs incurs unnecessary GCS delete and upload costs. If a partner re-uploads the same file multiple times or if the job is retried, the previous chunks are deleted and re-uploaded even if they are identical, wasting bandwidth and compute.",
+     "evidence": "_delete_remote_chunks(partner, dt, src.stem)\n            for chunk in chunks:\n                _upload(chunk, partner, dt)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The parity test compares the new streaming path against the old pandas path, but the old path is not actually used in production anymore after this PR is merged. If the old path has bugs or edge cases that are not covered by the test, the new path will inherit them, and the test will pass falsely.",
+     "evidence": "def test_new_path_matches_old_path(tmp_path):\n    src = tmp_path / \"sample.csv\"\n    src.write_text(SAMPLE)\n    chunks = []\n    _write_chunks(src, tmp_path, chunks)\n    assert len(chunks) == 1\n    with gzip.open(chunks[0], \"rt\", newline=\"\") as fh:\n        new_rows = list(csv.reader(fh))\n    assert new_rows == _old_path(SAMPLE)"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The code uses a magic number for the chunk size (500,000 rows) and the upload timeout (3600 seconds) without explaining why these values were chosen. This makes it harder for future maintainers to understand the trade-offs and adjust the values if needed.",
+     "evidence": "CHUNK_ROWS = 500_000\nUPLOAD_TIMEOUT_S = 3600"
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The PR description mentions that the _SUCCESS marker is written only when every file succeeded, but it does not clearly state what happens if the job is killed or fails after writing some chunks but before writing the marker. This could lead to confusion for operators who see partial data in the partition.",
+     "evidence": "The `_SUCCESS` marker is written only when every file succeeded."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4429,
+    "tokOut": 942,
+    "usd": 0,
+    "critMs": 74476
+   },
+   "wallMs": 79437
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "The parity test does not actually verify that the new streaming path produces output identical to the old pandas path. It calls _write_chunks (new path) and compares against _old_path, but _old_path uses the same normalise_row function as _write_chunks. If normalise_row has a bug, both paths produce the same wrong output and the test passes. The test should compare against a known-good fixture or the actual old code path before this PR.",
+     "evidence": "def test_new_path_matches_old_path(tmp_path): ... chunks = []; _write_chunks(src, tmp_path, chunks); ... assert new_rows == _old_path(SAMPLE)"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The gsutil command is constructed with partner-controlled filenames in the destination path without sanitization. While shell injection is prevented by using argument lists, path traversal via filenames like '../../other-partner/file.csv' could write to unintended GCS prefixes. The code assumes filenames from directory listings cannot contain '/', but this is not validated.",
+     "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{local.name}\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The chunk rollover logic has an off-by-one error. When i % CHUNK_ROWS == 0, a new chunk is created, but the first chunk (i=0) is created before any rows are written. However, the chunks list is only appended to when a new chunk is opened, meaning the first chunk is never added to the chunks list until the second chunk is opened. If a file has exactly CHUNK_ROWS rows, only one chunk is created and added, but if it has CHUNK_ROWS+1 rows, two chunks are created but only the first is in the list when the second is opened.",
+     "evidence": "if i % CHUNK_ROWS == 0: if out: out.close() path = out_dir / f\"{src.stem}-{len(chunks):04d}.csv.gz\" out = gzip.open(path, \"wt\", newline=\"\") chunks.append(path)"
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The PR introduces a dependency on gsutil being installed on the worker image, but does not vendor it or specify a version. If gsutil is not installed or is an incompatible version, the task fails. This adds operational complexity and potential for image drift, as noted in the review but not addressed in the code.",
+     "evidence": "def _check_gsutil(): if shutil.which(\"gsutil\") is None: raise RuntimeError(\"gsutil binary not found on PATH\")"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The upload timeout of 1 hour per chunk is a guess and may be too short for large chunks or slow networks. If a chunk upload times out, the entire file fails, even if the upload was nearly complete. This could lead to unnecessary reprocessing of large files.",
+     "evidence": "UPLOAD_TIMEOUT_S = 3600  # per gsutil call; a hung upload fails the file instead of blocking the task"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The code still imports pandas just to create single-row Series objects, which is inefficient and adds an unnecessary dependency. The review notes this but does not provide a plan to remove it.",
+     "evidence": "series = pd.Series({k: (float(\"nan\") if v == \"\" else v) for k, v in row.items()})"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5202,
+    "tokOut": 887,
+    "usd": 0,
+    "critMs": 61775
+   },
+   "wallMs": 83805
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The parity test compares gzipped output from the new path with uncompressed pandas output; csv.reader on gzip.open(..., 'rt') should work, but the test never decompresses the old path, so it's comparing gzip-decoded text vs raw text. However, both csv.reader calls should yield the same rows if the content matches. The real issue: the old path uses df.to_csv(index=False) which does NOT gzip, while the new path writes gzip. The test correctly uses gzip.open for the new path, so this is actually fine. Reconsidering...",
+     "evidence": "with gzip.open(chunks[0], 'rt', newline='') as fh: new_rows = list(csv.reader(fh))"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "In _write_chunks, the chunk index uses len(chunks) which increments as chunks are appended. But chunks is passed in from the caller and already contains any previously written chunks. For the first file this is fine, but if _write_chunks is called multiple times with the same chunks list (which it isn't in this code), it would be off. Actually, looking at the code, chunks is a fresh list per file in ingest_partner, so this is correct. No issue here.",
+     "evidence": "path = out_dir / f\"{src.stem}-{len(chunks):04d}.csv.gz\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The regex in _delete_remote_chunks uses re.escape(prefix) which escapes the '=' in 'dt=YYYY-MM-DD'. However, re.escape in Python 3.7+ only escapes special regex characters, and '=' is not one. So the pattern is fine. But wait - the prefix contains the partner name which could contain regex special characters, and re.escape handles that. The pattern looks correct.",
+     "evidence": "pattern = re.compile(rf\"^{re.escape(prefix)}\\d{{4}}\\.csv\\.gz$\")"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The _normalise function converts empty strings to NaN before calling normalise_row, but normalise_row might do arithmetic or string operations on the values. If normalise_row expects actual values and not NaN, this could cause silent data corruption. The old path had the same behavior (read_csv(dtype=str) converts empty to NaN), so this is preserved. However, the conversion back to empty string on output uses pd.isna which catches both NaN and None, but the input conversion only handles empty strings, not None values from the CSV reader. csv.DictReader returns None for missing values in rows with fewer fields than the header, which would not be converted to NaN before normalise_row.",
+     "evidence": "series = pd.Series({k: (float('nan') if v == '' else v) for k, v in row.items()})"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "When csv.DictReader encounters a row with more fields than the header, the extra values are stored in a list under the key None. This None key would be passed to normalise_row as a Series index, which could cause unexpected behavior or errors not present in the old pandas path (where read_csv would raise an error for inconsistent columns).",
+     "evidence": "for i, row in enumerate(reader):"
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The fieldnames check compares list(norm.keys()) != fieldnames, but dict key order in Python is insertion order, and norm is constructed from the CSV row which preserves column order. However, if normalise_row returns a dict with keys in a different order than the input, the second and subsequent rows would fail even if they have the same columns. The old pandas path with result_type='expand' would use the column order from the first row's returned Series, so this should match. But if normalise_row dynamically determines key order based on input values, this could break.",
+     "evidence": "elif list(norm.keys()) != fieldnames:"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The gsutil upload uses parallel_composite_upload_threshold=150M, but chunks are capped at CHUNK_ROWS rows. If each row is large, a single chunk could exceed 150M and trigger composite upload, which gsutil handles by creating temporary parts. However, if the upload is interrupted during composite assembly, the object might be left in an incomplete state. The code doesn't handle this case - it assumes gsutil either succeeds completely or fails and leaves no object.",
+     "evidence": "\"-o\", \"GSUtil:parallel_composite_upload_threshold=150M\","
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The _clear_success_marker is called at the start of ingest_partner, before any files are processed. If the task is killed immediately after clearing the marker but before processing any files, the partition will have no _SUCCESS marker and no new data, but the old data is still there. This is actually the safe state as described. However, if a re-run is triggered and it clears the marker, then fails on the first file, downstream readers that were using the old _SUCCESS will now see no marker and stop reading, even though the old data is still valid. This is a regression from the old behavior where _SUCCESS was only written at the end and never deleted.",
+     "evidence": "_clear_success_marker(partner, dt)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The code deletes remote chunks for a file before uploading new ones (touched_remote = True; _delete_remote_chunks...). If the upload of the first new chunk fails, the file's old chunks are already deleted, and the best-effort cleanup tries to delete again (finding nothing). The partition now has no chunks for this file. If this is a re-run of an already-complete partition, the file's data is temporarily lost between the delete and the failed upload. While _SUCCESS is not written, the data is gone until the next successful run.",
+     "evidence": "touched_remote = True\n_delete_remote_chunks(partner, dt, src.stem)\nfor chunk in chunks:\n    _upload(chunk, partner, dt)"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The partner parameter is used directly in the GCS path without validation. While the review notes state it's supplied by the DAG and not by the partner's file, there's no validation that it doesn't contain path separators or special characters. If the DAG parameter is ever compromised or misconfigured, it could write to unexpected locations.",
+     "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{local.name}\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Files are processed sequentially, and each file's chunks are uploaded one at a time. For a partner with many large files, this could take a very long time. The timeout is per gsutil call (default 1 hour), but there's no overall timeout for the task. If a partner has 100 files, the task could run for days.",
+     "evidence": "for src in sorted(drop_dir.glob('*.csv')):"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Each chunk upload is a separate gsutil call, which has overhead. For many small files, this could result in a large number of gsutil invocations. However, the chunks are at least CHUNK_ROWS rows each, so this is probably fine for large files.",
+     "evidence": "for chunk in chunks:\n    _upload(chunk, partner, dt)"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The code still imports pandas and uses it for one-row Series construction, which is a bit awkward. The review notes acknowledge this and mention it could be dropped in a follow-up if normalise_row is confirmed to be dict-safe.",
+     "evidence": "import pandas as pd"
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "In _normalise, the conversion back to empty string uses pd.isna(v), which returns True for NaN, None, and pd.NaT. However, if normalise_row returns an actual None value (not from an empty cell), it would be converted to an empty string, changing the data. The old path had the same behavior with to_csv, so this is preserved. But it's worth noting that None and empty string are now conflated.",
+     "evidence": "return {k: ('' if pd.isna(v) else v) for k, v in out.items()}"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5734,
+    "tokOut": 1795,
+    "usd": 0,
+    "critMs": 148244
+   },
+   "wallMs": 170984
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "gsutil credentials are not scoped or validated; workers hold GCS write credentials for the whole raw bucket, so a compromised or misconfigured gsutil call could write outside the intended raw/{partner}/dt={dt}/ prefix. The PR adds no credential scoping or destination validation beyond path construction.",
+     "evidence": "Workers run with TZ=America/Los_Angeles and hold GCS write credentials for the whole raw bucket"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "gsutil version is logged but not pinned or validated; an incompatible gsutil version in the worker image could silently produce different upload behavior (e.g., different composite upload semantics) without failing the task. The PR explicitly defers this as a follow-up.",
+     "evidence": "Pinning it is an image-level change that belongs outside this repo's diff, so it is left as a follow-up."
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "Orphaned temporary composite upload components from interrupted uploads are never cleaned up; the PR acknowledges this and defers a lifecycle rule as a follow-up. With large feeds and retries, this could accumulate significant orphaned storage.",
+     "evidence": "An interrupted composite upload can leave orphaned temporary components under gsutil's own tmp prefix in the bucket. ... A lifecycle rule on that prefix is a bucket-level change left as a follow-up."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The parity test only covers a single-chunk file and does not exercise chunk rollover at CHUNK_ROWS (500k rows). Chunk boundary behavior (header repetition, row splitting) is untested, which is a core risk of the streaming rewrite.",
+     "evidence": "The sample is small and yields a single chunk, so it does not exercise chunk rollover (CHUNK_ROWS). Rollover is covered only by reading the code."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "UPLOAD_TIMEOUT_S defaults to 3600s per chunk as an unmeasured guess. For a 3.1GB feed split into 500k-row chunks, a hung upload could block the task for an hour per chunk with no task-wide timeout, potentially missing the downstream dashboard SLA. The PR defers tuning as a follow-up.",
+     "evidence": "The default is a guess and should be tuned against real chunk sizes."
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Files are processed sequentially with no parallelism and no task-wide execution timeout. For many partner files or very large files, total runtime is unbounded and could exceed Airflow's default task timeout, causing the entire task to fail and leaving the partition without _SUCCESS.",
+     "evidence": "Files are processed sequentially on purpose... this PR adds no task-wide limit. A total bound belongs on the Airflow task (execution_timeout), which is DAG configuration outside this diff."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "gsutil is invoked as an external binary via subprocess rather than using the google-cloud-storage client library already imported. This introduces a dependency on the worker image's gsutil installation and adds a separate failure mode (binary missing, version drift) compared to the library approach.",
+     "evidence": "gsutil is invoked with an argument list, not through a shell"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The _normalise function constructs a pd.Series for every row, which the PR acknowledges costs per-row CPU but is unmeasured. For millions of rows, this could be a significant performance regression compared to the vectorized pandas apply, potentially offsetting the memory savings.",
+     "evidence": "Pandas is still imported, but only for one-row Series construction, so memory stays flat. This costs some per-row CPU, and I have not measured it."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 6628,
+    "tokOut": 802,
+    "usd": 0,
+    "critMs": 64526
+   },
+   "wallMs": 87834
+  }
+ ],
+ "artifact": "PR #58: Stream partner feeds instead of loading into pandas; upload with gsutil\n\nThe Northwind feed hit 3.1 GB last week and the ingest task OOM-killed the worker.\nThis rewrites `ingest_partner` to stream rows through the normaliser and write gzip CSV chunks, then push them with gsutil. gsutil's parallel composite uploads are intended for large objects. I have not benchmarked them against the client library's resumable uploads, so treat the upload tool as a choice to confirm rather than a measured win.\nPer-file failures no longer stop the remaining files from being attempted. They are logged and counted, and the task fails at the end if any file failed. The `_SUCCESS` marker is written only when every file succeeded.\n\nReview notes:\n- **`normalise_row` input contract (was the merge blocker):** I could not confirm from the diff that `normalise_row` uses only key access, so the PR no longer depends on that. Each streamed row is wrapped in a `pd.Series` before the call (`_normalise`), so `normalise_row` sees the same type it saw under `df.apply(axis=1)`, including positional indexing and Series methods. Differences from the old path are handled explicitly:\n  - `read_csv(dtype=str)` turned empty cells into NaN, whereas `csv.DictReader` gives `\"\"`. Empty strings are converted to NaN before the call, and NaN is converted back to `\"\"` on write (the old `to_csv` wrote NaN as an empty cell), so inputs and outputs match the old path.\n  - **Short rows:** `csv.DictReader` fills missing trailing fields with `None`, whereas `read_csv` filled them with NaN. `_normalise` now treats `None` like `\"\"` and converts it to NaN before the call, so `normalise_row` never sees `None` from a short row. The parity sample includes a short row.\n  - **Long rows:** `csv.DictReader` stores extra fields in a list under the key `None`. `read_csv` raised a parser error for such rows, so `_write_chunks` now fails the file with a clear error instead of passing a `None` key to `normalise_row`. A test covers this.\n  - `result_type=\"expand\"` flattened a returned Series or dict into columns. `_normalise` accepts a Series or a dict and converts it to a dict. A nested value (dict, list, tuple or set) raises a `TypeError` that fails the file, because `expand` would not have produced a flat column for it either.\n  - **None vs empty string on output:** `pd.isna` maps NaN, `None` and `NaT` returned by `normalise_row` to an empty cell, so those are conflated. The old `to_csv` path did exactly the same, so this is preserved deliberately.\n  - Pandas is still imported, but only for one-row Series construction, so memory stays flat. This costs some per-row CPU, and I have not measured it.\n  - `tests/test_partner_ingest_parity.py` is added: it runs the old pandas path and the new streaming path on the same sample (including empty cells and a short row) and asserts identical rows and columns. This must be green in CI before merge. If `normalise_row` is later confirmed to be dict-safe, the Series wrapper can be dropped in a follow-up.\n  - **What the parity test does and does not cover:** both paths deliberately call the same `normalise_row`. The test checks that the refactor's own changes (streaming, the Series wrapper, NaN/empty-string conversion, CSV writing) do not alter output. It does not check that `normalise_row` is correct, which is out of scope here and unchanged by this PR. A bug in `normalise_row` would be preserved, by design, and would be fixed in a separate PR. Sharing the function is what isolates the refactor as the only variable, and a frozen fixture would just encode today's `normalise_row` output.\n  - The old path is kept in the test only as a reference oracle for this refactor, not as production code. The goal of this PR is to preserve existing behaviour, so any quirk of the old path is carried over deliberately, and a behaviour change belongs in a separate PR. The sample is small and yields a single chunk, so it does not exercise chunk rollover (`CHUNK_ROWS`). Rollover is covered only by reading the code. The test reads the gzipped new output with `gzip.open(..., \"rt\")` and compares parsed rows with the old path's uncompressed `to_csv` text parsed the same way, so compression is not part of the comparison.\n- `partition_date()` is unchanged and still returns the UTC date (workers run with TZ=America/Los_Angeles).\n- gsutil is invoked with an argument list, not through a shell, so partner-chosen filenames cannot inject commands. The task also fails fast if the `gsutil` binary is missing.\n- **Object path and collisions:** the destination is `raw/{partner}/dt={dt}/{file}-NNNN.csv.gz`. `partner` is a path component supplied by the DAG, not by the partner's file, and filenames come from a directory listing so they cannot contain `/`. That is an OS guarantee, since a directory entry name cannot include a path separator, so a value like `../../other-partner/file.csv` cannot occur as a filename. GCS object names are also flat strings, so `..` or `.` inside a name has no traversal meaning there. A filename therefore cannot reach another partner's prefix. Within one partner and date, chunk names are derived from the file's own stem, and the prune step only matches that stem's exact `-NNNN.csv.gz` names. Replacing a partner's own earlier output for the same file and date is the intended re-run behaviour, not a collision.\n- **gsutil version:** the binary is not vendored, so the worker image must provide it. Pinning it is an image-level change that belongs outside this repo's diff, so it is left as a follow-up. A missing or incompatible gsutil does not fail silently. A non-zero exit raises and fails the file and the task, and `_SUCCESS` is not written. To make drift easy to spot, the task now logs `gsutil version` at startup, and it fails fast if that command fails.\n- **Composite uploads and interruption:** with `parallel_composite_upload_threshold=150M`, a chunk above that size is uploaded as temporary component objects and then assembled with a compose call. The final object only appears when the compose succeeds, so an interrupted upload leaves no partial `{file}-NNNN.csv.gz`; `gsutil cp` exits non-zero and the file fails as described above. An interrupted composite upload can leave orphaned temporary components under gsutil's own tmp prefix in the bucket. They never match the `{stem}-NNNN.csv.gz` pattern, so they are not read as data. A lifecycle rule on that prefix is a bucket-level change left as a follow-up.\n- Each gsutil call has a timeout (`UPLOAD_TIMEOUT_S`, default 1 hour per chunk, overridable through the `UPLOAD_TIMEOUT_S` environment variable so it can be tuned without a code change). `subprocess.run` kills the child on timeout and raises `TimeoutExpired`. That is handled like any other per-file failure: it is logged, counted, and `_SUCCESS` is not written. A hung upload therefore cannot block the task indefinitely. The default is a guess and should be tuned against real chunk sizes. Chunks are capped at `CHUNK_ROWS` rows, so a single call handles a bounded amount of data, and a timeout means a stuck transfer rather than a slow-but-progressing one at any plausible bandwidth.\n- **Runtime and SLA:** files are processed sequentially on purpose, to keep local disk bounded to one file's chunks. The timeout bounds each hung call, not total runtime, and this PR adds no task-wide limit. A total bound belongs on the Airflow task (`execution_timeout`), which is DAG configuration outside this diff and should be set there once real run times are known. If the task is killed or runs long, the partition has no `_SUCCESS`, which is the safe state for readers, and the retry starts from a clean slate. Parallelising files would raise peak disk usage and is left as a follow-up.\n- `-q` only silences gsutil's progress and status output. Errors still go to stderr, and `check=True` raises `CalledProcessError` on a non-zero exit. The failure is then logged with `log.exception` and counted, so `-q` does not hide upload failures.\n- **Local disk:** chunks are written to `work_dir` and deleted in a per-file `finally` block, so only one file's chunks exist locally at a time, never all files at once. Nothing is held in memory beyond the current row. Peak local usage is roughly the gzipped size of the single largest file, so `work_dir` must have room for that (not for the sum of all files). Files are processed sequentially.\n- Output layout stays flat under `raw/{partner}/dt={dt}/`. Objects are named `{file}-{chunk:04d}.csv.gz`, where the old name was `{file}.csv.gz`. Readers that glob `*.csv.gz` in the partition keep working. Readers that expect the exact old object name need updating, since a file can now span several chunks.\n- Every chunk starts with its own header row, because each chunk gets its own writer. This matches the old contract: every `.csv.gz` object already carried exactly one header, so a reader that globs the partition and parses each object independently needs no change. Chunks are deliberately self-describing so they can be read independently. The extra header per 500k rows is negligible.\n- **Chunk bookkeeping:** a chunk's path is appended to `chunks` in the same block that opens it, so the list always includes the chunk currently being written. A file with exactly `CHUNK_ROWS` rows produces one chunk and `CHUNK_ROWS + 1` rows produces two, both of which are in the list for upload and cleanup. If a failure happens mid-file, the open chunk is closed in `finally` and is already in the list, so local cleanup removes it. `chunks` is a fresh list per file in `ingest_partner`, so `len(chunks)` is the chunk index within that file.\n- **Column schema** is fixed per source file. The header comes from the first normalised row, and every later row must have the same set of keys. Key order is not compared: `DictWriter` writes each row by the header's field order, which matches the old `expand` behaviour of aligning columns by name from the first row. A row whose key set differs fails the file with a clear error instead of producing chunks with inconsistent schemas. Every chunk of a file uses the same fieldnames.\n- **Retries, re-runs and the `_SUCCESS` marker:** `_SUCCESS` is written only after every `gsutil cp` has returned (`subprocess.run(..., check=True)` blocks until the upload and any composite assembly finish), so it is never written ahead of the chunks. Because a re-run rewrites objects one at a time, the task deletes any `_SUCCESS` left by an earlier run of the same partner and date before it touches any chunk. A re-run of an already-complete partition therefore cannot expose a marker over a partition that is being rewritten. This is a deliberate trade-off: if the re-run fails, the partition stays marker-less, so readers gating on the old marker stop reading it even though some old data may remain. Under the old code a re-run overwrote objects under a live marker, so readers could see a half-rewritten partition. A marker-less partition is incomplete by contract, and readers must not read it.\n- **Replacing a file's earlier chunks:** chunks are uploaded first, overwriting same-named objects in place, and only then are leftover chunks of the same file (index at or above the new chunk count) pruned. The match is an exact regex on the stem, not a wildcard, so partner-chosen names containing `*`, `?` or `[` are safe. The regex is anchored and requires exactly four digits then `.csv.gz` after `{stem}-`. A stem such as `file-1` therefore only matches its own `file-1-0000.csv.gz`, not another file's chunks (for example, `file`'s chunks are `file-0000.csv.gz`, which do not match `file-1-`). A retry or a partner re-upload that yields fewer chunks cannot leave stale chunks behind. Because nothing is deleted before the new chunk is uploaded, a failed first upload does not remove the file's earlier chunks, so there is no window where the file's data is deleted before its replacement exists. If a file fails partway, its remote chunks may be a mix of old and new, but the partition has no `_SUCCESS`, the task fails, and the next retry overwrites and prunes the file again. Files that succeeded earlier in the same run stay in the partition. As before, readers must gate on `_SUCCESS`, which is written only when every file succeeded.\n- **Cost of re-runs:** the prune step is needed for correctness (stale chunks when a re-run produces fewer chunks). A re-run re-normalises the file anyway, so skipping identical uploads would need content hashing or comparison against remote objects. GCS ingress is free and the list and delete operations are a small number of cheap calls per file, so I judged the saving not worth the added complexity. This can be revisited if retries turn out to be frequent.\n- Local chunks are removed in a `finally` block even when a file fails, and a chunk is deleted locally only after its upload has finished.\n\ndiff --git a/pipelines/partner_ingest.py b/pipelines/partner_ingest.py\nindex a17c3e2..f48b0d9 100644\n--- a/pipelines/partner_ingest.py\n+++ b/pipelines/partner_ingest.py\n@@ -1,52 +1,167 @@\n+import csv\n+import gzip\n import logging\n+import os\n+import re\n+import shutil\n+import subprocess\n from datetime import datetime, timezone\n from pathlib import Path\n\n import pandas as pd\n+from google.api_core.exceptions import NotFound\n from google.cloud import storage\n\n from pipelines.normalise import normalise_row\n from pipelines.markers import write_success_marker\n\n log = logging.getLogger(__name__)\n BUCKET = \"acme-retail-raw\"\n CHUNK_ROWS = 500_000\n+# Per gsutil call; a hung upload fails the file instead of blocking the task.\n+# Default is a guess; override with the UPLOAD_TIMEOUT_S env var once real chunk sizes are known.\n+UPLOAD_TIMEOUT_S = int(os.environ.get(\"UPLOAD_TIMEOUT_S\", \"3600\"))\n\n\n def partition_date() -> str:\n     return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n\n\n-def ingest_partner(partner: str, drop_dir: Path) -> None:\n-    dt = partition_date()\n-    client = storage.Client()\n-    bucket = client.bucket(BUCKET)\n-    for src in sorted(drop_dir.glob(\"*.csv\")):\n-        df = pd.read_csv(src, dtype=str)\n-        df = df.apply(normalise_row, axis=1, result_type=\"expand\")\n-        blob = bucket.blob(f\"raw/{partner}/dt={dt}/{src.stem}.csv.gz\")\n-        blob.upload_from_string(df.to_csv(index=False, compression=\"gzip\"))\n-        log.info(\"uploaded %s rows=%d\", src.name, len(df))\n-    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")\n+def _normalise(row: dict) -> dict:\n+    # Preserve the old contract: normalise_row receives a pd.Series, and empty\n+    # cells are NaN (read_csv(dtype=str) behaviour), not \"\". DictReader gives\n+    # None for trailing fields missing from a short row; read_csv gave NaN.\n+    series = pd.Series(\n+        {k: (float(\"nan\") if v == \"\" or v is None else v) for k, v in row.items()}\n+    )\n+    out = normalise_row(series)\n+    # df.apply(result_type=\"expand\") accepted a Series or a dict.\n+    if isinstance(out, pd.Series):\n+        out = out.to_dict()\n+    if not isinstance(out, dict):\n+        raise TypeError(f\"normalise_row returned {type(out).__name__}, expected Series or dict\")\n+    if any(isinstance(v, (dict, list, tuple, set)) for v in out.values()):\n+        raise TypeError(\"normalise_row returned a nested value; expected flat columns\")\n+    # Old to_csv wrote NaN (and None) as an empty cell.\n+    return {k: (\"\" if pd.isna(v) else v) for k, v in out.items()}\n+\n+\n+def _write_chunks(src: Path, out_dir: Path, chunks: list[Path]) -> None:\n+    # Appends to the caller's list so chunks written before a failure can still be cleaned up.\n+    with src.open(newline=\"\") as fh:\n+        reader = csv.DictReader(fh)\n+        fieldnames = None\n+        writer = None\n+        out = None\n+        try:\n+            for i, row in enumerate(reader):\n+                if None in row:\n+                    # DictReader puts surplus fields under the None key; read_csv\n+                    # raised on such rows, so fail the file rather than pass them on.\n+                    raise ValueError(\n+                        f\"{src.name}: data row {i + 1} has more fields than the header\"\n+                    )\n+                norm = _normalise(row)\n+                if fieldnames is None:\n+                    fieldnames = list(norm.keys())\n+                elif set(norm.keys()) != set(fieldnames):\n+                    # Fail loudly rather than write chunks with inconsistent schemas.\n+                    # Order is not compared: DictWriter writes by fieldnames order.\n+                    raise ValueError(\n+                        f\"{src.name}: data row {i + 1} columns differ from the first row\"\n+                    )\n+                if i % CHUNK_ROWS == 0:\n+                    if out:\n+                        out.close()\n+                    path = out_dir / f\"{src.stem}-{len(chunks):04d}.csv.gz\"\n+                    out = gzip.open(path, \"wt\", newline=\"\")\n+                    # Appended in the same block that opens it, so the list always\n+                    # includes the chunk currently being written (including the first).\n+                    chunks.append(path)\n+                    # Every chunk gets its own header, with the file-wide fieldnames.\n+                    writer = csv.DictWriter(out, fieldnames=fieldnames)\n+                    writer.writeheader()\n+                writer.writerow(norm)\n+        finally:\n+            if out:\n+                out.close()\n+\n+\n+def _prune_remote_chunks(partner: str, dt: str, stem: str, keep: int) -> None:\n+    # Remove {stem}-NNNN.csv.gz objects for this file with index >= keep, i.e.\n+    # leftovers from an earlier run that produced more chunks. Uses a prefix\n+    # listing plus an exact regex (not gsutil wildcards), because partner-chosen\n+    # stems may contain wildcard characters or look like another file's prefix.\n+    # The regex is anchored and requires exactly four digits after \"{stem}-\", so\n+    # e.g. stem \"file-1\" cannot match chunks belonging to a different stem.\n+    prefix = f\"raw/{partner}/dt={dt}/{stem}-\"\n+    pattern = re.compile(rf\"^{re.escape(prefix)}(\\d{{4}})\\.csv\\.gz$\")\n+    bucket = storage.Client().bucket(BUCKET)\n+    for blob in bucket.list_blobs(prefix=prefix):\n+        m = pattern.match(blob.name)\n+        if m and int(m.group(1)) >= keep:\n+            blob.delete()\n+\n+\n+def _clear_success_marker(partner: str, dt: str) -> None:\n+    # Remove a _SUCCESS left by an earlier run of this partition before any chunk\n+    # is rewritten, so readers gating on it never see a marker over a\n+    # partition that is being replaced. A missing marker is the normal first-run case.\n+    blob = storage.Client().bucket(BUCKET).blob(f\"raw/{partner}/dt={dt}/_SUCCESS\")\n+    try:\n+        blob.delete()\n+    except NotFound:\n+        pass\n+\n+\n+def _upload(local: Path, partner: str, dt: str) -> None:\n+    # Flat layout, as before: raw/{partner}/dt={dt}/<object>.csv.gz\n+    # partner is fixed by the caller and local.name comes from a directory listing\n+    # (an OS directory entry name cannot contain \"/\"), so a file cannot address\n+    # another partner's prefix. GCS object names are flat strings, so \"..\" has no\n+    # traversal meaning there either.\n+    dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{local.name}\"\n+    # Argument list, no shell: partner/file names are partner-controlled.\n+    # subprocess.run blocks until gsutil (including composite assembly) exits.\n+    # The final object only appears once composite assembly succeeds.\n+    # -q only silences progress output; errors still reach stderr and check=True\n+    # raises on a non-zero exit. timeout kills a hung gsutil and raises TimeoutExpired.\n+    subprocess.run(\n+        [\n+            \"gsutil\",\n+            \"-q\",\n+            \"-o\",\n+            \"GSUtil:parallel_composite_upload_threshold=150M\",\n+            \"cp\",\n+            str(local),\n+            dest,\n+        ],\n+        check=True,\n+        timeout=UPLOAD_TIMEOUT_S,\n+    )\n+\n+\n+def _check_gsutil() -> None:\n+    if shutil.which(\"gsutil\") is None:\n+        raise RuntimeError(\"gsutil binary not found on PATH\")\n+    # Log the version so image drift is visible in task logs.\n+    res = subprocess.run(\n+        [\"gsutil\", \"version\"],\n+        check=True,\n+        capture_output=True,\n+        text=True,\n+        timeout=60,\n+    )\n+    log.info(\"using %s\", res.stdout.strip())\n+\n+\n+def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None:\n+    _check_gsutil()\n+    dt = partition_date()\n+    # Un-publish the partition before rewriting anything in it (see review notes).\n+    _clear_success_marker(partner, dt)\n+    ok = failed = 0\n+    for src in sorted(drop_dir.glob(\"*.csv\")):\n+        chunks: list[Path] = []\n+        try:\n+            _write_chunks(src, work_dir, chunks)\n+            # Upload first (same-named objects are overwritten in place), then prune\n+            # leftover chunks from an earlier run that had more chunks. Nothing is\n+            # deleted before its replacement exists.\n+            for chunk in chunks:\n+                _upload(chunk, partner, dt)\n+            _prune_remote_chunks(partner, dt, src.stem, keep=len(chunks))\n+            ok += 1\n+        except Exception:\n+            # Remote chunks may be a mix of old and new; the partition stays without\n+            # _SUCCESS and the next retry overwrites and prunes this file again.\n+            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n+            failed += 1\n+        finally:\n+            # Per-file cleanup: only one file's chunks are on local disk at a time.\n+            for chunk in chunks:\n+                chunk.unlink(missing_ok=True)\n+    log.info(\"partner=%s dt=%s ok=%d failed=%d\", partner, dt, ok, failed)\n+    if failed:\n+        # Do not write _SUCCESS: downstream treats it as \"partition complete\".\n+        raise RuntimeError(f\"partner={partner} dt={dt}: {failed} file(s) failed\")\n+    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")\ndiff --git a/tests/test_partner_ingest_parity.py b/tests/test_partner_ingest_parity.py\nnew file mode 100644\n--- /dev/null\n+++ b/tests/test_partner_ingest_parity.py\n@@ -0,0 +1,49 @@\n+import csv\n+import gzip\n+import io\n+\n+import pandas as pd\n+import pytest\n+\n+from pipelines.normalise import normalise_row\n+from pipelines.partner_ingest import _write_chunks\n+\n+# Includes empty cells and a short row (D4 has no price field).\n+SAMPLE = \"sku,qty,price\\nA1,3,9.99\\nB2,,4.50\\nC3,7,\\nD4,5\\n\"\n+\n+\n+# The pandas path is kept here only as a reference oracle: this refactor must\n+# preserve existing output, so the test pins the new path to the old behaviour.\n+# Both paths intentionally share normalise_row, so the test isolates the\n+# refactor (streaming, Series wrapper, NaN/\"\" handling, CSV writing). It does\n+# not validate normalise_row itself, which this PR does not change.\n+# Behaviour changes belong in a separate PR. Sample is single-chunk by design.\n+def _old_path(text: str) -> list[list[str]]:\n+    df = pd.read_csv(io.StringIO(text), dtype=str)\n+    df = df.apply(normalise_row, axis=1, result_type=\"expand\")\n+    return list(csv.reader(io.StringIO(df.to_csv(index=False))))\n+\n+\n+def test_new_path_matches_old_path(tmp_path):\n+    src = tmp_path / \"sample.csv\"\n+    src.write_text(SAMPLE)\n+    chunks = []\n+    _write_chunks(src, tmp_path, chunks)\n+    assert len(chunks) == 1\n+    # New path is gzipped; decode it, then compare parsed rows to the old path's text.\n+    with gzip.open(chunks[0], \"rt\", newline=\"\") as fh:\n+        new_rows = list(csv.reader(fh))\n+    assert new_rows == _old_path(SAMPLE)\n+\n+\n+def test_row_with_extra_fields_fails_the_file(tmp_path):\n+    # read_csv raised on rows longer than the header; the new path must not pass\n+    # DictReader's None-keyed overflow list through to normalise_row.\n+    src = tmp_path / \"long.csv\"\n+    src.write_text(\"sku,qty\\nA1,3,unexpected\\n\")\n+    with pytest.raises(ValueError):\n+        _write_chunks(src, tmp_path, [])",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 44946,
+  "tokOut": 52427,
+  "usd": 0.704026,
+  "critMs": 304277
+ },
+ "status": "cap"
+}

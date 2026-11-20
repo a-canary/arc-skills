@@ -1,0 +1,89 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "plan-10",
+ "rep": 1,
+ "wallMs": 331860,
+ "verdict": "ATTACKS",
+ "confidence": 0.8,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Processor deletions (Amplitude, Customer.io, Zendesk, Stripe, Apple revoke) run only after the DB transaction commits. The same transaction deletes the rows holding the identifiers needed to call them (Stripe customer, Apple refresh token, processor IDs). Nothing durable records the pending work, so a crash between commit and the calls, or any retry, has nothing to address. Third-party erasure can be lost, which undermines the Art. 17 claim.",
+   "evidence": "\"each account is one DB transaction across `users` and the 23 tables that reference it\" … \"After the DB transaction commits: Amplitude … Sign in with Apple users: `POST /auth/revoke`\" … \"Each call retries with exponential backoff for up to 7 days\"; ABSENT: outbox or processor-work table written in the same transaction, or where processor IDs persist"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The irreversible purge job has no stop control. The rollback section says the job ignores the feature flag. The only safeguard is a dry run of the first batch, so a bad registry entry or purge bug during an incident cannot be halted.",
+   "evidence": "\"Requests already confirmed are still purged on schedule (the purge job ignores the flag)\"; ABSENT: kill switch, pause flag or batch cap for AccountPurgeJob"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The restore guarantee does not hold as written. `deleted_accounts` lives in the same Postgres database that is restored from a snapshot, so a restore to an older snapshot also loses the tombstones for later purges. The runbook would then have nothing to re-apply. The plan does not say the tombstones are exported or stored outside the snapshot.",
+   "evidence": "\"Table `deleted_accounts` keeps only purged user IDs and dates (no PII); the restore runbook re-applies purges from it after any restore\"; ABSENT: tombstone storage outside the DB or a pre-restore export step"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "No state machine, lock or re-check is defined between 'Keep my account' / the email cancel link and the nightly purge. A user who restores while the purge has already selected the account can race it, and a purge that commits after the user chose to keep the account cannot be undone.",
+   "evidence": "\"Logging in during the 14 days … restores the account exactly as it was\" alongside \"Nightly `AccountPurgeJob` processes accounts whose grace period has ended\"; ABSENT: status field, row lock or purge-time state check"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Observability stops at a dashboard. No alert covers the nightly job failing or not running, a backlog of accounts past their grace period, or processor failures. Escalation after the 7-day window depends on a single privacy lead with no SLA or backup. The 21-day target and the one-month Art. 17 deadline could therefore be missed silently.",
+   "evidence": "\"A dashboard shows pending, completed and failed per processor.\" / \"opens a `purge-failed` ticket for the privacy lead\"; ABSENT: alert thresholds, paging, on-call or backup owner"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "'Nothing else is kept' and 'no other system holds user-level data' sit alongside 30-day logs and Sentry reports and 35-day snapshots, which are outside the purge. The retention is disclosed in the privacy policy, but the claim is inconsistent. Push providers are not named in the processor list despite push tokens being held, and the plan does not say the backup copies are put beyond use.",
+   "evidence": "\"Nothing else is kept.\" vs \"Application logs and Sentry error reports have 30-day retention\" and \"Postgres snapshots roll off after 35 days and are not edited.\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "The emailed data-export ZIP can be delivered after deletion is confirmed. The plan does not state where the file is stored, how long it lives, or whether the purge removes it.",
+   "evidence": "\"An export requested here is still delivered after you confirm deletion.\"; ABSENT: export storage and retention"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The registry CI check matches only `user_id` and `*_user_id` columns and validates only presence, not the chosen action. Differently named ownership columns (owner_id, author_id) are missed, and a wrong delete-versus-nullify choice is irreversible. 'New tables cannot be forgotten' is overstated.",
+   "evidence": "\"A CI test fails if any such column in `db/schema.rb` is missing from the registry, so new tables cannot be forgotten.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "'Keep my account' only unsets `cancel_at_period_end`. If the billing period ends during the 14-day grace, the subscription is already cancelled, so restoring 'exactly as it was' is false for web subscribers.",
+   "evidence": "\"\\\"Keep my account\\\" unsets it.\" vs \"restores the account exactly as it was\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The expiry and single-use properties of the logged-out deletion confirmation link are not specified, although clicking it counts as re-auth. Public endpoint email volume is limited only per IP and per address, so there is no global send ceiling.",
+   "evidence": "\"we email a confirmation link to the account address, and clicking it counts as re-auth.\" / \"5/hour per IP and 3/day per email address\""
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "Screen 1 says data is deleted after 14 days but does not say the account is hidden immediately at confirm. The Stripe subscription notice has no specified copy, and nothing reminds the user before the purge.",
+   "evidence": "\"permanently deleted 14 days after you confirm\" vs \"The account is deactivated: hidden from leaderboards, friends and clubs\"; \"Subscription notice, only when relevant (§3)\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The listed tests cover Stripe test mode and the Apple sandbox only. The Amplitude, Customer.io and Zendesk deletion paths are not verified in staging. The `deleted_accounts` 'no PII' label and the invoice retention duration are unsupported.",
+   "evidence": "\"Tests: request spec per registry table; staging run with 500 synthetic accounts … Stripe test-mode … Apple sandbox revoke\"; \"statutory retention period under §147 AO\""
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 72235,
+  "tokOut": 50258,
+  "usd": 0.13768936,
+  "critMs": 64374
+ }
+}

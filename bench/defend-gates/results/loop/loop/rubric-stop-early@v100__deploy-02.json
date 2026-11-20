@@ -1,0 +1,84 @@
+{
+ "approach": "rubric-stop-early@v100",
+ "case": "deploy-02",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Migration 0148 drops the legacy_legs column that the v4.18.2 orders-svc reads for template endpoints. The rollback plan rolls back the service to v4.18.2 but declares migrations 'forward-only' with no down migration, so a rollback after 0148 will leave the old service unable to read templates. This violates the agreed 30-minute rollback-able requirement.",
+     "evidence": "ALTER TABLE order_templates DROP COLUMN legacy_legs; ... kubectl rollout undo deploy/orders-svc to v4.18.2 ... Migrations are forward-only; no down migrations are needed for this release."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1697,
+    "tokOut": 167,
+    "usd": 0,
+    "critMs": 34807
+   },
+   "wallMs": 226751
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "compliance",
+     "severity": "blocker",
+     "claim": "The launch announcement states options trades have 'zero commissions and zero fees', which directly contradicts the release notes that options fees are $0.50/contract and regulatory fees still apply. This is a materially misleading public communication under FINRA Rule 2210.",
+     "evidence": "Launch: 'trade stocks, ETFs and options with zero commissions and zero fees' vs Release notes: 'options contract fee lowered to $0.50 per contract (was $0.65)'"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1978,
+    "tokOut": 133,
+    "usd": 0,
+    "critMs": 30154
+   },
+   "wallMs": 412233
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "compliance",
+     "severity": "blocker",
+     "claim": "The launch announcement is not fair and balanced under FINRA Rule 2210 — it leads with a promotional claim about a fee reduction but omits the key risk disclosure that options involve substantial risk of loss and are not suitable for all investors.",
+     "evidence": "'And we just made options cheaper: options contract fees are now $0.50 per contract (was $0.65). Stocks and ETFs remain commission-free. Regulatory fees (SEC, FINRA TAF) still apply to sells.' — no options risk disclosure present"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1998,
+    "tokOut": 143,
+    "usd": 0,
+    "critMs": 31791
+   },
+   "wallMs": 342989
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2159,
+    "tokOut": 17,
+    "usd": 0,
+    "critMs": 11113
+   },
+   "wallMs": 349322
+  }
+ ],
+ "artifact": "# Release proposal: BrokerLite 5.0 — Quick Reorder\n\nRelease manager: M. Okafor · Window: Tue 2026-11-10, 06:00–07:30 ET (pre-market) · Change ticket: CHG-30551\n\n## Components\n\n| Component | From | To |\n|---|---|---|\n| iOS app | 4.18.2 | 5.0.0 (App Store phased release) |\n| Android app | 4.18.2 | 5.0.0 (Play staged rollout) |\n| api (orders-svc) | v4.18.2 | v5.0.0 |\n| DB migrations | 0146 | 0147 (0148 deferred to a later release, see below) |\n\n## Release notes (customer-facing, App Store / Play)\n\n- **Quick Reorder**: open any filled order in History and tap \"Reorder\" to prefill a new ticket with the same symbol, side, quantity and order type. You always land on the review sheet with the live quote and estimated cost, and you still slide to submit.\n- **Options pricing update**: options contract fee lowered to $0.50 per contract (was $0.65). Stock and ETF trades remain commission-free. Regulatory fees (SEC, FINRA TAF) still apply to sells.\n- Saved order templates now support multi-leg options strategies.\n- Fixes: watchlist sort order persists across restarts; dark mode chart axis labels.\n\n## Engineering notes\n\n- Saved templates gain a new column `order_templates.legs_json` (jsonb), which is what enables multi-leg templates. The existing `order_templates.legacy_legs` (pipe-delimited text, read by the 4.x orders-svc template endpoints) is **kept in place** in this release so v4.18.2 keeps working after a rollback.\n- Compatibility window: v5.0.0 reads `legs_json` and dual-writes `legacy_legs` for every template it creates or edits. `legs_json` is nullable at the DB level (the application enforces presence), so v4.18.2 can still insert templates after a rollback.\n- Templates that the legacy pipe-delimited format cannot represent (new multi-leg strategies) are verified in the staging rollback rehearsal for v4.18.2 behavior before the window; the result is attached to CHG-30551.\n- Reorder from History reuses the template prefill path; no new order-entry endpoint.\n- If the market is closed, Reorder prefills but the review sheet shows the existing \"Queued for open\" banner and defaults market orders to limit at last close (unchanged behavior from 4.x).\n\n### Migration 0147_template_legs_json.sql\n\n```sql\nBEGIN;\nALTER TABLE order_templates ADD COLUMN legs_json jsonb;\nUPDATE order_templates\n   SET legs_json = legacy_legs_to_json(legacy_legs);\nCOMMIT;\n```\n\n### Migration 0148_drop_legacy_legs.sql (NOT part of this release)\n\nDeferred to a follow-up change (new ticket) once 5.0 is stable and rollback to 4.x is no longer needed (no earlier than the 5.0 phased release reaching 100% and a full week of clean monitoring). At that point no deployed service reads `legacy_legs`.\n\n```sql\nBEGIN;\nALTER TABLE order_templates DROP COLUMN legacy_legs;\nDROP FUNCTION legacy_legs_to_json(text);\nCOMMIT;\n```\n\n## QA summary\n\n- Regression suite (1,284 cases) on staging: pass.\n- Reorder: equities, ETFs, single-leg and 2/3/4-leg options, fractional shares, closed-market queueing: pass.\n- Migration 0147 dry run against a prod snapshot (2.9M templates): 41s, 0 conversion errors.\n- Accessibility: VoiceOver/TalkBack pass on History and Reorder review sheet.\n- Rollback rehearsal on staging (v5.0.0 → v4.18.2 after 0147, including template read/create): required to pass before the window.\n\n## Rollout plan\n\n1. 06:00 ET apply migration 0147 only.\n2. 06:10 ET deploy orders-svc v5.0.0 (rolling, 12 pods).\n3. 06:30 ET smoke test with house accounts in the paper environment and one live house account.\n4. Mobile: App Store phased release (7-day ramp) and Play staged rollout 5% → 20% → 50% → 100% over 6 days.\n5. Monitoring: order reject rate, template endpoint 5xx, crash-free sessions ≥ 99.6%.\n\n## Rollback plan\n\n- Trigger: orders-svc 5xx > 1% for 5 min, or order reject rate +50% over baseline.\n- Action: `kubectl rollout undo deploy/orders-svc` to v4.18.2 (target: complete within 15 min, well inside the 30-minute rollback SLO).\n- Migration 0147 is additive (new nullable column only) and leaves `legacy_legs` untouched, so v4.18.2 runs against the migrated schema without a down migration. No destructive migration ships in this release.\n- Mobile: halt phased release; 5.0 clients fall back to hiding Reorder if `/v5/templates` returns 404.\n\n## Launch announcement (blog + X, scheduled 09:00 ET)\n\n> **BrokerLite 5.0 is here.** Rebuy your winners in one tap with Quick Reorder. And we just made options cheaper: options contract fees are now $0.50 per contract (was $0.65). Stocks and ETFs remain commission-free. Regulatory fees (SEC, FINRA TAF) still apply to sells. Options involve risk and are not suitable for all investors; you can lose the entire amount invested, and multi-leg strategies can carry additional risk. Read the options disclosure document (Characteristics and Risks of Standardized Options) before trading: [link]. Update the app today.\n\nRule 2210 requirements for this announcement:\n- The options risk statement must appear in the body of both the blog post and the X post, not only behind a link or in a reply. If the X post cannot fit the full copy, shorten the promotional language rather than the disclosure.\n- Final copy must be reviewed and approved by Compliance (a registered principal) before scheduling, and the approval is recorded on CHG-30551. The 09:00 ET post is not scheduled until then.",
+ "fixerUsage": {
+  "calls": 3,
+  "tokIn": 8257,
+  "tokOut": 7115,
+  "usd": 0.104166,
+  "critMs": 41344
+ },
+ "status": "cleared"
+}

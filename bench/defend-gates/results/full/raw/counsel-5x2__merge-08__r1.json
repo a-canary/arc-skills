@@ -1,0 +1,83 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-08",
+ "rep": 1,
+ "wallMs": 293978,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "The replace directive points to ../zap, a sibling directory outside the repo that CI's clean checkout does not have. The module graph cannot resolve and the distributed binary cannot be built from main.",
+   "evidence": "+replace go.uber.org/zap => ../zap"
+  },
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "A local-path replace compiles whatever sits in an out-of-tree ../zap checkout into the binary distributed to on-call laptops that run against production fleets. This bypasses go.sum verification and the reviewed upstream module, and no go.sum change appears in the diff.",
+   "evidence": "+replace go.uber.org/zap => ../zap (no go.sum change in diff)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "printPlan does not reproduce computeBatches. It sizes batches with floor over len(hosts) while computeBatches uses ceil over len(rest), so 10 hosts at 0.25 prints 2 per batch where the real run uses 3, and 61 hosts prints 15 where the real run uses 16. On-call would trust a plan the rollout does not follow.",
+   "evidence": "per := int(float64(len(hosts)) * o.MaxSurge)  vs  size := int(math.Ceil(float64(len(rest)) * o.MaxSurge))"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "With --canary, printPlan prints the canary as batch 0 and then chunks the full hosts slice, so the canary appears again in a later batch. computeBatches removes it with without() first, so the plan misstates the real rollout.",
+   "evidence": "for i := 0; i < len(hosts); i += per { ... hosts[i:end] }  vs  rest = without(hosts, o.CanaryHost)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The zap bump has no effect on the built binary because the replace overrides the pinned pseudo-version, so the JSON encoder fix the PR claims to pick up is not what ships. No go.sum change verifies the pin either.",
+   "evidence": "go.uber.org/zap v1.27.1-0.20260914181502-9d3e1c0f7a2b ... replace go.uber.org/zap => ../zap"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR says dry-run exits without touching the orchestrator API, but Run calls api.Hosts before checking DryRun. The description contradicts the code, and dry-run also fails when the orchestrator read fails.",
+   "evidence": "'exits without touching the orchestrator API' vs hosts, err := api.Hosts(ctx, o.Service) placed before if o.DryRun {"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "Batch arithmetic is duplicated in printPlan instead of sharing computeBatches, and no test asserts that the printed plan equals the executed batches. The divergence already present shows drift will recur.",
+   "evidence": "ABSENT: no _test.go hunk for printPlan, --dry-run, or computeBatches parity; printPlan recomputes per instead of calling computeBatches"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "CanaryHost is not checked for membership in hosts. If it is absent, without() removes nothing, and printPlan still reports a canary batch that the real run will not deploy.",
+   "evidence": "ABSENT: validation of o.CanaryHost in hosts; rest = without(hosts, o.CanaryHost)"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "MaxSurge is not validated. Zero, negative, or NaN values silently clamp to one host per batch, turning a bad flag into one batch per host.",
+   "evidence": "if per < 1 { per = 1 }  (MaxSurge float64 // fraction of hosts per batch)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "printPlan uses strings.Join and io.Writer, but the diff shows no import hunk, so compilation cannot be confirmed from the artifact.",
+   "evidence": "ABSENT: import block changes for io and strings in internal/rollout/rollout.go"
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "For 60+ host services each batch prints as one long comma-joined line with no per-batch count, which is hard to verify by eye before confirming a rollout.",
+   "evidence": "fmt.Fprintf(w, \"  batch %d: %s\\n\", n, strings.Join(hosts[i:end], \", \"))"
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 86529,
+  "tokOut": 47519,
+  "usd": 0.039301989999999995,
+  "critMs": 70608
+ }
+}

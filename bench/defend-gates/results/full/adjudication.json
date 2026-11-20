@@ -1,0 +1,106 @@
+[
+ {
+  "case": "plan-09",
+  "nominations": 28,
+  "A": [
+   {
+    "summary": "fct_page_events_v2 holds full personal event history from backfill through the parity window and the swap, but it is not in the erasure or retention job lists. An erasure that lands after v2's last rebuild of a partition (for example between the nightly run and the 12:00 swap) leaves the user's rows in v2, and `bq cp -f` then republishes them to the live table. Parity cannot pass cleanly if erasures occur, and v2 is never dropped afterwards.",
+    "ruling": "defect",
+    "reason": "The document lists only raw.events, fct_page_events and (post-swap) fct_page_events_legacy for erasure and retention. v2 is incremental, so partitions that are not rebuilt keep erased rows. The swap copies v2 over production with no lock and no erasure step, which can resurrect erased personal data in dashboards and the customer export. The staging test forces a full rebuild and does not cover this path.",
+    "lens": "privacy-compliance",
+    "severity": "blocker",
+    "evidence": "Erasure: privacy-svc deletes a user's rows from `raw.events` first, then from `fct_page_events`. Rebuilds read only `raw.events`, so a rebuild cannot bring erased rows back."
+   },
+   {
+    "summary": "The evidence that per-partition dedup equals global dedup was gathered on the already globally deduplicated fct table (4.2B rows), where event_id is unique by construction. A zero count of event_ids spanning two event_dates is therefore vacuous and must be measured on raw.events. Meanwhile the only ongoing guard is a weekly test, so double counts could reach dashboards and the customer export for up to a week.",
+    "ruling": "defect",
+    "reason": "The 4.2B figure matches the deduplicated output table, where duplicated event_ids cannot exist, so the check cannot support the equivalence claim that the never-double-count constraint depends on.",
+    "lens": "correctness",
+    "severity": "major",
+    "evidence": "Checked over all 4.2B rows: 0 such `event_id`s (query linked in DATA-412)."
+   }
+  ],
+  "B": [
+   {
+    "summary": "Erasure and retention jobs do not cover fct_page_events_v2 during backfill and the parity window, so erased users' rows can survive in untouched partitions and be promoted to production at the swap.",
+    "ruling": "defect",
+    "reason": "The plan only adds fct_page_events_legacy to the erasure and retention lists after the swap, leaving v2 outside the privacy job scope for the entire period it holds personal event data.",
+    "lens": "privacy",
+    "severity": "blocker",
+    "evidence": "For those 30 days the retention and erasure jobs include `fct_page_events_legacy` in their table lists."
+   },
+   {
+    "summary": "The cross-partition dedup safety check ran on the already globally deduplicated fct table, so it cannot detect event_ids that map to two event_dates in raw.",
+    "ruling": "defect",
+    "reason": "The check's 0 result is vacuous because the source table has one row per event_id by construction, so the equivalence between global and per-partition dedup is actually unproven.",
+    "lens": "correctness",
+    "severity": "blocker",
+    "evidence": "Checked over all 4.2B rows: 0 such `event_id`s (query linked in DATA-412)."
+   }
+  ],
+  "agreed": [
+   "fct_page_events_v2 holds full personal event history from backfill through the parity window and the swap, but it is not in the erasure or retention job lists. An erasure that lands after v2's last rebuild of a partition (for example between the nightly run and the 12:00 swap) leaves the user's rows in v2, and `bq cp -f` then republishes them to the live table. Parity cannot pass cleanly if erasures occur, and v2 is never dropped afterwards.",
+   "The evidence that per-partition dedup equals global dedup was gathered on the already globally deduplicated fct table (4.2B rows), where event_id is unique by construction. A zero count of event_ids spanning two event_dates is therefore vacuous and must be measured on raw.events. Meanwhile the only ongoing guard is a weekly test, so double counts could reach dashboards and the customer export for up to a week."
+  ]
+ },
+ {
+  "case": "plan-03",
+  "nominations": 10,
+  "A": [
+   {
+    "summary": "The four listed outage dates (Feb 3, Apr 21, Jun 9, Sep 15, 2026) all fall on Tuesdays, while the plan treats Thursday as send day and schedules cutover on a Tuesday.",
+    "ruling": "not",
+    "reason": "The inconsistency is real and worth a clarifying question, but the motivation (WP-cron sending competing with PHP workers) and the cutover plan stand either way, and week 3 explicitly fixes the current send as Thursday, so a reviewer would not block on it.",
+    "lens": "internal-consistency",
+    "severity": "major",
+    "evidence": "4 send-day outages in 2026 (Feb 3, Apr 21, Jun 9, Sep 15)"
+   },
+   {
+    "summary": "Rollback only re-imports new Ghost signups into MailPoet, so unsubscribes, bounces, complaints and paid/Stripe state recorded in Ghost after cutover are never carried back, and re-enabling MailPoet could re-mail opted-out readers and desync membership.",
+    "ruling": "defect",
+    "reason": "Rollback is only available after Ghost sends begin, so Ghost-side opt-outs would be lost and section 4's suppression guarantee broken in an unrecallable way; the decoy note covers only the forward import, not this reverse path.",
+    "lens": "rollback-safety",
+    "severity": "blocker",
+    "evidence": "rollback = repoint DNS and re-enable MailPoet sending, with any new Ghost signups exported and re-imported to MailPoet."
+   }
+  ],
+  "B": [
+   {
+    "summary": "Rollback re-enables MailPoet from a pre-cutover snapshot and does not write back Ghost-side unsubscribes, bounces, complaints, or paid-member changes, so re-mailing opted-out subscribers and billing-state drift are possible.",
+    "ruling": "defect",
+    "reason": "The plan's own suppression guarantee in §4 is violated on rollback because §6 only re-imports new Ghost signups and never syncs suppression or Stripe state back to MailPoet, creating a real compliance and data-integrity failure a senior reviewer would block on.",
+    "lens": "completeness",
+    "severity": "blocker",
+    "evidence": "WordPress stays running read-only on the old VPS for 30 days; rollback = repoint DNS and re-enable MailPoet sending, with any new Ghost signups exported and re-imported to MailPoet."
+   }
+  ],
+  "agreed": [
+   "Rollback only re-imports new Ghost signups into MailPoet, so unsubscribes, bounces, complaints and paid/Stripe state recorded in Ghost after cutover are never carried back, and re-enabling MailPoet could re-mail opted-out readers and desync membership."
+  ]
+ },
+ {
+  "case": "deploy-09",
+  "nominations": 8,
+  "A": [
+   {
+    "summary": "The QA table presents the Nov 2-6 staff pilot as completed with results, which nominators read as premature given a review date of 2026-10-26; some also note it conflicts with the 'all QA ran on staging / test mode' header.",
+    "ruling": "not",
+    "reason": "The document never states a review date, so the 2026-10-26 'today' the nominators rely on is not in the text; the document reads coherently as a post-pilot proposal (Rollout step 1 says 'pilot above') ahead of the Nov 9 launch, and the staging-header wording is a minor scoping slip, since the pilot row explicitly says staff cards with real holds.",
+    "lens": "evidence-verification",
+    "severity": "major",
+    "evidence": "Staff pilot week (64 staff cards, real holds)"
+   }
+  ],
+  "B": [
+   {
+    "summary": "The QA table reports results from a staff pilot that the rollout section schedules for Nov 2-6, after the proposal's date of 2026-10-26, so those results cannot exist yet.",
+    "ruling": "defect",
+    "reason": "The document presents future, not-yet-run pilot results as completed QA evidence, which is an internally contradictory and unsupported claim that undermines the launch gate.",
+    "lens": "completeness",
+    "severity": "blocker",
+    "evidence": "Staff pilot week (64 staff cards, real holds) | 0 misdelivered texts; 2 copy fixes shipped and re-verified"
+   }
+  ],
+  "agreed": []
+ }
+]

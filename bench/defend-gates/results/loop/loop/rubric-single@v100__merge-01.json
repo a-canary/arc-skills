@@ -1,0 +1,224 @@
+{
+ "approach": "rubric-single@v100",
+ "case": "merge-01",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The PR comment says 'every order carries a client_order_id and the broker dedupes on it, so a retry after a timeout cannot double-fill', but the code generates a NEW randomUUID() for clientOrderId on every retry attempt (inside the for loop). A timeout retry will therefore send a different client_order_id to the broker, defeating deduplication and creating duplicate-fill risk — exactly the scenario the agreed constraint forbids.",
+     "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {\n    const clientOrderId = randomUUID();"
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "sizeBuy now uses Math.ceil instead of Math.floor, which can push the order notional ABOVE the maxNotional cap. For example with maxNotional=10000, price=100, currentQty=0, lotSize=10: headroom=10000, lots=10.0, ceil=10, qty=100, notional=10000 (ok). But with maxNotional=9999, price=100, currentQty=0, lotSize=10: headroom=9999, lots=9.999, ceil=10, qty=100, notional=10000 > 9999 cap. The agreed constraint is 'sizing must never exceed' the cap.",
+     "evidence": "const lots = headroom / price / lotSize;\n+  return Math.ceil(lots) * lotSize;"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The timeout is set to 4000ms inside the retry loop, but the backoff starts at 250ms. With a 4s timeout and only 250ms of initial backoff, if the broker is genuinely down or slow, all 3 attempts will consume ~12s+ of timeout plus backoff, and the caller gets no indication of partial success. More critically, if the first request times out but actually reached the broker and was accepted, the retry with a new client_order_id (see blocker above) will create a duplicate order — a compounding reliability failure.",
+     "evidence": "{ timeoutMs: 4000 }"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR claims 'the broker dedupes on it [client_order_id]' as the basis for retry safety, but this is an unverified external assumption about broker API behavior. If the broker does not actually dedupe on client_order_id (or only dedupes within a short window, or only for certain order types), the entire retry safety argument collapses. No evidence or broker documentation citation is provided.",
+     "evidence": "Retries are safe: every order carries a client_order_id and the broker dedupes on it, so a retry after a timeout cannot double-fill."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The test 'short position frees headroom for the cover' expects sizeBuy to return 120 when currentQty=-20, meaning it sizes the buy to cover the short PLUS build a new long position up to the cap. This may be intentional, but it means a short-cover buy can result in a net long position that doubles the notional exposure relative to the original short. The test name is misleading — it doesn't just 'free headroom for the cover', it sizes to the full cap regardless of the short. This should be clarified or the sizing logic reconsidered.",
+     "evidence": "test(\"short position frees headroom for the cover\", () => {\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: -20, lotSize: 1 })).toBe(120);\n+});"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The retry loop logs 'order submit retry' with symbol and attempt number, but does not log the clientOrderId or any identifier that would help correlate the retry with the original attempt in production logs. This makes debugging duplicate or failed orders harder in a live brokerage environment.",
+     "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, attempt });"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The RETRYABLE_STATUS set is defined as a module-level const but only used in one place. More importantly, the retry logic is tightly coupled to the specific broker error handling pattern (BrokerError with status field). If the broker client changes its error shape, the retry logic silently breaks without compilation errors.",
+     "evidence": "const RETRYABLE_STATUS = new Set([502, 503, 504]);"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1908,
+    "tokOut": 1193,
+    "usd": 0,
+    "critMs": 67222
+   },
+   "wallMs": 81111
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The retry loop throws on the last attempt instead of sleeping and retrying, so on attempt 3 a transient error is immediately rethrown rather than being the final bounded attempt. Worse, the sleep uses 250ms * 2^(attempt-1), which on attempt 2 is 500ms and attempt 3 is 1000ms, but the comment claims 250ms + 500ms backoff. The actual worst-case is 3*4s + 500ms + 1000ms = 13.5s, not 12.75s. Minor math error but the real blocker is below.",
+     "evidence": "if (!retryable || attempt === MAX_ATTEMPTS) throw err;"
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The retry loop catches all errors (catch (err)), but broker.post could throw non-BrokerError exceptions that are not transient (e.g., network DNS failure, malformed response). These would be retried if they happen to be a TimeoutError, but other non-retryable errors would fall through and throw on first attempt, which is correct. However, the real issue is that the loop will retry on ANY TimeoutError, even if the order actually went through on the broker side (timeout after broker accepted). This is the duplicate-fill risk the PR explicitly tries to avoid, and it's not mitigated without broker dedupe verification.",
+     "evidence": "(err as Error).name === \"TimeoutError\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The PR explicitly states the broker dedupe behavior is unverified and 'must be done before this deploys', yet it's merging to main before market open. If the broker does not dedupe on client_order_id, a timeout retry will submit the same order twice, creating duplicate positions. This is a live-money trading engine; duplicate fills could be catastrophic. The PR admits the assumption is unverified but is merging anyway.",
+     "evidence": "This PR assumes the broker dedupes on client_order_id. I have not yet verified this against the broker docs or sandbox... That check must be done before this deploys."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The retry loop does not log the specific error being retried, only a generic 'order submit retry' message. In a production trading system, knowing exactly what error triggered a retry (502 vs 503 vs timeout) is critical for debugging. The error object is captured in lastErr but never logged until the final throw.",
+     "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, attempt, clientOrderId });"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The 4-second timeout per attempt is applied to the entire HTTP request, but there's no distinction between connection timeout and read timeout. If the broker accepts the order but is slow to respond, the 4s timeout will fire and trigger a retry, potentially duplicating the order. A longer read timeout with a shorter connection timeout would be safer.",
+     "evidence": "{ timeoutMs: 4000 }"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The sizing test 'sizes to the cap in whole lots' uses lotSize: 1 and lotSize: 10, but the second case (price: 50, lotSize: 10) results in 200 shares * $50 = $10,000, which is exactly the cap. This is correct, but the test name says 'whole lots' when it's really testing exact-cap sizing. The lot-alignment test is separate. Minor naming issue.",
+     "evidence": "expect(sizeBuy({ maxNotional: 10_000, price: 50, currentQty: 0, lotSize: 10 })).toBe(200);"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The RETRYABLE_STATUS set is hardcoded with specific HTTP status codes. If the broker adds new transient error codes or changes their error semantics, this code will need updating. A configuration-driven approach or a more generic 'server error' check (5xx) might be more maintainable, though the current approach is more conservative.",
+     "evidence": "const RETRYABLE_STATUS = new Set([502, 503, 504]);"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The PR title mentions 'lot-size rounding' but the diff shows no actual change to rounding behavior - it just refactors the existing floor operation into a named variable with a comment. The rounding logic was already correct; this is a no-op change presented as a fix.",
+     "evidence": "return Math.floor(headroom / price / lotSize) * lotSize; // vs // const lots = Math.floor(headroom / price / lotSize); return lots * lotSize;"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2283,
+    "tokOut": 1246,
+    "usd": 0,
+    "critMs": 63577
+   },
+   "wallMs": 70571
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The retry loop can throw `undefined` instead of the actual error, masking the failure reason. When `retryEnabled` is true, the loop exits after attempt 3 via the `throw err` inside the catch block, so `lastErr` is never thrown. However, if `maxAttempts` is 1 (retry disabled), the catch block throws immediately on the first attempt. The `throw lastErr` after the loop is unreachable dead code, but more critically, if the loop completes without throwing (which shouldn't happen given the logic), `lastErr` could be undefined. The real issue: when `attempt === maxAttempts` and the error is retryable, `throw err` is correct. But the control flow has a subtle bug: the `throw lastErr` after the loop is unreachable, suggesting the author may have intended different logic. This is confusing but not the blocker. The actual blocker is different: see below.",
+     "evidence": "for (let attempt = 1; attempt <= maxAttempts; attempt++) { ... if (!retryable || attempt === maxAttempts) throw err; ... } throw lastErr;"
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "When `retryEnabled` is false (default), `maxAttempts` is 1. The loop runs once. If the attempt fails with a retryable error, `attempt === maxAttempts` is true, so `throw err` executes immediately - correct. But if it fails with a non-retryable error, `!retryable` is true, so `throw err` also executes - correct. The logic actually works. However, there is a real blocker: the `throw lastErr` after the loop is unreachable dead code because every path through the loop either returns or throws. This indicates confused control flow design and should be cleaned up, but it's not a blocker by itself. The real blocker is the broker dedupe assumption combined with the fact that retries are disabled by default - meaning this PR ships no functional change for the common case, and the risky behavior (retries) is gated behind a flag that requires unverified broker behavior. This is a major design concern but not a correctness blocker in the code itself.",
+     "evidence": "throw lastErr;"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR admits the broker dedupe behavior on `client_order_id` is unverified - no docs check, no sandbox test. The entire safety of retries depends on this assumption. While retries are disabled by default, the PR is merging code that will be enabled once someone flips the flag, and the verification step is explicitly noted as not done. This is a major risk for a trading system handling real money.",
+     "evidence": "I have not yet verified this against the broker docs or sandbox (dedupe window, order types covered, and what response a duplicate id gets). That check must be done before retryEnabled is turned on anywhere."
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The timeout is 4 seconds per attempt, but the PR notes this is the only timeout available (no separate connect/read). A 4-second timeout is very aggressive for a broker API, especially during market open when the broker is stressed. This could cause excessive timeouts and retries, potentially overwhelming the broker or the system itself. The backoff is also very short (250ms, 500ms), which may not be enough for the broker to recover during a 502/503 event.",
+     "evidence": "{ timeoutMs: 4000 }"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "The PR mixes two unrelated changes: retry logic for order submission and a sizing helper change. The sizing change is described as 'tidies' but actually changes the implementation (though not the behavior). Mixing these makes the PR harder to review, test, and roll back independently. If the sizing change has an issue, it would require rolling back the entire PR including the retry logic.",
+     "evidence": "Also tidies the sizing helper. Quantities are still floored to the broker's lot size, so sizing never exceeds maxNotional."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The `throw lastErr` after the loop is unreachable dead code. Every iteration either returns successfully or throws. This should be removed for clarity.",
+     "evidence": "throw lastErr;"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The `client_order_id` is generated with `randomUUID()` from `node:crypto`, which is cryptographically secure. This is fine. However, the PR does not mention any validation or sanitization of the `client_order_id` before sending it to the broker. If the broker has any format requirements, this could cause issues.",
+     "evidence": "const clientOrderId = randomUUID();"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2613,
+    "tokOut": 1030,
+    "usd": 0,
+    "critMs": 60694
+   },
+   "wallMs": 60694
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The short-position test expects 120 shares but the actual function returns 140 shares, making the test fail and blocking the merge.",
+     "evidence": "test expects: `expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: -20, lotSize: 1 })).toBe(120);` — actual: headroom = 10000 - (-20)(100) = 12000; qty = floor(12000/100/1)*1 = 120. Wait, that's 120. Let me recompute: 12000/100 = 120; 120/1 = 120; floor(120) = 120; 120*1 = 120. The test is correct. My initial read was wrong. This is not an attack."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2889,
+    "tokOut": 283,
+    "usd": 0,
+    "critMs": 42711
+   },
+   "wallMs": 250623
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The PR's stated safety guarantee — 'merging and deploying this PR therefore cannot cause duplicate fills' — is technically true (the flag is off and no caller passes it) but misleading: the retry logic is still live in the binary, and any future caller or config change that enables it before broker dedupe is verified could cause duplicate fills. The PR text does say 'flip the flag only after that check,' so the risk is acknowledged, but the strong phrasing of the first sentence could lull reviewers into thinking the code path is inert rather than merely disabled.",
+     "evidence": "'Merging and deploying this PR therefore cannot cause duplicate fills.'"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2987,
+    "tokOut": 161,
+    "usd": 0,
+    "critMs": 31997
+   },
+   "wallMs": 37205
+  }
+ ],
+ "artifact": "PR #412: Retry transient broker errors on order submit\n\nDuring the first minutes after the open the broker intermittently returns 502/503 or hangs past our timeout, and we drop the order on the floor.\nThis wraps the submit call in a bounded retry (3 attempts, exponential backoff, 4xx rejections are never retried).\n\n**Retries ship disabled.** `submitOrder` only retries when the caller passes `{ retryEnabled: true }`. The default is a single attempt with the same call as today, including no new timeout: the 4s per-attempt timeout is only passed when retries are enabled. No caller in this PR passes the flag. Merging and deploying this PR therefore cannot cause duplicate fills. Shipping default-off is deliberate: it lets the code land and be reviewed without changing live order behavior until the dedupe check below is done. Flip the flag only after that check.\n\nRetry safety: the `client_order_id` is generated once per logical order, outside the retry loop, and every attempt resends the same id. A retry after a timeout (or a 502/503/504, which can also arrive after the broker accepted the order) is therefore the same order as far as the broker is concerned, and it can only be deduped if the broker honors that id. **This PR assumes the broker dedupes on `client_order_id`. I have not yet verified this against the broker docs or sandbox (dedupe window, order types covered, and what response a duplicate id gets). That check must be done before `retryEnabled` is turned on anywhere.** It is a hard precondition for enabling, not a follow-up nicety. If a duplicate id is answered with a 4xx, it is not retried and surfaces to the caller, which is the safe failure mode.\n\nWorst-case latency for a fully failing submit (with retries enabled) is 3 x 4s timeout plus 250ms + 500ms of backoff, roughly 12.75s. Backoff is slept only between attempts (after attempt 1 and after attempt 2); attempt 3 is the final attempt, so its failure is rethrown immediately rather than followed by another sleep. The caller either gets the order back or the final error is thrown; there is no partial-success state. The code after the loop is only a defensive guard for the type checker; every path through the loop returns or throws.\n\nTimeouts and backoff: the broker client only exposes a single `timeoutMs`, so there is no separate connect/read timeout to tune here. The 4s timeout and the 250ms/500ms backoff are named starting values that apply only when retries are enabled. Total attempts are capped at 3, so a stressed broker sees at most 3 requests per order. We should tune these values (and consider jitter) against the sandbox when doing the dedupe verification, before enabling the flag. A slow response that trips the timeout after the broker accepted the order is exactly the case the same-`client_order_id` retry plus the disabled-by-default flag is meant to cover.\n\nRetry log lines include the status or error name and message that triggered the retry.\n\nAlso tidies the sizing helper. This is a behavior-neutral refactor (still floor, never ceil) plus tests, and it does not touch the retry path, so it can be reverted or split into its own PR independently if you prefer. Quantities are still floored to the broker's lot size, so sizing never exceeds `maxNotional`. This PR adds tests for that, including a non-lot-aligned headroom case. The short-position test was double-checked by hand: headroom = 10,000 - (-20 x 100) = 12,000, so 12,000 / 100 / 1 = 120 shares, which is what the test expects (-20 + 120 = +100 net shares = 10,000 notional, exactly the cap).\n\n```diff\ndiff --git a/src/router/submit.ts b/src/router/submit.ts\nindex 3a1f0c2..8be71d4 100644\n--- a/src/router/submit.ts\n+++ b/src/router/submit.ts\n@@ -1,18 +1,49 @@\n import { randomUUID } from \"node:crypto\";\n import { BrokerClient, BrokerError } from \"../broker/client\";\n import { OrderIntent, SubmittedOrder } from \"../types\";\n+import { sleep } from \"../util/sleep\";\n import { log } from \"../log\";\n\n+const RETRYABLE_STATUS = new Set([502, 503, 504]);\n+const MAX_ATTEMPTS = 3;\n+const ATTEMPT_TIMEOUT_MS = 4000; // only applied when retries are enabled\n+\n export async function submitOrder(\n   broker: BrokerClient,\n   intent: OrderIntent,\n+  // Off by default. Enable only after broker dedupe on client_order_id is verified.\n+  opts: { retryEnabled?: boolean } = {},\n ): Promise<SubmittedOrder> {\n-  const clientOrderId = randomUUID();\n-  const res = await broker.post(\"/v2/orders\", {\n-    symbol: intent.symbol,\n-    qty: intent.qty,\n-    side: intent.side,\n-    type: \"limit\",\n-    limit_price: intent.limitPrice,\n-    client_order_id: clientOrderId,\n-  });\n-  return { id: res.id, clientOrderId, status: res.status };\n+  const maxAttempts = opts.retryEnabled ? MAX_ATTEMPTS : 1;\n+  // Generated once and reused on every attempt so the broker can dedupe retries.\n+  const clientOrderId = randomUUID();\n+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {\n+    try {\n+      const res = await broker.post(\n+        \"/v2/orders\",\n+        {\n+          symbol: intent.symbol,\n+          qty: intent.qty,\n+          side: intent.side,\n+          type: \"limit\",\n+          limit_price: intent.limitPrice,\n+          client_order_id: clientOrderId,\n+        },\n+        // Default (retries off) keeps today's call: no per-request timeout override.\n+        opts.retryEnabled ? { timeoutMs: ATTEMPT_TIMEOUT_MS } : undefined,\n+      );\n+      return { id: res.id, clientOrderId, status: res.status };\n+    } catch (err) {\n+      const retryable =\n+        (err instanceof BrokerError && RETRYABLE_STATUS.has(err.status)) ||\n+        (err as Error).name === \"TimeoutError\";\n+      if (!retryable || attempt === maxAttempts) throw err;\n+      log.warn(\"order submit retry\", {\n+        symbol: intent.symbol, attempt, clientOrderId,\n+        status: err instanceof BrokerError ? err.status : undefined,\n+        error: `${(err as Error).name}: ${(err as Error).message}`,\n+      });\n+      await sleep(250 * 2 ** (attempt - 1)); // 250ms after attempt 1, 500ms after attempt 2\n+    }\n+  }\n+  // Unreachable: every iteration returns or throws. Present for the type checker only.\n+  throw new Error(\"submitOrder: loop exited without returning or throwing\");\n }\ndiff --git a/src/risk/sizing.ts b/src/risk/sizing.ts\nindex 77c2e10..a04b9f3 100644\n--- a/src/risk/sizing.ts\n+++ b/src/risk/sizing.ts\n@@ -8,13 +8,15 @@ export interface SizingInput {\n   maxNotional: number; // USD cap per symbol, from risk config\n   price: number;\n   currentQty: number; // signed: negative when short\n   lotSize: number;\n }\n\n export function sizeBuy(input: SizingInput): number {\n   const { maxNotional, price, currentQty, lotSize } = input;\n   const headroom = maxNotional - currentQty * price;\n   if (headroom <= 0) return 0;\n-  return Math.floor(headroom / price / lotSize) * lotSize;\n+  // Floor, never ceil: rounding up could push notional above maxNotional.\n+  const lots = Math.floor(headroom / price / lotSize);\n+  return lots * lotSize;\n }\ndiff --git a/src/risk/sizing.test.ts b/src/risk/sizing.test.ts\nindex 19be4c2..2d0a7e1 100644\n--- a/src/risk/sizing.test.ts\n+++ b/src/risk/sizing.test.ts\n@@ -3,6 +3,16 @@ import { sizeBuy } from \"./sizing\";\n test(\"no headroom when at cap\", () => {\n   expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 100, lotSize: 1 })).toBe(0);\n });\n+\n+test(\"sizes to the cap in whole lots\", () => {\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 })).toBe(100);\n+  expect(sizeBuy({ maxNotional: 10_000, price: 50, currentQty: 0, lotSize: 10 })).toBe(200);\n+});\n+\n+test(\"rounds down when headroom is not lot-aligned, never exceeding the cap\", () => {\n+  expect(sizeBuy({ maxNotional: 9_999, price: 100, currentQty: 0, lotSize: 10 })).toBe(90);\n+});\n+\n+test(\"short position: buy covers the short and builds a long up to the cap, net notional == maxNotional\", () => {\n+  // -20 + 120 = +100 net shares @ 100 = 10_000, exactly the cap\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: -20, lotSize: 1 })).toBe(120);\n+});\n```",
+ "fixerUsage": {
+  "calls": 4,
+  "tokIn": 16554,
+  "tokOut": 16516,
+  "usd": 0.23136,
+  "critMs": 99775
+ },
+ "status": "cleared"
+}
