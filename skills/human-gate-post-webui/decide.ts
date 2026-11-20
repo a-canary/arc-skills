@@ -148,6 +148,15 @@ function ask(a: Args, card: { q: string; opts: string[]; kind?: string }) {
   writeFileSync(f, body);
   const id = JSON.parse(bd(dir, "create", title, "-p", s("p") ?? "2", "-t", "decision", "-l", "human", "--body-file", f, "--json")).id as string;
   console.log(id); // printed first: the card is live even if a link below fails
+  // repos-m1ft3: a card can be created in a hidden state (label decided, no human). Read it back and fail loudly.
+  const shown = JSON.parse(bd(dir, "show", id, "--json"));
+  const labels = (shown.labels ?? []).join(" ");
+  if (!labels.includes("human") && shown.assignee !== "a-canary") {
+    throw new Error(`${id} posted but has no human label and no operator assignee — /inbox will not show it. Labels: ${labels || "(none)"}`);
+  }
+  if (labels.includes("decided")) {
+    throw new Error(`${id} posted but has the decided label — /inbox filters it out. Post cards open; decided is set when the operator answers.`);
+  }
   const link = (what: string, ...args: string[]) => { try { bd(dir, ...args); } catch (e) { console.error(`${id} posted, but ${what} failed: ${(e as Error).message}`); } };
   if (s("blocks")) link(`dep ${s("blocks")} → ${id}`, "dep", "add", s("blocks")!, id);
   if (s("replaces")) link(`closing ${s("replaces")}`, "close", s("replaces")!, "--reason", `replaced by ${id}`);
