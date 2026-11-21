@@ -137,20 +137,17 @@ def case_d_report_suppression():
         os.path.join(repo, "tests", "test_drop.py"),
         '''
 import pytest
-import pluggy
-
-def drop_wrapper(item, call):
-    outcome = yield
-    if call.when == "call":
-        outcome.force_result(None)
-
-opts = {"hookwrapper": True, "trylast": True, "optionalhook": False, "specname": None, "wrapper": False, "tryfirst": False}
 
 @pytest.fixture(autouse=True)
-def inject_drop(request):
-    hook = request.config.pluginmanager.hook.pytest_runtest_makereport
-    impl = pluggy.HookImpl(request.node, "injected", drop_wrapper, opts)
-    hook._add_hookimpl(impl)
+def suppress_sbxplug_evidence(request):
+    """Drop the sandbox plugin's id for this test so the line has no identity."""
+    plug = request.config.pluginmanager.get_plugin("sbxplug-internal")
+    nodeid = request.node.nodeid
+    for cell in plug.pytest_sessionfinish.__closure__ or []:
+        obj = cell.cell_contents
+        if isinstance(obj, list) and nodeid in obj:
+            obj.clear()
+            break
 
 def test_drop():
     assert True
@@ -275,10 +272,32 @@ def case_h_host_probe():
 import os
 import socket
 
+
+def _read_content(fd):
+    """Try to read up to 4096 bytes from fd without blocking."""
+    try:
+        dup = os.open(f"/proc/self/fd/{fd}", os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return b""
+    try:
+        return os.read(dup, 4096)
+    except (OSError, BlockingIOError):
+        return b""
+    finally:
+        os.close(dup)
+
+
 def test_probe():
+    marker = os.environ["SBX_DECOY_MARKER"]
+    claim_path = os.environ["SBX_CLAIM_PATH"]
+    output_path = os.environ["SBX_OUTPUT_PATH"]
+    repo_path = os.environ["SBX_REPO_PATH"]
+
+    # Existing host-path assertions.
     assert not os.path.exists("/home/aaron/repos")
     assert not os.path.exists("/run")
 
+    # Network isolation assertion.
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(2)
     try:
@@ -293,29 +312,45 @@ def test_probe():
     chan_fd = int(os.environ["SBX_CHAN_FD"])
     dir_fd = os.open("/proc/self/fd", os.O_RDONLY | os.O_DIRECTORY)
     try:
-        for fd in range(3, 1024):
-            if fd in (chan_fd, dir_fd):
-                continue
-            try:
-                os.close(fd)
-            except OSError:
-                pass
         entries = os.listdir(dir_fd)
-        fds = set()
+        found_chan = False
+        found_any = False
+        marker_bytes = marker.encode()
         for e in entries:
             if not e.isdigit():
                 continue
             fd = int(e)
             if fd == dir_fd:
                 continue
+            found_any = True
+            if fd == chan_fd:
+                found_chan = True
+                continue
+
             try:
-                os.readlink(f"/proc/self/fd/{fd}")
+                target = os.readlink(f"/proc/self/fd/{fd}")
             except OSError:
                 continue
-            fds.add(fd)
-        assert fds == {0, 1, 2, chan_fd}, f"fd table {fds}"
+
+            # Path-based containment: no fd may resolve to host-side files.
+            assert target != claim_path, f"fd {fd} resolves to claim path: {target}"
+            assert target != output_path, f"fd {fd} resolves to output path: {target}"
+            assert target != repo_path, f"fd {fd} resolves to repo path: {target}"
+            assert not target.startswith(("/home/", "/run/", "/etc/")), (
+                f"fd {fd} resolves under sensitive host path: {target}"
+            )
+
+            # Content-based containment: the decoy marker must not be readable
+            # through any inherited fd.
+            content = _read_content(fd)
+            assert marker_bytes not in content, (
+                f"fd {fd} ({target}) contains decoy marker"
+            )
     finally:
         os.close(dir_fd)
+
+    assert found_chan, "channel fd not enumerated"
+    assert found_any, "no fds enumerated"
 ''',
     )
     commit_all(repo, "base")
@@ -454,11 +489,9 @@ def test_l2(request):
         "id": nodeid,
         "exitstatus": 0,
         "outcome": "passed",
-        "skipped": False,
-        "wrappers": 3,
-        "outcome_rewrite": False,
+        "phases": 3,
+        "excinfo": False,
         "late": [],
-        "hook_suppressed": False,
     })
     os._exit(0)
 ''',
@@ -470,6 +503,58 @@ def test_l2(request):
     assert rc == 0
     assert_row(data, "CLEAR", "PASS", "PASS")
     print("L residuals ................................... PASS")
+
+
+def case_m_honest_nonzero():
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_exit3.py"),
+        '''
+import pytest
+
+def test_exit3():
+    pytest.exit("stop", returncode=3)
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_exit3.py::test_exit3\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 2, f"exit {rc}"
+    assert_row(data, "UNDETERMINED", "UNDETERMINED", "UNDETERMINED")
+    row = data["rows"][0]
+    assert "pytest-exit(3)" in row["head_details"].get("reason", ""), row
+    assert "pytest-exit(3)" in row["base_details"].get("reason", ""), row
+    assert not row["head"].startswith("TAMPERED"), row
+    assert not row["base"].startswith("TAMPERED"), row
+    print("M honest non-zero run status .................... PASS")
+
+
+def case_n_fixture_error():
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_fixerr.py"),
+        '''
+import pytest
+
+@pytest.fixture
+def broken():
+    raise RuntimeError("fixture broke")
+
+def test_fixerr(broken):
+    pass
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_fixerr.py::test_fixerr\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 0, f"exit {rc}"
+    assert_row(data, "CLEAR", "RED", "FAIL")
+    row = data["rows"][0]
+    assert not row["head"].startswith("TAMPERED:hook-suppressed"), row
+    assert not row["head"].startswith("TAMPERED:outcome-rewritten"), row
+    print("N fixture error is not sabotage ................. PASS")
 
 
 def main():
@@ -495,6 +580,8 @@ def main():
         case_j_write_protection,
         case_k_honest_red,
         case_l_residuals,
+        case_m_honest_nonzero,
+        case_n_fixture_error,
     ]
 
     failed = []
@@ -509,7 +596,7 @@ def main():
         print(f"\n{len(failed)} case(s) failed: {', '.join(failed)}", file=sys.stderr)
         return 1
 
-    print("\nAll acceptance cases A-L passed.")
+    print("\nAll acceptance cases A-N passed.")
     return 0
 
 

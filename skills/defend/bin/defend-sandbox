@@ -70,9 +70,10 @@ def _make_plugin():
     KEY = bytes.fromhex(buf.decode().strip())
 
     # Mutable state shared by hook methods via closure.
+    # The record is flat: id, exitstatus, outcome, phases, excinfo, late.
+    # All six fields are raw observations; no verdict fields are sent.
     _late = []
     _session_started = [False]
-    _started = set()
     _records = {}
     _ids = []
 
@@ -96,54 +97,51 @@ def _make_plugin():
             mod = getattr(plugin, "__module__", None)
             if mod is None:
                 mod = getattr(type(plugin), "__module__", None)
-            if mod and not mod.startswith("_pytest."):
-                _late.append(mod)
+            if mod:
+                _late.append(mod)  # raw, unfiltered; parent applies _pytest.* exemption
 
         @pytest.hookimpl(tryfirst=True)
         def pytest_runtest_setup(self, item):
-            _started.add(item.nodeid)
             if item.nodeid not in _ids:
                 _ids.append(item.nodeid)
 
         @pytest.hookimpl(hookwrapper=True, tryfirst=True)
         def pytest_runtest_makereport(self, item, call):
             rec = _records.setdefault(item.nodeid, {
-                "wrappers": 0,
-                "outcome_rewrite": False,
+                "phases": 0,
+                "excinfo": False,
                 "outcome": None,
-                "skipped": False,
             })
-            rec["wrappers"] += 1
+            rec["phases"] += 1
             outcome = yield
             try:
                 report = outcome.get_result()
             except Exception:
                 report = None
-            if call.when == "call" and report is not None:
+            if report is None:
+                return
+            if call.when == "call":
                 if report.outcome == "passed" and call.excinfo is not None:
-                    rec["outcome_rewrite"] = True
+                    rec["excinfo"] = True
                 rec["outcome"] = report.outcome
-                rec["skipped"] = report.outcome == "skipped"
+            elif call.when == "setup" and rec["outcome"] is None:
+                rec["outcome"] = report.outcome
 
         @pytest.hookimpl(tryfirst=True)
         def pytest_sessionfinish(self, exitstatus, session):
             for nodeid in (_ids or [None]):
                 rec = _records.get(nodeid, {
-                    "wrappers": 0,
-                    "outcome_rewrite": False,
+                    "phases": 0,
+                    "excinfo": False,
                     "outcome": None,
-                    "skipped": False,
                 })
-                hook_suppressed = nodeid in _started and rec["wrappers"] == 0
                 _send({
                     "id": nodeid,
                     "exitstatus": exitstatus,
                     "outcome": rec["outcome"],
-                    "skipped": rec["skipped"],
-                    "wrappers": rec["wrappers"],
-                    "outcome_rewrite": rec["outcome_rewrite"],
+                    "phases": rec["phases"],
+                    "excinfo": rec["excinfo"],
                     "late": list(_late),
-                    "hook_suppressed": hook_suppressed,
                 })
 
     return SbxPlug()
@@ -246,7 +244,8 @@ def check_overlay_never(head_dir, base_dir):
     return violations
 
 
-def build_bwrap_cmd(tree_dir, trusted_dir, site_dir, nodeid, child_fd, allow_net):
+def build_bwrap_cmd(tree_dir, trusted_dir, site_dir, nodeid, child_fd, allow_net,
+                    decoy_marker, claim_path, output_path, repo_path):
     """Return bwrap argv."""
     cmd = [
         "bwrap",
@@ -275,13 +274,14 @@ def build_bwrap_cmd(tree_dir, trusted_dir, site_dir, nodeid, child_fd, allow_net
         "--setenv", "PYTHONDONTWRITEBYTECODE", "1",
         "--setenv", "PYTHONSAFEPATH", "1",
         "--setenv", "SBX_CHAN_FD", str(child_fd),
+        "--setenv", "SBX_DECOY_MARKER", decoy_marker,
+        "--setenv", "SBX_CLAIM_PATH", claim_path,
+        "--setenv", "SBX_OUTPUT_PATH", output_path,
+        "--setenv", "SBX_REPO_PATH", repo_path,
         "/usr/bin/python3",
         "-m", "pytest",
         "-q",
-        "-s",
         "-p", "no:cacheprovider",
-        "-p", "no:logging",
-        "-p", "no:faulthandler",
         "-p", "sbxplug",
         nodeid,
     ])
@@ -335,7 +335,8 @@ def materialize_working_tree(repo_dir, dest_dir):
         raise RuntimeError(f"tar failed: {tar_err.decode()}")
 
 
-def run_one_sandbox(repo_dir, ref, nodeid, site_dir, allow_net, base_dir=None, use_worktree=False):
+def run_one_sandbox(repo_dir, ref, nodeid, site_dir, allow_net, claim_path,
+                    decoy_marker, output_path, base_dir=None, use_worktree=False):
     """Run a single sandboxed pytest invocation for nodeid at ref.
 
     Returns a dict:
@@ -356,18 +357,19 @@ def run_one_sandbox(repo_dir, ref, nodeid, site_dir, allow_net, base_dir=None, u
                 "status": "UNDETERMINED",
                 "reason": f"materialize-error:{e}",
                 "provenance": provenance,
-                "details": {},
+                "details": {"reason": f"materialize-error:{e}"},
             }
 
         # For head runs, enforce overlay-never against the base tree.
         if base_dir is not None:
             violations = check_overlay_never(tree_dir, base_dir)
             if violations:
+                reason = f"overlay-never:{','.join(violations)}"
                 return {
                     "status": "BLOCK",
-                    "reason": f"overlay-never:{','.join(violations)}",
+                    "reason": reason,
                     "provenance": provenance,
-                    "details": {"violations": violations},
+                    "details": {"reason": reason, "violations": violations},
                 }
 
         with tempfile.TemporaryDirectory(prefix="sbx-trusted-") as trusted_dir:
@@ -386,14 +388,26 @@ def run_one_sandbox(repo_dir, ref, nodeid, site_dir, allow_net, base_dir=None, u
                 nodeid=nodeid,
                 child_fd=child_fd.fileno(),
                 allow_net=allow_net,
+                decoy_marker=decoy_marker,
+                claim_path=claim_path,
+                output_path=output_path,
+                repo_path=repo_dir,
             )
 
-            proc = subprocess.Popen(
-                cmd,
-                pass_fds=[child_fd.fileno()],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
+            # Open the claim file as a decoy handle that must NOT leak into the
+            # child.  pass_fds only carries the channel fd, so close_fds=True
+            # closes this one in the child.  If that ever changes, the sandboxed
+            # probe will see the marker and fail.
+            claim_fd = os.open(claim_path, os.O_RDONLY)
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    pass_fds=[child_fd.fileno()],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+            finally:
+                os.close(claim_fd)
             child_fd.close()
 
             try:
@@ -476,51 +490,63 @@ def run_one_sandbox(repo_dir, ref, nodeid, site_dir, allow_net, base_dir=None, u
                     "details": details,
                 }
 
-            # Rule 4: exactly one call record per claimed id.
+            # Rule 7: non-0/1 process exit is never PASS and never TAMPERED.
+            # Applied here so Rules 4-6 cannot label an interrupted run TAMPERED.
+            if rc not in (0, 1):
+                reason = f"pytest-exit({rc})"
+                return {
+                    "status": "UNDETERMINED",
+                    "reason": reason,
+                    "provenance": provenance,
+                    "details": {**details, "reason": reason},
+                }
+
+            # Rule 4: the line must be about the claimed id.
             rec_id = record.get("id")
-            if rec_id != nodeid or (record.get("outcome") is None and not record.get("hook_suppressed")):
+            if rec_id != nodeid:
                 return {
                     "status": "TAMPERED:missing-id",
                     "provenance": provenance,
                     "details": details,
                 }
 
-            # Rule 5: late plugin registration.
+            # Rule 5: late plugin registration (parent filters _pytest.* exemption).
             late = record.get("late") or []
-            if late:
+            bad_late = sorted(m for m in late if not m.startswith("_pytest."))
+            if bad_late:
                 return {
-                    "status": f"TAMPERED:late-plugin:{late[0]}",
+                    "status": f"TAMPERED:late-plugin:{bad_late[0]}",
                     "provenance": provenance,
                     "details": details,
                 }
 
-            # Rule 6: outcome rewrite with excinfo still set.
-            if record.get("outcome_rewrite"):
+            # Rule 6a: outcome rewrite observed post-yield.
+            if record.get("excinfo") is True:
                 return {
                     "status": "TAMPERED:outcome-rewritten",
                     "provenance": provenance,
                     "details": details,
                 }
 
-            # Rule 6: hook chain exclusion.
-            wrappers = record.get("wrappers", 0)
-            hook_suppressed = record.get("hook_suppressed", False)
-            if hook_suppressed or wrappers != 3:
+            # Rule 6b: hook chain exclusion, checked against the implied report set.
+            phases = record.get("phases", 0)
+            outcome = record.get("outcome")
+            if phases == 0 or (outcome == "passed" and phases != 3):
                 return {
                     "status": "TAMPERED:hook-suppressed",
                     "provenance": provenance,
                     "details": details,
                 }
 
-            # Rule 7: translate honest outcomes.
+            # Translate honest pytest outcomes.
             outcome = record.get("outcome")
-            skipped = record.get("skipped", False)
-            if skipped or outcome in ("skipped", "xfail"):
+            if outcome in ("skipped", "xfailed"):
+                reason = "skipped/xfail"
                 return {
                     "status": "UNDETERMINED",
-                    "reason": "skipped/xfail",
+                    "reason": reason,
                     "provenance": provenance,
-                    "details": details,
+                    "details": {**details, "reason": reason},
                 }
 
             if rc == 0 and outcome == "passed":
@@ -540,7 +566,7 @@ def run_one_sandbox(repo_dir, ref, nodeid, site_dir, allow_net, base_dir=None, u
                 "status": "UNDETERMINED",
                 "reason": f"unclassified outcome:{outcome} exit:{rc}",
                 "provenance": provenance,
-                "details": details,
+                "details": {**details, "reason": f"unclassified outcome:{outcome} exit:{rc}"},
             }
 
 
@@ -549,10 +575,21 @@ def read_claim(path):
     with open(path, "r") as f:
         for line in f:
             line = line.strip()
-            if not line or line.startswith("#"):
+            if not line or line.startswith("#") or line.startswith("SBXDECOY-"):
                 continue
             ids.append(line)
     return ids
+
+
+def add_decoy_to_claim(claim_path):
+    """Prepend a unique content marker to the claim file and return it."""
+    marker = "SBXDECOY-" + os.urandom(16).hex()
+    with open(claim_path, "r+") as f:
+        content = f.read()
+        f.seek(0)
+        f.write(marker + "\n" + content)
+        f.truncate()
+    return marker
 
 
 def main():
@@ -590,6 +627,10 @@ def main():
         except Exception as e:
             die(f"cannot materialize base tree {args.base}: {e}")
 
+        claim_path = os.path.abspath(args.claim)
+        output_path = os.path.abspath(args.json_out) if args.json_out else ""
+        decoy_marker = add_decoy_to_claim(claim_path)
+
         rows = []
         for nodeid in claim_ids:
             base_result = run_one_sandbox(
@@ -598,6 +639,9 @@ def main():
                 nodeid=nodeid,
                 site_dir=site_dir,
                 allow_net=args.allow_net,
+                claim_path=claim_path,
+                decoy_marker=decoy_marker,
+                output_path=output_path,
                 base_dir=None,
             )
             head_result = run_one_sandbox(
@@ -606,6 +650,9 @@ def main():
                 nodeid=nodeid,
                 site_dir=site_dir,
                 allow_net=args.allow_net,
+                claim_path=claim_path,
+                decoy_marker=decoy_marker,
+                output_path=output_path,
                 base_dir=base_tree_dir,
                 use_worktree=True,
             )
