@@ -1,0 +1,122 @@
+#!/bin/bash
+# defend-ask-test — self-test for the reviewer-prompt contract wrapper.
+# No model calls: everything runs with --dry-run or against refusals.
+set -uo pipefail
+cd "$(dirname "$0")" || exit 1
+DA=./defend-ask
+T=$(mktemp -d) || exit 1
+trap 'rm -rf "$T"' EXIT
+fail=0
+
+ok()   { printf 'ok   %s\n' "$1"; }
+bad()  { printf 'FAIL %s\n' "$1"; fail=$((fail+1)); }
+expect_rc() { [ "$1" = "$2" ] && ok "$3 (rc=$1)" || bad "$3 (rc=$1, want $2)"; }
+
+ART="$T/artifact.txt"; echo real > "$ART"
+
+# 1. a complete prompt launches clean and is not rewritten
+cat > "$T/full.txt" <<EOF
+ARTIFACT STATUS: this is a design; the code does not contain it yet.
+Read $ART
+BUDGET: Cap: 12 tool calls.
+VERDICT — final message MUST start with exactly one line:
+VERDICT: CLEAR
+or
+VERDICT: ATTACKS
+EOF
+before=$(md5sum < "$T/full.txt")
+out=$($DA "$T/full.txt" --calls 12 --dry-run 2>&1); rc=$?
+expect_rc "$rc" 0 "complete prompt accepted"
+[ "$(md5sum < "$T/full.txt")" = "$before" ] && ok "input prompt not modified" || bad "input prompt was modified"
+case "$out" in *"timeout=1680s"*) ok "timeout from budget (600+90*12=1680)" ;; *) bad "timeout arithmetic: $out" ;; esac
+[ -e "$T/full.txt.effective" ] && bad "wrote .effective for a complete prompt" || ok "no .effective for complete prompt"
+
+# 2. a verdict-less prompt gets the canonical block on a copy, input untouched
+printf 'Find problems in %s\n' "$ART" > "$T/bare.txt"
+before=$(md5sum < "$T/bare.txt")
+$DA "$T/bare.txt" --calls 20 --dry-run >/dev/null 2>&1
+[ "$(md5sum < "$T/bare.txt")" = "$before" ] && ok "bare prompt not modified" || bad "bare prompt modified in place"
+[ -s "$T/bare.txt.effective" ] && ok "effective copy written" || bad "no effective copy"
+grep -q '^VERDICT: CLEAR' "$T/bare.txt.effective" && ok "effective copy carries the verdict line" || bad "verdict line missing from effective copy"
+grep -q 'Cap: 20 tool calls' "$T/bare.txt.effective" && ok "effective copy carries the real budget" || bad "budget not templated from --calls"
+
+# 3. idempotent: second run does not append a second block
+$DA "$T/bare.txt" --calls 20 --dry-run >/dev/null 2>&1
+n=$(grep -c 'REVIEWER CONTRACT' "$T/bare.txt.effective")
+[ "$n" = 1 ] && ok "single contract block after re-run" || bad "$n contract blocks after re-run"
+
+# 4. refusals
+printf 'Attack the design. VERDICT: CLEAR or ATTACKS. Cap: 9 tool calls. artifact status: stated.\n' > "$T/nopath.txt"
+$DA "$T/nopath.txt" --dry-run >/dev/null 2>&1; expect_rc "$?" 2 "refuses a prompt with no existing artifact"
+$DA "$T/nonexistent.txt" --dry-run >/dev/null 2>&1; expect_rc "$?" 2 "refuses a missing prompt file"
+: > "$T/empty.txt"; $DA "$T/empty.txt" --dry-run >/dev/null 2>&1; expect_rc "$?" 2 "refuses an empty prompt file"
+$DA "$T/full.txt" --calls abc --dry-run >/dev/null 2>&1; expect_rc "$?" 2 "refuses non-numeric --calls"
+$DA "$T/full.txt" --calls 3 --dry-run >/dev/null 2>&1; expect_rc "$?" 2 "refuses a budget too small for a verdict"
+$DA --bogus >/dev/null 2>&1; expect_rc "$?" 2 "refuses an unknown flag"
+
+# 5. timeout floor
+printf 'Read %s\nVERDICT: CLEAR or VERDICT: ATTACKS. Cap: 5 tool calls. artifact status: design.\n' "$ART" > "$T/small.txt"
+out=$($DA "$T/small.txt" --calls 5 --dry-run 2>&1)
+case "$out" in *"timeout=1200s"*) ok "timeout floor is 1200s at calls=5" ;; *) bad "timeout floor: $out" ;; esac
+
+# 6. model preflight (refusals happen before launch)
+$DA "$T/full.txt" --calls 12 --model ollama-cloud/fast --dry-run >/dev/null 2>&1
+expect_rc "$?" 2 "refuses a model id absent from the catalog (18bvp 404 mode)"
+$DA "$T/full.txt" --calls 12 --model fast --dry-run >/dev/null 2>&1
+expect_rc "$?" 2 "refuses --model without provider/ prefix"
+
+# 7. the verdict gate: a run that returns no verdict line must NOT exit 0.
+#    Stub pi on PATH so this costs no model call.
+mkdir -p "$T/stub"; cat > "$T/stub/pi" <<'STUB'
+#!/bin/bash
+for a in "$@"; do [ "$a" = "--list-models" ] && { echo "ollama-cloud  deepseek-v4-pro:0813  128K 16.4K no no"; exit 0; }; done
+echo "I read some files and thought about it."
+exit 0
+STUB
+chmod +x "$T/stub/pi"
+PATH="$T/stub:$PATH" $DA "$T/full.txt" --calls 12 --model ollama-cloud/deepseek-v4-pro:0813 >/dev/null 2>&1
+rc=$?
+[ "$rc" = 3 ] && ok "no verdict line -> exit 3, not 0 (run gated nothing)" || bad "no-verdict run exited $rc, want 3"
+[ -s "$T/full.txt.out" ] && ok "transcript kept for the ledger" || bad "no transcript written"
+cat > "$T/stub/pi" <<'STUB'
+#!/bin/bash
+for a in "$@"; do [ "$a" = "--list-models" ] && { echo "ollama-cloud  deepseek-v4-pro:0813  128K 16.4K no no"; exit 0; }; done
+echo "VERDICT: CLEAR"
+echo "1. nothing found"
+exit 0
+STUB
+PATH="$T/stub:$PATH" $DA "$T/full.txt" --calls 12 --model ollama-cloud/deepseek-v4-pro:0813 >/dev/null 2>&1
+expect_rc "$?" 0 "verdict line present -> exit 0"
+
+# 8. default model must not be banned and must agree with the launch line.
+#    Why: 2026-11-20, glm-5.3 was banned and the fix landed only in the unversioned
+#    ~/vault copy; the executing copy kept the banned default for ~18 hours. This
+#    section pins the rule: the DEFAULT (not an override) must not be glm-5.x, must
+#    match the dry-run launch line, and must exist in the model catalog.
+default_model=$(grep -E '^prompt="" calls=[0-9]+ model="' "$DA" | sed 's/.*model="\([^"]*\)".*/\1/')
+[ -n "$default_model" ] && ok "derived default model from source: $default_model" || bad "could not derive default model from source"
+
+# 8A. ban: the default must not be glm-5.x (operator ban 2026-11-20)
+case "$default_model" in
+  *glm-5*) bad "default model $default_model is banned (glm-5.x ban)" ;;
+  *) ok "default model $default_model is not a banned glm-5.x" ;;
+esac
+
+# 8B. agreement: --dry-run with no --model flag must print the same default
+dry_out=$($DA "$T/full.txt" --calls 12 --dry-run 2>&1)
+dry_model=$(printf '%s\n' "$dry_out" | sed -n 's/^defend-ask: prompt=.*model=\([^ ]*\).*/\1/p')
+[ "$dry_model" = "$default_model" ] && ok "dry-run launch line agrees with source default ($dry_model)" || bad "dry-run model=$dry_model differs from source default $default_model"
+
+# 8C. catalog: the default must be in pi --list-models (skip if pi is not on PATH)
+if command -v pi >/dev/null 2>&1; then
+  if pi --list-models 2>/dev/null | awk -v m="$default_model" '$1"/"$2==m{f=1} END{exit !f}'; then
+    ok "default model $default_model is in the pi model catalog"
+  else
+    bad "default model $default_model is NOT in the pi model catalog (would 404)"
+  fi
+else
+  echo "skip default model catalog check (pi not on PATH)"
+fi
+
+echo
+if [ "$fail" -eq 0 ]; then echo "defend-ask-test: PASS"; else echo "defend-ask-test: $fail FAILED"; exit 1; fi
