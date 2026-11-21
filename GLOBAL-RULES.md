@@ -87,6 +87,7 @@ At session start, load these files into the system prompt:
   If `pace` is missing or unreadable, count as over pace.
   Over pace (including by an unreadable budget line), Ollama Cloud is allowed whatever the laneproxy queue length; the queue and `util` tests in the lane-overflow rule apply only to seats under pace.
   A Lead's own turns that orchestrate, dispatch to laneproxy or Ollama Cloud, review, and report are not "new Claude work"; keep them short.
+  Non-Claude seats are exempt from the pace limit (operator ruling 2026-11-18, repos-1o8pn item 4): a seat whose `model` field is not a Claude model (e.g. `pi` for ml-rnd-lead) ignores the pace halt entirely; the Waker continues to nudge it and it may keep working Claude-free V100 work at any time. The R&D Lead (ml-rnd-lead) is the canonical case: it spends no Claude budget, so pacing it would idle the V100 GPUs it exists to keep busy.
 - **Delegate in ≤10-minute subagents (operator 2026-10-31).** The main session orchestrates; each investigation or implementation chunk runs as a subagent timeboxed to ~10 minutes, for context management.
 - **Subagents return distilled findings only** — conclusion + refs, under
   ~500 tokens.
