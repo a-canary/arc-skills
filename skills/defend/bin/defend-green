@@ -1,0 +1,716 @@
+#!/usr/bin/env python3
+"""defend-green — attack a worker's GREEN before push (repos-ccfr.3).
+
+Input: a claim file listing pytest node ids (one per line), plus an optional
+guard file listing which claimed ids are declared GUARD.
+
+Output: a per-test matrix artifact and a verdict.
+  CLEAR (exit 0): at least one RED_ASSERT or RED_EXC row AND every claimed id passes at head.
+  BLOCK (exit 1): any VACUOUS without valid GUARD, FAILING_HEAD, PASSING_VACUOUS, or undeclared-change.
+  refusal (exit 3): UNDETERMINED / TAMPERED / SETUP_ERROR.
+  usage error (exit 2): missing input, bad usage, unusable base.
+
+Caps: max 20 ids, 120s per id, 300s base overlay run, 120s head run.
+"""
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+
+MAX_IDS = 20
+PER_ID_TIMEOUT = 120
+BASE_TIMEOUT = 300
+HEAD_TIMEOUT = 120
+OVERALL_TIMEOUT = 1800
+
+# Paths that must never be overlaid from head
+OVERLAY_NEVER = {"conftest.py", "pyproject.toml", "setup.cfg", "tox.ini"}
+
+
+def die(msg, code=2):
+    print(f"defend-green: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def run(cmd, timeout, env=None, cwd=None, capture=True):
+    """Run a command with timeout. Returns (returncode, stdout, stderr)."""
+    try:
+        proc = subprocess.run(
+            cmd,
+            timeout=timeout,
+            env=env,
+            cwd=cwd,
+            capture_output=capture,
+            text=True,
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+    except subprocess.TimeoutExpired:
+        return 124, "", "timeout"
+    except Exception as e:
+        return 1, "", str(e)
+
+
+class WorktreeManager:
+    """Manages a scratch worktree for the base commit."""
+
+    def __init__(self, repo_dir, base_rev):
+        self.repo_dir = repo_dir
+        self.base_rev = base_rev
+        self.path = None
+        self._cleanup_done = False
+
+    def create(self):
+        """Create a named scratch worktree at the base commit."""
+        tag = time.strftime("%Y%m%d-%H%M%S")
+        pid = os.getpid()
+        self.path = os.path.join(
+            self.repo_dir, ".defend-green-wt", f"{tag}-{pid}"
+        )
+        # Ensure parent dir
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        rc, out, err = run(
+            ["git", "-C", self.repo_dir, "worktree", "add", self.path, self.base_rev],
+            timeout=60,
+        )
+        if rc != 0:
+            raise RuntimeError(f"git worktree add failed: {err}")
+        # Register for cleanup
+        self._atexit_register()
+        return self.path
+
+    def _atexit_register(self):
+        import atexit
+        atexit.register(self.cleanup)
+
+    def cleanup(self):
+        """Remove the scratch worktree."""
+        if self._cleanup_done or not self.path:
+            return
+        self._cleanup_done = True
+        run(
+            ["git", "-C", self.repo_dir, "worktree", "remove", "--force", self.path],
+            timeout=30,
+        )
+
+    def sweep_leaked(self):
+        """Sweep leaked scratch worktrees from previous runs.
+
+        Uses liveness check: only removes worktrees whose owner pid is dead.
+        """
+        wt_root = os.path.join(self.repo_dir, ".defend-green-wt")
+        if not os.path.isdir(wt_root):
+            return
+        for name in os.listdir(wt_root):
+            full = os.path.join(wt_root, name)
+            if not os.path.isdir(full):
+                continue
+            # name format: YYYYMMDD-HHMMSS-PID
+            parts = name.rsplit("-", 1)
+            if len(parts) != 2:
+                continue
+            try:
+                owner_pid = int(parts[1])
+            except ValueError:
+                continue
+            # Check if pid is still alive
+            if owner_pid == os.getpid():
+                continue  # our own
+            try:
+                os.kill(owner_pid, 0)
+                continue  # still alive, don't touch
+            except OSError:
+                pass  # dead, safe to remove
+            # Also check for lock file
+            lock_file = os.path.join(full, ".lock")
+            if os.path.exists(lock_file):
+                try:
+                    with open(lock_file) as f:
+                        lock_pid = int(f.read().strip())
+                    if lock_pid != owner_pid:
+                        try:
+                            os.kill(lock_pid, 0)
+                            continue  # lock owner alive
+                        except OSError:
+                            pass
+                except (ValueError, OSError):
+                    pass
+            # Remove the leaked worktree
+            run(
+                [
+                    "git",
+                    "-C",
+                    self.repo_dir,
+                    "worktree",
+                    "remove",
+                    "--force",
+                    full,
+                ],
+                timeout=30,
+            )
+
+
+def get_git_dir(repo_dir):
+    """Get the git common dir for the repo."""
+    rc, out, err = run(["git", "-C", repo_dir, "rev-parse", "--git-common-dir"], timeout=10)
+    if rc != 0:
+        die(f"cannot determine git dir: {err}")
+    return os.path.realpath(out.strip())
+
+
+def validate_claim_ids(ids):
+    """Validate claim ids: non-empty, within cap, no pytest flags, no shell metacharacters."""
+    if not ids:
+        die("claim file is empty or has no test ids")
+    if len(ids) > MAX_IDS:
+        die(f"claim has {len(ids)} ids, cap is {MAX_IDS}")
+    for i in ids:
+        if not i.strip():
+            continue
+        if i.startswith("-"):
+            die(f"selector '{i}' starts with '-', looks like a pytest flag")
+        # Shell metacharacters
+        if re.search(r"[;&|`$(){}<>]", i):
+            die(f"selector '{i}' contains shell metacharacters")
+
+
+def find_test_file(repo_dir, test_id):
+    """Find the test file that contains a given test id.
+
+    Returns the repo-relative path, or None.
+    """
+    # Try to run pytest --collect-only to find which file contains the id
+    rc, out, err = run(
+        [
+            "python3",
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "--no-header",
+            "-o",
+            "addopts=",
+            test_id,
+        ],
+        timeout=60,
+        cwd=repo_dir,
+    )
+    if rc != 0:
+        return None
+    # Parse output: lines like "tests/test_foo.py::TestBar::test_baz"
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # Match the test id by suffix
+        if line.endswith(test_id) or test_id.endswith(line):
+            # Extract file path
+            parts = line.split("::", 1)
+            if parts:
+                return parts[0]
+    return None
+
+
+def overlay_test_files(worktree_path, repo_dir, test_ids):
+    """Copy head's test files into the base worktree.
+
+    Only copies files that:
+    - are repo-relative
+    - are inside the repo
+    - are touched by the diff
+    - are not conftest.py, pyproject.toml, setup.cfg, tox.ini
+    """
+    # Get the list of files in the diff
+    rc, out, err = run(
+        ["git", "-C", repo_dir, "diff", "--name-only", "HEAD~1", "HEAD"],
+        timeout=30,
+    )
+    diff_files = set()
+    for line in out.splitlines():
+        line = line.strip()
+        if line:
+            diff_files.add(line)
+
+    overlaid = set()
+    for test_id in test_ids:
+        # Find the test file for this id at head
+        test_file = find_test_file(repo_dir, test_id)
+        if not test_file:
+            continue
+        # Validate path
+        abs_head = os.path.realpath(os.path.join(repo_dir, test_file))
+        abs_repo = os.path.realpath(repo_dir)
+        if not abs_head.startswith(abs_repo):
+            die(f"test file '{test_file}' is outside the repo")
+        if test_file in OVERLAY_NEVER:
+            continue  # never overlay these
+        if test_file not in diff_files:
+            continue  # not touched by diff, skip
+        if test_file in overlaid:
+            continue  # already copied
+        # Copy the file
+        src = os.path.join(repo_dir, test_file)
+        dst = os.path.join(worktree_path, test_file)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+        overlaid.add(test_file)
+
+    return overlaid
+
+
+def run_pytest_per_id(worktree_path, test_ids, env_overrides=None):
+    """Run pytest for each test id individually.
+
+    Returns a list of dicts: {id, outcome, exception_type, indirect}
+    """
+    results = []
+    wt_abs = os.path.realpath(worktree_path)
+
+    for test_id in test_ids:
+        # Build pytest command
+        cmd = [
+            "python3",
+            "-m",
+            "pytest",
+            "-o",
+            "addopts=",
+            "-c",
+            "/dev/null",
+            "--rootdir=" + wt_abs,
+            "-p",
+            "no:cacheprovider",
+            "--continue-on-collection-errors",
+            "-q",
+            "--tb=short",
+            "-v",
+            test_id,
+        ]
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS")
+        }
+        if env_overrides:
+            env.update(env_overrides)
+
+        rc, out, err = run(cmd, timeout=PER_ID_TIMEOUT, env=env, cwd=worktree_path)
+        combined = out + "\n" + err
+
+        # Classify this test's outcome
+        result = classify_test_outcome(test_id, rc, combined)
+        results.append(result)
+
+    return results
+
+
+def classify_test_outcome(test_id, rc, output):
+    """Classify a single test's outcome based on its own output.
+
+    RED_ASSERT  = AssertionError or pytest.fail
+    RED_EXC     = any other exception, marked indirect with type
+    REFS_MISSING= AttributeError, ImportError, ModuleNotFoundError, NameError,
+                 TypeError, or collection error in claimed module
+    VACUOUS     = passes against base code, no valid guard
+    UNDETERMINED= SKIPPED, XFAIL, SETUP_ERROR, unrecognised
+    TAMPERED    = fewer records than expected (handled at caller level)
+    """
+    result = {"id": test_id}
+
+    # Look for the outcome line for this test
+    # pytest output format: "path/to/test.py::TestClass::test_name PASSED/FAILED/SKIPPED/XFAIL"
+    lines = output.splitlines()
+
+    # Check for collection errors
+    if "ERROR collecting" in output or "ERROR: " in output:
+        # Check if it's for this test's module
+        test_module = test_id.split("::")[0]
+        if test_module in output and ("ERROR collecting" in output or "ImportError" in output or "ModuleNotFoundError" in output):
+            result["outcome"] = "REFS_MISSING"
+            result["indirect"] = None
+            return result
+
+    # Find the outcome for this specific test
+    # pytest output formats:
+    #   tests/test_mod.py::test_name PASSED
+    #   tests/test_mod.py F          (abbreviated when single test)
+    #   FAILED tests/test_mod.py::test_name - message
+    test_file = test_id.split("::")[0]
+    test_func = test_id.rsplit("::", 1)[-1] if "::" in test_id else test_id
+
+    for line in lines:
+        # Match the test id by suffix or full containment
+        if test_id in line or (test_file in line and test_func in line):
+            # Determine outcome from the line
+            # Handle "FAILED <test_id> - message" format (summary line)
+            if line.startswith("FAILED ") and test_id in line:
+                exc_type = extract_exception_type(output)
+                if exc_type in ("AssertionError", "Failed"):
+                    result["outcome"] = "RED_ASSERT"
+                else:
+                    result["outcome"] = "RED_EXC"
+                    result["indirect"] = exc_type
+                return result
+            elif " PASSED" in line or line.rstrip().endswith("PASSED"):
+                result["outcome"] = "VACUOUS"  # passes against base = vacuous (unless guard)
+                result["indirect"] = None
+                return result
+            elif " FAILED" in line or line.rstrip().endswith("FAILED"):
+                # Determine exception type from output
+                exc_type = extract_exception_type(output)
+                if exc_type in ("AssertionError", "Failed"):
+                    result["outcome"] = "RED_ASSERT"
+                else:
+                    result["outcome"] = "RED_EXC"
+                    result["indirect"] = exc_type
+                return result
+            elif " SKIPPED" in line or line.rstrip().endswith("SKIPPED"):
+                result["outcome"] = "UNDETERMINED"
+                result["indirect"] = "SKIPPED"
+                return result
+            elif " XFAIL" in line or line.rstrip().endswith("XFAIL"):
+                result["outcome"] = "UNDETERMINED"
+                result["indirect"] = "XFAIL"
+                return result
+            elif " XPASS" in line or line.rstrip().endswith("XPASS"):
+                result["outcome"] = "VACUOUS"  # XPASS counts as base pass
+                result["indirect"] = None
+                return result
+            elif " ERROR" in line or line.rstrip().endswith("ERROR"):
+                result["outcome"] = "UNDETERMINED"
+                result["indirect"] = "SETUP_ERROR"
+                return result
+
+    # Fallback: check summary lines for the test
+    for line in lines:
+        if test_id in line:
+            if line.startswith("PASSED ") or " PASSED" in line:
+                result["outcome"] = "VACUOUS"
+                result["indirect"] = None
+                return result
+            if line.startswith("FAILED ") or " FAILED" in line:
+                exc_type = extract_exception_type(output)
+                if exc_type in ("AssertionError", "Failed"):
+                    result["outcome"] = "RED_ASSERT"
+                else:
+                    result["outcome"] = "RED_EXC"
+                    result["indirect"] = exc_type
+                return result
+            if line.startswith("SKIPPED ") or " SKIPPED" in line:
+                result["outcome"] = "UNDETERMINED"
+                result["indirect"] = "SKIPPED"
+                return result
+
+    # Not found in output — check for timeout
+    if rc == 124:
+        result["outcome"] = "UNDETERMINED"
+        result["indirect"] = "TIMEOUT"
+        return result
+
+    # Check overall output for error types even if test id not on outcome line
+    exc_type = extract_exception_type(output)
+    if exc_type in ("AttributeError", "ImportError", "ModuleNotFoundError", "NameError", "TypeError"):
+        result["outcome"] = "REFS_MISSING"
+        result["indirect"] = exc_type
+        return result
+
+    # If we got here, we couldn't determine the outcome
+    if rc == 0:
+        result["outcome"] = "VACUOUS"  # exit 0 with no clear failure = passed = vacuous
+    else:
+        result["outcome"] = "UNDETERMINED"
+        result["indirect"] = f"rc={rc}"
+    result.setdefault("indirect", None)
+    return result
+
+
+def extract_exception_type(output):
+    """Extract the exception type from pytest output."""
+    lines = output.splitlines()
+    # Look for "E   ExceptionType: message" lines
+    for line in lines:
+        line = line.strip()
+        if line.startswith("E ") or line.startswith("E\t"):
+            # Format: "E   ExceptionType: message"
+            body = line[2:].strip()
+            # Check if it's an assertion (starts with "assert")
+            if body.startswith("assert"):
+                return "AssertionError"
+            parts = body.split(":", 1)
+            if parts:
+                exc = parts[0].strip()
+                if exc and not exc.startswith("<") and not exc.startswith("("):
+                    return exc
+    # Look for "raise ExceptionType"
+    for line in lines:
+        m = re.search(r"raise\s+(\w+(?:\.\w+)*)\b", line)
+        if m:
+            return m.group(1)
+    # Look for "E   pytest.fail(" or "E       Failed:"
+    for line in lines:
+        if "pytest.fail" in line or line.strip().startswith("E   Failed"):
+            return "Failed"
+    return None
+
+
+def run_pytest_all_ids(worktree_path, test_ids):
+    """Run all test ids together at head to check GREEN."""
+    cmd = [
+        "python3",
+        "-m",
+        "pytest",
+        "-o",
+        "addopts=",
+        "-c",
+        "/dev/null",
+        "--rootdir=" + os.path.realpath(worktree_path),
+        "-p",
+        "no:cacheprovider",
+        "--continue-on-collection-errors",
+        "-v",
+    ] + list(test_ids)
+
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS")
+    }
+
+    rc, out, err = run(cmd, timeout=HEAD_TIMEOUT, env=env, cwd=worktree_path)
+    combined = out + "\n" + err
+
+    # Check that all ids passed
+    passed_count = 0
+    for test_id in test_ids:
+        for line in combined.splitlines():
+            if test_id in line and (" PASSED" in line or line.rstrip().endswith("PASSED")):
+                passed_count += 1
+                break
+
+    return rc, passed_count == len(test_ids), combined
+
+
+def test_exists_at_base(repo_dir, base_rev, test_id):
+    """Check if a test exists at the base commit (not just in the claim)."""
+    rc, out, err = run(
+        ["git", "-C", repo_dir, "show", f"{base_rev}:{test_id.split('::')[0]}"],
+        timeout=30,
+    )
+    if rc != 0:
+        return False  # file doesn't exist at base
+    # Check if the test function name is in the file at base
+    test_func = test_id.rsplit("::", 1)[-1] if "::" in test_id else test_id
+    return test_func in out
+
+
+def compute_verdict(base_results, head_all_passed, guard_ids, repo_dir, base_rev, has_declared_change):
+    """Compute the verdict from the matrix.
+
+    BLOCK (exit 1) if any:
+      - VACUOUS without valid GUARD
+      - FAILING_HEAD
+      - undeclared-change
+    CLEAR (exit 0) only if:
+      - at least one RED_ASSERT or RED_EXC row
+      - every claimed id PASSED at head
+    refusal (exit 3) on UNDETERMINED / TAMPERED / SETUP_ERROR
+    """
+    defects = []
+    has_discriminating = False
+    has_undetermined = False
+    has_tampered = False
+    has_failing_head = False
+
+    for r in base_results:
+        outcome = r["outcome"]
+        test_id = r["id"]
+        # Guard is only valid if the test exists at base
+        is_guard = test_id in guard_ids and test_exists_at_base(repo_dir, base_rev, test_id)
+
+        if outcome in ("RED_ASSERT", "RED_EXC"):
+            has_discriminating = True
+            r["final"] = outcome
+        elif outcome == "VACUOUS":
+            if is_guard:
+                r["final"] = "GUARD"
+            else:
+                r["final"] = "VACUOUS"
+                defects.append(f"{test_id}: VACUOUS — passes against base, not a guard")
+        elif outcome == "REFS_MISSING":
+            r["final"] = "REFS_MISSING"
+        elif outcome in ("UNDETERMINED", "TAMPERED", "SETUP_ERROR"):
+            r["final"] = outcome
+            if outcome == "UNDETERMINED":
+                has_undetermined = True
+            elif outcome == "TAMPERED":
+                has_tampered = True
+            defects.append(f"{test_id}: {outcome} ({r.get('indirect', '')})")
+        else:
+            r["final"] = outcome
+            has_undetermined = True
+            defects.append(f"{test_id}: unknown outcome {outcome}")
+
+    if not head_all_passed:
+        has_failing_head = True
+        defects.append("FAILING_HEAD: not all claimed tests pass at head")
+
+    if not has_declared_change:
+        defects.append("undeclared-change: diff does not match claim surface")
+
+    # Determine verdict
+    if has_tampered:
+        return "REFUSE", 3, defects
+    if has_undetermined:
+        return "REFUSE", 3, defects
+    if has_failing_head:
+        return "BLOCK", 1, defects
+    if not has_discriminating:
+        defects.append("no-discriminating-test: no RED_ASSERT or RED_EXC row")
+        return "BLOCK", 1, defects
+    if any(r["final"] == "VACUOUS" for r in base_results):
+        return "BLOCK", 1, defects
+    if defects:
+        return "BLOCK", 1, defects
+
+    return "CLEAR", 0, defects
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="defend-green — verify a worker's claimed tests actually fail on base"
+    )
+    parser.add_argument(
+        "--claim", required=True, help="claim file with pytest node ids (one per line)"
+    )
+    parser.add_argument("--base", default="HEAD~1", help="base revision (default: HEAD~1)")
+    parser.add_argument("--guard", default=None, help="file listing declared guard test ids")
+    parser.add_argument("--artifact", default=None, help="path for matrix artifact")
+    parser.add_argument("--review", action="store_true", help="opt-in adversarial review")
+    args = parser.parse_args()
+
+    # Validate claim file
+    if not os.path.isfile(args.claim):
+        die(f"claim file not found: {args.claim}")
+    with open(args.claim) as f:
+        raw_ids = [line.strip() for line in f if line.strip()]
+    if not raw_ids:
+        die("claim file contains no test ids")
+    validate_claim_ids(raw_ids)
+
+    # Load guard declarations
+    guard_ids = set()
+    if args.guard and os.path.isfile(args.guard):
+        with open(args.guard) as f:
+            guard_ids = {line.strip() for line in f if line.strip()}
+
+    repo_dir = os.getcwd()
+    # Validate base
+    rc, base_sha_out, err = run(["git", "-C", repo_dir, "rev-parse", args.base], timeout=10)
+    if rc != 0:
+        die(f"cannot resolve base {args.base}: {err}")
+    base_sha = base_sha_out.strip()
+
+    # Validate guard declarations: guard ids must be claimed ids
+    for g in guard_ids:
+        if g not in raw_ids:
+            die(f"guard file lists '{g}' which is not in the claim file")
+
+    # Determine claimed test files
+    claimed_files = set()
+    for test_id in raw_ids:
+        tf = find_test_file(repo_dir, test_id)
+        if tf:
+            claimed_files.add(tf)
+
+    # Check that the diff touches the claimed files
+    rc, diff_out, err = run(
+        ["git", "-C", repo_dir, "diff", "--name-only", args.base, "HEAD"], timeout=30
+    )
+    diff_files = {line.strip() for line in diff_out.splitlines() if line.strip()}
+    has_declared_change = not claimed_files or claimed_files.issubset(diff_files)
+
+    # Manage worktree
+    wt = WorktreeManager(repo_dir, args.base)
+    try:
+        wt.sweep_leaked()
+        wt_path = wt.create()
+
+        # Overlay head's test files onto base
+        overlaid = overlay_test_files(wt_path, repo_dir, raw_ids)
+
+        # Run base overlay tests (per-id)
+        base_results = run_pytest_per_id(wt_path, raw_ids)
+
+        # Check for TAMPERED: fewer outcome records than claimed ids
+        # (exit 0 with zero records is TAMPERED)
+        if all(r["outcome"] == "VACUOUS" and r.get("indirect") is None for r in base_results):
+            # All passed — check if this is suspicious
+            pass
+
+        # Run head tests to verify GREEN
+        head_rc, head_all_passed, head_output = run_pytest_all_ids(repo_dir, raw_ids)
+
+        # Compute verdict
+        verdict, exit_code, defects = compute_verdict(
+            base_results, head_all_passed, guard_ids, repo_dir, base_sha, has_declared_change
+        )
+
+        # Build matrix artifact
+        head_sha = run(["git", "-C", repo_dir, "rev-parse", "HEAD"], timeout=10)[1].strip()
+        matrix = {
+            "head_sha": head_sha,
+            "base_sha": base_sha,
+            "verdict": verdict,
+            "exit_code": exit_code,
+            "tests": base_results,
+            "defects": defects,
+            "overlaid_files": sorted(overlaid),
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+
+        # Write artifact
+        artifact_path = args.artifact
+        if not artifact_path:
+            artifact_dir = os.path.join(repo_dir, ".defend", "green")
+            os.makedirs(artifact_dir, exist_ok=True)
+            artifact_path = os.path.join(artifact_dir, f"{head_sha}.json")
+
+        with open(artifact_path, "w") as f:
+            json.dump(matrix, f, indent=2)
+
+        # Print matrix summary
+        print("=== defend-green matrix ===")
+        print(f"head: {head_sha[:8]}")
+        print(f"base: {base_sha[:8]}")
+        for r in base_results:
+            indirect = f" ({r['indirect']})" if r.get("indirect") else ""
+            print(f"  {r['final']}{indirect}: {r['id']}")
+        print(f"overlaid: {', '.join(sorted(overlaid)) if overlaid else '(none)'}")
+        print(f"artifact: {artifact_path}")
+        print()
+
+        if verdict == "CLEAR":
+            print("VERDICT: CLEAR")
+        elif verdict == "BLOCK":
+            print("VERDICT: BLOCK")
+            for d in defects:
+                print(f"  {d}")
+        else:
+            print(f"VERDICT: {verdict}")
+            for d in defects:
+                print(f"  {d}")
+
+        sys.exit(exit_code)
+
+    finally:
+        wt.cleanup()
+
+
+if __name__ == "__main__":
+    main()

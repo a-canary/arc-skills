@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# defend-green-test — acceptance test for defend-green (Case A only)
+#
+# Case A: deterministic fixture, scratch repo built by the test.
+# - base commit with one pre-existing test
+# - head commit adds: (a) genuine RED-to-GREEN test, (b) vacuous undeclared test,
+#   (c) vacuous test wrongly labelled as guard (must stay VACUOUS)
+# - pre-existing test is declared guard (must rate GUARD)
+# Expected: RED_ASSERT / VACUOUS / VACUOUS / GUARD, exit 1 (BLOCK)
+set -euo pipefail
+die() { echo "defend-green-test: $*" >&2; exit 1; }
+self=$(dirname "$(readlink -f "$0")")
+
+# Build scratch repo
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+cd "$scratch"
+git init -q
+git config user.name "defend-green-test"
+git config user.email "test@defend-green"
+
+# Base: module with a bug, one pre-existing test
+mkdir -p tests
+cat > mod.py <<'PYEOF'
+def compute(x):
+    return x + 1
+
+
+def double(x):
+    return x + 1  # Bug: should be x * 2
+PYEOF
+
+cat > tests/test_mod.py <<'PYEOF'
+from mod import compute
+
+
+def test_preexisting_guard():
+    """This test exists at base and is unchanged at head."""
+    assert compute(1) == 2
+PYEOF
+
+git add -A
+git commit -q -m "base: initial module and guard test"
+
+# Head: fix the bug + three new tests, leave guard unchanged
+cat > mod.py <<'PYEOF'
+def compute(x):
+    return x + 1
+
+
+def double(x):
+    return x * 2  # Fixed
+PYEOF
+
+cat > tests/test_mod.py <<'PYEOF'
+from mod import compute, double
+
+
+def test_preexisting_guard():
+    """This test exists at base and is unchanged at head."""
+    assert compute(1) == 2
+
+
+def test_double_red():
+    """Genuinely fails against base code: double(5) was 6, now 10."""
+    result = double(5)
+    assert result == 10
+
+
+def test_vacuous_undeclared():
+    """Passes against base code, not declared as guard."""
+    assert compute(1) == 2
+
+
+def test_vacuous_wrong_guard():
+    """Passes against base code, wrongly labelled as guard (must stay VACUOUS)."""
+    assert compute(2) == 3
+PYEOF
+
+git add -A
+git commit -q -m "head: fix double() and add tests"
+
+# Claim file: all four test ids
+cat > claim.txt <<'EOF'
+tests/test_mod.py::test_double_red
+tests/test_mod.py::test_vacuous_undeclared
+tests/test_mod.py::test_vacuous_wrong_guard
+tests/test_mod.py::test_preexisting_guard
+EOF
+
+# Guard file: declares two guards (one valid, one wrongly declared on new test)
+cat > guard.txt <<'EOF'
+tests/test_mod.py::test_vacuous_wrong_guard
+tests/test_mod.py::test_preexisting_guard
+EOF
+
+# Run defend-green
+echo "=== Running defend-green ==="
+set +e
+python3 "$self/defend-green" \
+    --claim claim.txt \
+    --guard guard.txt \
+    --base HEAD~1 \
+    --artifact matrix.json
+rc=$?
+set -e
+echo "exit code: $rc"
+echo ""
+
+# Verify exit code is 1 (BLOCK)
+if [ "$rc" -ne 1 ]; then
+    die "expected exit 1 (BLOCK), got $rc"
+fi
+
+# Verify matrix artifact
+if [ ! -f matrix.json ]; then
+    die "matrix artifact matrix.json not found"
+fi
+
+echo "=== Verifying matrix ==="
+python3 - <<'PYEOF'
+import json
+import sys
+
+with open("matrix.json") as f:
+    matrix = json.load(f)
+
+verdict = matrix["verdict"]
+tests = matrix["tests"]
+
+# Build expected map: test id suffix -> expected outcome
+expected = {
+    "test_double_red": "RED_ASSERT",
+    "test_vacuous_undeclared": "VACUOUS",
+    "test_vacuous_wrong_guard": "VACUOUS",
+    "test_preexisting_guard": "GUARD",
+}
+
+errors = []
+for t in tests:
+    tid = t["id"]
+    final = t["final"]
+    # Match by suffix
+    for suffix, exp in expected.items():
+        if tid.endswith(suffix):
+            if final != exp:
+                errors.append(f"{tid}: expected {exp}, got {final}")
+            break
+
+if errors:
+    for e in errors:
+        print(f"FAIL: {e}", file=sys.stderr)
+    sys.exit(1)
+
+if verdict != "BLOCK":
+    print(f"FAIL: expected verdict BLOCK, got {verdict}", file=sys.stderr)
+    sys.exit(1)
+
+print("All matrix checks passed.")
+PYEOF
+
+echo ""
+echo "=== Case A: PASS ==="
