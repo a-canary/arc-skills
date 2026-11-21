@@ -17,15 +17,19 @@
 set -euo pipefail
 die() { echo "defend-receipt: $*" >&2; exit 2; }
 self=$(dirname "$(readlink -f "$0")")   # before any cd: a relative $0 resolves against the caller's cwd
-usage='usage: defend-receipt CLEAR|BLOCK <pr> <reviewed-sha> [-R owner/repo] "<summary>"'
+usage='usage: defend-receipt CLEAR|BLOCK <pr> <reviewed-sha> [-R owner/repo] [--by MODEL] "<summary>"'
 [ $# -ge 4 ] || die "$usage"
 verdict=$1
 case $verdict in CLEAR) state=success ;; BLOCK) state=failure ;; *) die "$usage" ;; esac
 pr=$2 sha=${3,,}; shift 3
 [[ $pr =~ ^[0-9]+$ ]] || die "PR number must be digits, got '$pr'"   # printed back as a command: never paste an argument through
-repo= summary=
+repo= summary= by=
 while [ $# -gt 0 ]; do
-  case $1 in -R) [ $# -ge 2 ] || die "$usage"; repo=$2; shift 2 ;; *) summary+="${summary:+ }$1"; shift ;; esac
+  case $1 in
+    -R) [ $# -ge 2 ] || die "$usage"; repo=$2; shift 2 ;;
+    --by) [ $# -ge 2 ] || die "$usage"; by=$2; shift 2 ;;
+    *) summary+="${summary:+ }$1"; shift ;;
+  esac
 done
 [ -n "$summary" ] || die "$usage"
 [[ $sha =~ ^[0-9a-f]{7,40}$ ]] || die "reviewed sha must be 7-40 hex chars, got '$sha'"
@@ -64,7 +68,9 @@ if [ "$verdict" = CLEAR ]; then
   [ -z "$bench" ] || (cd "$top" && "$self/champion-check" "$base") >&2 || die "champion check failed"
 fi
 
-gh api -X POST "repos/$p/statuses/$head" -f state=$state -f context=defend/merge -f "description=${summary:0:140}" >/dev/null
+desc=$summary
+if [ -n "$by" ]; then desc="$summary (by=$by)"; fi
+gh api -X POST "repos/$p/statuses/$head" -f state=$state -f context=defend/merge -f "description=${desc:0:140}" >/dev/null
 echo "defend-receipt: $verdict → defend/merge=$state on $p@${head:0:7}"
 # repos-kbefs: a CLEAR that does not say how to merge leaves the seat to invent a gh command the
 # guard refuses for its shape. Print both spellings: the helper (checks the head, then merges), and
