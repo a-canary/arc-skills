@@ -1,0 +1,734 @@
+#!/usr/bin/env python3
+"""defend-sandbox — run base+overlay pytest node ids under bwrap (repos-tmckz).
+
+Usage:
+    defend-sandbox --repo DIR --base REF --claim FILE [--json OUT] [--site DIR] [--allow-net]
+
+Exit:
+    0 CLEAR
+    1 BLOCK (TAMPERED or enforced refusal)
+    2 UNDETERMINED
+"""
+
+import argparse
+import hashlib
+import hmac
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+
+
+# Files/patterns that the overlay (head tree) is never allowed to add or change.
+OVERLAY_NEVER_NAMES = {
+    "conftest.py",
+    "pyproject.toml",
+    "setup.cfg",
+    "tox.ini",
+    "pytest.ini",
+    "sitecustomize.py",
+    "usercustomize.py",
+}
+OVERLAY_NEVER_PATTERNS = [re.compile(r".*\.pth$")]
+
+
+def is_overlay_never(path):
+    """Return True if a path (relative to tree root) matches the overlay-never set."""
+    name = os.path.basename(path)
+    if name in OVERLAY_NEVER_NAMES:
+        return True
+    for pat in OVERLAY_NEVER_PATTERNS:
+        if pat.match(name):
+            return True
+    return False
+
+
+# Trusted pytest plugin, generated into a tempdir outside the repo tree.
+SBXPLUG_SOURCE = r'''import hashlib
+import hmac
+import json
+import os
+
+import pytest
+
+CHAN_FD = int(os.environ["SBX_CHAN_FD"])
+
+
+def _make_plugin():
+    # Read the per-run HMAC key delivered in-band before any overlay code runs.
+    buf = b""
+    while b"\n" not in buf:
+        ch = os.read(CHAN_FD, 1)
+        if not ch:
+            break
+        buf += ch
+    KEY = bytes.fromhex(buf.decode().strip())
+
+    # Mutable state shared by hook methods via closure.
+    # The record is flat: id, exitstatus, outcome, phases, excinfo, late.
+    # All six fields are raw observations; no verdict fields are sent.
+    _late = []
+    _session_started = [False]
+    _records = {}
+    _ids = []
+
+    def _hmac(payload_bytes):
+        return hmac.new(KEY, payload_bytes, hashlib.sha256).hexdigest()
+
+    def _send(payload_dict):
+        payload = json.dumps(payload_dict, separators=(",", ":"), sort_keys=True).encode()
+        auth = _hmac(payload)
+        os.write(CHAN_FD, f"{auth} ".encode() + payload + b"\n")
+
+    class SbxPlug:
+        @pytest.hookimpl(tryfirst=True)
+        def pytest_sessionstart(self, session):
+            _session_started[0] = True
+
+        @pytest.hookimpl(tryfirst=True)
+        def pytest_plugin_registered(self, plugin, manager):
+            if not _session_started[0]:
+                return
+            mod = getattr(plugin, "__module__", None)
+            if mod is None:
+                mod = getattr(type(plugin), "__module__", None)
+            if mod:
+                _late.append(mod)  # raw, unfiltered; parent applies _pytest.* exemption
+
+        @pytest.hookimpl(tryfirst=True)
+        def pytest_runtest_setup(self, item):
+            if item.nodeid not in _ids:
+                _ids.append(item.nodeid)
+
+        @pytest.hookimpl(hookwrapper=True, tryfirst=True)
+        def pytest_runtest_makereport(self, item, call):
+            rec = _records.setdefault(item.nodeid, {
+                "phases": 0,
+                "excinfo": False,
+                "outcome": None,
+            })
+            rec["phases"] += 1
+            outcome = yield
+            try:
+                report = outcome.get_result()
+            except Exception:
+                report = None
+            if report is None:
+                return
+            if call.when == "call":
+                if report.outcome == "passed" and call.excinfo is not None:
+                    rec["excinfo"] = True
+                rec["outcome"] = report.outcome
+            elif call.when == "setup" and rec["outcome"] is None:
+                rec["outcome"] = report.outcome
+
+        @pytest.hookimpl(tryfirst=True)
+        def pytest_sessionfinish(self, exitstatus, session):
+            for nodeid in (_ids or [None]):
+                rec = _records.get(nodeid, {
+                    "phases": 0,
+                    "excinfo": False,
+                    "outcome": None,
+                })
+                _send({
+                    "id": nodeid,
+                    "exitstatus": exitstatus,
+                    "outcome": rec["outcome"],
+                    "phases": rec["phases"],
+                    "excinfo": rec["excinfo"],
+                    "late": list(_late),
+                })
+
+    return SbxPlug()
+
+
+def pytest_configure(config):
+    config.pluginmanager.register(_make_plugin(), name="sbxplug-internal")
+'''
+
+
+def die(msg, code=2):
+    print(f"defend-sandbox: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def run_capture(cmd, cwd=None, env=None, timeout=120):
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+    except subprocess.TimeoutExpired:
+        return 124, "", "timeout"
+    except Exception as e:
+        return 1, "", str(e)
+
+
+def detect_site_dir():
+    """Return the site-packages directory containing pytest."""
+    try:
+        rc, out, err = run_capture(
+            [sys.executable, "-c", "import os, pytest; print(pytest.__file__)"]
+        )
+        if rc != 0:
+            return None
+        path = out.strip()
+        # pytest/__init__.py -> site-packages
+        while path and path != "/":
+            if os.path.basename(path) == "site-packages":
+                return path
+            path = os.path.dirname(path)
+    except Exception:
+        pass
+    return None
+
+
+def materialize_tree(repo_dir, ref, dest_dir):
+    """Materialize git tree for ref into dest_dir using git archive | tar -x."""
+    archive_proc = subprocess.Popen(
+        ["git", "-C", repo_dir, "archive", ref],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    tar_proc = subprocess.Popen(
+        ["tar", "-x", "-C", dest_dir],
+        stdin=archive_proc.stdout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    archive_proc.stdout.close()
+    tar_out, tar_err = tar_proc.communicate(timeout=60)
+    arc_out, arc_err = archive_proc.communicate(timeout=60)
+    if archive_proc.returncode != 0:
+        raise RuntimeError(f"git archive {ref} failed: {arc_err.decode()}")
+    if tar_proc.returncode != 0:
+        raise RuntimeError(f"tar failed: {tar_err.decode()}")
+
+
+def file_hash(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(65536)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def check_overlay_never(head_dir, base_dir):
+    """Return list of paths in head that add/change an overlay-never file."""
+    violations = []
+    for root, dirs, files in os.walk(head_dir):
+        for name in files:
+            rel = os.path.relpath(os.path.join(root, name), head_dir)
+            if not is_overlay_never(rel):
+                continue
+            base_path = os.path.join(base_dir, rel)
+            head_path = os.path.join(head_dir, rel)
+            if not os.path.exists(base_path):
+                violations.append(rel)
+                continue
+            if file_hash(base_path) != file_hash(head_path):
+                violations.append(rel)
+    return violations
+
+
+def build_bwrap_cmd(tree_dir, trusted_dir, site_dir, nodeid, child_fd, allow_net,
+                    decoy_marker, claim_path, output_path, repo_path):
+    """Return bwrap argv."""
+    cmd = [
+        "bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--hostname", "sbx",
+    ]
+    if allow_net:
+        cmd.append("--share-net")
+    cmd.extend([
+        "--ro-bind", "/usr", "/usr",
+        "--ro-bind", "/lib", "/lib",
+        "--ro-bind", "/lib64", "/lib64",
+        "--ro-bind", "/bin", "/bin",
+        "--ro-bind", "/etc/ld.so.cache", "/etc/ld.so.cache",
+        "--ro-bind", site_dir, "/site",
+        "--ro-bind", trusted_dir, "/trusted",
+        "--ro-bind", tree_dir, "/work",
+        "--chdir", "/work",
+        "--proc", "/proc",
+        "--dev", "/dev",
+        "--tmpfs", "/tmp",
+        "--tmpfs", "/dev/shm",
+        "--setenv", "HOME", "/tmp/home",
+        "--setenv", "PYTHONPATH", "/trusted:/site",
+        "--setenv", "PYTHONDONTWRITEBYTECODE", "1",
+        "--setenv", "PYTHONSAFEPATH", "1",
+        "--setenv", "SBX_CHAN_FD", str(child_fd),
+        "--setenv", "SBX_DECOY_MARKER", decoy_marker,
+        "--setenv", "SBX_CLAIM_PATH", claim_path,
+        "--setenv", "SBX_OUTPUT_PATH", output_path,
+        "--setenv", "SBX_REPO_PATH", repo_path,
+        "/usr/bin/python3",
+        "-m", "pytest",
+        "-q",
+        "-p", "no:cacheprovider",
+        "-p", "sbxplug",
+        nodeid,
+    ])
+    return cmd
+
+
+def materialize_working_tree(repo_dir, dest_dir):
+    """Materialize the current working tree (including untracked files) into dest_dir.
+
+    Uses a temporary git index and a temporary object directory so the
+    repository being audited is not written to.
+    """
+    objects_proc = subprocess.run(
+        ["git", "-C", repo_dir, "rev-parse", "--path-format=absolute", "--git-path", "objects"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if objects_proc.returncode != 0:
+        raise RuntimeError(f"git rev-parse objects failed: {objects_proc.stderr.decode()}")
+    objects = objects_proc.stdout.decode().strip()
+
+    with tempfile.TemporaryDirectory(prefix="sbx-objdir-") as objdir, \
+         tempfile.TemporaryDirectory(prefix="sbx-index-") as indexdir:
+        index_file = os.path.join(indexdir, "index")
+        env = os.environ.copy()
+        env["GIT_INDEX_FILE"] = index_file
+        env["GIT_OBJECT_DIRECTORY"] = objdir
+        env["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = objects
+        add_proc = subprocess.run(
+            ["git", "add", "-A"],
+            cwd=repo_dir,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if add_proc.returncode != 0:
+            raise RuntimeError(f"git add failed: {add_proc.stderr.decode()}")
+        write_proc = subprocess.run(
+            ["git", "write-tree"],
+            cwd=repo_dir,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if write_proc.returncode != 0:
+            raise RuntimeError(f"git write-tree failed: {write_proc.stderr.decode()}")
+        tree = write_proc.stdout.decode().strip()
+        archive_proc = subprocess.Popen(
+            ["git", "-C", repo_dir, "archive", tree],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        tar_proc = subprocess.Popen(
+            ["tar", "-x", "-C", dest_dir],
+            stdin=archive_proc.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        archive_proc.stdout.close()
+        tar_out, tar_err = tar_proc.communicate(timeout=60)
+        arc_out, arc_err = archive_proc.communicate(timeout=60)
+        if archive_proc.returncode != 0:
+            raise RuntimeError(f"git archive {tree} failed: {arc_err.decode()}")
+        if tar_proc.returncode != 0:
+            raise RuntimeError(f"tar failed: {tar_err.decode()}")
+
+
+def run_one_sandbox(repo_dir, ref, nodeid, site_dir, allow_net, claim_path,
+                    decoy_marker, output_path, base_dir=None, use_worktree=False):
+    """Run a single sandboxed pytest invocation for nodeid at ref.
+
+    Returns a dict:
+      status: "PASS" | "FAIL" | "RED" | "UNDETERMINED" | "BLOCK" | "TAMPERED:<reason>"
+      provenance: "sandboxed(check)" | "sandboxed(net)"
+      details: dict with raw fields for JSON output
+    """
+    provenance = "sandboxed(net)" if allow_net else "sandboxed(check)"
+
+    with tempfile.TemporaryDirectory(prefix="sbx-tree-") as tree_dir:
+        try:
+            if use_worktree:
+                materialize_working_tree(repo_dir, tree_dir)
+            else:
+                materialize_tree(repo_dir, ref, tree_dir)
+        except Exception as e:
+            return {
+                "status": "UNDETERMINED",
+                "reason": f"materialize-error:{e}",
+                "provenance": provenance,
+                "details": {"reason": f"materialize-error:{e}"},
+            }
+
+        # For head runs, enforce overlay-never against the base tree.
+        if base_dir is not None:
+            violations = check_overlay_never(tree_dir, base_dir)
+            if violations:
+                reason = f"overlay-never:{','.join(violations)}"
+                return {
+                    "status": "BLOCK",
+                    "reason": reason,
+                    "provenance": provenance,
+                    "details": {"reason": reason, "violations": violations},
+                }
+
+        with tempfile.TemporaryDirectory(prefix="sbx-trusted-") as trusted_dir:
+            plug_path = os.path.join(trusted_dir, "sbxplug.py")
+            with open(plug_path, "w") as f:
+                f.write(SBXPLUG_SOURCE)
+
+            parent_fd, child_fd = socket.socketpair()
+            key = os.urandom(32)
+            os.write(parent_fd.fileno(), key.hex().encode() + b"\n")
+
+            cmd = build_bwrap_cmd(
+                tree_dir=tree_dir,
+                trusted_dir=trusted_dir,
+                site_dir=site_dir,
+                nodeid=nodeid,
+                child_fd=child_fd.fileno(),
+                allow_net=allow_net,
+                decoy_marker=decoy_marker,
+                claim_path=claim_path,
+                output_path=output_path,
+                repo_path=repo_dir,
+            )
+
+            # Open the claim file as a decoy handle that must NOT leak into the
+            # child.  pass_fds only carries the channel fd, so close_fds=True
+            # closes this one in the child.  If that ever changes, the sandboxed
+            # probe will see the marker and fail.
+            claim_fd = os.open(claim_path, os.O_RDONLY)
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    pass_fds=[child_fd.fileno()],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+            finally:
+                os.close(claim_fd)
+            child_fd.close()
+
+            try:
+                stdout, stderr = proc.communicate(timeout=120)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                stdout, stderr = proc.communicate()
+                rc = 124
+            else:
+                rc = proc.returncode
+
+            # Read the report channel to EOF.
+            parent_fd.shutdown(socket.SHUT_WR)
+            chunks = []
+            while True:
+                chunk = os.read(parent_fd.fileno(), 4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            channel_bytes = b"".join(chunks)
+            parent_fd.close()
+
+            lines = [line for line in channel_bytes.split(b"\n") if line]
+
+            details = {
+                "exitstatus": rc,
+                "channel_lines": len(lines),
+                "stderr_tail": stderr.decode("utf-8", "replace")[-500:],
+            }
+
+            # Rule 1: no terminal record.
+            if len(lines) == 0:
+                return {
+                    "status": "TAMPERED:truncated",
+                    "provenance": provenance,
+                    "details": details,
+                }
+
+            # Rule 2: exactly one line.
+            if len(lines) > 1:
+                return {
+                    "status": "TAMPERED:channel",
+                    "provenance": provenance,
+                    "details": details,
+                }
+
+            line = lines[0]
+            if b" " not in line:
+                return {
+                    "status": "TAMPERED:auth",
+                    "provenance": provenance,
+                    "details": details,
+                }
+
+            got_auth, payload = line.split(b" ", 1)
+            expected_auth = hmac.new(key, payload, hashlib.sha256).hexdigest().encode()
+            if not hmac.compare_digest(got_auth, expected_auth):
+                return {
+                    "status": "TAMPERED:auth",
+                    "provenance": provenance,
+                    "details": details,
+                }
+
+            try:
+                record = json.loads(payload.decode("utf-8"))
+            except Exception as e:
+                return {
+                    "status": "TAMPERED:auth",
+                    "provenance": provenance,
+                    "details": details,
+                }
+
+            details["record"] = record
+
+            # Rule 3: record.exitstatus must match observed process exit status.
+            if record.get("exitstatus") != rc:
+                return {
+                    "status": "TAMPERED:exit",
+                    "provenance": provenance,
+                    "details": details,
+                }
+
+            # Rule 7: non-0/1 process exit is never PASS and never TAMPERED.
+            # Applied here so Rules 4-6 cannot label an interrupted run TAMPERED.
+            if rc not in (0, 1):
+                reason = f"pytest-exit({rc})"
+                return {
+                    "status": "UNDETERMINED",
+                    "reason": reason,
+                    "provenance": provenance,
+                    "details": {**details, "reason": reason},
+                }
+
+            # Rule 4: the line must be about the claimed id.
+            rec_id = record.get("id")
+            if rec_id != nodeid:
+                return {
+                    "status": "TAMPERED:missing-id",
+                    "provenance": provenance,
+                    "details": details,
+                }
+
+            # Rule 5: late plugin registration (parent filters _pytest.* exemption).
+            late = record.get("late") or []
+            bad_late = sorted(m for m in late if not m.startswith("_pytest."))
+            if bad_late:
+                return {
+                    "status": f"TAMPERED:late-plugin:{bad_late[0]}",
+                    "provenance": provenance,
+                    "details": details,
+                }
+
+            # Rule 6a: outcome rewrite observed post-yield.
+            if record.get("excinfo") is True:
+                return {
+                    "status": "TAMPERED:outcome-rewritten",
+                    "provenance": provenance,
+                    "details": details,
+                }
+
+            # Rule 6b: hook chain exclusion, checked against the implied report set.
+            phases = record.get("phases", 0)
+            outcome = record.get("outcome")
+            if phases == 0 or (outcome == "passed" and phases != 3):
+                return {
+                    "status": "TAMPERED:hook-suppressed",
+                    "provenance": provenance,
+                    "details": details,
+                }
+
+            # Translate honest pytest outcomes.
+            outcome = record.get("outcome")
+            if outcome in ("skipped", "xfailed"):
+                reason = "skipped/xfail"
+                return {
+                    "status": "UNDETERMINED",
+                    "reason": reason,
+                    "provenance": provenance,
+                    "details": {**details, "reason": reason},
+                }
+
+            if rc == 0 and outcome == "passed":
+                return {
+                    "status": "PASS",
+                    "provenance": provenance,
+                    "details": details,
+                }
+            if rc == 1 and outcome == "failed":
+                return {
+                    "status": "FAIL",
+                    "provenance": provenance,
+                    "details": details,
+                }
+
+            return {
+                "status": "UNDETERMINED",
+                "reason": f"unclassified outcome:{outcome} exit:{rc}",
+                "provenance": provenance,
+                "details": {**details, "reason": f"unclassified outcome:{outcome} exit:{rc}"},
+            }
+
+
+def read_claim(path):
+    ids = []
+    with open(path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith("SBXDECOY-"):
+                continue
+            ids.append(line)
+    return ids
+
+
+def add_decoy_to_claim(claim_path):
+    """Prepend a unique content marker to the claim file and return it."""
+    marker = "SBXDECOY-" + os.urandom(16).hex()
+    with open(claim_path, "r+") as f:
+        content = f.read()
+        f.seek(0)
+        f.write(marker + "\n" + content)
+        f.truncate()
+    return marker
+
+
+def main():
+    parser = argparse.ArgumentParser(description="sandboxed base+overlay pytest runner")
+    parser.add_argument("--repo", required=True, help="path to git repository")
+    parser.add_argument("--base", required=True, help="base ref (commit/branch/tag)")
+    parser.add_argument("--claim", required=True, help="file listing pytest node ids")
+    parser.add_argument("--json", dest="json_out", help="write machine-readable matrix to FILE")
+    parser.add_argument("--site", dest="site_dir", help="site-packages directory to bind read-only")
+    parser.add_argument("--allow-net", action="store_true", help="retain network namespace (stamps provenance)")
+    args = parser.parse_args()
+
+    repo_dir = os.path.abspath(args.repo)
+    if not os.path.isdir(os.path.join(repo_dir, ".git")):
+        die(f"not a git repository: {repo_dir}")
+
+    if not os.path.isfile(args.claim):
+        die(f"claim file not found: {args.claim}")
+
+    site_dir = args.site_dir
+    if site_dir is None:
+        site_dir = detect_site_dir()
+    if site_dir is None or not os.path.isdir(site_dir):
+        die(f"cannot locate site-packages (use --site); pytest may be missing", code=2)
+    site_dir = os.path.abspath(site_dir)
+
+    claim_ids = read_claim(args.claim)
+    if not claim_ids:
+        die("claim file is empty")
+
+    # Materialize base tree once for overlay-never comparison.
+    with tempfile.TemporaryDirectory(prefix="sbx-base-") as base_tree_dir:
+        try:
+            materialize_tree(repo_dir, args.base, base_tree_dir)
+        except Exception as e:
+            die(f"cannot materialize base tree {args.base}: {e}")
+
+        claim_path = os.path.abspath(args.claim)
+        output_path = os.path.abspath(args.json_out) if args.json_out else ""
+        decoy_marker = add_decoy_to_claim(claim_path)
+
+        rows = []
+        for nodeid in claim_ids:
+            base_result = run_one_sandbox(
+                repo_dir=repo_dir,
+                ref=args.base,
+                nodeid=nodeid,
+                site_dir=site_dir,
+                allow_net=args.allow_net,
+                claim_path=claim_path,
+                decoy_marker=decoy_marker,
+                output_path=output_path,
+                base_dir=None,
+            )
+            head_result = run_one_sandbox(
+                repo_dir=repo_dir,
+                ref="HEAD",
+                nodeid=nodeid,
+                site_dir=site_dir,
+                allow_net=args.allow_net,
+                claim_path=claim_path,
+                decoy_marker=decoy_marker,
+                output_path=output_path,
+                base_dir=base_tree_dir,
+                use_worktree=True,
+            )
+
+            # Base failure is labelled RED.
+            base_status = base_result["status"]
+            if base_status == "FAIL":
+                base_status = "RED"
+
+            # Determine row verdict.
+            statuses = [base_result["status"], head_result["status"]]
+            if any(s.startswith("TAMPERED:") for s in statuses):
+                row_verdict = "BLOCK"
+            elif any(s == "UNDETERMINED" for s in statuses):
+                row_verdict = "UNDETERMINED"
+            else:
+                row_verdict = "CLEAR"
+
+            rows.append({
+                "id": nodeid,
+                "base": base_status,
+                "head": head_result["status"],
+                "verdict": row_verdict,
+                "provenance": head_result["provenance"],
+                "base_details": base_result.get("details", {}),
+                "head_details": head_result.get("details", {}),
+            })
+
+    # Print matrix.
+    print(f"{'id':<50} {'base':<20} {'head':<20} {'verdict':<14} {'provenance'}")
+    for row in rows:
+        print(
+            f"{row['id']:<50} {row['base']:<20} {row['head']:<20} "
+            f"{row['verdict']:<14} {row['provenance']}"
+        )
+
+    # Write JSON.
+    if args.json_out:
+        output = {
+            "repo": repo_dir,
+            "base": args.base,
+            "allow_net": args.allow_net,
+            "verdict": None,
+            "rows": rows,
+        }
+        if any(r["verdict"] == "BLOCK" for r in rows):
+            output["verdict"] = "BLOCK"
+        elif any(r["verdict"] == "UNDETERMINED" for r in rows):
+            output["verdict"] = "UNDETERMINED"
+        else:
+            output["verdict"] = "CLEAR"
+        with open(args.json_out, "w") as f:
+            json.dump(output, f, indent=2)
+
+    # Exit code.
+    if any(r["verdict"] == "BLOCK" for r in rows):
+        sys.exit(1)
+    if any(r["verdict"] == "UNDETERMINED" for r in rows):
+        sys.exit(2)
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
