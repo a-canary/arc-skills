@@ -49,6 +49,16 @@ def write(path, content):
         f.write(content)
 
 
+def count_objects(repo):
+    proc = run(["git", "count-objects", "-v"], cwd=repo, capture=True)
+    return proc.stdout
+
+
+def fsck_dangling(repo):
+    proc = run(["git", "fsck", "--dangling"], cwd=repo, capture=True, check=False)
+    return proc.stdout + proc.stderr
+
+
 def invoke(repo, base, claim_path, extra_args=None):
     extra_args = extra_args or []
     json_path = os.path.join(tempfile.mkdtemp(prefix="sbx-out-"), "matrix.json")
@@ -557,6 +567,37 @@ def test_fixerr(broken):
     print("N fixture error is not sabotage ................. PASS")
 
 
+def case_o_audited_repo_unpolluted():
+    repo = fresh_repo()
+    write(os.path.join(repo, "tests", "test_ok.py"), "def test_ok(): pass\n")
+    commit_all(repo, "base")
+    # Dirty the working tree so materialize_working_tree() would have to write
+    # new blobs and a dangling tree if it used the audited repo's object store.
+    tracked = os.path.join(repo, "tracked.txt")
+    write(tracked, "modified\n")
+    write(os.path.join(repo, "untracked.txt"), "untracked\n")
+
+    before_count = count_objects(repo)
+    before_fsck = fsck_dangling(repo)
+
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_ok.py::test_ok\n")
+    rc, data = invoke(repo, "HEAD", claim)
+
+    after_count = count_objects(repo)
+    after_fsck = fsck_dangling(repo)
+
+    assert rc == 0, f"exit {rc}"
+    assert_row(data, "CLEAR", "PASS", "PASS")
+    assert before_count == after_count, (
+        f"object count changed:\nbefore:\n{before_count}\nafter:\n{after_count}"
+    )
+    assert before_fsck == after_fsck, (
+        f"fsck --dangling output changed:\nbefore:\n{before_fsck}\nafter:\n{after_fsck}"
+    )
+    print("O audited repo unpolluted ..................... PASS")
+
+
 def main():
     if not os.path.exists(SCRIPT):
         print(f"defend-sandbox-test: missing script {SCRIPT}", file=sys.stderr)
@@ -582,6 +623,7 @@ def main():
         case_l_residuals,
         case_m_honest_nonzero,
         case_n_fixture_error,
+        case_o_audited_repo_unpolluted,
     ]
 
     failed = []
@@ -596,7 +638,7 @@ def main():
         print(f"\n{len(failed)} case(s) failed: {', '.join(failed)}", file=sys.stderr)
         return 1
 
-    print("\nAll acceptance cases A-N passed.")
+    print("\nAll acceptance cases A-O passed.")
     return 0
 
 

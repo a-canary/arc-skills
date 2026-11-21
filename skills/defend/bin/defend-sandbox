@@ -291,48 +291,63 @@ def build_bwrap_cmd(tree_dir, trusted_dir, site_dir, nodeid, child_fd, allow_net
 def materialize_working_tree(repo_dir, dest_dir):
     """Materialize the current working tree (including untracked files) into dest_dir.
 
-    Uses a temporary git index so the repository index is not touched.
+    Uses a temporary git index and a temporary object directory so the
+    repository being audited is not written to.
     """
-    index_file = os.path.join(tempfile.mkdtemp(prefix="sbx-index-"), "index")
-    env = os.environ.copy()
-    env["GIT_INDEX_FILE"] = index_file
-    add_proc = subprocess.run(
-        ["git", "add", "-A"],
-        cwd=repo_dir,
-        env=env,
+    objects_proc = subprocess.run(
+        ["git", "-C", repo_dir, "rev-parse", "--path-format=absolute", "--git-path", "objects"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    if add_proc.returncode != 0:
-        raise RuntimeError(f"git add failed: {add_proc.stderr.decode()}")
-    write_proc = subprocess.run(
-        ["git", "write-tree"],
-        cwd=repo_dir,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if write_proc.returncode != 0:
-        raise RuntimeError(f"git write-tree failed: {write_proc.stderr.decode()}")
-    tree = write_proc.stdout.decode().strip()
-    archive_proc = subprocess.Popen(
-        ["git", "-C", repo_dir, "archive", tree],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    tar_proc = subprocess.Popen(
-        ["tar", "-x", "-C", dest_dir],
-        stdin=archive_proc.stdout,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    archive_proc.stdout.close()
-    tar_out, tar_err = tar_proc.communicate(timeout=60)
-    arc_out, arc_err = archive_proc.communicate(timeout=60)
-    if archive_proc.returncode != 0:
-        raise RuntimeError(f"git archive {tree} failed: {arc_err.decode()}")
-    if tar_proc.returncode != 0:
-        raise RuntimeError(f"tar failed: {tar_err.decode()}")
+    if objects_proc.returncode != 0:
+        raise RuntimeError(f"git rev-parse objects failed: {objects_proc.stderr.decode()}")
+    objects = objects_proc.stdout.decode().strip()
+
+    with tempfile.TemporaryDirectory(prefix="sbx-objdir-") as objdir, \
+         tempfile.TemporaryDirectory(prefix="sbx-index-") as indexdir:
+        index_file = os.path.join(indexdir, "index")
+        env = os.environ.copy()
+        env["GIT_INDEX_FILE"] = index_file
+        env["GIT_OBJECT_DIRECTORY"] = objdir
+        env["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = objects
+        add_proc = subprocess.run(
+            ["git", "add", "-A"],
+            cwd=repo_dir,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if add_proc.returncode != 0:
+            raise RuntimeError(f"git add failed: {add_proc.stderr.decode()}")
+        write_proc = subprocess.run(
+            ["git", "write-tree"],
+            cwd=repo_dir,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if write_proc.returncode != 0:
+            raise RuntimeError(f"git write-tree failed: {write_proc.stderr.decode()}")
+        tree = write_proc.stdout.decode().strip()
+        archive_proc = subprocess.Popen(
+            ["git", "-C", repo_dir, "archive", tree],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        tar_proc = subprocess.Popen(
+            ["tar", "-x", "-C", dest_dir],
+            stdin=archive_proc.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        archive_proc.stdout.close()
+        tar_out, tar_err = tar_proc.communicate(timeout=60)
+        arc_out, arc_err = archive_proc.communicate(timeout=60)
+        if archive_proc.returncode != 0:
+            raise RuntimeError(f"git archive {tree} failed: {arc_err.decode()}")
+        if tar_proc.returncode != 0:
+            raise RuntimeError(f"tar failed: {tar_err.decode()}")
 
 
 def run_one_sandbox(repo_dir, ref, nodeid, site_dir, allow_net, claim_path,
