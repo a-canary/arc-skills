@@ -8,6 +8,7 @@ all cases behave as specified.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -16,8 +17,10 @@ import tempfile
 SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "defend-sandbox")
 
 
-def run(cmd, cwd=None, check=True, capture=True):
+def run(cmd, cwd=None, check=True, capture=True, env=None):
     kwargs = {"cwd": cwd, "text": True}
+    if env is not None:
+        kwargs["env"] = env
     if capture:
         kwargs["stdout"] = subprocess.PIPE
         kwargs["stderr"] = subprocess.PIPE
@@ -59,16 +62,24 @@ def fsck_dangling(repo):
     return proc.stdout + proc.stderr
 
 
-def invoke(repo, base, claim_path, extra_args=None):
+def invoke(repo, base, claim_path, extra_args=None, extra_env=None,
+           return_stdout=False, script=SCRIPT):
     extra_args = extra_args or []
+    env = None
+    if extra_env:
+        env = os.environ.copy()
+        env.update(extra_env)
     json_path = os.path.join(tempfile.mkdtemp(prefix="sbx-out-"), "matrix.json")
     proc = run(
-        [sys.executable, SCRIPT, "--repo", repo, "--base", base, "--claim", claim_path, "--json", json_path]
+        [sys.executable, script, "--repo", repo, "--base", base, "--claim", claim_path, "--json", json_path]
         + extra_args,
         check=False,
+        env=env,
     )
     with open(json_path) as f:
         data = json.load(f)
+    if return_stdout:
+        return proc.returncode, data, proc.stdout
     return proc.returncode, data
 
 
@@ -534,7 +545,7 @@ def test_exit3():
     commit_all(repo, "base")
     claim = os.path.join(repo, "claim.txt")
     write(claim, "tests/test_exit3.py::test_exit3\n")
-    rc, data = invoke(repo, "HEAD", claim)
+    rc, data, stdout = invoke(repo, "HEAD", claim, return_stdout=True)
     assert rc == 2, f"exit {rc}"
     assert_row(data, "UNDETERMINED", "UNDETERMINED", "UNDETERMINED")
     row = data["rows"][0]
@@ -542,6 +553,14 @@ def test_exit3():
     assert "pytest-exit(3)" in row["base_details"].get("reason", ""), row
     assert not row["head"].startswith("TAMPERED"), row
     assert not row["base"].startswith("TAMPERED"), row
+
+    # The human table must decorate UNDETERMINED with its reason token.
+    assert "UNDETERMINED(pytest-exit(3))" in stdout, stdout
+    for line in stdout.splitlines():
+        if "tests/test_exit3.py::test_exit3" in line:
+            assert re.search(r"UNDETERMINED\s", line) is None, (
+                f"table row still prints bare UNDETERMINED: {line}"
+            )
     print("M honest non-zero run status .................... PASS")
 
 
@@ -666,6 +685,178 @@ def test_liar_spoof():
     print("P liar spoof (false CLEAR regression) ......... PASS")
 
 
+def case_q_honest_late_plugin():
+    """Honest late plugin must read REVIEW, never BLOCK/CLEAR/PASS."""
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "conftest.py"),
+        '''
+import pytest
+
+class Honest:
+    """Registers a marker. Never touches a report."""
+    def pytest_configure(self, config):
+        config.addinivalue_line("markers", "honest: from a late plugin")
+
+@pytest.fixture(autouse=True)
+def register_honest(request):
+    request.config.pluginmanager.register(Honest(), name="honest-late")
+''',
+    )
+    write(
+        os.path.join(repo, "tests", "test_ok.py"),
+        '''
+import pytest
+
+@pytest.mark.honest
+def test_ok():
+    assert True
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_ok.py::test_ok\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 2, f"exit {rc}"
+    assert_row(data, "REVIEW", "REVIEW:late-plugin:Honest", "REVIEW:late-plugin:Honest")
+    row = data["rows"][0]
+    assert not row["head"].startswith("TAMPERED"), row
+    assert not row["base"].startswith("TAMPERED"), row
+    assert row["head"] != "PASS", row
+    assert row["base"] != "PASS", row
+    assert row["head"] != "CLEAR", row
+    assert row["base"] != "CLEAR", row
+    assert row["verdict"] != "CLEAR", row
+    record = row["head_details"].get("record", {})
+    assert record.get("late") == ["Honest"], row
+    print("Q honest late plugin .......................... PASS")
+
+
+def _make_break_script():
+    """Return a temp copy of defend-sandbox with rule 5 set to TAMPERED."""
+    tmpdir = tempfile.mkdtemp(prefix="sbx-break-")
+    break_path = os.path.join(tmpdir, "defend-sandbox-break")
+    shutil.copy(SCRIPT, break_path)
+    with open(break_path, "r") as f:
+        content = f.read()
+    old = '"status": f"REVIEW:late-plugin:{bad_late[0]}",'
+    new = '"status": f"TAMPERED:late-plugin:{bad_late[0]}",'
+    if old not in content:
+        raise RuntimeError("could not locate rule 5 REVIEW return for break test")
+    content = content.replace(old, new)
+    with open(break_path, "w") as f:
+        f.write(content)
+    return break_path
+
+
+def break_q_false_positive():
+    """Prove Q measures the false-positive half of rule 5.
+
+    If rule 5 still refused late plugins (TAMPERED), the honest late fixture
+    becomes BLOCK, while the true-positive cases C and P (caught by rule 6)
+    remain unchanged.
+    """
+    break_script = _make_break_script()
+
+    # Q: honest late plugin must be BLOCK if rule 5 is set to refuse.
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "conftest.py"),
+        '''
+import pytest
+
+class Honest:
+    def pytest_configure(self, config):
+        config.addinivalue_line("markers", "honest: from a late plugin")
+
+@pytest.fixture(autouse=True)
+def register_honest(request):
+    request.config.pluginmanager.register(Honest(), name="honest-late")
+''',
+    )
+    write(
+        os.path.join(repo, "tests", "test_ok.py"),
+        '''
+import pytest
+
+@pytest.mark.honest
+def test_ok():
+    assert True
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_ok.py::test_ok\n")
+    rc, data = invoke(repo, "HEAD", claim, script=break_script)
+    assert rc == 1, f"expected BLOCK exit 1 under break mode, got {rc}"
+    assert data["rows"][0]["verdict"] == "BLOCK", data
+    assert data["rows"][0]["head"].startswith("TAMPERED:late-plugin"), data
+
+    # C: report-rewriting liar is still caught by rule 6 before rule 5.
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_liar.py"),
+        '''
+import pytest
+
+class Liar:
+    @pytest.hookimpl(hookwrapper=True, trylast=True)
+    def pytest_runtest_makereport(self, item, call):
+        outcome = yield
+        if call.when == "call":
+            report = outcome.get_result()
+            report.outcome = "passed"
+
+@pytest.fixture(autouse=True)
+def inject(request):
+    request.config.pluginmanager.register(Liar(), name="liar")
+
+def test_liar():
+    assert False
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_liar.py::test_liar\n")
+    rc, data = invoke(repo, "HEAD", claim, script=break_script)
+    assert rc == 1, f"C under break mode: exit {rc}"
+    assert_row(data, "BLOCK", "TAMPERED:outcome-rewritten", "TAMPERED:outcome-rewritten")
+
+    # P: spoofed __module__ liar is still caught by rule 6.
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_liar_spoof.py"),
+        '''
+import pytest
+
+class Liar:
+    __module__ = "_pytest.evil"
+    @pytest.hookimpl(hookwrapper=True, trylast=True)
+    def pytest_runtest_makereport(self, item, call):
+        outcome = yield
+        if call.when == "call":
+            report = outcome.get_result()
+            report.outcome = "passed"
+            report.longrepr = None
+            call.excinfo = None
+
+@pytest.fixture(autouse=True)
+def inject(request):
+    request.config.pluginmanager.register(Liar(), name="liar")
+
+def test_liar_spoof():
+    assert False, "this test really fails"
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_liar_spoof.py::test_liar_spoof\n")
+    rc, data = invoke(repo, "HEAD", claim, script=break_script)
+    assert rc == 1, f"P under break mode: exit {rc}"
+    assert_row(data, "BLOCK", "TAMPERED:outcome-rewritten", "TAMPERED:outcome-rewritten")
+    print("Q break-test (false-positive pin) ............. PASS")
+
+
 def main():
     if not os.path.exists(SCRIPT):
         print(f"defend-sandbox-test: missing script {SCRIPT}", file=sys.stderr)
@@ -693,6 +884,7 @@ def main():
         case_n_fixture_error,
         case_o_audited_repo_unpolluted,
         case_p_liar_spoof,
+        case_q_honest_late_plugin,
     ]
 
     failed = []
@@ -703,11 +895,22 @@ def main():
             print(f"{fn.__name__}: FAIL\n  {e}", file=sys.stderr)
             failed.append(fn.__name__)
 
-    if failed:
+    # Run the break test for Q separately so A-Q output and break-test output
+    # are distinct, and the break variant never pollutes the real script.
+    break_failed = None
+    try:
+        break_q_false_positive()
+    except Exception as e:
+        break_failed = str(e)
+        print(f"break_q_false_positive: FAIL\n  {e}", file=sys.stderr)
+
+    if failed or break_failed:
         print(f"\n{len(failed)} case(s) failed: {', '.join(failed)}", file=sys.stderr)
+        if break_failed:
+            print("break-test failed", file=sys.stderr)
         return 1
 
-    print("\nAll acceptance cases A-P passed.")
+    print("\nAll acceptance cases A-Q passed; break-test passed.")
     return 0
 
 
