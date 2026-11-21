@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# defend-mandate — Defend gate for edits to missions.md or a CHOICES.md.
+#
+# Operator ruling (repos-nh5f, 2026-11-09): tiered Defense at this gate — "Qwen first;
+# Opus on flags or risk; Opus also after 3 Qwen failures". This wraps defend-attack so the
+# tiering is the OPERATOR'S, not defend-attack's default (JEV/Haiku):
+#
+#   tier 1  Qwen      the resident Qwen on the fast lane, as the screener. It can only FLAG.
+#   tier 2  Opus      decides every flagged criterion; deep-verifies everything when the
+#                     screener flagged nothing (so "Opus on risk" is not optional here).
+#   tier 3  Opus      after DEFEND_MANDATE_STRIKES (default 3) consecutive Qwen screener
+#                     failures, Qwen is skipped entirely and Opus decides every criterion.
+#                     This is the ruling's third clause and defend-attack has no such counter.
+#   Haiku is DISABLED here on purpose: if Qwen is down the answer is Opus, not a second cheap
+#   model (and no extra Claude spend between Qwen and Opus).
+#
+# Usage:
+#   defend-mandate [--repo DIR] [--base REF] [--paths "missions.md CHOICES.md"]
+#   defend-mandate --diff FILE          # attack a prepared diff (proposal path)
+#   defend-mandate --check [same]       # exit 3 if the diff touches no mandate file
+#   defend-mandate --staged             # pre-commit: attack only what this commit carries
+#
+# Exit: 0 CLEAR, 1 BLOCK, 2 usage/model error, 3 no mandate change (nothing to attack).
+#
+# Output is defend-attack's, with two added lines first:
+#   Mandate: <n> file(s) touched: <paths>
+#   Tier: qwen (consecutive qwen failures: <n>/<strikes>)
+set -uo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+attack=${DEFEND_MANDATE_ATTACK:-$here/defend-attack}
+strikes=${DEFEND_MANDATE_STRIKES:-3}
+state=${DEFEND_MANDATE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/defend-mandate.strikes}
+# The Qwen that backs lane `fast`. Overridable so the gate is testable and movable.
+lane=${DEFEND_MANDATE_LANE:-http://ai-lab-02:8099}
+default_paths="missions.md CHOICES.md"
+
+die() { echo "defend-mandate: $*" >&2; exit 2; }
+
+diff_file=; repo=$PWD; base=; paths=$default_paths; check=0; staged=0
+while [ $# -gt 0 ]; do
+  case $1 in
+    --diff)   [ $# -ge 2 ] || die "--diff needs a file"; diff_file=$2; shift 2 ;;
+    --repo)   [ $# -ge 2 ] || die "--repo needs a dir"; repo=$2; shift 2 ;;
+    --base)   [ $# -ge 2 ] || die "--base needs a ref"; base=$2; shift 2 ;;
+    --paths)  [ $# -ge 2 ] || die "--paths needs a value"; paths=$2; shift 2 ;;
+    --check)  check=1; shift ;;
+    --staged) staged=1; shift ;;
+    -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+[ -x "$attack" ] || die "not executable: $attack"
+
+tmp=$(mktemp -d); trap 'command rm -r "$tmp"' EXIT
+
+# --- the diff under attack ---
+if [ -n "$diff_file" ]; then
+  [ -r "$diff_file" ] || die "cannot read diff file: $diff_file"
+  cp "$diff_file" "$tmp/diff"
+else
+  git -C "$repo" rev-parse --show-toplevel >/dev/null 2>&1 || die "not a git repo: $repo"
+  # shellcheck disable=SC2086  # paths is a deliberate space-separated list
+  set -- $paths
+  if [ "$staged" = 1 ]; then
+    # pre-commit: exactly what this commit carries, not anything else dirty in the tree.
+    # An unborn HEAD (first commit in a repo) has nothing to diff against: use the empty tree.
+    if git -C "$repo" rev-parse --verify -q HEAD >/dev/null; then
+      git -C "$repo" diff --no-color -U3 --cached HEAD -- "$@" > "$tmp/diff" 2>/dev/null
+    else
+      git -C "$repo" diff --no-color -U3 --cached "$(git -C "$repo" hash-object -t tree /dev/null)" -- "$@" > "$tmp/diff" 2>/dev/null
+    fi
+  elif [ -n "$base" ]; then
+    git -C "$repo" diff --no-color -U3 "$base"...HEAD -- "$@" > "$tmp/diff" 2>/dev/null
+  else
+    # what a proposal would actually carry: staged + unstaged, against HEAD.
+    git -C "$repo" diff --no-color -U3 HEAD -- "$@" > "$tmp/diff" 2>/dev/null
+  fi
+  [ -s "$tmp/diff" ] || { [ $check = 1 ] && { echo "defend-mandate: no mandate change ($paths)"; exit 3; }; echo "defend-mandate: no mandate change ($paths)"; exit 3; }
+fi
+
+# Which mandate files does it actually touch? Do not trust the caller's claim.
+touched=$(grep -oE '^\+\+\+ b/[^	 ]+' "$tmp/diff" 2>/dev/null | sed 's|^+++ b/||' | sort -u)
+mandate_hits=
+for p in $paths; do
+  case " $touched " in *" $p "*) mandate_hits="$mandate_hits $p" ;; esac
+done
+# A diff given via --diff may use another prefix; fall back to a plain name match.
+if [ -z "$mandate_hits" ]; then
+  for p in $paths; do
+    grep -qE "^(diff --git .*|[-+]{3} .*)$(basename "$p")([[:space:]]|\$)" "$tmp/diff" 2>/dev/null && mandate_hits="$mandate_hits $(basename "$p")"
+  done
+fi
+mandate_hits=$(echo "$mandate_hits" | xargs 2>/dev/null || true)
+if [ -z "$mandate_hits" ]; then
+  echo "defend-mandate: no mandate change (touched: ${touched:-none})"
+  exit 3
+fi
+
+# --- tier state: consecutive Qwen screener failures ---
+mkdir -p "$(dirname "$state")" 2>/dev/null || true
+prev=0
+[ -r "$state" ] && prev=$(tr -dc '0-9' < "$state" 2>/dev/null)
+[ -n "$prev" ] || prev=0
+
+echo "Mandate: $(echo "$mandate_hits" | wc -w) file(s) touched: $mandate_hits"
+echo "Tier: qwen (consecutive qwen failures: $prev/$strikes)"
+
+# --- run the attack ---
+export DEFEND_LANE_URL=$lane
+# defend-attack's screener timeout defaults to 30s. Measured on the Qwen lane: one multi-criterion
+# pass takes 38s on a 3-line mandate diff and 162s on a 32KB one. At 30s the screener would time
+# out on every real call, "fail" every time, and escalate every mandate to Opus — tier 1 would
+# look present and never actually decide anything. Raised here, deliberately, with the numbers.
+export DEFEND_JEV_TIMEOUT=${DEFEND_JEV_TIMEOUT:-300}
+export DEFEND_HAIKU_CMD=false   # never a second cheap tier: Qwen, then Opus (see header)
+if [ "$prev" -ge "$strikes" ]; then
+  # Tier 3: Qwen has failed this many times in a row; Opus decides every criterion.
+  export DEFEND_JEV_CMD=false
+  echo "Tier: opus-decides-all (qwen skipped: $prev consecutive failures)"
+fi
+
+set +e
+out=$("$attack" --diff "$tmp/diff" 2>&1); rc=$?
+set -e
+printf '%s\n' "$out"
+
+# --- update the tier state from what the screener actually did ---
+screener=$(printf '%s\n' "$out" | sed -n 's/^Screener: \([a-z]*\).*/\1/p' | head -1)
+case $screener in
+  jev)  echo 0 > "$state" ;;                 # Qwen answered: streak broken
+  none) echo $((prev + 1)) > "$state" ;;     # Qwen failed: count it, Opus already decided
+  *) : ;;                                    # unknown: leave the streak alone
+esac
+
+exit $rc
