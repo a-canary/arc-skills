@@ -53,6 +53,7 @@ SBXPLUG_SOURCE = r'''import hashlib
 import hmac
 import json
 import os
+import inspect
 
 import pytest
 
@@ -94,11 +95,19 @@ def _make_plugin():
         def pytest_plugin_registered(self, plugin, manager):
             if not _session_started[0]:
                 return
-            mod = getattr(plugin, "__module__", None)
-            if mod is None:
-                mod = getattr(type(plugin), "__module__", None)
-            if mod:
-                _late.append(mod)  # raw, unfiltered; parent applies _pytest.* exemption
+            # Use an honest label: the plugin's own name, or the class name.
+            # To avoid the spoofable __module__ attribute, determine the
+            # origin module only for the internal-plugin filter; it is never
+            # sent as the label and never used as a TAMPERED signal.
+            if inspect.ismodule(plugin):
+                origin = getattr(plugin, "__name__", None)
+            else:
+                origin = getattr(type(plugin), "__module__", None)
+            if origin and origin.startswith("_pytest."):
+                return
+            name = getattr(plugin, "__name__", None) or type(plugin).__name__
+            if name:
+                _late.append(name)
 
         @pytest.hookimpl(tryfirst=True)
         def pytest_runtest_setup(self, item):
@@ -111,8 +120,12 @@ def _make_plugin():
                 "phases": 0,
                 "excinfo": False,
                 "outcome": None,
+                "teardown": None,
             })
             rec["phases"] += 1
+            # Snapshot excinfo BEFORE the yield, while this tryfirst wrapper is
+            # still outside any inner wrapper that might clear it.
+            pre_excinfo = call.excinfo is not None
             outcome = yield
             try:
                 report = outcome.get_result()
@@ -121,11 +134,17 @@ def _make_plugin():
             if report is None:
                 return
             if call.when == "call":
-                if report.outcome == "passed" and call.excinfo is not None:
+                # A passing report with a pre-existing excinfo is an outcome rewrite.
+                # Keep the post-yield check too for wrappers that create a passing
+                # report where none should exist.
+                if report.outcome == "passed" and (pre_excinfo or call.excinfo is not None):
                     rec["excinfo"] = True
                 rec["outcome"] = report.outcome
             elif call.when == "setup" and rec["outcome"] is None:
                 rec["outcome"] = report.outcome
+            elif call.when == "teardown":
+                if report.outcome != "passed":
+                    rec["teardown"] = report.outcome
 
         @pytest.hookimpl(tryfirst=True)
         def pytest_sessionfinish(self, exitstatus, session):
@@ -134,6 +153,7 @@ def _make_plugin():
                     "phases": 0,
                     "excinfo": False,
                     "outcome": None,
+                    "teardown": None,
                 })
                 _send({
                     "id": nodeid,
@@ -141,6 +161,7 @@ def _make_plugin():
                     "outcome": rec["outcome"],
                     "phases": rec["phases"],
                     "excinfo": rec["excinfo"],
+                    "teardown": rec["teardown"],
                     "late": list(_late),
                 })
 
@@ -525,17 +546,7 @@ def run_one_sandbox(repo_dir, ref, nodeid, site_dir, allow_net, claim_path,
                     "details": details,
                 }
 
-            # Rule 5: late plugin registration (parent filters _pytest.* exemption).
-            late = record.get("late") or []
-            bad_late = sorted(m for m in late if not m.startswith("_pytest."))
-            if bad_late:
-                return {
-                    "status": f"TAMPERED:late-plugin:{bad_late[0]}",
-                    "provenance": provenance,
-                    "details": details,
-                }
-
-            # Rule 6a: outcome rewrite observed post-yield.
+            # Rule 6a: outcome rewrite observed pre- or post-yield.
             if record.get("excinfo") is True:
                 return {
                     "status": "TAMPERED:outcome-rewritten",
@@ -549,6 +560,27 @@ def run_one_sandbox(repo_dir, ref, nodeid, site_dir, allow_net, claim_path,
             if phases == 0 or (outcome == "passed" and phases != 3):
                 return {
                     "status": "TAMPERED:hook-suppressed",
+                    "provenance": provenance,
+                    "details": details,
+                }
+
+            # Rule 5: late plugin registration is a suspicion, not a refusal.
+            # The _pytest.* exemption stops being load-bearing for TAMPERED; a
+            # non-internal late registration downgrades the id to REVIEW.
+            late = record.get("late") or []
+            bad_late = sorted(m for m in late if not m.startswith("_pytest."))
+            if bad_late:
+                return {
+                    "status": f"REVIEW:late-plugin:{bad_late[0]}",
+                    "provenance": provenance,
+                    "details": details,
+                }
+
+            # Honest teardown error is a real failure, not sabotage.
+            teardown = record.get("teardown")
+            if teardown in ("failed", "error") and rc == 1:
+                return {
+                    "status": "FAIL",
                     "provenance": provenance,
                     "details": details,
                 }
@@ -596,15 +628,19 @@ def read_claim(path):
     return ids
 
 
-def add_decoy_to_claim(claim_path):
-    """Prepend a unique content marker to the claim file and return it."""
+def prepare_decoy_claim(claim_path, tmpdir):
+    """Create a temporary copy of the claim file with a unique decoy marker.
+
+    The caller's claim file is never modified.  The returned path is a temp
+    copy that carries the marker and is used for both id reading and as the
+    decoy handle held open across the sandbox spawn.
+    """
     marker = "SBXDECOY-" + os.urandom(16).hex()
-    with open(claim_path, "r+") as f:
-        content = f.read()
-        f.seek(0)
-        f.write(marker + "\n" + content)
-        f.truncate()
-    return marker
+    decoy_path = os.path.join(tmpdir, "claim.txt")
+    with open(claim_path, "r") as src, open(decoy_path, "w") as dst:
+        dst.write(marker + "\n")
+        shutil.copyfileobj(src, dst)
+    return decoy_path, marker
 
 
 def main():
@@ -631,20 +667,20 @@ def main():
         die(f"cannot locate site-packages (use --site); pytest may be missing", code=2)
     site_dir = os.path.abspath(site_dir)
 
-    claim_ids = read_claim(args.claim)
-    if not claim_ids:
-        die("claim file is empty")
-
     # Materialize base tree once for overlay-never comparison.
-    with tempfile.TemporaryDirectory(prefix="sbx-base-") as base_tree_dir:
+    with tempfile.TemporaryDirectory(prefix="sbx-base-") as base_tree_dir, \
+         tempfile.TemporaryDirectory(prefix="sbx-claim-") as claim_tmpdir:
         try:
             materialize_tree(repo_dir, args.base, base_tree_dir)
         except Exception as e:
             die(f"cannot materialize base tree {args.base}: {e}")
 
-        claim_path = os.path.abspath(args.claim)
+        original_claim_path = os.path.abspath(args.claim)
         output_path = os.path.abspath(args.json_out) if args.json_out else ""
-        decoy_marker = add_decoy_to_claim(claim_path)
+        claim_path, decoy_marker = prepare_decoy_claim(original_claim_path, claim_tmpdir)
+        claim_ids = read_claim(claim_path)
+        if not claim_ids:
+            die("claim file is empty")
 
         rows = []
         for nodeid in claim_ids:
@@ -683,6 +719,8 @@ def main():
                 row_verdict = "BLOCK"
             elif any(s == "UNDETERMINED" for s in statuses):
                 row_verdict = "UNDETERMINED"
+            elif any(s.startswith("REVIEW:") for s in statuses):
+                row_verdict = "REVIEW"
             else:
                 row_verdict = "CLEAR"
 
@@ -717,6 +755,8 @@ def main():
             output["verdict"] = "BLOCK"
         elif any(r["verdict"] == "UNDETERMINED" for r in rows):
             output["verdict"] = "UNDETERMINED"
+        elif any(r["verdict"] == "REVIEW" for r in rows):
+            output["verdict"] = "REVIEW"
         else:
             output["verdict"] = "CLEAR"
         with open(args.json_out, "w") as f:
@@ -725,7 +765,7 @@ def main():
     # Exit code.
     if any(r["verdict"] == "BLOCK" for r in rows):
         sys.exit(1)
-    if any(r["verdict"] == "UNDETERMINED" for r in rows):
+    if any(r["verdict"] in ("UNDETERMINED", "REVIEW") for r in rows):
         sys.exit(2)
     sys.exit(0)
 

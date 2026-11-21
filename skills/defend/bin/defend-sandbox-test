@@ -137,7 +137,7 @@ def test_liar():
     write(claim, "tests/test_liar.py::test_liar\n")
     rc, data = invoke(repo, "HEAD", claim)
     assert rc == 1
-    assert_row(data, "BLOCK", "TAMPERED:late-plugin:test_liar", "TAMPERED:late-plugin:test_liar")
+    assert_row(data, "BLOCK", "TAMPERED:outcome-rewritten", "TAMPERED:outcome-rewritten")
     print("C report-rewriting liar ....................... PASS")
 
 
@@ -280,6 +280,7 @@ def case_h_host_probe():
         os.path.join(repo, "tests", "test_probe.py"),
         '''
 import os
+import errno
 import socket
 
 
@@ -307,17 +308,21 @@ def test_probe():
     assert not os.path.exists("/home/aaron/repos")
     assert not os.path.exists("/run")
 
-    # Network isolation assertion.
+    # Network isolation assertion (192.0.2.1 is TEST-NET-1 and must be
+    # unreachable inside the sandbox, yielding ENETUNREACH).
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(2)
+    reachable = True
+    got_errno = None
     try:
-        s.connect(("127.0.0.1", 80))
-        reachable = True
-    except Exception:
+        s.connect(("192.0.2.1", 80))
+    except OSError as e:
         reachable = False
+        got_errno = e.errno
     finally:
         s.close()
     assert not reachable
+    assert got_errno == errno.ENETUNREACH, f"expected ENETUNREACH, got {got_errno}"
 
     chan_fd = int(os.environ["SBX_CHAN_FD"])
     dir_fd = os.open("/proc/self/fd", os.O_RDONLY | os.O_DIRECTORY)
@@ -466,8 +471,8 @@ def test_l1():
     claim = os.path.join(repo, "claim.txt")
     write(claim, "tests/test_l1.py::test_l1\n")
     rc, data = invoke(repo, "HEAD", claim)
-    assert rc == 0
-    assert_row(data, "CLEAR", "PASS", "PASS")
+    assert rc == 1
+    assert_row(data, "BLOCK", "TAMPERED:outcome-rewritten", "TAMPERED:outcome-rewritten")
 
     # L2: channel forge with stolen key + os._exit(0).
     repo = fresh_repo()
@@ -541,6 +546,7 @@ def test_exit3():
 
 
 def case_n_fixture_error():
+    # Sub-case 1: fixture error during setup.
     repo = fresh_repo()
     write(
         os.path.join(repo, "tests", "test_fixerr.py"),
@@ -564,6 +570,32 @@ def test_fixerr(broken):
     row = data["rows"][0]
     assert not row["head"].startswith("TAMPERED:hook-suppressed"), row
     assert not row["head"].startswith("TAMPERED:outcome-rewritten"), row
+
+    # Sub-case 2: teardown error after a passing call must read as FAIL.
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_teardown.py"),
+        '''
+import pytest
+
+@pytest.fixture
+def bad_teardown():
+    yield
+    raise RuntimeError("teardown broke")
+
+def test_teardown_err(bad_teardown):
+    pass
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_teardown.py::test_teardown_err\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 0, f"exit {rc}"
+    assert_row(data, "CLEAR", "RED", "FAIL")
+    row = data["rows"][0]
+    assert not row["head"].startswith("TAMPERED"), row
+    assert not row["base"].startswith("TAMPERED"), row
     print("N fixture error is not sabotage ................. PASS")
 
 
@@ -598,6 +630,42 @@ def case_o_audited_repo_unpolluted():
     print("O audited repo unpolluted ..................... PASS")
 
 
+def case_p_liar_spoof():
+    """The v7 false CLEAR: spoofed __module__ plus excinfo cleared."""
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_liar_spoof.py"),
+        '''
+import pytest
+
+class Liar:
+    __module__ = "_pytest.evil"
+    @pytest.hookimpl(hookwrapper=True, trylast=True)
+    def pytest_runtest_makereport(self, item, call):
+        outcome = yield
+        if call.when == "call":
+            report = outcome.get_result()
+            report.outcome = "passed"
+            report.longrepr = None
+            call.excinfo = None
+
+@pytest.fixture(autouse=True)
+def inject(request):
+    request.config.pluginmanager.register(Liar(), name="liar")
+
+def test_liar_spoof():
+    assert False, "this test really fails"
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_liar_spoof.py::test_liar_spoof\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 1
+    assert_row(data, "BLOCK", "TAMPERED:outcome-rewritten", "TAMPERED:outcome-rewritten")
+    print("P liar spoof (false CLEAR regression) ......... PASS")
+
+
 def main():
     if not os.path.exists(SCRIPT):
         print(f"defend-sandbox-test: missing script {SCRIPT}", file=sys.stderr)
@@ -624,6 +692,7 @@ def main():
         case_m_honest_nonzero,
         case_n_fixture_error,
         case_o_audited_repo_unpolluted,
+        case_p_liar_spoof,
     ]
 
     failed = []
@@ -638,7 +707,7 @@ def main():
         print(f"\n{len(failed)} case(s) failed: {', '.join(failed)}", file=sys.stderr)
         return 1
 
-    print("\nAll acceptance cases A-O passed.")
+    print("\nAll acceptance cases A-P passed.")
     return 0
 
 
