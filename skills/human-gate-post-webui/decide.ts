@@ -149,9 +149,10 @@ function ask(a: Args, card: { q: string; opts: string[]; kind?: string }) {
   const id = JSON.parse(bd(dir, "create", title, "-p", s("p") ?? "2", "-t", "decision", "-l", "human", "--body-file", f, "--json")).id as string;
   console.log(id); // printed first: the card is live even if a link below fails
   // repos-m1ft3: a card can be created in a hidden state (label decided, no human). Read it back and fail loudly.
-  const shown = JSON.parse(bd(dir, "show", id, "--json"));
-  const labels = (shown.labels ?? []).join(" ");
-  if (!labels.includes("human") && shown.assignee !== "a-canary") {
+  const shownArr = JSON.parse(bd(dir, "show", id, "--json"));
+  const shown = Array.isArray(shownArr) ? shownArr[0] : shownArr;
+  const labels = (shown?.labels ?? []).join(" ");
+  if (!labels.includes("human") && shown?.assignee !== "a-canary") {
     throw new Error(`${id} posted but has no human label and no operator assignee — /inbox will not show it. Labels: ${labels || "(none)"}`);
   }
   if (labels.includes("decided")) {
