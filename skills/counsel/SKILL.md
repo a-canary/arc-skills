@@ -104,10 +104,27 @@ reviewer. Same trigger as /hard-merge's §4 panel escalation; same 5-expert
 shape; same outcome (judgment breadth + audit trail, NOT a mechanical
 unlock — a merge classifier still sees only the diff and may block).
 
-## Fable escalation — cross-model attack/verdict
+## Opus xhigh decider — mandatory for defense gates
 
-Any agent or user may invoke counsel when facing a **very complex problem** or a
-**repeating blockage**. When either applies, do not stop at the panel:
+Per operator policy 2026-11-20 ("all defence gate use Opus for gates"), every
+counsel session invoked as a defense gate (DefendPlan, DefendDeploy, DefendConviction)
+must include an Opus xhigh decider leg. This is the final authority on the verdict.
+
+After the panel completes its synthesis (step 6), pipe the full report to Opus xhigh:
+
+```sh
+cat /tmp/counsel-<slug>.md | ENABLE_CLAUDEAI_MCP_SERVERS=false claude -p --model opus --effort xhigh --max-turns 1 --allowedTools "" --tools "" --strict-mcp-config \
+  "You are the final decider for this defense gate. Review this counsel panel report. You may affirm, modify, or override the panel's recommendation. If you override, state exactly what changed and why. Respond in the verdict contract: CLEAR | ATTACKS, ranked, each attack with what would satisfy it. If CLEAR, name the strongest attacks you considered that failed."
+```
+
+Append Opus's output as `### Opus Decider (xhigh)` at the end of the report. **The Opus verdict is binding** — if Opus says ATTACKS, the gate does not pass, even if the panel said CLEAR.
+
+For non-gate counsel (ad hoc decisions, routine questions), the Fable escalation below remains optional.
+
+## Fable escalation — cross-model attack/verdict (non-gate)
+
+For non-gate counsel facing a **very complex problem** or a **repeating blockage**,
+you may escalate to Fable (low effort) for a cross-model attack:
 
 1. Collect fresh data from many angles first — the panel rounds are the debate;
    if the question is under-evidenced, gather evidence before debating it.

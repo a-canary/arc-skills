@@ -1,4 +1,4 @@
-# DefendPlan — wayfinder result → build dispatch (counsel)
+# DefendPlan — wayfinder result → build dispatch (counsel + Opus xhigh decider)
 
 Fires when the Director (qwen wayfinder) has a plan ready and the User is about
 to release it to the Driver for build. The gate sits **between user and
@@ -32,6 +32,7 @@ Director** — its verdict reaches the user directly.
 
 ## Verdict routing
 
-`CLEAR | ATTACKS` → user. On ATTACKS the Director iterates with the user and
-re-submits; re-runs are allowed but each re-run is another counsel call — converge
-or escalate to a human decision, don't loop.
+Panel synthesis → Opus xhigh decider (binding) → user. On ATTACKS (from either
+panel or Opus) the Director iterates with the user and re-submits; re-runs are
+allowed but each re-run is another counsel call — converge or escalate to a human
+decision, don't loop.
