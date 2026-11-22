@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# defend-mandate-hook — pre-commit gate: a commit that edits missions.md or a CHOICES.md is
+# attacked before it can become a proposal to the operator (repos-ccfr.1, ruling repos-nh5f).
+#
+# Install as <repo>/.git/hooks/pre-commit (or chain it from an existing one), and point
+# DEFEND_MANDATE_BIN at defend-mandate. It runs only when a mandate file is staged, so every
+# other commit pays one `git diff --cached --name-only` and nothing else.
+#
+# Exit 0 = let the commit through. Anything else = abort it, with the verdict on stdout.
+# Override: `git commit --no-verify` — deliberately visible in the record, not a silent env flag.
+set -uo pipefail
+
+mandates=${DEFEND_MANDATE_PATHS:-"missions.md CHOICES.md"}
+gate=${DEFEND_MANDATE_BIN:-$(cd "$(dirname "$0")" && pwd)/defend-mandate}
+staged=$(git diff --cached --name-only --diff-filter=ACMR HEAD 2>/dev/null || git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)
+
+hit=
+for p in $mandates; do
+  printf '%s\n' "$staged" | grep -qxE "(.*/)?$p" && hit="$hit $p"
+done
+[ -n "$hit" ] || exit 0
+
+echo "defend-mandate: this commit edits$hit — attacking it before it becomes a proposal"
+echo "defend-mandate: (an edit to a mission or CHOICES.md is a proposal to the operator, not a normal commit)"
+out=$("$gate" --staged 2>&1); rc=$?
+printf '%s\n' "$out"
+
+case $rc in
+  0) exit 0 ;;   # CLEAR
+  3) exit 0 ;;   # nothing mandate-shaped actually changed: let it through
+  1) echo "defend-mandate: BLOCK — the commit was aborted. Fix the finding, or --no-verify to overrule the gate on the record."
+     exit 1 ;;
+  *) echo "defend-mandate: gate error (exit $rc) — treating as BLOCK: a gate that cannot run is not a gate that passed."
+     exit 1 ;;
+esac

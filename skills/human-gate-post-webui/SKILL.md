@@ -87,6 +87,8 @@ bun $D text --repo <repo> --kind design --title "<what you need>" --context "<Pr
 ```
 
 The first `--opt` is the recommendation (`rec="1"`). `--dry` prints the card without posting.
+
+**After posting, verify the card is visible before telling anyone it is up.** Run `bd -C <db> show <id>` with the db path explicit (e.g. `bd -C ~/repos/<repo> show <id>`), not a bare `bd show <id>`. Two bead databases can share a prefix; a bare `bd show` from ~/repos cannot see ~/repos/<repo>. **Confirm `LABELS: human` (or assignee a-canary) and NOT `decided`.** A card labelled `decided` with no `human` label is invisible to /inbox (repos-m1ft3: three trading PRs sat hidden tonight because of it). decide.ts now asserts this on post and exits non-zero if it fails.
 `--adds` is required on every card (repos-0f2e, operator 2026-11-16: "maximize my contribution per card"). If nothing in it needs the operator, don't post the card: fix the guard so the reviewed path runs by itself. The lint refuses meat-proxy cards (re-accept, re-approve, run the reviewed command, type this line).
 `--run` cards only for scripts that cross a `skills/deploy-agent/human-only.txt` line; everything else goes through a Lead grant (`deploy-run.ts --grant`, repos-jedj).
 Need a description, a path, an artifact, access? Use `text`: the operator accepts "Answer in note" and types it.

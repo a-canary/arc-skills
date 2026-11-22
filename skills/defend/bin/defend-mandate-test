@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# defend-mandate-test — plumbing for the missions.md/CHOICES.md gate, stubbed models, no network.
+# Usage: defend-mandate-test [path-to-defend-mandate]
+#
+# Covers the three operator clauses (repos-nh5f 11-09): Qwen first, Opus on flags or risk,
+# Opus after 3 Qwen failures. The stub "attack" records the env it was handed, so the test
+# asserts the tiering the gate chose rather than the verdict text.
+set -uo pipefail
+
+M=${1:-$(dirname "$0")/defend-mandate}
+M=$(cd "$(dirname "$M")" && pwd)/$(basename "$M")
+T=$(mktemp -d); trap 'command rm -rf "$T"' EXIT
+[ -x "$M" ] || { echo "not executable: $M"; exit 1; }
+
+ok=0; bad=0
+check() { if eval "$2"; then ok=$((ok+1)); else bad=$((bad+1)); echo "FAIL: $1"; fi; }
+
+# --- stub attack: prints whatever the test asks for, and dumps the tier env it received ---
+cat > "$T/attack" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = "--diff" ] && [ -r "$2" ] || { echo "stub: bad args" >&2; exit 2; }
+{
+  echo "lane=${DEFEND_LANE_URL:-unset}"
+  echo "haiku=${DEFEND_HAIKU_CMD:-unset}"
+  echo "jev=${DEFEND_JEV_CMD:-unset}"
+  echo "jt=${DEFEND_JEV_TIMEOUT:-unset}"
+  echo "diff_bytes=$(wc -c < "$2")"
+} > "$STUB_ENV"
+if [ -n "${STUB_VERDICT_FILE:-}" ]; then cat "$STUB_VERDICT_FILE"; else
+  echo "Screener: ${STUB_SCREENER:-jev} fails=${STUB_FAILS:-0}"
+  echo "VERDICT: ${STUB_VERDICT:-CLEAR} by=opus"
+fi
+exit "${STUB_EXIT:-0}"
+EOF
+chmod +x "$T/attack"
+
+# --- a repo with a mandate file, built WITHOUT the caller's git env (a hook exports GIT_DIR,
+# which silently redirects `git init`/`git commit` at the caller's repo: repos-qbvi lesson) ---
+g() { env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git "$@"; }
+mkdir -p "$T/repo"; g -C "$T/repo" init -q
+printf 'mission v1\n' > "$T/repo/missions.md"
+printf 'unrelated\n' > "$T/repo/other.txt"
+g -C "$T/repo" add -A
+g -C "$T/repo" -c user.name=t -c user.email=t@t commit -qm init
+
+echo "== no mandate change -> exit 3, attack never runs"
+ARGS=(--repo "$T/repo")
+out=$(DEFEND_MANDATE_ATTACK=$T/attack DEFEND_MANDATE_STATE=$T/strikes "$M" --repo "$T/repo" 2>&1); rc=$?
+check "no-change exit=3 (got $rc)" "[ $rc = 3 ]"
+check "no-change names what it saw" "grep -q 'no mandate change' <<<\"\$out\""
+
+echo "== a missions.md edit -> Qwen first, Opus decides, haiku disabled"
+printf 'mission v1\nmission v2: always up inference\n' > "$T/repo/missions.md"
+STUB_ENV=$T/env STUB_SCREENER=jev STUB_VERDICT=CLEAR DEFEND_MANDATE_ATTACK=$T/attack \
+  DEFEND_MANDATE_STATE=$T/strikes DEFEND_MANDATE_LANE=http://qwen.test:8099 \
+  "$M" --repo "$T/repo" > "$T/out.clear" 2>&1; rc=$?
+check "clear exit=0 (got $rc)" "[ $rc = 0 ]"
+check "tier 1 is the qwen lane" "grep -qx 'lane=http://qwen.test:8099' '$T/env'"
+check "haiku is disabled (Qwen then Opus only)" "grep -qx 'haiku=false' '$T/env'"
+check "qwen was NOT skipped on a clean streak" "grep -qx 'jev=unset' '$T/env'"
+check "screener timeout raised above the lane's measured latency" "grep -qx 'jt=300' '$T/env'"
+check "reports the tier" "grep -q 'Tier: qwen' '$T/out.clear'"
+check "names the mandate file" "grep -q 'missions.md' '$T/out.clear'"
+check "streak reset to 0 after qwen answered" "[ \"\$(cat '$T/strikes')\" = 0 ]"
+
+echo "== BLOCK propagates as exit 1"
+printf 'mission v1\nmission v3\n' > "$T/repo/missions.md"
+STUB_ENV=$T/env STUB_SCREENER=jev STUB_FAILS=2 STUB_VERDICT=BLOCK STUB_EXIT=1 \
+  DEFEND_MANDATE_ATTACK=$T/attack DEFEND_MANDATE_STATE=$T/strikes "$M" --repo "$T/repo" > "$T/out.block" 2>&1; rc=$?
+check "block exit=1 (got $rc)" "[ $rc = 1 ]"
+check "verdict text passes through" "grep -q 'VERDICT: BLOCK' '$T/out.block'"
+
+echo "== Qwen screener failure increments the streak"
+printf 'mission v1\nmission v4\n' > "$T/repo/missions.md"
+STUB_ENV=$T/env STUB_SCREENER=none DEFEND_MANDATE_ATTACK=$T/attack DEFEND_MANDATE_STATE=$T/strikes \
+  "$M" --repo "$T/repo" > /dev/null 2>&1
+check "streak=1 after one qwen failure" "[ \"\$(cat '$T/strikes')\" = 1 ]"
+
+echo "== after 3 consecutive failures -> Qwen skipped, Opus decides everything"
+echo 3 > "$T/strikes"
+STUB_ENV=$T/env STUB_SCREENER=none DEFEND_MANDATE_ATTACK=$T/attack DEFEND_MANDATE_STATE=$T/strikes \
+  "$M" --repo "$T/repo" > "$T/out.tier3" 2>&1
+check "qwen skipped at 3 strikes" "grep -qx 'jev=false' '$T/env'"
+check "says so in the output" "grep -q 'opus-decides-all' '$T/out.tier3'"
+check "streak keeps counting" "[ \"\$(cat '$T/strikes')\" = 4 ]"
+
+echo "== --diff mode (the proposal path) and --check"
+printf 'diff --git a/missions.md b/missions.md\n--- a/missions.md\n+++ b/missions.md\n+x\n' > "$T/prop.diff"
+STUB_ENV=$T/env STUB_SCREENER=jev DEFEND_MANDATE_ATTACK=$T/attack DEFEND_MANDATE_STATE=$T/strikes \
+  "$M" --diff "$T/prop.diff" > "$T/out.diff" 2>&1; rc=$?
+check "--diff clear exit=0 (got $rc)" "[ $rc = 0 ]"
+check "--diff attacks the real bytes" "[ \"\$(grep -o 'diff_bytes=[0-9]*' '$T/env' | cut -d= -f2)\" = \"\$(wc -c < '$T/prop.diff')\" ]"
+
+printf 'diff --git a/other.txt b/other.txt\n--- a/other.txt\n+++ b/other.txt\n+x\n' > "$T/nomandate.diff"
+DEFEND_MANDATE_ATTACK=$T/attack DEFEND_MANDATE_STATE=$T/strikes "$M" --diff "$T/nomandate.diff" --check > /dev/null 2>&1; rc=$?
+check "--check on a non-mandate diff exit=3 (got $rc)" "[ $rc = 3 ]"
+
+echo "== a CHOICES.md edit is gated too (both files are mandates)"
+printf 'diff --git a/CHOICES.md b/CHOICES.md\n--- a/CHOICES.md\n+++ b/CHOICES.md\n+x\n' > "$T/ch.diff"
+STUB_ENV=$T/env STUB_SCREENER=jev DEFEND_MANDATE_ATTACK=$T/attack DEFEND_MANDATE_STATE=$T/strikes \
+  "$M" --diff "$T/ch.diff" > "$T/out.ch" 2>&1; rc=$?
+check "CHOICES.md clear exit=0 (got $rc)" "[ $rc = 0 ]"
+check "CHOICES.md named" "grep -q 'CHOICES.md' '$T/out.ch'"
+
+echo "== --staged attacks only what the commit carries (the pre-commit path)"
+printf 'mission v1\nmission v6 staged\n' > "$T/repo/missions.md"; g -C "$T/repo" add missions.md
+printf 'dirty but NOT staged\n' >> "$T/repo/other.txt"
+STUB_ENV=$T/env STUB_SCREENER=jev DEFEND_MANDATE_ATTACK=$T/attack DEFEND_MANDATE_STATE=$T/strikes \
+  "$M" --repo "$T/repo" --staged > "$T/out.staged" 2>&1; rc=$?
+check "--staged clear exit=0 (got $rc)" "[ $rc = 0 ]"
+check "--staged ignores unstaged noise" "! grep -q other.txt '$T/out.staged'"
+g -C "$T/repo" reset -q
+echo "== usage errors are 2, never a silent pass"
+DEFEND_MANDATE_ATTACK=$T/attack "$M" --bogus > /dev/null 2>&1; rc=$?
+check "bogus arg exit=2 (got $rc)" "[ $rc = 2 ]"
+DEFEND_MANDATE_ATTACK=$T/attack "$M" --diff "$T/does-not-exist" > /dev/null 2>&1; rc=$?
+check "missing diff file exit=2 (got $rc)" "[ $rc = 2 ]"
+
+echo
+if [ "$bad" = 0 ]; then echo "defend-mandate-test: $ok ok, 0 failed"; echo "defend-mandate-test: PASS"; exit 0; fi
+echo "defend-mandate-test: $ok ok, $bad failed"; exit 1
