@@ -306,6 +306,76 @@ export async function sendAlert(state: "down" | "up" | "degraded", serviceId: st
   }
 }
 
+// ---- GPU idle detection (repos-yhlbu, 1o8pn item 3) -----------------------
+
+const GPU_IDLE_STATE_FILE = join(HOME, "vault/health/gpu-idle-state.json");
+
+async function readGpuIdleState(): Promise<{ lastBusy: number } | null> {
+  try {
+    if (!existsSync(GPU_IDLE_STATE_FILE)) return null;
+    const raw = readFileSync(GPU_IDLE_STATE_FILE, "utf8");
+    const obj = JSON.parse(raw);
+    if (typeof obj.lastBusy === "number") return { lastBusy: obj.lastBusy };
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeGpuIdleState(lastBusy: number): Promise<void> {
+  try {
+    mkdirSync(join(HOME, "vault/health"), { recursive: true });
+    writeFileSync(GPU_IDLE_STATE_FILE, JSON.stringify({ lastBusy, updated: Date.now() }));
+  } catch (e) {
+    console.error(`gpu-idle: failed to write state: ${e}`);
+  }
+}
+
+/**
+ * Check if the V100 GPU has been idle for more than `maxIdleMin` minutes.
+ * If busy, update the last-busy timestamp. If idle too long, throw an error.
+ */
+export async function gpuIdleProbe(maxIdleMin: number): Promise<string> {
+  try {
+    const lanesRes = await get("http://127.0.0.1:8099/__lanes");
+    if (!lanesRes) throw new Error("cannot reach laneproxy __lanes");
+    const lanes = (await lanesRes.json().catch(() => null)) as {
+      slots?: { lane: string | null }[];
+      idle?: { lent?: boolean };
+    } | null;
+    if (!lanes) throw new Error("laneproxy __lanes returned invalid JSON");
+
+    // If the GPU is lent to a batch job, that's fine — it's doing work.
+    if (lanes.idle?.lent === true) {
+      await writeGpuIdleState(Date.now());
+      return "GPU lent to batch job (not idle)";
+    }
+
+    // Check if any slot is assigned a lane (i.e., processing work).
+    const busy = (lanes.slots ?? []).some((s) => s.lane !== null);
+    if (busy) {
+      await writeGpuIdleState(Date.now());
+      return "GPU busy";
+    }
+
+    // GPU is idle — check how long.
+    const state = await readGpuIdleState();
+    const now = Date.now();
+    const lastBusy = state?.lastBusy ?? now;
+    const idleMin = (now - lastBusy) / 60_000;
+
+    if (idleMin > maxIdleMin) {
+      throw new Error(`GPU idle for ${idleMin.toFixed(1)} min (> ${maxIdleMin} min threshold)`);
+    }
+    return `GPU idle for ${idleMin.toFixed(1)} min (ok)`;
+  } catch (e) {
+    // If we can't reach the laneproxy, the v100 probe will catch it.
+    // Don't double-alert here.
+    console.error(`gpu-idle: probe error: ${e}`);
+    return `gpu-idle probe error (v100 probe covers this): ${String(e).slice(0, 100)}`;
+  }
+}
+
 // ---- the services ---------------------------------------------------------
 
 const QUIET = process.argv.includes("--quiet");
@@ -324,6 +394,14 @@ export const SERVICES: Service[] = [
     //   job claim present -> DEGRADED (named, never green, never pages)
     //   no job for 15 min -> DOWN (a crashed hook reads exactly like this)
     probe: () => probeV100(),
+  },
+  {
+    id: "gpu-idle",
+    project: "llm-hosting",
+    // Idle GPU > 30 min raises a failure item (repos-yhlbu, 1o8pn item 3).
+    // A GPU sitting at 0% means Leads are out of jobs or pace-throttled.
+    // State file: ~/vault/health/gpu-idle-state.json tracks last-busy time.
+    probe: async () => gpuIdleProbe(30),
   },
   {
     id: "webui",
