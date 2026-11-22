@@ -1,0 +1,313 @@
+#!/usr/bin/env bash
+# defend-deploy-test — hermetic acceptance tests for defend-deploy.
+# Stubs the reviewer commands via DEFEND_OPUS_CMD / DEFEND_JEV_CMD.
+# No network, no real models. Builds everything in a temp dir.
+set -euo pipefail
+
+SELF_DIR=$(dirname "$(readlink -f "$0")")
+DEPLOY="$SELF_DIR/defend-deploy"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+PASS=0
+FAIL=0
+
+pass() { echo "PASS: $1"; PASS=$((PASS + 1)); }
+fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
+
+# --- stub Opus: CLEAR ---
+cat > "$TMP/opus-clear.sh" << 'EOF'
+#!/usr/bin/env bash
+cat > /dev/null
+echo "Note: content reviewed against all four lenses, no blocking issues found"
+echo "VERDICT: CLEAR"
+EOF
+chmod +x "$TMP/opus-clear.sh"
+
+# --- stub Opus: BLOCK ---
+cat > "$TMP/opus-block.sh" << 'EOF'
+#!/usr/bin/env bash
+cat > /dev/null
+cat << 'RESPONSE'
+Blocking: unsupported numerical claim "98.7% of Americans support this bill" with no source
+VERDICT: BLOCK
+RESPONSE
+EOF
+chmod +x "$TMP/opus-block.sh"
+
+# --- stub Opus: empty output (exit 0, prints nothing) ---
+cat > "$TMP/opus-empty.sh" << 'EOF'
+#!/usr/bin/env bash
+cat > /dev/null
+exit 0
+EOF
+chmod +x "$TMP/opus-empty.sh"
+
+# --- stub Opus: no VERDICT line ---
+cat > "$TMP/opus-noverdict.sh" << 'EOF'
+#!/usr/bin/env bash
+cat > /dev/null
+echo "Blocking: something is wrong"
+EOF
+chmod +x "$TMP/opus-noverdict.sh"
+
+# --- stub JEV: all pass ---
+cat > "$TMP/jev-pass.sh" << 'EOF'
+#!/usr/bin/env bash
+cat > /dev/null
+echo "C1: PASS"
+echo "C2: PASS"
+echo "C3: PASS"
+echo "C4: PASS"
+EOF
+chmod +x "$TMP/jev-pass.sh"
+
+# --- honest draft (500+ words) ---
+cat > "$TMP/draft.md" << 'EOF'
+# The People Care Act: A Path to Universal Coverage
+
+The People Care Act (H.R. 150) would provide comprehensive healthcare
+coverage to all Americans through a voluntary public option available to
+every citizen and legal resident. The bill was introduced on January 15,
+2025, and has received bipartisan support in committee.
+
+## Background
+
+Over 27 million Americans currently lack health insurance, and another
+12 million are underinsured, paying premiums that exceed 10% of their
+household income. The Congressional Budget Office estimates that
+uncompensated care costs — medical services provided to uninsured
+patients and later absorbed by hospitals — total approximately $430
+billion annually, ultimately passed on to insured patients through
+higher premiums.
+
+## Key Provisions
+
+The legislation would establish the following:
+
+1. A federally administered public option health plan available in every
+   state, with premiums actuarially rated based on income and age.
+2. Premium subsidies for households earning less than 400% of the federal
+   poverty level, similar to existing ACA marketplace subsidies.
+3. Mental health parity requirements ensuring that mental health benefits
+   are no more restrictive than medical and surgical benefits.
+4. Prescription drug cost caps limiting out-of-pocket spending to $2,000
+   per year for individuals and $4,000 for families.
+5. Protections for individuals with pre-existing conditions, prohibiting
+   insurers from denying coverage or charging higher premiums based on
+   health status.
+6. Rural healthcare funding, including $50 billion over five years for
+   rural hospital infrastructure and telemedicine expansion.
+
+## Fiscal Impact
+
+According to the Congressional Budget Office score released in January
+2025, the bill would reduce the federal deficit by approximately $200
+billion over a ten-year period. This projection accounts for premium
+revenue, subsidy costs, reduced uncompensated care spending, and lower
+Medicare and Medicaid expenditures as healthier individuals enter the
+private insurance market.
+
+## Support and Opposition
+
+The bill has been endorsed by the American Medical Association, the
+National Association of Community Health Centers, and several state
+medical societies. The Heritage Foundation has criticized the bill as
+"an expansion of government bureaucracy" and has proposed an alternative
+market-based approach.
+
+The legislation is currently pending before the House Committee on Ways
+and Means, with a markup session scheduled for mid-February 2025.
+
+## Sources
+
+- Congressional Research Service, "The People Care Act: Background and
+  Analysis," Report R49125, January 2025.
+- CBO Score, H.R. 150, January 2025.
+- American Medical Association Statement on H.R. 150, January 2025.
+- Heritage Foundation, "Alternative Approaches to Healthcare Reform,"
+  February 2025.
+EOF
+
+# --- draft with planted unsupported numerical claim ---
+cat > "$TMP/draft-bad.md" << 'EOF'
+# The People Care Act
+
+The People Care Act (H.R. 150) would provide comprehensive healthcare
+coverage to all Americans. A recent Gallup poll found that 98.7% of
+Americans support this bill, making it one of the most popular pieces
+of legislation in recent history.
+
+The bill would establish a public option available to all citizens, with
+premiums subsidized for low-income families. According to an unnamed
+senior White House official, the bill will save every American family
+an average of $5,000 per year in healthcare costs.
+
+## Key Provisions
+
+- Universal coverage through public option
+- Mental health parity
+- Prescription drug cost caps
+EOF
+
+# --- evidence directory ---
+mkdir -p "$TMP/evidence"
+cat > "$TMP/evidence/qa-report.md" << 'EOF'
+# QA Report — H.R. 150 Article
+
+Dimensions covered: factual accuracy, source verification, tone.
+Findings: all numerical claims verified against primary sources.
+Coverage gaps: none identified.
+EOF
+echo "screenshot-hero.png
+screenshot-cta.png" > "$TMP/evidence/assets.txt"
+
+# ===================================================================
+# Case A: honest draft, evidence present => exit 0, VERDICT: CLEAR,
+#         receipt exists and first line is CLEAR.
+# ===================================================================
+receipts_a="$TMP/receipts-a"
+export DEFEND_OPUS_CMD="$TMP/opus-clear.sh"
+export DEFEND_JEV_CMD="$TMP/jev-pass.sh"
+export DEFEND_JEV_TIMEOUT=10
+
+set +e
+out_a=$(python3 "$DEPLOY" --artifact "$TMP/draft.md" \
+    --evidence "$TMP/evidence" \
+    --audience "general public, politically diverse" \
+    --surface "website article on ndivisible.com" \
+    --receipts "$receipts_a" 2>&1)
+rc_a=$?
+set -e
+
+if [ $rc_a -eq 0 ] && echo "$out_a" | grep -q "VERDICT: CLEAR by=opus"; then
+    receipt_file=$(ls "$receipts_a" 2>/dev/null | head -1)
+    if [ -n "$receipt_file" ] && [ "$(head -1 "$receipts_a/$receipt_file")" = "CLEAR" ]; then
+        pass "A: honest draft => exit 0, VERDICT: CLEAR, receipt written with CLEAR first line"
+    else
+        fail "A: receipt missing or first line not CLEAR"
+    fi
+else
+    fail "A: expected exit 0 + CLEAR, got exit $rc_a"
+    echo "  output: $out_a"
+fi
+
+# ===================================================================
+# Case B: draft with unsupported claim => exit 1, VERDICT: BLOCK,
+#         no receipt file exists afterwards.
+# ===================================================================
+receipts_b="$TMP/receipts-b"
+export DEFEND_OPUS_CMD="$TMP/opus-block.sh"
+
+set +e
+out_b=$(python3 "$DEPLOY" --artifact "$TMP/draft-bad.md" \
+    --evidence "$TMP/evidence" \
+    --receipts "$receipts_b" 2>&1)
+rc_b=$?
+set -e
+
+if [ $rc_b -eq 1 ] && echo "$out_b" | grep -q "VERDICT: BLOCK by=opus"; then
+    if [ -z "$(ls -A "$receipts_b" 2>/dev/null)" ]; then
+        pass "B: unsupported claim => exit 1, VERDICT: BLOCK, no receipt written"
+    else
+        fail "B: receipt file exists after BLOCK verdict"
+    fi
+else
+    fail "B: expected exit 1 + BLOCK, got exit $rc_b"
+    echo "  output: $out_b"
+fi
+
+# ===================================================================
+# Case C: missing artifact => exit 3, no VERDICT; empty artifact => exit 3.
+# ===================================================================
+export DEFEND_OPUS_CMD="$TMP/opus-clear.sh"
+
+set +e
+out_c1=$(python3 "$DEPLOY" --artifact "$TMP/nonexistent-file.md" \
+    --receipts "$TMP/receipts-c" 2>&1)
+rc_c1=$?
+set -e
+if [ $rc_c1 -eq 3 ] && ! echo "$out_c1" | grep -q "VERDICT:"; then
+    pass "C1: missing artifact => exit 3, no VERDICT line"
+else
+    fail "C1: expected exit 3, got exit $rc_c1"
+fi
+
+: > "$TMP/empty.md"
+set +e
+out_c2=$(python3 "$DEPLOY" --artifact "$TMP/empty.md" \
+    --receipts "$TMP/receipts-c" 2>&1)
+rc_c2=$?
+set -e
+if [ $rc_c2 -eq 3 ] && ! echo "$out_c2" | grep -q "VERDICT:"; then
+    pass "C2: empty artifact => exit 3, no VERDICT line"
+else
+    fail "C2: expected exit 3, got exit $rc_c2"
+fi
+
+# ===================================================================
+# Case D: reviewer exits 0 but prints nothing / prints no VERDICT line
+#         => exit 3, not CLEAR.
+# ===================================================================
+export DEFEND_OPUS_CMD="$TMP/opus-empty.sh"
+set +e
+out_d1=$(python3 "$DEPLOY" --artifact "$TMP/draft.md" \
+    --evidence "$TMP/evidence" \
+    --receipts "$TMP/receipts-d" 2>&1)
+rc_d1=$?
+set -e
+if [ $rc_d1 -eq 3 ] && ! echo "$out_d1" | grep -q "VERDICT:"; then
+    pass "D1: empty reviewer output => exit 3, not CLEAR"
+else
+    fail "D1: expected exit 3, got exit $rc_d1"
+fi
+
+export DEFEND_OPUS_CMD="$TMP/opus-noverdict.sh"
+set +e
+out_d2=$(python3 "$DEPLOY" --artifact "$TMP/draft.md" \
+    --evidence "$TMP/evidence" \
+    --receipts "$TMP/receipts-d" 2>&1)
+rc_d2=$?
+set -e
+if [ $rc_d2 -eq 3 ] && ! echo "$out_d2" | grep -q "VERDICT:"; then
+    pass "D2: no VERDICT line in reviewer output => exit 3, not CLEAR"
+else
+    fail "D2: expected exit 3, got exit $rc_d2"
+fi
+
+# ===================================================================
+# Case E: artifact hash changes between read and review => exit 3,
+#         no receipt. Simulated by stub reviewer rewriting the file.
+# ===================================================================
+cp "$TMP/draft.md" "$TMP/draft-e.md"
+cat > "$TMP/opus-modify.sh" << EOF
+#!/usr/bin/env bash
+cat > /dev/null
+echo "tampered content injected by test" >> "$TMP/draft-e.md"
+echo "VERDICT: CLEAR"
+EOF
+chmod +x "$TMP/opus-modify.sh"
+
+receipts_e="$TMP/receipts-e"
+export DEFEND_OPUS_CMD="$TMP/opus-modify.sh"
+set +e
+out_e=$(python3 "$DEPLOY" --artifact "$TMP/draft-e.md" \
+    --receipts "$receipts_e" 2>&1)
+rc_e=$?
+set -e
+if [ $rc_e -eq 3 ] && ! echo "$out_e" | grep -q "VERDICT:"; then
+    pass "E: artifact changed during review => exit 3, no receipt"
+else
+    fail "E: expected exit 3, got exit $rc_e"
+    echo "  output: $out_e"
+fi
+
+# ===================================================================
+# Summary
+# ===================================================================
+echo ""
+echo "Results: $PASS passed, $FAIL failed"
+if [ "$FAIL" -gt 0 ]; then
+    exit 1
+fi
+exit 0
