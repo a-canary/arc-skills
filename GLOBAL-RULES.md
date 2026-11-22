@@ -87,6 +87,9 @@ At session start, load these files into the system prompt:
   If `pace` is missing or unreadable, count as over pace.
   Over pace (including by an unreadable budget line), Ollama Cloud is allowed whatever the laneproxy queue length; the queue and `util` tests in the lane-overflow rule apply only to seats under pace.
   A Lead's own turns that orchestrate, dispatch to laneproxy or Ollama Cloud, review, and report are not "new Claude work"; keep them short.
+- **Schema and state flow validation (operator ruling 2026-11-16, repos-qqym).** Before building or changing a data schema or a state machine, the change must pass validation by the schema-validator seat (Fable at high effort). This is a gate before DefendPlan or DefendMerge for any change touching a schema or a state machine.
+  What the validator checks: every field has a documented owner; no nullable fields without a documented reason; foreign keys are explicit, not just convention; every state transition is logged (who, when, from, to, why); state machines have a terminal state and a restart path; migrations are reversible or have a documented undo plan; no silent failures: every error path is explicit.
+  Blockers fail the gate; warnings do not. The validator's verdict file is attached to the PR as evidence.
 - **Delegate in ≤10-minute subagents (operator 2026-10-31).** The main session orchestrates; each investigation or implementation chunk runs as a subagent timeboxed to ~10 minutes, for context management.
 - **Subagents return distilled findings only** — conclusion + refs, under
   ~500 tokens.
