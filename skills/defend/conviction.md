@@ -1,4 +1,4 @@
-# DefendConviction — conviction change touching a held position → apply (counsel)
+# DefendConviction — conviction change touching a held position → apply (counsel + Opus xhigh decider)
 
 Fires when a nightly grade produces a conviction change that would **exit a
 held slot or drop it below floor**, before that change is applied and traded by
@@ -52,10 +52,10 @@ counsel, a different family than the Qwen/bonsai grade path.
 
 ## Verdict routing
 
-`CLEAR | ATTACKS` → the apply step, surfaced **verbatim** (no summarizing away).
-The consumer is a mechanical apply step with no human in the loop, so the verdict
-must be operationally decisive. The attacker draws this line explicitly on every
-attack it files:
+Panel synthesis → Opus xhigh decider (binding) → the apply step, surfaced
+**verbatim** (no summarizing away). The consumer is a mechanical apply step with
+no human in the loop, so the verdict must be operationally decisive. The Opus
+decider and the panel together draw this line explicitly on every attack filed:
 
 - **Blocking** — refutes the *direction* of the change or its *evidence-soundness*
   (a mandatory-lens failure: no affirmative disconfirmation, price substituted for

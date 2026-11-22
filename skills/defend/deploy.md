@@ -1,4 +1,4 @@
-# DefendDeploy — QA+visual passed → production deploy (counsel)
+# DefendDeploy — QA+visual passed → production deploy (counsel + Opus xhigh decider)
 
 Fires after full QA **and** visual capture & analysis, before production
 deploy: app version, YT video, X post, website content update. Production =
@@ -39,7 +39,8 @@ un-revocable in practice; this is the last model check before it crosses.
 
 ## Verdict routing
 
-`CLEAR | ATTACKS` → Driver, surfaced **verbatim** (no summarizing away).
-ATTACKS block the deploy until resolved or overridden; override = ledger note
-row (gate, attacks, why). "Refresh human approval" routes back to the user's
-webui review with the drifted elements named.
+Panel synthesis → Opus xhigh decider (binding) → Driver, surfaced **verbatim**
+(no summarizing away). ATTACKS (from either panel or Opus) block the deploy
+until resolved or overridden; override = ledger note row (gate, attacks, why).
+"Refresh human approval" routes back to the user's webui review with the
+drifted elements named.
