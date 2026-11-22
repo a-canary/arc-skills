@@ -28,7 +28,7 @@
 
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const HOME = process.env.HOME ?? "";
 const VAULT = process.env.VAULT_DIR ?? join(HOME, "vault");
@@ -40,6 +40,24 @@ export type Service = { id: string; project: string; probe: () => Promise<string
 
 const fail = (msg: string): never => {
   throw new Error(msg);
+};
+
+/**
+ * A status that is neither healthy nor down: the surface is unusable, but the
+ * cause is explainable and may be legitimate (llama stopped for a GPU lend).
+ * It must never read as OK — that is how a dead llama stayed green (repos-pkql)
+ * — and it must not page as DOWN either, because a real lend can last hours.
+ * Dedupe treats it as its own state, so degraded→recovered and
+ * degraded→down each alert once.
+ */
+export class Degraded extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = "Degraded";
+  }
+}
+const degraded = (msg: string): never => {
+  throw new Degraded(msg);
 };
 
 // ---- native probe helpers -------------------------------------------------
@@ -76,6 +94,158 @@ async function firstOk(urls: string[], init?: RequestInit): Promise<string> {
     tried.push(`${u} → ${r ? r.status : "unreachable"}`);
   }
   return fail(`no healthy endpoint: ${tried.join(", ")}`);
+}
+
+// ---- lend classification (repos-pkql) -------------------------------------
+
+/**
+ * GET + JSON parse, or null. A monitor probe must never throw on a malformed
+ * body: an unparseable /__lanes is "no evidence", not a new failure mode.
+ */
+async function getJson(url: string): Promise<unknown | null> {
+  const r = await get(url);
+  if (!r || r.status !== 200) return null;
+  try {
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A v100 batch job that claims to be running, or null. This is deliberately
+ * weak evidence — rd-director's job state is known to go stale (repos-gxiy:
+ * four jobs still said `queue` after they finished) — so a hit here yields
+ * DEGRADED, never OK, and a miss only means "not proven running".
+ */
+export function runningV100Job(
+  dir = join(HOME, "repos/rd-director/jobs/local-v100"),
+): string | null {
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((f) => f.endsWith(".json"));
+  } catch {
+    return null;
+  }
+  for (const f of names) {
+    try {
+      const d = JSON.parse(readFileSync(join(dir, f), "utf8")) as { state?: unknown };
+      if (["started", "running", "run"].includes(String(d?.state))) return f.replace(/\.json$/, "");
+    } catch {
+      continue; // unreadable spec is not a running job
+    }
+  }
+  return null;
+}
+
+/** How long "lent with no job" may hold before it is a DOWN, not a degraded. */
+export const LEND_ESCALATE_MS = 15 * 60_000;
+
+/**
+ * Classify a `lent` claim from laneproxy. Pure: the caller supplies the job
+ * evidence, the clock and the persisted first-seen time.
+ *
+ * Why this exists: laneproxy's idle_cmd contract is "exit 1 = no job, upstream
+ * running; anything else = assume lent", so an error or a timeout is
+ * indistinguishable from a real lend (laneproxy.py:1072). Reporting that state
+ * as health let a dead llama read green (repos-pkql).
+ */
+export function classifyLend(opts: {
+  jobId: string | null;
+  now: number;
+  claimedAt: number | null;
+  escalateMs?: number;
+}): { verdict: "degraded" | "down"; detail: string; claimedAt: number | null } {
+  const { jobId, now, claimedAt, escalateMs = LEND_ESCALATE_MS } = opts;
+  if (jobId) {
+    return {
+      verdict: "degraded",
+      detail: `lent to batch job ${jobId}: llama stopped for it, and the job claim is rd-director's job state (not the GPU) — degraded, not healthy`,
+      claimedAt: null,
+    };
+  }
+  const since = claimedAt ?? now;
+  const mins = Math.round((now - since) / 60_000);
+  if (now - since >= escalateMs) {
+    return {
+      verdict: "down",
+      detail: `lent for ${mins}m with no running v100 job — laneproxy assumes lent on any idle_cmd error/timeout, so a crashed hook looks like this and llama stays stopped`,
+      claimedAt: since,
+    };
+  }
+  return {
+    verdict: "degraded",
+    detail: `lent claimed, no running v100 job (${mins}m; DOWN after ${Math.round(escalateMs / 60_000)}m)`,
+    claimedAt: since,
+  };
+}
+
+/** Persisted first-seen time for "lent with no job" so the 15-min clock spans cron ticks. */
+const lendClaimPath = () => join(OUT_DIR, "lend-unverified.json");
+
+export function readLendClaimedAt(path = lendClaimPath()): number | null {
+  try {
+    const v = (JSON.parse(readFileSync(path, "utf8")) as { claimedAt?: unknown }).claimedAt;
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLendClaimedAt(claimedAt: number | null, path = lendClaimPath()): void {
+  try {
+    if (claimedAt === null) {
+      if (existsSync(path)) writeFileSync(path, `${JSON.stringify({ claimedAt: null })}\n`);
+      return;
+    }
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify({ claimedAt })}\n`);
+  } catch {
+    // state is a nicety: losing it delays a DOWN by one tick, it must not throw
+  }
+}
+
+/**
+ * The v100 probe. Extracted from SERVICES so the regression has an automated
+ * test against a real HTTP front — the inline version could only be checked by
+ * hand, which is how the original bug survived in plain sight.
+ *
+ * Every input is injectable (front URL, clock, job lookup, clock file); the
+ * defaults are the live ones.
+ */
+export async function probeV100(
+  opts: {
+    front?: string;
+    now?: number;
+    jobId?: string | null; // undefined = ask rd-director; null = proven no job
+    jobsDir?: string;
+    claimPath?: string;
+    escalateMs?: number;
+  } = {},
+): Promise<string> {
+  const { front = "http://127.0.0.1:8099", now = Date.now(), claimPath = lendClaimPath(), escalateMs } = opts;
+  let up: string;
+  try {
+    up = `${await firstOk([`${front}/health`])} ok`;
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e);
+    const lanes = (await getJson(`${front}/__lanes`)) as { idle?: { lent?: boolean } } | null;
+    const idle = lanes?.idle;
+    // No `idle` object = the lend feature is off in this deployment (or the
+    // snapshot is unreadable): nothing here may excuse a stopped llama.
+    if (!idle) return fail(`${front} health down (${why}); no lend claim — idle absent or /__lanes unreadable`);
+    if (idle.lent !== true) return fail(`${front} health down (${why}); idle.lent=false — llama stopped, not lent`);
+    const v = classifyLend({
+      jobId: opts.jobId === undefined ? runningV100Job(opts.jobsDir) : opts.jobId,
+      now,
+      claimedAt: readLendClaimedAt(claimPath),
+      escalateMs,
+    });
+    writeLendClaimedAt(v.claimedAt, claimPath);
+    return v.verdict === "down" ? fail(v.detail) : degraded(v.detail);
+  }
+  writeLendClaimedAt(null, claimPath); // healthy: the next lend starts a fresh no-job clock
+  return up;
 }
 
 function sh(cmd: string, args: string[]): { rc: number; out: string } {
@@ -117,15 +287,16 @@ export function discordWebhook(): string {
  *
  * Never throws: a dead alert path must not hide the finding (already on stderr).
  */
-export async function sendAlert(state: "down" | "up", serviceId: string, detail: string): Promise<boolean> {
-  const emoji = state === "down" ? "🔴" : "🟢";
-  const title = state === "down" ? `${serviceId} DOWN` : `${serviceId} recovered`;
+export async function sendAlert(state: "down" | "up" | "degraded", serviceId: string, detail: string): Promise<boolean> {
+  const emoji = state === "down" ? "🔴" : state === "degraded" ? "🟡" : "🟢";
+  const title = state === "down" ? `${serviceId} DOWN` : state === "degraded" ? `${serviceId} DEGRADED` : `${serviceId} recovered`;
+  const severity = state === "down" ? "error" : state === "degraded" ? "warn" : "info";
   const body = `${emoji} **${title}** — ${detail}`;
   try {
     discordWebhook();
     const r = spawnSync(
       process.execPath,
-      [NOTIFY_BIN, title, body, "--source", "health-monitor", "--severity", state === "down" ? "error" : "info", "--dedupe-key", `health-monitor:${serviceId}`, "--state", state],
+      [NOTIFY_BIN, title, body, "--source", "health-monitor", "--severity", severity, "--dedupe-key", `health-monitor:${serviceId}`, "--state", state],
       // explicit env: Bun's spawnSync passes the START-UP env, not later process.env writes
       { encoding: "utf8", timeout: 15_000, env: process.env },
     );
@@ -145,19 +316,14 @@ export const SERVICES: Service[] = [
     project: "llm-hosting",
     // GPU inference behind provider `v100`. The model runs on ai-lab-02; :8099 here is
     // lane-front, and /health passes front -> laneproxy -> llama-server (502 if any hop is down).
-    // While the idle detector lends the GPU to a batch job llama is stopped by design; the next
-    // POST reclaims it, so a lend reads as up.
-    // ponytail: a failed reclaim leaves lent=true and reads up here; it surfaces as 502s on the
-    // POST path, not in this probe. Add a reclaim-failure counter to /__lanes if that bites.
-    probe: async () => {
-      try {
-        return `${await firstOk(["http://127.0.0.1:8099/health"])} ok`;
-      } catch (e) {
-        const lanes = (await (await get("http://127.0.0.1:8099/__lanes"))?.json().catch(() => null)) as { idle?: { lent?: boolean } } | null;
-        if (lanes?.idle?.lent === true) return "GPU lent to batch job (reclaims on next request)";
-        throw e;
-      }
-    },
+    // While the idle detector lends the GPU to a batch job llama is stopped by design, so a
+    // lend must not read as DOWN — but it must not read as OK either: laneproxy sets `lent`
+    // for ANY idle_cmd exit that is not 1, so a crashed hook, a timeout and a real lend are
+    // indistinguishable (laneproxy.py:1072). A dead llama read green here for three days
+    // (repos-pkql, 8reo: 18 start/stops). Classification lives in classifyLend:
+    //   job claim present -> DEGRADED (named, never green, never pages)
+    //   no job for 15 min -> DOWN (a crashed hook reads exactly like this)
+    probe: () => probeV100(),
   },
   {
     id: "webui",
@@ -221,49 +387,58 @@ export const SERVICES: Service[] = [
 
 // ---- the run --------------------------------------------------------------
 
-export type Result = { id: string; project: string; ok: boolean; detail: string };
+export type Status = "ok" | "degraded" | "down";
+export type Result = { id: string; project: string; ok: boolean; status: Status; detail: string };
 
 /**
  * Probe every service, then alert via notify.ts on transitions. Dedupe is
  * handled by notify's --dedupe-key, so this function stays stateless.
  *
+ * Three states, because "the endpoint is down" and "the endpoint is off on
+ * purpose and we cannot prove it" are different facts and only one is an
+ * outage: a `Degraded` throw alerts as degraded (yellow) and never as OK.
+ *
  * `sendAlert` is injected so tests can spy on it without touching notify.
  */
 export async function runHealthMonitor(opts: {
   services: Service[];
-  alert: (state: "down" | "up", serviceId: string, detail: string) => Promise<unknown>;
+  alert: (state: "down" | "up" | "degraded", serviceId: string, detail: string) => Promise<unknown>;
   outDir?: string | null;
   quiet?: boolean;
   log?: (line: string) => void;
 }): Promise<Result[]> {
   const { services, alert, outDir = OUT_DIR, quiet = QUIET, log = console.log } = opts;
   const results = await Promise.all(
-    services.map(async ({ id, project, probe }) => {
+    services.map(async ({ id, project, probe }): Promise<Result> => {
       try {
-        return { id, project, ok: true, detail: await probe() };
+        return { id, project, ok: true, status: "ok", detail: await probe() };
       } catch (e) {
-        return { id, project, ok: false, detail: e instanceof Error ? e.message : String(e) };
+        const detail = e instanceof Error ? e.message : String(e);
+        // name, not instanceof: a reloaded module must not change the status
+        const status: Status = (e as { name?: string })?.name === "Degraded" ? "degraded" : "down";
+        return { id, project, ok: status === "ok", status, detail };
       }
     }),
   );
 
   for (const r of results) {
     // notify.ts dedupe handles the transition gating; we always call.
-    await alert(r.ok ? "up" : "down", r.id, r.detail);
-    if (!quiet) log(`${r.ok ? "ok  " : "DOWN"} ${r.id.padEnd(16)} ${r.detail}`);
+    await alert(r.status === "ok" ? "up" : r.status, r.id, r.detail);
+    if (!quiet) log(`${r.status === "ok" ? "ok  " : r.status === "degraded" ? "WARN" : "DOWN"} ${r.id.padEnd(16)} ${r.detail}`);
   }
 
   if (outDir) {
     mkdirSync(outDir, { recursive: true });
     const stamp = new Date().toISOString();
-    const down = results.filter((r) => !r.ok);
+    const down = results.filter((r) => r.status === "down");
+    const deg = results.filter((r) => r.status === "degraded");
     writeFileSync(
       join(outDir, "status.json"),
-      `${JSON.stringify({ at: stamp, down: down.length, services: results }, null, 1)}\n`,
+      `${JSON.stringify({ at: stamp, down: down.length, degraded: deg.length, services: results }, null, 1)}\n`,
     );
     appendFileSync(
       join(outDir, "monitor.log"),
-      `${stamp} ok=${results.length - down.length}/${results.length} down=[${down.map((d) => d.id).join(",")}]\n`,
+      `${stamp} ok=${results.filter((r) => r.status === "ok").length}/${results.length} degraded=[${deg.map((d) => d.id).join(",")}] down=[${down.map((d) => d.id).join(",")}]\n`,
     );
   }
   return results;
@@ -281,8 +456,12 @@ async function main() {
         : (state, id, detail) => sendAlert(state, id, detail),
       outDir: dry ? null : OUT_DIR,
     });
-    const down = results.filter((r) => !r.ok).map((r) => r.id);
-    console.log(`health-monitor: ${results.length - down.length}/${results.length} up${down.length ? ` — DOWN: ${down.join(", ")}` : ""}`);
+    const down = results.filter((r) => r.status === "down").map((r) => r.id);
+    const deg = results.filter((r) => r.status === "degraded").map((r) => r.id);
+    const ok = results.length - down.length - deg.length;
+    console.log(
+      `health-monitor: ${ok}/${results.length} up${deg.length ? ` — DEGRADED: ${deg.join(", ")}` : ""}${down.length ? ` — DOWN: ${down.join(", ")}` : ""}`,
+    );
   } catch (e) {
     console.error(`health-monitor: run failed: ${e instanceof Error ? e.message : String(e)}`);
     process.exitCode = 1;
