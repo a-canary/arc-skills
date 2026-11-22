@@ -1,0 +1,918 @@
+#!/usr/bin/env python3
+"""defend-sandbox-test — acceptance harness for defend-sandbox.
+
+Builds fixture git trees and runs the real bwrap path for every acceptance
+case A through L, then checks the matrix and exit code.  Exits 0 only when
+all cases behave as specified.
+"""
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "defend-sandbox")
+
+
+def run(cmd, cwd=None, check=True, capture=True, env=None):
+    kwargs = {"cwd": cwd, "text": True}
+    if env is not None:
+        kwargs["env"] = env
+    if capture:
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.PIPE
+    proc = subprocess.run(cmd, **kwargs)
+    if check and proc.returncode != 0:
+        raise RuntimeError(
+            f"command failed ({proc.returncode}): {' '.join(cmd)}\n"
+            f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+        )
+    return proc
+
+
+def fresh_repo():
+    d = tempfile.mkdtemp(prefix="sbx-test-repo-")
+    run(["git", "init", "-q"], cwd=d)
+    run(["git", "config", "user.name", "test"], cwd=d)
+    run(["git", "config", "user.email", "test@test"], cwd=d)
+    return d
+
+
+def commit_all(repo, message):
+    run(["git", "add", "-A"], cwd=repo)
+    run(["git", "commit", "-q", "-m", message], cwd=repo)
+
+
+def write(path, content):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(content)
+
+
+def count_objects(repo):
+    proc = run(["git", "count-objects", "-v"], cwd=repo, capture=True)
+    return proc.stdout
+
+
+def fsck_dangling(repo):
+    proc = run(["git", "fsck", "--dangling"], cwd=repo, capture=True, check=False)
+    return proc.stdout + proc.stderr
+
+
+def invoke(repo, base, claim_path, extra_args=None, extra_env=None,
+           return_stdout=False, script=SCRIPT):
+    extra_args = extra_args or []
+    env = None
+    if extra_env:
+        env = os.environ.copy()
+        env.update(extra_env)
+    json_path = os.path.join(tempfile.mkdtemp(prefix="sbx-out-"), "matrix.json")
+    proc = run(
+        [sys.executable, script, "--repo", repo, "--base", base, "--claim", claim_path, "--json", json_path]
+        + extra_args,
+        check=False,
+        env=env,
+    )
+    with open(json_path) as f:
+        data = json.load(f)
+    if return_stdout:
+        return proc.returncode, data, proc.stdout
+    return proc.returncode, data
+
+
+def assert_row(data, want_verdict, want_base, want_head):
+    assert len(data["rows"]) == 1, f"expected one row, got {data['rows']}"
+    row = data["rows"][0]
+    assert row["verdict"] == want_verdict, f"verdict {row['verdict']} != {want_verdict}: {row}"
+    assert row["base"] == want_base, f"base {row['base']} != {want_base}: {row}"
+    assert row["head"] == want_head, f"head {row['head']} != {want_head}: {row}"
+
+
+def case_a_normal():
+    repo = fresh_repo()
+    write(os.path.join(repo, "tests", "test_ok.py"), "def test_one(): pass\ndef test_two(): pass\n")
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_ok.py::test_one\ntests/test_ok.py::test_two\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 0, f"exit {rc}"
+    assert len(data["rows"]) == 2
+    for row in data["rows"]:
+        assert row["base"] == "PASS", row
+        assert row["head"] == "PASS", row
+        assert row["verdict"] == "CLEAR", row
+        assert row["provenance"] == "sandboxed(check)", row
+    print("A normal suite ................................ PASS")
+
+
+def case_b_os_exit():
+    repo = fresh_repo()
+    write(os.path.join(repo, "tests", "test_exit.py"), "import os\ndef test_exit(): os._exit(0)\n")
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_exit.py::test_exit\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 1
+    assert_row(data, "BLOCK", "TAMPERED:truncated", "TAMPERED:truncated")
+    print("B os._exit(0) body ............................ PASS")
+
+
+def case_c_liar_register():
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_liar.py"),
+        '''
+import pytest
+
+class Liar:
+    @pytest.hookimpl(hookwrapper=True, trylast=True)
+    def pytest_runtest_makereport(self, item, call):
+        outcome = yield
+        if call.when == "call":
+            report = outcome.get_result()
+            report.outcome = "passed"
+
+@pytest.fixture(autouse=True)
+def inject(request):
+    request.config.pluginmanager.register(Liar(), name="liar")
+
+def test_liar():
+    assert False
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_liar.py::test_liar\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 1
+    assert_row(data, "BLOCK", "TAMPERED:outcome-rewritten", "TAMPERED:outcome-rewritten")
+    print("C report-rewriting liar ....................... PASS")
+
+
+def case_d_report_suppression():
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_drop.py"),
+        '''
+import pytest
+
+@pytest.fixture(autouse=True)
+def suppress_sbxplug_evidence(request):
+    """Drop the sandbox plugin's id for this test so the line has no identity."""
+    plug = request.config.pluginmanager.get_plugin("sbxplug-internal")
+    nodeid = request.node.nodeid
+    for cell in plug.pytest_sessionfinish.__closure__ or []:
+        obj = cell.cell_contents
+        if isinstance(obj, list) and nodeid in obj:
+            obj.clear()
+            break
+
+def test_drop():
+    assert True
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_drop.py::test_drop\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 1
+    assert_row(data, "BLOCK", "TAMPERED:missing-id", "TAMPERED:missing-id")
+    print("D report suppression .......................... PASS")
+
+
+def case_e_outcome_rewrite():
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_rewrite.py"),
+        '''
+import pytest
+import pluggy
+
+def rewrite_wrapper(item, call):
+    outcome = yield
+    if call.when == "call":
+        report = outcome.get_result()
+        report.outcome = "passed"
+
+opts = {"hookwrapper": True, "trylast": True, "optionalhook": False, "specname": None, "wrapper": False, "tryfirst": False}
+
+@pytest.fixture(autouse=True)
+def inject_rewrite(request):
+    hook = request.config.pluginmanager.hook.pytest_runtest_makereport
+    impl = pluggy.HookImpl(request.node, "injected", rewrite_wrapper, opts)
+    hook._add_hookimpl(impl)
+
+def test_rewrite():
+    assert False
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_rewrite.py::test_rewrite\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 1
+    assert_row(data, "BLOCK", "TAMPERED:outcome-rewritten", "TAMPERED:outcome-rewritten")
+    print("E outcome rewrite without registration ........ PASS")
+
+
+def case_f_hook_exclusion():
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_suppress.py"),
+        '''
+import pytest
+
+@pytest.fixture(autouse=True)
+def remove_sbxplug(request):
+    hook = request.config.pluginmanager.hook.pytest_runtest_makereport
+    hook._hookimpls = [impl for impl in hook._hookimpls if impl.plugin_name != "sbxplug-internal"]
+
+def test_ok():
+    pass
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_suppress.py::test_ok\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 1
+    assert_row(data, "BLOCK", "TAMPERED:hook-suppressed", "TAMPERED:hook-suppressed")
+    print("F hook-chain exclusion ........................ PASS")
+
+
+def case_g_channel_forgery():
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_forge.py"),
+        '''
+import os
+
+def test_forge():
+    fd = int(os.environ["SBX_CHAN_FD"])
+    os.write(fd, b"forged line\\n")
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_forge.py::test_forge\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 1
+    assert_row(data, "BLOCK", "TAMPERED:channel", "TAMPERED:channel")
+
+    # Wrong-key single line.
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_wrongkey.py"),
+        '''
+import os
+
+def test_wrongkey():
+    real_write = os.write
+    os.write = lambda fd, data: 0
+    fd = int(os.environ["SBX_CHAN_FD"])
+    real_write(fd, b"deadbeef {}\\n")
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_wrongkey.py::test_wrongkey\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 1
+    assert_row(data, "BLOCK", "TAMPERED:auth", "TAMPERED:auth")
+    print("G channel forgery ............................. PASS")
+
+
+def case_h_host_probe():
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_probe.py"),
+        '''
+import os
+import errno
+import socket
+
+
+def _read_content(fd):
+    """Try to read up to 4096 bytes from fd without blocking."""
+    try:
+        dup = os.open(f"/proc/self/fd/{fd}", os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return b""
+    try:
+        return os.read(dup, 4096)
+    except (OSError, BlockingIOError):
+        return b""
+    finally:
+        os.close(dup)
+
+
+def test_probe():
+    marker = os.environ["SBX_DECOY_MARKER"]
+    claim_path = os.environ["SBX_CLAIM_PATH"]
+    output_path = os.environ["SBX_OUTPUT_PATH"]
+    repo_path = os.environ["SBX_REPO_PATH"]
+
+    # Existing host-path assertions.
+    assert not os.path.exists("/home/aaron/repos")
+    assert not os.path.exists("/run")
+
+    # Network isolation assertion (192.0.2.1 is TEST-NET-1 and must be
+    # unreachable inside the sandbox, yielding ENETUNREACH).
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(2)
+    reachable = True
+    got_errno = None
+    try:
+        s.connect(("192.0.2.1", 80))
+    except OSError as e:
+        reachable = False
+        got_errno = e.errno
+    finally:
+        s.close()
+    assert not reachable
+    assert got_errno == errno.ENETUNREACH, f"expected ENETUNREACH, got {got_errno}"
+
+    chan_fd = int(os.environ["SBX_CHAN_FD"])
+    dir_fd = os.open("/proc/self/fd", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        entries = os.listdir(dir_fd)
+        found_chan = False
+        found_any = False
+        marker_bytes = marker.encode()
+        for e in entries:
+            if not e.isdigit():
+                continue
+            fd = int(e)
+            if fd == dir_fd:
+                continue
+            found_any = True
+            if fd == chan_fd:
+                found_chan = True
+                continue
+
+            try:
+                target = os.readlink(f"/proc/self/fd/{fd}")
+            except OSError:
+                continue
+
+            # Path-based containment: no fd may resolve to host-side files.
+            assert target != claim_path, f"fd {fd} resolves to claim path: {target}"
+            assert target != output_path, f"fd {fd} resolves to output path: {target}"
+            assert target != repo_path, f"fd {fd} resolves to repo path: {target}"
+            assert not target.startswith(("/home/", "/run/", "/etc/")), (
+                f"fd {fd} resolves under sensitive host path: {target}"
+            )
+
+            # Content-based containment: the decoy marker must not be readable
+            # through any inherited fd.
+            content = _read_content(fd)
+            assert marker_bytes not in content, (
+                f"fd {fd} ({target}) contains decoy marker"
+            )
+    finally:
+        os.close(dir_fd)
+
+    assert found_chan, "channel fd not enumerated"
+    assert found_any, "no fds enumerated"
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_probe.py::test_probe\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 0
+    assert_row(data, "CLEAR", "PASS", "PASS")
+    print("H host & fd probe ............................. PASS")
+
+
+def case_i_overlay_never():
+    base_repo = fresh_repo()
+    write(os.path.join(base_repo, "tests", "test_ok.py"), "def test_ok(): pass\n")
+    commit_all(base_repo, "base")
+
+    for name, rel_path, content in [
+        ("conftest.py", "conftest.py", "def pytest_configure(config): pass\n"),
+        ("subdirectory conftest.py", "tests/sub/conftest.py", "def pytest_configure(config): pass\n"),
+        ("pytest.ini", "pytest.ini", "[pytest]\n"),
+    ]:
+        repo = fresh_repo()
+        write(os.path.join(repo, "tests", "test_ok.py"), "def test_ok(): pass\n")
+        commit_all(repo, "base")
+        write(os.path.join(repo, rel_path), content)
+        claim = os.path.join(repo, "claim.txt")
+        write(claim, "tests/test_ok.py::test_ok\n")
+        rc, data = invoke(repo, "HEAD", claim)
+        assert rc == 0, f"{name}: exit {rc}"
+        assert_row(data, "CLEAR", "PASS", "BLOCK")
+    print("I overlay cannot add config ..................... PASS")
+
+
+def case_j_write_protection():
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_write.py"),
+        '''
+import os
+
+def test_write():
+    for path in ["/usr/bin/python3", "/site/pytest/__init__.py", "/work/tests/test_write.py"]:
+        try:
+            with open(path, "a") as f:
+                f.write("x")
+            ok = True
+        except OSError:
+            ok = False
+        assert not ok, f"write succeeded for {path}"
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_write.py::test_write\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 0
+    assert_row(data, "CLEAR", "PASS", "PASS")
+    print("J write protection ............................ PASS")
+
+
+def case_k_honest_red():
+    repo = fresh_repo()
+    write(os.path.join(repo, "tests", "test_red.py"), "def test_red(): assert False\n")
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_red.py::test_red\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 0
+    assert_row(data, "CLEAR", "RED", "FAIL")
+    print("K honest RED .................................. PASS")
+
+
+def case_l_residuals():
+    # L1: report forge through honest plugin.
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_l1.py"),
+        '''
+import pytest
+import pluggy
+
+def forge_wrapper(item, call):
+    outcome = yield
+    if call.when == "call":
+        report = outcome.get_result()
+        report.outcome = "passed"
+        report.longrepr = None
+        call.excinfo = None
+
+opts = {"hookwrapper": True, "trylast": True, "optionalhook": False, "specname": None, "wrapper": False, "tryfirst": False}
+
+@pytest.fixture(autouse=True)
+def inject_forge(request):
+    hook = request.config.pluginmanager.hook.pytest_runtest_makereport
+    impl = pluggy.HookImpl(request.node, "injected", forge_wrapper, opts)
+    hook._add_hookimpl(impl)
+
+def test_l1():
+    assert False
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_l1.py::test_l1\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 1
+    assert_row(data, "BLOCK", "TAMPERED:outcome-rewritten", "TAMPERED:outcome-rewritten")
+
+    # L2: channel forge with stolen key + os._exit(0).
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_l2.py"),
+        '''
+import gc
+import os
+
+def test_l2(request):
+    plug = request.config.pluginmanager.get_plugin("sbxplug-internal")
+    send = None
+    for cell in plug.pytest_sessionfinish.__closure__ or []:
+        obj = cell.cell_contents
+        if callable(obj) and getattr(obj, "__name__", None) == "_send":
+            send = obj
+            break
+    if send is None:
+        for obj in gc.get_objects():
+            if callable(obj) and getattr(obj, "__name__", None) == "_send":
+                send = obj
+                break
+    if send is None:
+        raise RuntimeError("could not find _send")
+    hook = request.config.pluginmanager.hook.pytest_sessionfinish
+    hook._hookimpls = [impl for impl in hook._hookimpls if impl.plugin_name != "sbxplug-internal"]
+    nodeid = request.node.nodeid
+    send({
+        "id": nodeid,
+        "exitstatus": 0,
+        "outcome": "passed",
+        "phases": 3,
+        "excinfo": False,
+        "late": [],
+    })
+    os._exit(0)
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_l2.py::test_l2\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 0
+    assert_row(data, "CLEAR", "PASS", "PASS")
+    print("L residuals ................................... PASS")
+
+
+def case_m_honest_nonzero():
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_exit3.py"),
+        '''
+import pytest
+
+def test_exit3():
+    pytest.exit("stop", returncode=3)
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_exit3.py::test_exit3\n")
+    rc, data, stdout = invoke(repo, "HEAD", claim, return_stdout=True)
+    assert rc == 2, f"exit {rc}"
+    assert_row(data, "UNDETERMINED", "UNDETERMINED", "UNDETERMINED")
+    row = data["rows"][0]
+    assert "pytest-exit(3)" in row["head_details"].get("reason", ""), row
+    assert "pytest-exit(3)" in row["base_details"].get("reason", ""), row
+    assert not row["head"].startswith("TAMPERED"), row
+    assert not row["base"].startswith("TAMPERED"), row
+
+    # The human table must decorate UNDETERMINED with its reason token.
+    assert "UNDETERMINED(pytest-exit(3))" in stdout, stdout
+    for line in stdout.splitlines():
+        if "tests/test_exit3.py::test_exit3" in line:
+            assert re.search(r"UNDETERMINED\s", line) is None, (
+                f"table row still prints bare UNDETERMINED: {line}"
+            )
+    print("M honest non-zero run status .................... PASS")
+
+
+def case_n_fixture_error():
+    # Sub-case 1: fixture error during setup.
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_fixerr.py"),
+        '''
+import pytest
+
+@pytest.fixture
+def broken():
+    raise RuntimeError("fixture broke")
+
+def test_fixerr(broken):
+    pass
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_fixerr.py::test_fixerr\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 0, f"exit {rc}"
+    assert_row(data, "CLEAR", "RED", "FAIL")
+    row = data["rows"][0]
+    assert not row["head"].startswith("TAMPERED:hook-suppressed"), row
+    assert not row["head"].startswith("TAMPERED:outcome-rewritten"), row
+
+    # Sub-case 2: teardown error after a passing call must read as FAIL.
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_teardown.py"),
+        '''
+import pytest
+
+@pytest.fixture
+def bad_teardown():
+    yield
+    raise RuntimeError("teardown broke")
+
+def test_teardown_err(bad_teardown):
+    pass
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_teardown.py::test_teardown_err\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 0, f"exit {rc}"
+    assert_row(data, "CLEAR", "RED", "FAIL")
+    row = data["rows"][0]
+    assert not row["head"].startswith("TAMPERED"), row
+    assert not row["base"].startswith("TAMPERED"), row
+    print("N fixture error is not sabotage ................. PASS")
+
+
+def case_o_audited_repo_unpolluted():
+    repo = fresh_repo()
+    write(os.path.join(repo, "tests", "test_ok.py"), "def test_ok(): pass\n")
+    commit_all(repo, "base")
+    # Dirty the working tree so materialize_working_tree() would have to write
+    # new blobs and a dangling tree if it used the audited repo's object store.
+    tracked = os.path.join(repo, "tracked.txt")
+    write(tracked, "modified\n")
+    write(os.path.join(repo, "untracked.txt"), "untracked\n")
+
+    before_count = count_objects(repo)
+    before_fsck = fsck_dangling(repo)
+
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_ok.py::test_ok\n")
+    rc, data = invoke(repo, "HEAD", claim)
+
+    after_count = count_objects(repo)
+    after_fsck = fsck_dangling(repo)
+
+    assert rc == 0, f"exit {rc}"
+    assert_row(data, "CLEAR", "PASS", "PASS")
+    assert before_count == after_count, (
+        f"object count changed:\nbefore:\n{before_count}\nafter:\n{after_count}"
+    )
+    assert before_fsck == after_fsck, (
+        f"fsck --dangling output changed:\nbefore:\n{before_fsck}\nafter:\n{after_fsck}"
+    )
+    print("O audited repo unpolluted ..................... PASS")
+
+
+def case_p_liar_spoof():
+    """The v7 false CLEAR: spoofed __module__ plus excinfo cleared."""
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_liar_spoof.py"),
+        '''
+import pytest
+
+class Liar:
+    __module__ = "_pytest.evil"
+    @pytest.hookimpl(hookwrapper=True, trylast=True)
+    def pytest_runtest_makereport(self, item, call):
+        outcome = yield
+        if call.when == "call":
+            report = outcome.get_result()
+            report.outcome = "passed"
+            report.longrepr = None
+            call.excinfo = None
+
+@pytest.fixture(autouse=True)
+def inject(request):
+    request.config.pluginmanager.register(Liar(), name="liar")
+
+def test_liar_spoof():
+    assert False, "this test really fails"
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_liar_spoof.py::test_liar_spoof\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 1
+    assert_row(data, "BLOCK", "TAMPERED:outcome-rewritten", "TAMPERED:outcome-rewritten")
+    print("P liar spoof (false CLEAR regression) ......... PASS")
+
+
+def case_q_honest_late_plugin():
+    """Honest late plugin must read REVIEW, never BLOCK/CLEAR/PASS."""
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "conftest.py"),
+        '''
+import pytest
+
+class Honest:
+    """Registers a marker. Never touches a report."""
+    def pytest_configure(self, config):
+        config.addinivalue_line("markers", "honest: from a late plugin")
+
+@pytest.fixture(autouse=True)
+def register_honest(request):
+    request.config.pluginmanager.register(Honest(), name="honest-late")
+''',
+    )
+    write(
+        os.path.join(repo, "tests", "test_ok.py"),
+        '''
+import pytest
+
+@pytest.mark.honest
+def test_ok():
+    assert True
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_ok.py::test_ok\n")
+    rc, data = invoke(repo, "HEAD", claim)
+    assert rc == 2, f"exit {rc}"
+    assert_row(data, "REVIEW", "REVIEW:late-plugin:Honest", "REVIEW:late-plugin:Honest")
+    row = data["rows"][0]
+    assert not row["head"].startswith("TAMPERED"), row
+    assert not row["base"].startswith("TAMPERED"), row
+    assert row["head"] != "PASS", row
+    assert row["base"] != "PASS", row
+    assert row["head"] != "CLEAR", row
+    assert row["base"] != "CLEAR", row
+    assert row["verdict"] != "CLEAR", row
+    record = row["head_details"].get("record", {})
+    assert record.get("late") == ["Honest"], row
+    print("Q honest late plugin .......................... PASS")
+
+
+def _make_break_script():
+    """Return a temp copy of defend-sandbox with rule 5 set to TAMPERED."""
+    tmpdir = tempfile.mkdtemp(prefix="sbx-break-")
+    break_path = os.path.join(tmpdir, "defend-sandbox-break")
+    shutil.copy(SCRIPT, break_path)
+    with open(break_path, "r") as f:
+        content = f.read()
+    old = '"status": f"REVIEW:late-plugin:{bad_late[0]}",'
+    new = '"status": f"TAMPERED:late-plugin:{bad_late[0]}",'
+    if old not in content:
+        raise RuntimeError("could not locate rule 5 REVIEW return for break test")
+    content = content.replace(old, new)
+    with open(break_path, "w") as f:
+        f.write(content)
+    return break_path
+
+
+def break_q_false_positive():
+    """Prove Q measures the false-positive half of rule 5.
+
+    If rule 5 still refused late plugins (TAMPERED), the honest late fixture
+    becomes BLOCK, while the true-positive cases C and P (caught by rule 6)
+    remain unchanged.
+    """
+    break_script = _make_break_script()
+
+    # Q: honest late plugin must be BLOCK if rule 5 is set to refuse.
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "conftest.py"),
+        '''
+import pytest
+
+class Honest:
+    def pytest_configure(self, config):
+        config.addinivalue_line("markers", "honest: from a late plugin")
+
+@pytest.fixture(autouse=True)
+def register_honest(request):
+    request.config.pluginmanager.register(Honest(), name="honest-late")
+''',
+    )
+    write(
+        os.path.join(repo, "tests", "test_ok.py"),
+        '''
+import pytest
+
+@pytest.mark.honest
+def test_ok():
+    assert True
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_ok.py::test_ok\n")
+    rc, data = invoke(repo, "HEAD", claim, script=break_script)
+    assert rc == 1, f"expected BLOCK exit 1 under break mode, got {rc}"
+    assert data["rows"][0]["verdict"] == "BLOCK", data
+    assert data["rows"][0]["head"].startswith("TAMPERED:late-plugin"), data
+
+    # C: report-rewriting liar is still caught by rule 6 before rule 5.
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_liar.py"),
+        '''
+import pytest
+
+class Liar:
+    @pytest.hookimpl(hookwrapper=True, trylast=True)
+    def pytest_runtest_makereport(self, item, call):
+        outcome = yield
+        if call.when == "call":
+            report = outcome.get_result()
+            report.outcome = "passed"
+
+@pytest.fixture(autouse=True)
+def inject(request):
+    request.config.pluginmanager.register(Liar(), name="liar")
+
+def test_liar():
+    assert False
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_liar.py::test_liar\n")
+    rc, data = invoke(repo, "HEAD", claim, script=break_script)
+    assert rc == 1, f"C under break mode: exit {rc}"
+    assert_row(data, "BLOCK", "TAMPERED:outcome-rewritten", "TAMPERED:outcome-rewritten")
+
+    # P: spoofed __module__ liar is still caught by rule 6.
+    repo = fresh_repo()
+    write(
+        os.path.join(repo, "tests", "test_liar_spoof.py"),
+        '''
+import pytest
+
+class Liar:
+    __module__ = "_pytest.evil"
+    @pytest.hookimpl(hookwrapper=True, trylast=True)
+    def pytest_runtest_makereport(self, item, call):
+        outcome = yield
+        if call.when == "call":
+            report = outcome.get_result()
+            report.outcome = "passed"
+            report.longrepr = None
+            call.excinfo = None
+
+@pytest.fixture(autouse=True)
+def inject(request):
+    request.config.pluginmanager.register(Liar(), name="liar")
+
+def test_liar_spoof():
+    assert False, "this test really fails"
+''',
+    )
+    commit_all(repo, "base")
+    claim = os.path.join(repo, "claim.txt")
+    write(claim, "tests/test_liar_spoof.py::test_liar_spoof\n")
+    rc, data = invoke(repo, "HEAD", claim, script=break_script)
+    assert rc == 1, f"P under break mode: exit {rc}"
+    assert_row(data, "BLOCK", "TAMPERED:outcome-rewritten", "TAMPERED:outcome-rewritten")
+    print("Q break-test (false-positive pin) ............. PASS")
+
+
+def main():
+    if not os.path.exists(SCRIPT):
+        print(f"defend-sandbox-test: missing script {SCRIPT}", file=sys.stderr)
+        return 2
+
+    # Verify bwrap is available.
+    if shutil.which("bwrap") is None:
+        print("defend-sandbox-test: bwrap not found on PATH", file=sys.stderr)
+        return 2
+
+    cases = [
+        case_a_normal,
+        case_b_os_exit,
+        case_c_liar_register,
+        case_d_report_suppression,
+        case_e_outcome_rewrite,
+        case_f_hook_exclusion,
+        case_g_channel_forgery,
+        case_h_host_probe,
+        case_i_overlay_never,
+        case_j_write_protection,
+        case_k_honest_red,
+        case_l_residuals,
+        case_m_honest_nonzero,
+        case_n_fixture_error,
+        case_o_audited_repo_unpolluted,
+        case_p_liar_spoof,
+        case_q_honest_late_plugin,
+    ]
+
+    failed = []
+    for fn in cases:
+        try:
+            fn()
+        except Exception as e:
+            print(f"{fn.__name__}: FAIL\n  {e}", file=sys.stderr)
+            failed.append(fn.__name__)
+
+    # Run the break test for Q separately so A-Q output and break-test output
+    # are distinct, and the break variant never pollutes the real script.
+    break_failed = None
+    try:
+        break_q_false_positive()
+    except Exception as e:
+        break_failed = str(e)
+        print(f"break_q_false_positive: FAIL\n  {e}", file=sys.stderr)
+
+    if failed or break_failed:
+        print(f"\n{len(failed)} case(s) failed: {', '.join(failed)}", file=sys.stderr)
+        if break_failed:
+            print("break-test failed", file=sys.stderr)
+        return 1
+
+    print("\nAll acceptance cases A-Q passed; break-test passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
