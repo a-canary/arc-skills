@@ -39,8 +39,10 @@ hard-merge's second-disjoint-reviewer rule. Override = ledger note row.
 **Receipt (mechanical).** Record the head before the attack:
 `sha=$(gh pr view <pr> -R owner/repo --json headRefOid -q .headRefOid)`. Never re-read it after
 the attack: a push in between must get no receipt. After verifying the verdict, the author
-posts it on that *reviewed* SHA: `~/.claude/skills/defend/bin/defend-receipt CLEAR|BLOCK <pr> <sha> -R owner/repo "<summary>"`
-(a `defend/merge` commit status). Enforcement is GitHub branch protection on `main`
+posts it on that *reviewed* SHA: `~/.claude/skills/defend/bin/defend-receipt CLEAR|BLOCK <pr> <sha> -R owner/repo --by <model> "<summary>"`
+(a `defend/merge` commit status). The `--by` flag records which model decided (e.g. `--by opus`),
+making the audit trail visible at the seam rather than buried in local session logs.
+Enforcement is GitHub branch protection on `main`
 requiring the `defend/merge` status (enforce_admins on), so every merge path — `gh pr merge`,
 `gh api`, web UI, `git push` — needs head to carry a success; a push after review voids it.
 Not a command-text hook: those leak and over-block (repos-76u counsel, 2026-10-27).
