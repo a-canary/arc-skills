@@ -1,0 +1,101 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "merge-05",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "accessibility",
+     "severity": "major",
+     "claim": "The embargo badge uses hardcoded white text on a var(--surface) background. In the default light theme --surface is #ffffff, so the text is white on white and effectively invisible. This fails WCAG 1.4.3, a stated release requirement.",
+     "evidence": ".embargo { ... background: var(--surface); color: #ffffff; ... } with :root --surface: #ffffff"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "major",
+     "claim": "The unpublish control is a clickable span with no role, tabIndex, or key handler, so keyboard-only editors cannot reach or activate this destructive action. There is also no :focus-visible style. This violates WCAG 2.1.1 and 2.4.7 for a user base that includes keyboard-only editors.",
+     "evidence": "<span className={styles.unpublish} onClick={handleUnpublish}> with only .unpublish:hover styled"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "major",
+     "claim": "The unpublish control is icon-only, with the icon aria-hidden and no aria-label or visible text on the wrapper. Screen reader users get no accessible name for the control, which fails WCAG 4.1.2.",
+     "evidence": "<TrashIcon aria-hidden=\"true\" /> inside the span with no aria-label"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "handleUnpublish has no error handling, no pending or disabled state, and no in-flight guard. A rejected onUnpublish fails silently as an unhandled rejection, and repeated activations can fire duplicate unpublish requests. Editors pulling a story that went out early cannot tell whether it was actually pulled.",
+     "evidence": "if (ok) await onUnpublish(draft.id);  (no try/catch, no pending state)"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The diff is frontend-only and shows no authorization check or audit record for unpublish. The server side is outside the diff, so this cannot be confirmed from the artifact. Worth verifying that the endpoint enforces role checks and logs who unpublished what.",
+     "evidence": "ABSENT: server-side authz/audit for onUnpublish in this diff"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The embargo lift time is shown without a timezone label or year, so editors in other zones or across date boundaries may misread it. Embargo state is also computed from the client clock.",
+     "evidence": "Embargo until {formatInNewsroomTz(draft.embargoUntil!, \"MMM d, HH:mm\")} and new Date(draft.embargoUntil) > new Date()"
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 18859,
+    "tokOut": 10585,
+    "usd": 0.04614940000000001,
+    "critMs": 22003
+   },
+   "wallMs": 173689
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "Disabling the focused unpublish button while the request is pending can drop keyboard focus to the body. Keyboard and screen-reader users may lose their place in the queue, and no status is announced during the pending state.",
+     "evidence": "disabled={pending} on the unpublish <button>; no aria-busy, status text, or focus management"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The pending guard starts only after the confirm dialog resolves, so a rapid double activation before the dialog renders could open two confirms. The PR's claim that repeated activations can't fire duplicate requests is only true for the in-flight window.",
+     "evidence": "const ok = await confirm({...}); if (!ok) return; setPending(true);"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The error text asserts the story is still published, but a timeout or lost response could occur after the server committed the unpublish. There is also no timeout, so a hung request leaves the button disabled until reload.",
+     "evidence": "setError(\"Could not unpublish this story. It is still published.\");"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The embargo state comes from the browser clock, computed once per render. A skewed clock or a long-open queue can show a stale or wrong badge. The label also omits the timezone name.",
+     "evidence": "new Date(draft.embargoUntil) > new Date(); Embargo until {formatInNewsroomTz(draft.embargoUntil!, \"MMM d, HH:mm\")}"
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 21743,
+    "tokOut": 11109,
+    "usd": 0.061232499999999995,
+    "critMs": 32481
+   },
+   "wallMs": 96115
+  }
+ ],
+ "artifact": "PR #644: Embargo badge + quick unpublish in the draft queue\n\nDesk editors keep opening drafts just to check whether they are under embargo, and pulling a story that went out early takes four clicks.\nThis adds an embargo badge (amber outline, shows the lift time in the newsroom's timezone) and a one-click unpublish action on each queue row.\nUnpublish still goes through the standard confirm dialog.\n\nAccessibility and reliability notes:\n- The badge text uses `var(--text)`, so it stays readable in both themes. The amber outline carries the \"warning\" meaning.\n- Unpublish is a real `<button>` with an accessible name that includes the headline. It is keyboard reachable and has a `:focus-visible` style.\n- Unpublish is disabled while a request is in flight, so repeated activations can't fire duplicate requests. A failed request shows an inline `role=\"alert\"` message in the row instead of failing silently.\n\n```diff\ndiff --git a/web/src/queue/DraftRow.tsx b/web/src/queue/DraftRow.tsx\nindex 6d1e0b4..b38f7c2 100644\n--- a/web/src/queue/DraftRow.tsx\n+++ b/web/src/queue/DraftRow.tsx\n@@ -1,31 +1,74 @@\n+import { useState } from \"react\";\n import { Draft } from \"../api/types\";\n import { formatByline } from \"../lib/format\";\n+import { formatInNewsroomTz } from \"../lib/time\";\n+import { useConfirm } from \"../ui/confirm\";\n+import { TrashIcon } from \"../ui/icons\";\n import styles from \"./DraftRow.module.css\";\n\n type Props = {\n   draft: Draft;\n   onOpen: (id: string) => void;\n+  onUnpublish: (id: string) => Promise<void>;\n };\n\n-export function DraftRow({ draft, onOpen }: Props) {\n+export function DraftRow({ draft, onOpen, onUnpublish }: Props) {\n+  const confirm = useConfirm();\n+  const [pending, setPending] = useState(false);\n+  const [error, setError] = useState<string | null>(null);\n+  const embargoed =\n+    draft.embargoUntil !== null && new Date(draft.embargoUntil) > new Date();\n+\n+  async function handleUnpublish() {\n+    if (pending) return;\n+    setError(null);\n+    const ok = await confirm({\n+      title: \"Unpublish this story?\",\n+      body: `\"${draft.headline}\" will be removed from the site and returned to drafts.`,\n+      confirmLabel: \"Unpublish\",\n+      destructive: true,\n+    });\n+    if (!ok) return;\n+    setPending(true);\n+    try {\n+      await onUnpublish(draft.id);\n+    } catch {\n+      setError(\"Could not unpublish this story. It is still published.\");\n+    } finally {\n+      setPending(false);\n+    }\n+  }\n+\n   return (\n     <li className={styles.row}>\n       <button className={styles.open} onClick={() => onOpen(draft.id)}>\n         <span className={styles.headline}>{draft.headline}</span>\n         <span className={styles.byline}>{formatByline(draft.authors)}</span>\n       </button>\n+      {embargoed && (\n+        <span className={styles.embargo}>\n+          Embargo until {formatInNewsroomTz(draft.embargoUntil!, \"MMM d, HH:mm\")}\n+        </span>\n+      )}\n       <span className={styles.status} data-status={draft.status}>\n         {draft.status}\n       </span>\n+      {draft.status === \"published\" && (\n+        <button\n+          type=\"button\"\n+          className={styles.unpublish}\n+          aria-label={`Unpublish \"${draft.headline}\"`}\n+          disabled={pending}\n+          onClick={handleUnpublish}\n+        >\n+          <TrashIcon aria-hidden=\"true\" />\n+        </button>\n+      )}\n+      {error && (\n+        <span className={styles.error} role=\"alert\">\n+          {error}\n+        </span>\n+      )}\n     </li>\n   );\n }\ndiff --git a/web/src/queue/DraftRow.module.css b/web/src/queue/DraftRow.module.css\nindex 1a2b3c4..5d6e7f8 100644\n--- a/web/src/queue/DraftRow.module.css\n+++ b/web/src/queue/DraftRow.module.css\n@@ -1,24 +1,66 @@\n .row {\n   display: flex;\n   align-items: center;\n   gap: 12px;\n   padding: 10px 16px;\n   background: var(--surface);\n   border-bottom: 1px solid var(--border);\n }\n\n .open {\n   flex: 1;\n   text-align: left;\n   background: none;\n   border: 0;\n   color: var(--text);\n }\n+\n+.embargo {\n+  font-size: 12px;\n+  padding: 2px 8px;\n+  border-radius: 999px;\n+  border: 1px solid var(--warn);\n+  background: var(--surface);\n+  color: var(--text);\n+  white-space: nowrap;\n+}\n+\n+.unpublish {\n+  display: inline-flex;\n+  padding: 6px;\n+  border-radius: 6px;\n+  border: 0;\n+  background: none;\n+  color: var(--text-muted);\n+  cursor: pointer;\n+}\n+\n+.unpublish:hover {\n+  color: var(--danger);\n+  background: var(--surface-hover);\n+}\n+\n+.unpublish:focus-visible {\n+  outline: 2px solid var(--text);\n+  outline-offset: 2px;\n+}\n+\n+.unpublish:disabled {\n+  cursor: not-allowed;\n+  opacity: 0.6;\n+}\n+\n+.error {\n+  font-size: 12px;\n+  color: var(--text);\n+}\ndiff --git a/web/src/theme/tokens.css b/web/src/theme/tokens.css\nindex 0c9a8e1..4f27b1d 100644\n--- a/web/src/theme/tokens.css\n+++ b/web/src/theme/tokens.css\n@@ -1,11 +1,13 @@\n :root {\n   --surface: #ffffff;\n   --surface-hover: #f2f3f5;\n   --text: #1b1d21;\n   --text-muted: #5f6672;\n   --border: #e2e4e8;\n+  --warn: #b45309;\n   --danger: #b91c1c;\n }\n [data-theme=\"dark\"] {\n   --surface: #16181d;\n   --surface-hover: #22252c;\n+  --warn: #f59e0b;\n   --text: #e7e9ee;\n```",
+ "fixerUsage": {
+  "calls": 1,
+  "tokIn": 3020,
+  "tokOut": 3488,
+  "usd": 0.046956,
+  "critMs": 21134
+ },
+ "status": "cleared"
+}

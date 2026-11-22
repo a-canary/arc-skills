@@ -1,0 +1,101 @@
+{
+ "approach": "cascade",
+ "case": "merge-02",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "blocker",
+     "claim": "The duplicate-ballot log line writes the voter's email together with the chosen option. That links a named resident to their choice, which breaks the core anonymity promise. The logs ship to a third-party host readable by the whole support team.",
+     "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value,)"
+    },
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "The results export is meant to be admin-only, but the route has no require_role(\"admin\") dependency. Any caller, even an unauthenticated one, can download tallies. Other admin routes such as close_measure do use the check.",
+     "evidence": "async def export_results(measure_id: int, db: Session = Depends(get_db),):  # vs close_measure: user: User = Depends(require_role(\"admin\"))"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The export does not check that the measure is closed, although the stated purpose is a tally once a measure closes. Running tallies of open measures can be downloaded, which can influence voting in progress.",
+     "evidence": "measure = db.get(Measure, measure_id)\n    if measure is None:\n        raise HTTPException(404)  # no closed check"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Log lines with email and choice go to a third-party host and cannot be recalled by reverting the PR. The exposure is one-way once deployed.",
+     "evidence": "ABSENT: no redaction, retention limit, or purge plan for the third-party log host"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The duplicate log reveals the choice the voter attempted on the second try. It also adds nothing useful for the \"already voted\" tickets. Safe diagnostics such as a timestamp, measure id, or hashed receipt token would be enough.",
+     "evidence": "body.choice.value passed to logger.info in the duplicate branch"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The measure slug is interpolated unescaped into the Content-Disposition header. If a slug can contain quotes or control characters, the header can be malformed or injected.",
+     "evidence": "f'attachment; filename=\"{measure.slug}-results.csv\"'"
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 6832,
+    "tokOut": 3497,
+    "usd": 0.02196252,
+    "critMs": 33485
+   },
+   "wallMs": 185207
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The log line records an 8-character prefix of a receipt derived from user id and measure id. It is stable per resident per measure, but it carries no choice and is not joined to any ballot, so it exposes only that someone already voted. That fact is already visible to the voter and the support ticket. The first-pass blocker is overstated. If the receipt is an unkeyed hash, it is guessable from a known user id. The log host cannot be recalled, so keeping the receipt keyed is worth confirming.",
+     "evidence": "logger.info(\"duplicate ballot rejected measure=%s receipt=%s\", measure_id, receipt[:8])"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The first-pass correctness attack is speculative. If Ballot.choice is an SQLAlchemy Enum(Choice) column, the query returns Choice members and counts.get(choice, 0) works. The diff does not show the column type. A test asserting non-zero counts would settle it.",
+     "evidence": "counts.get(choice, 0)"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "measure.slug is placed unescaped in the Content-Disposition header and in a CSV cell. The route is admin-only and slugs are normally restricted, so the risk is low. Sanitizing or validating the slug would be cheap hardening.",
+     "evidence": "f'attachment; filename=\"{measure.slug}-results.csv\"'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The duplicate check is read-then-insert with no visible unique constraint on Receipt.token. This predates the PR and is not introduced by it.",
+     "evidence": "if db.query(Receipt).filter_by(token=receipt).first(): ... db.add(Receipt(token=receipt))"
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 7125,
+    "tokOut": 4139,
+    "usd": 0.02793762,
+    "critMs": 27533
+   },
+   "wallMs": 129377
+  }
+ ],
+ "artifact": "PR #231: Results CSV export for closed measures + better duplicate-ballot diagnostics\n\nClerks have asked for a downloadable tally once a measure closes so they can attach it to the council packet.\nAdds GET /measures/{id}/results.csv for admins, returning one row per choice with counts. The export is admin-only and returns 409 while a measure is still open.\nAlso adds a log line when a duplicate ballot is rejected, since support keeps getting \"it says I already voted\" tickets and we have no way to see what happened. The log line records only the measure id and the opaque per-measure receipt token prefix, never the user's email, user id, or the choice. The attempted choice is deliberately not logged, to preserve ballot anonymity. Because logs ship to a third-party host and can't be recalled, nothing identifying is written to them.\n\ndiff --git a/app/routes/ballots.py b/app/routes/ballots.py\nindex 4e1b0a7..9c3d2f5 100644\n--- a/app/routes/ballots.py\n+++ b/app/routes/ballots.py\n@@ -1,14 +1,18 @@\n+import csv\n+import io\n import logging\n\n from fastapi import APIRouter, Depends, HTTPException\n+from fastapi.responses import StreamingResponse\n+from sqlalchemy import func\n from sqlalchemy.orm import Session\n\n from app.auth import current_user, require_role\n from app.db import get_db\n-from app.models import Ballot, Measure, Receipt, User\n+from app.models import Ballot, Choice, Measure, Receipt, User\n from app.receipts import voter_receipt\n from app.schemas import BallotIn\n\n logger = logging.getLogger(__name__)\n router = APIRouter()\n@@ -22,26 +26,61 @@ async def cast_ballot(\n     user: User = Depends(current_user),\n     db: Session = Depends(get_db),\n ):\n     measure = db.get(Measure, measure_id)\n     if measure is None or not measure.is_open():\n         raise HTTPException(404, \"measure not open\")\n     receipt = voter_receipt(user.id, measure_id)\n     if db.query(Receipt).filter_by(token=receipt).first():\n+        logger.info(\n+            \"duplicate ballot rejected measure=%s receipt=%s\",\n+            measure_id,\n+            receipt[:8],\n+        )\n         raise HTTPException(409, \"already voted\")\n     db.add(Receipt(token=receipt))\n     db.add(Ballot(measure_id=measure_id, choice=body.choice))\n     db.commit()\n     return {\"ok\": True}\n\n\n @router.post(\"/measures/{measure_id}/close\")\n async def close_measure(\n     measure_id: int,\n     user: User = Depends(require_role(\"admin\")),\n     db: Session = Depends(get_db),\n ):\n     measure = db.get(Measure, measure_id)\n     if measure is None:\n         raise HTTPException(404)\n     measure.close(closed_by=user.id)\n     db.commit()\n     return {\"closed\": True}\n+\n+\n+@router.get(\"/measures/{measure_id}/results.csv\")\n+async def export_results(\n+    measure_id: int,\n+    user: User = Depends(require_role(\"admin\")),\n+    db: Session = Depends(get_db),\n+):\n+    measure = db.get(Measure, measure_id)\n+    if measure is None:\n+        raise HTTPException(404)\n+    if measure.is_open():\n+        raise HTTPException(409, \"measure is still open\")\n+    counts = dict(\n+        db.query(Ballot.choice, func.count(Ballot.id))\n+        .filter(Ballot.measure_id == measure_id)\n+        .group_by(Ballot.choice)\n+        .all()\n+    )\n+    buf = io.StringIO()\n+    writer = csv.writer(buf)\n+    writer.writerow([\"measure\", \"choice\", \"votes\"])\n+    for choice in Choice:\n+        writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])\n+    buf.seek(0)\n+    return StreamingResponse(\n+        buf,\n+        media_type=\"text/csv\",\n+        headers={\n+            \"Content-Disposition\": f'attachment; filename=\"{measure.slug}-results.csv\"'\n+        },\n+    )",
+ "fixerUsage": {
+  "calls": 1,
+  "tokIn": 2549,
+  "tokOut": 1442,
+  "usd": 0.024612,
+  "critMs": 7383
+ },
+ "status": "cleared"
+}

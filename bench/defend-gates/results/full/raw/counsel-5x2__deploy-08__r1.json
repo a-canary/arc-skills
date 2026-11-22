@@ -1,0 +1,161 @@
+{
+ "approach": "counsel-5x2",
+ "case": "deploy-08",
+ "rep": 1,
+ "wallMs": 302371,
+ "verdict": "ATTACKS",
+ "confidence": 0.9,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The public launch post, sent to all publishers at 16:00 UTC, says Smart Send is live for every publication and that issues arrive up to 5× faster. That contradicts the 5%/25%/100% cohort ramp meant to gate the default, and a sent announcement cannot be recalled by flipping a flag.",
+   "evidence": "\"Smart Send Time is live for every publication today\" vs \"ramp SMART_SEND_DEFAULT by publication cohort: 5% (week 1), 25% (week 2), 100% (week 3)\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The production config sets Smart Send to default-on for all publications on day one, so the staged ramp described in the plan does not match what the deploy does.",
+   "evidence": "\"SMART_SEND_DEFAULT=on\" in deploy/prod/send-worker.env vs \"ramp SMART_SEND_DEFAULT by publication cohort: 5% (week 1), 25% (week 2), 100% (week 3)\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "On any whole-batch SES error, every recipient in the batch is recorded as a failure and excluded from the rest of the issue, with no retry. A transient throttle or 5xx therefore silently drops up to 50 subscribers per batch and reports them as 'Not delivered'.",
+   "evidence": "\"if err != nil { for _, r := range batch.Recipients { failures.Record(ctx, batch.IssueID, r.SubscriberID, errCode(err)) } ... continue }\" and \"those recipients are excluded from the issue's remaining sends\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "blocker",
+   "claim": "Default-on Smart Send holds time-sensitive issues (breaking news, election results, weather alerts) up to 18 hours for roughly 40% of publications. The artifact does not segment or exempt them, which defeats the core purpose of those sends.",
+   "evidence": "\"Issues are held for at most 18 hours. Enabled by default for all publications\" vs \"4,480 of them (40%) are news or local-news outlets whose issues are time-sensitive (breaking news, election results, weather alerts)\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The throughput QA ran with SES throttling simulated off, and the only real-SES signal showed throttling on 4 workers. The sub-3-minute goal and production behaviour under real SES limits are therefore unobserved.",
+   "evidence": "\"4 workers were throttled intermittently, so QA ran with SES throttling simulated off via the sandbox mock\" and \"50k-recipient issue end to end | 4 workers, batch 50 | Pass, 0 failures, 11 min\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "Production runs 48 workers, each measured at about 25 msg/s in a single-worker run, against a stated 300 msg/s SES ceiling. The config is not reconciled with the quota, and the bottleneck is not identified, so throttling into the failure path is plausible.",
+   "evidence": "\"SEND_WORKERS=48\" with \"~25 msg/s sustained\" per worker and \"SES production account limits (us-east-1): 300 messages/second\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The '5× faster' claim in the public launch post is not supported. The measured result is 11 minutes for 50k, with throttling off, and the 3-minute goal is unmeasured. The implied ratio is not 5× under any measured run.",
+   "evidence": "\"every Inkwell issue reaches inboxes up to 5× faster\" vs \"cut median time-to-inbox for a 50k-subscriber issue from 14 min to under 3 min\" and \"Pass, 0 failures, 11 min\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The 71% within ±1h Smart Send accuracy has no naive baseline such as a fixed-hour send, and it covers 2,000 sampled subscribers. The 3% open-rate lift gate therefore has no stated prior or measured basis.",
+   "evidence": "\"predicted hour within ±1h of actual top open hour, 2,000 sampled subscribers | — | 71%\" and \"open-rate lift ≥ 3% vs control\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The batch is acked after the SES call with no idempotency key or dedupe. A crash or redelivery after SES accepted the batch could double-send to subscribers.",
+   "evidence": "ABSENT: idempotency key or dedupe on SendBulkEmail; \"q.Ack(ctx, batch)\" follows the send"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The pager covers only queue lag and complaint rate. send.batch_failed and the growth of send_failures records have no alarm, so silent recipient loss would not page on-call. The complaint thresholds also disagree: dashboards alarm at 0.08% and the pager fires at 0.1%.",
+   "evidence": "\"On-call pager: queue lag > 10 min, complaint rate > 0.1%.\" with \"send.batch_failed\" listed only under Dashboards, vs \"alarms at 4% / 0.08%\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The pipeline cuts over to 100% of sends at deploy with no canary, and the Sidekiq rollback's sub-2-minute drain is not shown to have been tested under load. The public launch is set for the same day with no burn-in window.",
+   "evidence": "\"deploy Monday 09:00 UTC to 100% of sends\" and \"in-flight batches drain in < 2 min\" with ABSENT: rollback exercise in QA table, and \"Launch post: Mon 2026-11-09 16:00 UTC\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Default-on delay of commercial email by up to 18 hours, with no per-recipient opt-out, notice, or consent step, is a material change to delivery timing. No legal or ToS review of this change is documented, including for time-bound election and weather content.",
+   "evidence": "\"Enabled by default for all publications; publishers can turn it off in Settings → Delivery\" with ABSENT: compliance or legal review of Smart Send holds"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Per-subscriber open-hour profiles are derived from 90 days of opens and used to hold sends. No retention period, consent basis, subscriber disclosure, or publisher access control is stated.",
+   "evidence": "\"predicts each subscriber's most likely open hour from their last 90 days of opens\" with ABSENT: retention, consent, and access controls"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Per-recipient results are matched to batch.Recipients by index with no length or ordering check, so a short or reordered SES response could misattribute failures to the wrong subscribers.",
+   "evidence": "\"for i, res := range out.BulkEmailEntryResults { ... batch.Recipients[i].SubscriberID\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The shared 300 msg/s and 25M/day quota has no per-publication fairness or backpressure, so one large issue can crowd out others.",
+   "evidence": "\"SES production account limits (us-east-1): 300 messages/second, 25M/day\" with no fairness mechanism described"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "The top Q3 customer request was time-zone scheduled sends, which already shipped. Smart Send is a different feature that removes publisher control of send time by default and does not address that request.",
+   "evidence": "\"Top customer request in Q3: scheduled sends with time zone support (shipped in 2026.08).\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Rollback releases only held issues. Issues already delivered at a delayed hour cannot be recalled.",
+   "evidence": "\"held issues are released immediately\""
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "The 'Not delivered' report does not distinguish retryable throttle losses from permanent subscriber-side failures, so publishers may misread the cause.",
+   "evidence": "\"shown to publishers in the issue report under 'Not delivered'\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "The launch copy 'Nothing to set up; it's already on' hides the delay trade-off and the opt-out location from publishers.",
+   "evidence": "\"Nothing to set up; it's already on.\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Throttle-driven retries would consume SES quota and spend, and no volume forecast, cost estimate, or spend cap is stated for the 48-worker fleet.",
+   "evidence": "ABSENT: send volume forecast and SES cost estimate"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "Access controls for write and read on send_failures, which holds subscriber IDs, and SES credential scope are not described.",
+   "evidence": "ABSENT: IAM scope for send-worker and access controls on send_failures"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "Sending depends on one provider in one region with no documented fallback or exit path.",
+   "evidence": "\"SES_REGION=us-east-1\" and \"calls SES SendBulkEmail\""
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "No accessibility review is listed for the Settings → Delivery toggle, the 'Not delivered' report, or the launch copy.",
+   "evidence": "ABSENT: accessibility review of Settings → Delivery and issue report"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The idle Sidekiq sender has no stated removal owner or date beyond the 14-day window, creating a dual code path.",
+   "evidence": "\"keep the Sidekiq sender deployed but idle for 14 days\""
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 129284,
+  "tokOut": 37605,
+  "usd": 0.04289599,
+  "critMs": 61894
+ }
+}

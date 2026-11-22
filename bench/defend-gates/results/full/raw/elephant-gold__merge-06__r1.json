@@ -1,0 +1,131 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-06",
+ "rep": 1,
+ "wallMs": 223860,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "On upstream 429 the handler retries once with no retry budget, no concurrency cap, and no shared backoff, and the retry bypasses the tenant bucket. Under saturation this doubles upstream calls and holds each client request open for up to 5s, so load and in-flight memory grow when upstream is already throttling.",
+   "evidence": "let res = await upstream.chat(req.body, { signal: req.signal }); if (res.status === 429) { ... await new Promise((r) => setTimeout(r, delay)); res = await upstream.chat(req.body, { signal: req.signal }); }"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The retry path has no timeout bound. The first call, the sleep, and the second call can each block, so worst-case latency is roughly two upstream timeouts plus 5s. The diff sets no timeout on either call.",
+   "evidence": "await new Promise((r) => setTimeout(r, delay));\n      res = await upstream.chat(req.body, { signal: req.signal });"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "major",
+   "claim": "The retry is designed to fail whenever upstream's Retry-After exceeds 5s. The code caps the wait and retries anyway, so those requests add 5s of latency and one extra upstream call for a request that will almost certainly get another 429.",
+   "evidence": "\"honoring its Retry-After capped at 5s\" with MAX_UPSTREAM_RETRY_MS = 5_000 and no check that the capped wait is long enough to succeed"
+  },
+  {
+   "lens": "rollback",
+   "severity": "major",
+   "claim": "The 20 rps / burst 40 default and the upstream retry take effect for all ~120 tenants on deploy, with no feature flag, kill switch, shadow mode, or staged enablement. Tenants whose legitimate traffic exceeds 20 rps start receiving 429s immediately, and the only rollback is a redeploy.",
+   "evidence": "ABSENT: no feature flag, kill switch, dry-run, or staged rollout. \"limits from tenant config, default 20 rps / burst 40\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "No test covers the upstream 429 retry, the retryAfterMs cap, pass-through of non-429 errors, or the route handler. Only TenantLimiter.take() is tested, and the route's module-level limiter singleton keeps state across tests.",
+   "evidence": "ABSENT: tests for src/routes/completions.ts or upstream 429 handling. Only src/ratelimit/bucket.test.ts is added. \"const limiter = new TenantLimiter();\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The default policy the PR depends on is not in the diff. limitsFor and the tenant config that supply the 20 rps / burst 40 default are referenced but not shown, so the default cannot be verified.",
+   "evidence": "ABSENT: definition of limitsFor in ../tenants. \"limits from tenant config, default 20 rps / burst 40\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The retry sleep ignores client disconnects. If the caller aborts during the wait, the handler still sleeps and then sends a second upstream request with an already-aborted signal, which wastes upstream capacity.",
+   "evidence": "await new Promise((r) => setTimeout(r, delay));\n      res = await upstream.chat(req.body, { signal: req.signal });"
+  },
+  {
+   "lens": "logic",
+   "severity": "minor",
+   "claim": "Date.now can step backward. A negative elapsed time reduces tokens, and Math.min clamps only the upper bound, so tokens can go negative and lock the tenant out for a period proportional to the step size. The bucket recovers as time passes, so this is bounded rather than permanent. A monotonic clock would avoid it.",
+   "evidence": "constructor(private now: () => number = Date.now) {} ... const elapsedSec = (nowMs - b.updatedMs) / 1000; b.tokens = Math.min(limits.burst, b.tokens + elapsedSec * limits.ratePerSec);"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The aggregate cap is unverified. Per-tenant 20 rps across ~120 tenants allows about 2400 rps total, and nothing shows that fits upstream capacity or quota. The per-tenant cap stops one tenant from starving others, but it does not stop the combined load from producing upstream 429s.",
+   "evidence": "ABSENT: any upstream capacity or quota figure. \"default 20 rps / burst 40\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "keyFingerprint is an unsalted, truncated SHA-256 of the raw tenant API key, logged on every denial. It is a stable identifier derived from a secret. A keyed HMAC or the tenant id would be safer, and the log retention and access policy for this field is not addressed.",
+   "evidence": "{ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "An info-level log line is written for every rejected request, so log volume grows linearly with offending traffic. A tenant at 400 rps produces 400 lines per second, which can drown logging and I/O during abuse.",
+   "evidence": "req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, \"tenant rate limited\");"
+  },
+  {
+   "lens": "logic",
+   "severity": "minor",
+   "claim": "retryAfterMs parses only delta-seconds. An HTTP-date Retry-After yields NaN and silently falls back to 1s, so the upstream's requested wait is ignored without any log or test.",
+   "evidence": "const secs = Number(header);\n  if (!Number.isFinite(secs) || secs < 0) return 1_000;"
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "The tenant-limit Retry-After is rounded up to whole seconds. A tenant that needs about 50ms to recover is told to wait a full second, so well-behaved clients back off about 20x longer than necessary.",
+   "evidence": ".header(\"Retry-After\", String(Math.ceil(waitMs / 1000)))"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "A zero or invalid ratePerSec from config divides by zero. waitMs becomes Infinity and the Retry-After header is set to the invalid string 'Infinity'. Limits are not validated at the point of use.",
+   "evidence": "return Math.ceil(((1 - b.tokens) / limits.ratePerSec) * 1000);"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "LRU eviction resets an evicted tenant's bucket to full burst. Idle-then-returning or churned tenants regain full burst, which defeats the limit once more than 10k tenants are active. The boundary is neither documented nor tested. It is not reached at ~120 tenants.",
+   "evidence": "private buckets = new LRUCache<string, Bucket>({ max: 10_000 }); ... ?? { tokens: limits.burst, updatedMs: nowMs };"
+  },
+  {
+   "lens": "logic",
+   "severity": "minor",
+   "claim": "The first upstream 429 response body is never consumed or cancelled before the retry. Depending on the HTTP client, this can hold the connection and leak a socket per retried request.",
+   "evidence": "let res = await upstream.chat(req.body, { signal: req.signal });\n    if (res.status === 429) {"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Observability covers only denials. Admitted requests, retry outcomes, and pass-through second 429s produce no metric or log, so ops cannot alert on tenant starvation or retry storms, even though the PR says rate-limit decisions are logged.",
+   "evidence": "req.log.info({ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }, \"tenant rate limited\");"
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "The gateway's own 429 and the passed-through upstream 429 share a status code. The gateway's error type is a free-text 'rate_limited' string, so clients cannot reliably tell which layer throttled them.",
+   "evidence": ".send({ error: { type: \"rate_limited\", message: \"tenant rate limit exceeded\" } });"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "No error handling wraps the upstream calls. A throw from the first or retry call propagates unhandled. The PR says other errors are passed straight through, but upstream's error behavior is not shown, so this is unverified.",
+   "evidence": "let res = await upstream.chat(req.body, { signal: req.signal });"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 63075,
+  "tokOut": 31361,
+  "usd": 0.028292099999999997,
+  "critMs": 43209
+ }
+}

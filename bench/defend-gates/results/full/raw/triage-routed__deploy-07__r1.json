@@ -1,0 +1,119 @@
+{
+ "approach": "triage-routed",
+ "case": "deploy-07",
+ "rep": 1,
+ "wallMs": 320716,
+ "verdict": "ATTACKS",
+ "confidence": 0.92,
+ "attacks": [
+  {
+   "lens": "trust boundaries",
+   "severity": "blocker",
+   "claim": "Plugin discovery auto-loads and executes any installed package carrying the `tasq-plugin` keyword with no allowlist, signature check, or user consent. Any transitive or typosquatted npm package can run code on every `tasq run`, `tasq lint-staged` (pre-commit), and CI invocation.",
+   "evidence": "\"Any installed package with the `tasq-plugin` keyword is picked up automatically. No more `plugins: [...]` array in `tasq.config.ts`.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "Discovery runs on every invocation, including `tasq lint-staged` in pre-commit hooks, and walks an unbounded glob reading and parsing every package.json. Cost grows with installed package count, so large repos pay a multi-second penalty on every commit and CI run before any work starts.",
+   "evidence": "\"On every invocation (`tasq run`, `tasq lint-staged`, `tasq watch` restarts, `tasq list`), the CLI walks `node_modules`... reads each `package.json`\" and \"glob(\\\"**/node_modules/**/package.json\\\", { cwd: root })\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The performance table shows discovery regressing every fast path (--version ~18x, lint-staged ~6x, cache-hit run ~10x), yet the artifact asserts discovery is negligible and overall build time improves. The only support is a single cold-build row from one monorepo, with no measurement isolating discovery cost from the cache benefit.",
+   "evidence": "\"Discovery is a fixed per-invocation cost and becomes negligible relative to real build work, so overall build time improves thanks to the new graph cache.\" Table: \"`tasq run build` (cache hit) | 0.21 s | 2.02 s\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The headline claim of cache-hit builds completing in under 50 ms of task time is contradicted by the artifact's own table, where the cache-hit run takes 2.02 s wall-clock on 3.0.0-rc.2. No measurement isolates task time from discovery overhead.",
+   "evidence": "\"repeated `tasq run build` with unchanged inputs completes in under 50 ms of task time\" vs. \"`tasq run build` (cache hit) | 0.21 s | 2.02 s\""
+  },
+  {
+   "lens": "injection",
+   "severity": "major",
+   "claim": "The discovery code returns `dir` derived from the glob-matched path without checking containment within `root`, and passes `pkg.name` from untrusted package.json through unvalidated. Malicious names or paths flow into later require/import and subcommand registration.",
+   "evidence": "found.push({ name: pkg.name, dir: dirname(pkgJson) }); (no containment or name validation shown)"
+  },
+  {
+   "lens": "trust boundaries",
+   "severity": "major",
+   "claim": "Discovery runs before argument parsing and on `tasq list` and `--version`, so plugin code executes even for introspection commands. The artifact does not state whether plugins are sandboxed or what capabilities and environment they receive, so CI and pre-commit credentials are exposed to them.",
+   "evidence": "\"Discovery runs before argument parsing so that plugins can register subcommands.\" and ABSENT: any statement on plugin sandboxing, capabilities, or environment isolation"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Discovery parses every package.json with an unguarded JSON.parse and no timeout or bound. A single malformed package.json can abort the CLI before argument parsing, and symlink loops or very large trees have no guard.",
+   "evidence": "\"const pkg = JSON.parse(await readFile(join(root, pkgJson), \"utf8\"));\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The failure behavior when a plugin throws during load or subcommand registration is unspecified. One broken community plugin can break every `tasq` invocation, including pre-commit and CI, with no isolation or safe-mode fallback.",
+   "evidence": "\"Discovery runs before argument parsing so that plugins can register subcommands.\" and ABSENT: plugin load-failure handling"
+  },
+  {
+   "lens": "other",
+   "severity": "major",
+   "claim": "Auto-discovery silently changes an explicit opt-in into implicit execution of transitive packages, removing the `plugins` array's allowlist and ordering semantics. The proposal describes no way to disable or allowlist discovery and no migration path for users who relied on the array as a deny-list.",
+   "evidence": "\"`plugins` array in config ignored | Auto-discovery replaces it; `tasq-migrate` removes the array and installs nothing new\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The rollback plan is incomplete for a release that removes CommonJS and changes config semantics. Re-pointing `latest` to 2.9.4 does not restore users who ran tasq-migrate, does not reach users already on 3.x via `next` or lockfiles, and no P1 detection or telemetry is defined for the 7-day window.",
+   "evidence": "\"if a P1 is found after promotion, re-point `latest` to `2.9.4` (`npm dist-tag add tasq@2.9.4 latest`)\" and \"promote to `latest` after 7 days with no P1 issues\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The migration claim rests on 40 repos, but post-migration test results for the 38 automatic cases are not reported, and the 'installs nothing new' behavior has no test evidence.",
+   "evidence": "\"tested on 40 public repos, 38 fully automatic, 2 needed manual edits (documented)\" and ABSENT: post-migration test results for the 38"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Discovery cost is not fixed: it scales with node_modules size and nested workspace trees, and it is performed serially with no concurrency bound, memoization, or persisted index. Only one 2,430-package repo was measured.",
+   "evidence": "\"walks `node_modules` (including nested `node_modules` in workspaces)\" and ABSENT: benchmarks above 2,430 packages or any discovery cache"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The task graph cache has no stated size bound, eviction policy, or storage location, so repeated runs in large repos or CI can grow it without limit on disk.",
+   "evidence": "\"**Task graph caching** keyed on input file hashes\" and ABSENT: cache size limit, eviction, or cleanup policy"
+  },
+  {
+   "lens": "other",
+   "severity": "major",
+   "claim": "The Node 18 drop is a hard install break (`engines` enforcement) with no stated soft warning or pre-publish communication, affecting users on an EOL runtime who may still be numerous across 180k weekly downloads.",
+   "evidence": "Node 18 support dropped | Node 18 is EOL since April 2025; `engines` field enforces `>=20`"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "Performance numbers come from 3.0.0-rc.2 on a single laptop with warm cache only, while the release is 3.0.0. Cold-cache and CI-runner numbers, where pre-commit and CI users feel the cost, are absent.",
+   "evidence": "\"3.0.0-rc.2\" in the table header vs. \"M2 MacBook Air, warm disk cache\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The 'no copyleft' and test-pass claims reference no CI run or scan output, so they cannot be verified from the artifact.",
+   "evidence": "\"License scan: no copyleft dependencies.\" and \"1,912 tests pass\" — ABSENT: linked CI run or scan output"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Yarn PnP projects have no node_modules tree for the glob to walk, so discovery may silently find zero plugins there, and the two manual-edit cases are not tested for the discovery path.",
+   "evidence": "\"2 manual (Yarn PnP projects, documented)\" and \"walks `node_modules`\""
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 24427,
+  "tokOut": 9476,
+  "usd": 0.00951275,
+  "critMs": 19063
+ }
+}

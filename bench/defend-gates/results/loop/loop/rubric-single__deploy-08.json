@@ -1,0 +1,1109 @@
+{
+ "approach": "rubric-single",
+ "case": "deploy-08",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The launch post is scheduled to go public at 16:00 UTC announcing Smart Send Time as live for every publication, but the rollout plan ramps it 5%, then 25%, then 100% over three weeks, gated on metrics that have not yet been collected. A public announcement cannot be recalled, so the gate is bypassed before the evidence exists.",
+     "evidence": "'Smart Send Time is live for every publication today ... Nothing to set up; it's already on.' vs. 'ramp SMART_SEND_DEFAULT by publication cohort: 5% (week 1), 25% (week 2), 100% (week 3)'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Any non-success per-entry result, including transient throttling, is recorded as a permanent failure and excluded from the issue's remaining sends with no retry. Production offers about 1,200 msg/s of load (48 workers at roughly 25 msg/s each) against a 300 msg/s SES quota, so throttling is expected in production and subscribers will be silently dropped and reported as 'Not delivered'.",
+     "evidence": "'failures.Record(ctx, batch.IssueID, r.SubscriberID, string(res.Status))' and 'those recipients are excluded from the issue's remaining sends' with 'SEND_WORKERS=48' and 'SES production account limits (us-east-1): 300 messages/second'"
+    },
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "The staging QA pass is not valid evidence for the production SES path. Throttling was disabled in the mock, so the throttled-result handling that the production failure mode depends on was never exercised, and the reported 'Pass, 0 failures' cannot be trusted.",
+     "evidence": "'4 workers were throttled intermittently, so QA ran with SES throttling simulated off via the sandbox mock'"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The staging throughput numbers are internally inconsistent with the stated staging SES limit of 14 msg/s. Four workers at about 25 msg/s each is roughly 100 msg/s, and 50k messages in 11 minutes is about 76 msg/s, both far above the limit. The numbers therefore came from the mock, not from real SES behaviour.",
+     "evidence": "'Staging SES account limit is 14 msg/s' vs. 'Per-worker throughput | 1 worker, batch 50 | ~25 msg/s sustained' and '50k-recipient issue end to end | 4 workers, batch 50 | Pass, 0 failures, 11 min'"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "No rate limiter appears in the send loop, and 48 concurrent workers exceed the 300 msg/s account quota. Even at the quota, a 50k issue takes about 167 s, leaving almost no headroom against the under-3-minute goal and no room for retries. At 10-100x volume the 25M/day cap is also not modelled.",
+     "evidence": "'SEND_WORKERS=48' and 'SES production account limits (us-east-1): 300 messages/second, 25M/day' with 'under 3 min' goal; no limiter in the loop"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "A whole-batch SES error marks every recipient as failed, even when SES accepted some or all of the messages before a timeout. Because the loop continues without Ack, the batch may be redelivered, causing duplicate sends, or a poison batch may loop forever. Neither outcome is described.",
+     "evidence": "'if err != nil { for _, r := range batch.Recipients { failures.Record(...) } ... continue }' and 'q.Ack(ctx, batch)' is skipped on that path"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The alert thresholds leave no margin before SES enforcement. The complaint pager fires at exactly SES's complaint threshold, the bounce alarm is set at 4% with no pager, and no alert covers send_failures or the Not-delivered rate, so silent drops would go unnoticed.",
+     "evidence": "'SES bounce/complaint rate (alarms at 4% / 0.08%)' and 'On-call pager: queue lag > 10 min, complaint rate > 0.1%'"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The pipeline cuts over 100% of production sends on Monday with no canary stage, and the staging evidence does not cover the throttling failure mode.",
+     "evidence": "'Send pipeline v2: deploy Monday 09:00 UTC to 100% of sends'"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "Smart Send is on by default for all publications, including the 4,480 news and local-news outlets whose issues are time-sensitive. Holding issues for up to 18 hours on breaking news, election results, or weather alerts is a harmful default that makes publishers opt out. Q3 customer demand was for time-zone scheduling, not for this feature.",
+     "evidence": "'Enabled by default for all publications' and 'Issues are held for at most 18 hours' with '4,480 of them (40%) are news or local-news outlets whose issues are time-sensitive'"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "major",
+     "claim": "Holding each issue until each subscriber's predicted hour adds up to 18 hours of delay for every recipient. The pipeline's latency gain is largely given back, and the delivery-speed goal (median under 3 min) does not measure what subscribers experience.",
+     "evidence": "'delivers each issue at that hour. Issues are held for at most 18 hours' vs. 'median time-to-inbox for a 50k-subscriber issue from 14 min to under 3 min'"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Smart Send's prediction accuracy is 71% within ±1 hour, meaning about 29% of subscribers are sent at the wrong hour. No control arm or baseline is provided, and the ramp gate ('open-rate lift ≥ 3% vs control') has no defined control or measurement method.",
+     "evidence": "'predicted hour within ±1h of actual top open hour, 2,000 sampled subscribers | — | 71%' and 'open-rate lift ≥ 3% vs control' with no control defined"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The public copy says every issue is up to 5x faster. The stated goal is 14 min to under 3 min, about 4.7x at best and bounded by the SES quota, so 'every issue' and '5x' are unsupported. The same post also says Smart Send delays delivery, which contradicts the speed claim.",
+     "evidence": "'every Inkwell issue reaches inboxes up to 5× faster' vs. 'from 14 min to under 3 min'"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Per-subscriber behavioural profiling is built from 90 days of opens. The artifact contains no consent, subscriber disclosure, retention limit for the open history or predictions, or subscriber opt-out.",
+     "evidence": "ABSENT: any statement on consent, notice, retention, or subscriber-level opt-out for 'predicts each subscriber's most likely open hour from their last 90 days of opens'"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "There is no legal review of per-subscriber profiling and automated timing decisions across jurisdictions, and no check against platform or email-sending policies for a default-on change.",
+     "evidence": "ABSENT: any legal or policy review of 'Enabled by default for all publications'"
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "All sending is locked to a single provider in one US region. Subscriber PII and open data are processed in us-east-1 with no data-residency statement and no tested alternative; the retained idle Sidekiq sender is not an SES alternative.",
+     "evidence": "'SES_REGION=us-east-1' and 'calls SES SendBulkEmail' with ABSENT: residency or alternate-provider plan"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "There is no cost estimate for SES volume at the stated 25M/day cap, nor for retries or held-issue storage.",
+     "evidence": "ABSENT: any cost or budget figures for 'SES production account limits ... 25M/day'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Rollback releases held issues but does not clear send_failures records written during the bad window, so subscribers wrongly marked as failed stay excluded. Behaviour of held issues across worker restarts or deploys is also unspecified.",
+     "evidence": "'Rollback (Smart Send): set SMART_SEND_DEFAULT=off; held issues are released immediately' with no mention of send_failures cleanup"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Results are mapped to recipients by index with no length check against the batch. A mismatch could panic or misattribute failures to the wrong subscriber.",
+     "evidence": "'failures.Record(ctx, batch.IssueID, batch.Recipients[i].SubscriberID, ...)' with ABSENT: length check on out.BulkEmailEntryResults"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "No material security finding in the artifact. The unsubscribe headers are present and the failure path records only error codes.",
+     "evidence": "'Unsubscribe link and List-Unsubscribe-Post header present | Pass'"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "No material accessibility finding in the artifact.",
+     "evidence": "No user-facing UI change beyond the Settings → Delivery toggle"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "No material maintainability finding beyond the untested throttling path, which is already covered under correctness and evidence.",
+     "evidence": "'QA ran with SES throttling simulated off via the sandbox mock'"
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The 'Not delivered' report silently omits subscribers excluded for transient throttling, so publishers would see a misleading delivery picture.",
+     "evidence": "'shown to publishers in the issue report under \"Not delivered\"'"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The release proposal has no explicit go/no-go criteria for the Monday cutover that tie to the throttling and failure-rate evidence.",
+     "evidence": "ABSENT: go/no-go criteria for 'deploy Mon 2026-11-09 09:00 UTC'"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3197,
+    "tokOut": 9731,
+    "usd": 0.00533522,
+    "critMs": 45313
+   },
+   "wallMs": 55446
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The idempotency key is derived from issue+batch, but batches are re-formed from Postgres and the Requeue path rebuilds retry lists with a new batch composition; the same key can be attached to a different recipient set, or a retried subset can reuse the original key, so duplicate or silently skipped sends are possible. Also SES SendBulkEmail idempotency is not a documented guarantee, so the dedupe claim is unverified.",
+     "evidence": "\"Idempotency: token derived from issue+batch so a redelivered batch is not sent twice\" and \"q.Requeue(ctx, batch.IssueID, retry, backoff(batch.Attempts))\" with no stated key for requeued recipients"
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Whole-batch error path nacks the batch with the same key but the artifact's own QA says the timeout-after-acceptance case has not been tested; the code is shipping an unverified duplicate-delivery guard to 5% of real publications.",
+     "evidence": "\"Test whole-batch timeouts where SES actually accepted the send: verify no duplicate delivery via the idempotency key\" listed under \"Required before production cutover\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Limiter is called with WaitN before the batch, but on Nack after limiter error the loop continues without bounded retry or dead-lettering, and the ctx-cancel path drops the batch silently, which contradicts the zero-silent-drop gate.",
+     "evidence": "\"if err := limiter.WaitN(ctx, len(batch.Recipients)); err != nil { q.Nack(ctx, batch); continue }\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Index alignment between batch.Recipients and out.BulkEmailEntryResults is assumed; SES bulk results are not guaranteed to be returned in input order in the code's own reading, and a mismatch would attribute failures to wrong subscribers.",
+     "evidence": "\"for i, res := range out.BulkEmailEntryResults { r := batch.Recipients[i]\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Transient retries are only recorded as failures after MaxBatchAttempts, but the retry path requeues per-recipient with backoff(batch.Attempts) where Attempts is the batch counter, so recipients requeued from a fresh batch restart their attempt count and may never exhaust, and the 'final delivered + permanent-failed = recipients' invariant is not enforced for this case.",
+     "evidence": "\"Transient results are retried up to `MaxBatchAttempts` and only recorded as failures after retries are exhausted.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "blocker",
+     "claim": "Quota math is inconsistent: 240 msg/s on a 300/s quota with 8 workers at ~25 msg/s is 200 msg/s, not the 240 limiter ceiling, and the stated goal of under 3 min requires ~400 msg/s, which exceeds the current 300/s quota; the rollout nonetheless proceeds on the claimed 3.5 min figure that is only reachable after an unapproved quota increase.",
+     "evidence": "\"The \\\"under 3 min\\\" goal requires an SES quota increase to at least ~400 msg/s; we are requesting it now\" and \"SES production account limits (us-east-1): 300 messages/second\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Daily volume: 25M/day cap is stated as 100x current peak, but the alarm at 60% of cap (15M/day) and no modelling for quota-dependent growth means a 10-100x load jump is not assessed; the 'larger-scale modelling will be done before' is deferred past the gate.",
+     "evidence": "\"Larger-scale modelling will be done before any quota-dependent growth.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "Throughput and transient-handling claims are unsupported: the only 50k run used throttling off and a sandbox mock whose 25 msg/s figure the artifact itself calls inconsistent with real SES; throttle handling was never exercised, yet the rollout is scheduled against those numbers.",
+     "evidence": "\"QA worked around it by turning throttling off in the mock, so throttle handling was **not exercised**\" and \"Mock figure, inconsistent with the 14 msg/s staging SES limit; not real SES throughput\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Smart Send's 71% prediction accuracy has no baseline, and the artifact's own caveat concedes it, yet the ramp gate is set on open-rate lift; the 3% lift threshold is not justified by any prior data.",
+     "evidence": "\"71% (no baseline for comparison yet; see Rollout plan)\" and \"gated on open-rate lift ≥ 3% vs control\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The artifact asserts Smart Send is 'not a Q3 request' and is 'a hypothesis', but the rollout and launch post treat it as a shipping feature for all publishers; the value claim rests on an untested hypothesis.",
+     "evidence": "\"Smart Send Time was not a Q3 request; it is a hypothesis we are testing by ramp, not a committed demand.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "blocker",
+     "claim": "Smart Send profiles subscribers via open-hour prediction and the artifact itself says legal/privacy review is a launch prerequisite that has not occurred, while the default-on ramp to 100% of eligible publications starts in week 1 of launch; profiling without confirmed legal basis for non-EU/UK jurisdictions (e.g., US state laws) is not addressed.",
+     "evidence": "\"Legal/privacy review is a launch prerequisite.\" and \"Regions: subscribers in jurisdictions requiring consent for profiling (e.g. EU/UK) are excluded until the review confirms the legal basis.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Retention is inconsistent: predictions are kept for a rolling 90-day window, but the prediction is derived from 90 days of opens and raw events follow a separate policy; the artifact does not state whether predictions are deleted on opt-out, only on unsubscribe or deletion request.",
+     "evidence": "\"opted-out subscribers receive the issue at the normal send time and are excluded from prediction\" vs \"deleted with the subscriber's data on unsubscribe or deletion request\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "blocker",
+     "claim": "News and local-news publications with time-sensitive content (breaking news, election results, weather alerts) are excluded only by default; publishers can still enable Smart Send, which delays election or weather issues by up to 18 hours, creating a real harm and possible election-rule/consumer-protection exposure with no guardrail.",
+     "evidence": "\"permanently off by default for publications categorized as news or local news (4,480 today)\" and \"Issues are held for at most 18 hours.\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "The 40% of publications that are news outlets are the exact group for whom delay is most harmful, and the artifact does not show that any non-news cohort wants timing personalization; the launch post advertises it to all publishers.",
+     "evidence": "\"Top customer request in Q3: scheduled sends with time zone support (shipped in 2026.08). Smart Send Time was not a Q3 request\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The rollback for the pipeline switches SENDER in the dispatcher, but in-flight batches with retried idempotency keys may still be in the new worker's queue, and the 'drains in < 2 min' claim is unverified against the 18-hour hold and 5-attempt backoff.",
+     "evidence": "\"Rollback (pipeline): set `SENDER=sidekiq` in the dispatcher; in-flight batches drain in < 2 min.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The on-call pager thresholds sit above the warn thresholds only for bounce/complaint, and the 'SES throttle rate > 10% sustained' pager has no defined throttle-rate metric in the monitoring list, so the alarm may never fire.",
+     "evidence": "\"SES throttle rate > 10% sustained for 5 min\" (no throttle-rate dashboard listed under Dashboards)"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Smart Send rollback sets the default to off and releases held issues immediately, but the subscriber-visible effect (issues arriving at unexpected times for those already held, and publisher settings toggles) is not described, and per-subscriber predictions already stored are not addressed on rollback.",
+     "evidence": "\"Rollback (Smart Send): set `SMART_SEND_DEFAULT=off`; held issues are released immediately.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Canary gate lists 'zero silently dropped recipients' but the canary population is 5% of publications, and gates are checked per step without defining what happens when a single publication fails.",
+     "evidence": "\"each step gated on: zero silently dropped recipients (delivered + failed = recipients)\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The List-Unsubscribe-Post header and unsubscribe link pass QA, but Smart Send's timing-personalization opt-out is a separate preference page and the artifact does not state that opting out is reflected in the subscriber-facing unsubscribe flow, creating a consent-disclosure gap.",
+     "evidence": "\"subscribers can turn off timing personalization from the preferences page\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Launch post wording makes a '[measured]×' speed claim with no defined measurement method beyond 'measured pipeline speed', and the feature sentence promises gradual rollout that the publishers may not see.",
+     "evidence": "\"Issues now reach inboxes about [measured]× faster on average.\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "The artifact states the pipeline and Smart Send deploy timeline (Mon 2026-11-09) but the required QA re-run and legal review are not scheduled, so the date is asserted without a path to satisfy the stated prerequisites; with today at 2026-10-27 the schedule is unlikely to hold.",
+     "evidence": "\"Cutover is contingent on the required QA re-run above being completed; otherwise the date slips.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5472,
+    "tokOut": 3583,
+    "usd": 0.0027162199999999997,
+    "critMs": 15303
+   },
+   "wallMs": 63325
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The reconciliation rule has no defined outcome when no SES Send event arrives. Transient-failed recipients stay 'sending' and get no Send event, so they can never be re-sent, or they are re-sent without proof. Late or missing events make this ambiguous either way.",
+     "evidence": "Remaining recipients are marked 'sending'. 'sending' rows left over from an unknown outcome are reconciled against SES configuration-set Send events ... before they may be re-sent. Transient branch: r.Attempts++ then retry = append(retry, r), with no ledger state change."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Account-level states such as sending paused are classified as transient. After about 5 minutes of backoff they are recorded as permanent failures for every remaining recipient, and those subscribers are excluded from the issue.",
+     "evidence": "isTransient(res.Status): // throttling, account sending paused/temporary failure ... failures.Record(ctx, batch.IssueID, r.SubscriberID, 'retries_exhausted:'+...) ... excluded from the issue's remaining sends and shown to publishers under 'Not delivered'."
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The 240 msg/s limiter is an in-process rate.Limiter. The artifact does not show cross-host sharing, so with multiple worker hosts the real ceiling is N times 240, which can exceed the SES quota and the stated 20.7M/day limiter ceiling.",
+     "evidence": "limiter := rate.NewLimiter(rate.Limit(cfg.SESRatePerSec), cfg.SESBurst) // shared across all workers ... SEND_WORKERS=8 ... A shared limiter holds the fleet to 240 msg/s"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Rollback safety assumes the legacy Sidekiq sender consults the new send ledger. The artifact does not say the Sidekiq path was changed, so rollback could double-send.",
+     "evidence": "retried batches are safe because both senders consult the same send ledger, so already-sent recipients are skipped. ABSENT: any change to the Sidekiq sender to read or write the ledger."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Smart Send rollback releases held issues through the shared limiter, but ownership of held sends is unclear (scheduler vs worker). The claim of no duplicates is asserted, not tested, and the backlog release can saturate the limiter and the daily cap.",
+     "evidence": "Issues currently held are released immediately but paced by the shared limiter (240 msg/s) ... with no duplicates. Smart Send holds are handled by the scheduler, not the worker, and are unaffected by this rollback."
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Smart Send predictions were already computed for 2,000 sampled subscribers, and the artifact does not say EU/UK or unknown-region subscribers were excluded from that sample. This profiling ran before the legal review that gates any Smart Send processing.",
+     "evidence": "Smart Send Time: predicted hour within ±1h of actual top open hour, 2,000 sampled subscribers | 71%. Legal gate: legal/privacy review is a prerequisite for any Smart Send traffic. EU/UK subscribers ... are excluded until the review confirms the legal basis."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The ramp contradicts the control design. A 50/50 within-cohort holdout means a 100% step cannot be 100% of eligible publications. The rollout is also described inconsistently with the customer section.",
+     "evidence": "Ramp ... 100% of eligible (week 3) ... Control definition: within each cohort, publications are randomly assigned 50/50 to Smart Send vs normal send time (holdout)."
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The go/no-go schedule depends on a ledger redesign merged on Oct 30 and a full QA re-run plus capacity model by Nov 4, with no slack before the Nov 6 gate. The critical dedupe path has almost no time to fail and be fixed.",
+     "evidence": "Fri 2026-10-30 Idempotency/ledger redesign merged ... Wed 2026-11-04 QA re-run complete (... injected throttling, whole-batch-timeout test ...) ... capacity model for 10x and 100x volume complete"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Batches dead-lettered to the DLQ leave their recipients in 'sending' with no stated resolution path. They are not written to send_failures, so the 'Not delivered' view does not show them and no recovery is defined.",
+     "evidence": "poison batch goes to DLQ, alerted ... q.DeadLetter(ctx, b) ... metrics.Inc('send.batch_dead_lettered'). Only permanent failures and retry-exhausted recipients are written to send_failures."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Ledger writes and claims are not error-checked. The batch is acked even when MarkSent fails after SES accepted the send, which leaves recipients in 'sending' with no retry path.",
+     "evidence": "ledger.MarkSent(ctx, batch.IssueID, r.SubscriberID) with no error check ... ledger.ClaimAndReconcile(ctx, batch) with no error check ... q.Ack(ctx, batch)"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Smart Send delivers at each subscriber's predicted hour, so predictions cluster at common open hours. The capacity model covers daily volume only, so hourly bursts above 240 msg/s and queue lag are not modelled.",
+     "evidence": "delivers each issue at that hour ... The capacity model (current peak, 10x, and 100x projections vs the 20.7M/day limiter ceiling and the 25M/day SES cap ...)"
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The news block depends on self-declared categories and manual support recategorization with no SLA or detection for unlabelled news outlets. Those outlets can enable Smart Send, which delays time-sensitive content up to 18 hours.",
+     "evidence": "recategorization out of news is manual, by support ... publications categorized as news or local news cannot enable Smart Send ... news and local-news publications (4,480 today)"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 3-minute goal arithmetic is inconsistent. 50k messages under 180 s needs about 278 msg/s, not about 400, so the quota ask is overstated.",
+     "evidence": "The 'under 3 min' goal requires an SES quota increase to at least ~400 msg/s."
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 'time-to-inbox' metric is not defined. SES delivery events indicate receipt by the recipient mail server, not inbox placement. The launch copy also says 'on average' while the goal is a median.",
+     "evidence": "cut median time-to-inbox ... Issues now reach inboxes about [measured]× faster on average. ABSENT: how inbox arrival is measured."
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Predictions are retained for a paused feature and deleted only when the pause is classed as a privacy finding. Retaining profiling data without an active purpose is not justified.",
+     "evidence": "Stored predictions are retained, so re-enabling does not start cold. ... If the rollback is due to a privacy finding, predictions are deleted instead."
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Region for the EU/UK and unknown-region exclusion is not defined, so the exclusion cannot be implemented or verified.",
+     "evidence": "Subscribers with unknown region are excluded. ABSENT: how region is determined."
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Reconciliation trusts SES configuration-set Send events, but the artifact does not state how the event feed is authenticated. Forged or replayed events could mark recipients as sent or drive re-send decisions.",
+     "evidence": "reconciled against SES configuration-set Send events (tagged with issue_id + subscriber_id) before they may be re-sent. ABSENT: event authenticity controls."
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "There is no cost estimate for SES spend at the 20.7M/day ceiling, for the pending quota increase, or for holding predictions and held messages for up to 18 hours.",
+     "evidence": "ABSENT: cost figures. SES production account limits (us-east-1): 300 messages/second, 25M/day."
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "Delivery depends on a single provider in a single region with no alternate sender. EU/UK personal data flows to us-east-1 and the transfer basis is not addressed.",
+     "evidence": "SES_REGION=us-east-1 ... calls SES SendBulkEmail. ABSENT: alternate sender or transfer basis."
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "Smart Send is a hypothesis with no demonstrated demand, yet it moves toward 25% and 100% of eligible publications. The top customer request was already shipped.",
+     "evidence": "Smart Send Time was not a Q3 request; it is a hypothesis, not a committed demand. Top customer request in Q3: scheduled sends with time zone support (shipped in 2026.08)."
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "Time-sensitive publishers must remember to use 'Send now' for each issue, and the 18-hour default hold adds friction and delay for opted-in publishers.",
+     "evidence": "every issue has 'Send now' that bypasses Smart Send for that issue ... Issues are held for at most 18 hours"
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The preferences page places 'Unsubscribe' next to 'Don't personalize send time' on one screen, which invites mis-clicks that end a subscription.",
+     "evidence": "shows both options together: 'Unsubscribe' and 'Don't personalize send time'"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "There are no accessibility checks for the Settings toggle's paused state, the preferences options, or the issue-creation hold notice.",
+     "evidence": "ABSENT: accessibility criteria for Settings → Delivery, preferences page, or issue-creation UI copy."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Smart Send holds sit in the scheduler while sends run in the worker, both sharing one limiter. This hidden coupling makes rollback and testing harder.",
+     "evidence": "Smart Send holds are handled by the scheduler, not the worker ... paced by the shared limiter (240 msg/s)"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The canary routes 5% of publications, not 5% of volume. Large publications may never exercise the v2 path before 100%.",
+     "evidence": "route 5% of publications (internal and volunteer, non-news) to v2"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 8978,
+    "tokOut": 20118,
+    "usd": 0.011684920000000001,
+    "critMs": 91246
+   },
+   "wallMs": 133122
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The SES bulk response is matched to recipients by index (`r := batch.Recipients[i]`), and the artifact admits order is unverified. A reordering would attribute success/failure to the wrong subscriber, causing drops or duplicates; the only guard is a length check.",
+     "evidence": "\"order is verified against real SES in QA\" and \"Verify against real SES that `BulkEmailEntryResults` order matches the request entries\" (listed as required, not yet done)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Duplicate-send protection rests on a ledger/reconciliation design where the 'sending' state after an unknown outcome is re-sent after a 15-minute settle window if no Send event is found. Send events can be delayed past that window, which the artifact concedes yields duplicates, and a 'Send event found' check also cannot distinguish a send that was never accepted. This is a known duplicate path on a bulk email system with no SES idempotency.",
+     "evidence": "\"The residual risk is a Send event delayed past the settle window, which would cause one duplicate... a duplicate in that case is judged preferable to a silent drop\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The rollback path depends on the legacy Sidekiq sender being changed to read/write the same ledger, and the artifact says that without this drilled there is no go. The schedule places this change on 10-30 with the drill on 11-04, but the QA re-run is itself still unperformed; the rollback is not proven at go/no-go time, and drain times are unmeasured.",
+     "evidence": "\"If the Sidekiq ledger change is not merged and drilled, there is no go. These drain times are not assumed: they are measured in the rollback drill during the QA re-run\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "Per-worker throughput is a mock figure contradicted by the staging data. The mock (~25 msg/s/worker) conflicts with the 14 msg/s staging SES limit, and the capacity plan assumes 8 workers reach 240 msg/s. Sizing and the 3.5-minute goal rest on unmeasured numbers.",
+     "evidence": "\"Real per-worker throughput is not yet measured. The ~25 msg/s per worker is a mock figure\" and \"Mock figure, inconsistent with the 14 msg/s staging SES limit; not real SES throughput\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Throttle handling was never exercised: QA disabled throttling in the mock to pass, so the pass result for the 50k end-to-end test is not evidence for production behaviour, yet the report still lists it as a pass.",
+     "evidence": "\"QA worked around it by turning throttling off in the mock, so throttle handling was **not exercised**\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The 'Not delivered' and 'needs_review' invariant has gaps: the DLQ-recovery path and the account-level path both leave recipients in 'pending' with no bound on how long the issue stays paused, and `send.ses_account_level` only pages, so an issue can sit indefinitely with no delivery deadline or expiry.",
+     "evidence": "\"Recipients stay `pending` and resume when the account recovers\" with no timeout or maximum pause duration stated"
+    },
+    {
+     "lens": "privacy",
+     "severity": "blocker",
+     "claim": "The 2,000-subscriber Smart Send evaluation used open data without establishing that EU/UK or unknown-region subscribers were excluded, and processing of that data has not been reviewed. The artifact's own deletion plan is conditional on legal, leaving personal data retained by default.",
+     "evidence": "\"the artifact does not establish that EU/UK or unknown-region subscribers were excluded from the sample\" and \"the 2,000-subscriber prediction outputs are deleted unless legal confirms they may be kept\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Smart Send is designed to collect and process per-subscriber open timing for profiling, and the legal review is scheduled for 11-13 while the pipeline canary and the evaluation both proceed earlier. Opt-out is not yet a verified control, and 'excluded until review' for EU/UK is not implemented as an enforced gate.",
+     "evidence": "\"Regions: subscribers in EU/UK... are excluded until the review confirms the legal basis\" with \"by Fri 2026-11-13\" for legal/privacy review"
+    },
+    {
+     "lens": "compliance",
+     "severity": "blocker",
+     "claim": "Time-sensitive publishers are protected only by a self-declared category and a heuristic detector. Election results, weather alerts, and breaking news are delayed by up to 18 hours for non-declared outlets that the detector may miss, and the artifact does not establish that delay of such content is lawful or within platform/ToS commitments to publishers.",
+     "evidence": "\"categories are self-declared at signup\" and \"Non-news publishers sending time-critical content (e.g. weather or election-related alerts) are told in the Settings copy to use 'Send now'\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Subscribers are excluded from prediction only if the subscriber region is known and non-EU/UK, but no source or accuracy is given for region data, so unknown-region exclusion is unverified.",
+     "evidence": "\"Subscribers with unknown region are excluded.\" — ABSENT: how region is determined and its accuracy"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "Smart Send was not a customer request and is a hypothesis, yet the artifact plans a 3-week ramp to 100% of admitted publications with a 71% accuracy against a not-yet-run baseline, so there is no evidence the feature delivers value or beats the fixed hour.",
+     "evidence": "\"Smart Send Time was not a Q3 request; it is a hypothesis, not a committed demand.\" and \"71%. No baseline yet.\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The 3% lift threshold is provisional and the ramp gate is set before the power analysis that determines whether the test can detect it, so the gate may be underpowered.",
+     "evidence": "\"The 3% lift threshold is provisional\""
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "The holdout design means at 100% admitted only half of eligible publications receive Smart Send, and holdout publications delay their feature until after the experiment, adding friction and delay for publishers who opted in.",
+     "evidence": "\"at the 100% step only half of eligible publications actually receive Smart Send until the experiment concludes\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Smart Send concentrates sends into peak hours. The capacity model is not complete at go/no-go, and a 240 msg/s limiter against a peak-hour ~864k/hour ceiling leaves an unmodeled peak; the 70% gate is only enforced if the model exists.",
+     "evidence": "\"The capacity model... is complete before the go/no-go on 2026-11-06, not deferred\" alongside \"The \"about 100x current peak\" figure is an estimate and is re-derived\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Shared limiter is backed by Postgres or Redis with an unspecified choice, and the distributed token bucket's behaviour under contention at 8+ workers is untested, creating a hot-row bottleneck risk.",
+     "evidence": "\"backed by a Postgres/Redis-based distributed token bucket\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Held-issue backlog release at 120 msg/s during rollback can run hours and counts against the 25M/day cap, and there is no stated cost or quota headroom for that backlog.",
+     "evidence": "\"so a large backlog may take several minutes to hours and is also counted against the 25M daily cap\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Ledger write-failure and reconciliation depend on a 15-minute settle window and an alarm/pager mapping that is not tested under real SES event delay; the window is set without measurement.",
+     "evidence": "\"SEND_EVENT_SETTLE_SEC, 15 min, longer than observed event delay\" — ABSENT: measured event delay"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The public launch post is scheduled to all publishers while its gate ('measured numbers', 100% pipeline) is not specified as a numeric threshold, so it could publish with a claim (speed multiplier) not yet measured.",
+     "evidence": "\"Launch post is held until the pipeline is at 100% with measured speed\" and \"[measured]× faster on average\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The worker takes subscriber and issue IDs from the batch and uses them in SES tags and reconciliation without stated authorization checks; no authn/authz detail is given for the Settings/API override of the news block.",
+     "evidence": "ABSENT: authorization model for the server-enforced news block and the API change path"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Retry, DLQ, reconciliation and account-level logic are spread across the worker, DLQ handler, reconciliation job and on-call runbook, creating hidden coupling that is hard to test end to end.",
+     "evidence": "\"On-call runs the same reconciliation against SES events\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "The schedule admits a go/no-go with no slack and treats slipping as the expected outcome; the rollback and duplicate protections depend on work scheduled in the same week as the QA re-run, so the gate is likely to slip repeatedly while the Smart Send legal gate is not coupled to the pipeline gate.",
+     "evidence": "\"the schedule has no slack by design\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 11803,
+    "tokOut": 3337,
+    "usd": 0.00385942,
+    "critMs": 14530
+   },
+   "wallMs": 40395
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The ledger/reconciliation design depends on SES Send events being delivered within a settle window, but the artifact itself admits the settle window (900 s) is provisional and unmeasured. If the QA re-run cannot support it, the gate is no-go, yet the production config ships SEND_EVENT_SETTLE_SEC=900 as a hard value.",
+     "evidence": "\"The settle window is provisional (900 s) and is set from measured data... if it cannot be supported the result is no-go.\" / \"SEND_EVENT_SETTLE_SEC=900\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Result-order verification is unproven, yet the worker design depends on positional mapping of BulkEmailEntryResults to recipients. With SES_RESULT_ORDER_VERIFIED=false every batch takes the unknown-outcome path, meaning reconciliation must carry all traffic; the canary cannot be validated against that path at 50k scale. Positional attribution is also the only way the code maps per-recipient outcomes at all.",
+     "evidence": "\"Until then... the outcome is treated as unknown and resolved by reconciliation\" / \"Verify against real SES that BulkEmailEntryResults order matches the request entries... a failure means... no-go.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "The throughput and time-to-inbox goal rests on mock numbers the artifact itself declares invalid. The 3.5 min figure is a quota projection, and the QA 11-min result was mock with throttling off and not counted as a pass. Per-worker throughput of ~25 msg/s is contradicted by the staging limit of 14 msg/s and by the 8-worker sizing.",
+     "evidence": "\"Not counted as a pass: mock with throttling off is not valid evidence\" / \"Mock figure, inconsistent with the 14 msg/s staging SES limit\" / \"These are projections from the quota, not measurements.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Throttle handling was never exercised: QA disabled throttling in the mock, so the retry, backoff, and per-recipient attempt paths the design relies on are untested. The staging throttling run was also intermittent and worked around.",
+     "evidence": "\"QA worked around it by turning throttling off in the mock, so throttle handling was **not exercised**\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Shared limiter is a Postgres/Redis distributed token bucket, but the artifact does not state its failure behaviour. If the backing store is unavailable, WaitN's error path gets treated as a counted attempt and batches are DLQ'd, which can flood the DLQ at scale and page on-call on every batch.",
+     "evidence": "\"limiter_error // e.g. batch larger than burst; counts toward attempts\" / \"any DLQ batch\" pages on-call"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The DLQ/needs_review path can page on every dead-lettered batch and requires manual reconciliation against SES events. At 10x-100x volume and under sustained throttling, manual on-call toil is unbounded and no capacity for it is modelled.",
+     "evidence": "\"any DLQ batch, any `needs_review` recipient\" / \"On-call runs the same reconciliation against SES events\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The duplicate-send design is acknowledged as at-least-once with a known residual duplicate risk, and the QA timeout test is the only measurement of it. The publish gate and canary progression do not define an acceptable duplicate rate, so the 'zero silently dropped' gate can pass while duplicates accumulate.",
+     "evidence": "\"The residual risk is a Send event delayed past the settle window, which would cause one duplicate\" / \"The QA timeout test ... measures the actual duplicate rate\" — the gate checks only \"send.possible_duplicate reviewed\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback depends on the legacy Sidekiq sender being changed to read and write the same ledger, which is only merged on 10-30 and drilled during QA. The rollback itself is untested under real load, and the drill result determines go/no-go but its pass criteria are not specified.",
+     "evidence": "\"If the Sidekiq ledger change is not merged and drilled, there is no go.\" / \"verifies zero duplicates\" (no threshold given)"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Smart Send rollback releases held issues in bulk after a pause, causing early delivery to subscribers and a backlog that may take hours. The 'once' no-duplicate property is 'tested, not assumed', but the artifact gives no measured result, so the rollback safety is unproven.",
+     "evidence": "\"a large backlog may take several minutes to hours\" / \"the no-duplicate property is tested, not assumed\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "blocker",
+     "claim": "Predictions are computed from open events of subscribers whose region is unknown or EU/UK, and the 2,000-subscriber evaluation sample's region exclusions were never established. The artifact says no EU/UK exclusion was confirmed in the evaluation, and the region source is unmeasured. Profiling of protected subscribers may already have occurred without legal basis.",
+     "evidence": "\"the artifact does not establish that EU/UK or unknown-region subscribers were excluded from the sample\" / \"the region data source ... is documented, and its coverage and accuracy are measured on a sample before the 5% cohort\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Opt-out deletion of predictions is specified, but the deletion of predictions after the 2,000-subscriber evaluation outputs is set as a default deletion, not a verified deletion process. The count of EU/UK subscribers in that sample must be recorded before deletion, which creates a retention-before-delete ordering with no owner or verification step.",
+     "evidence": "\"Before deleting, the data team records how many sampled subscribers were EU/UK or unknown-region\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "blocker",
+     "claim": "Smart Send is delayed delivery for subscribers, and the publisher acknowledgement covers the delay, but no legal review of consistency with platform commitments or with US state profiling/opt-out laws has been completed. The flag enforcement is correct in design, yet the legal review is scheduled after the pipeline canary and the launch post is not tied to it, so the sign-off is not yet a fact.",
+     "evidence": "\"legal/privacy review is **a prerequisite for any Smart Send traffic\" / \"Legal/privacy review complete ... by Fri 2026-11-13\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "News and local-news classification relies on self-declared categories plus a classifier whose miss rate is unmeasured. Time-sensitive public-safety content such as weather or election alerts could be delayed for unlabelled outlets before the detector runs, and the block is enforced only after the 5% cohort gate.",
+     "evidence": "\"The detector's miss rate is measured on a labelled sample before the 5% cohort\" / \"Because Smart Send is opt-in, a missed outlet is also only exposed if it chose to enable it.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Smart Send concentrates sends into peak hours, and the hourly model is an estimate built from open-hour distribution. The 70% hourly gate is fail-closed only if the model is current, but the peak demand against the 864k/hour ceiling is not measured, and the 100% step can exceed the ceiling because holdouts are also counted.",
+     "evidence": "\"predicted open hours cluster at common times\" / \"A ramp step does not start unless the modelled peak-hour demand is below 70%\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The daily cap check is stated as 20.7M/day limiter ceiling versus the 25M SES cap, but the 100x volume projection is labelled an estimate and is not derived from actual data. The quota increase trigger therefore has no measured basis.",
+     "evidence": "\"The \\\"about 100x current peak\\\" figure is an estimate\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "The Smart Send feature is a hypothesis with no committed demand, yet the artifact still builds the 100% ramp and a public launch around it. The 71% accuracy figure is shown to be not evidence of value, and the randomized lift has not been measured.",
+     "evidence": "\"Smart Send Time was not a Q3 request; it is a hypothesis, not a committed demand.\""
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The launch draft states a speedup as \"[measured]× faster on average\" while the metric is a median, creating a copy mismatch with the measurement definition.",
+     "evidence": "\"Issues now reach inboxes about [measured]× faster on average.\" vs \"median time-to-inbox\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "Opt-out and unsubscribe are presented together on the preferences page, but no accessibility or wording check is specified for the distinction between 'Unsubscribe' and 'Don't personalize send time'.",
+     "evidence": "\"shows both options together: \\\"Unsubscribe\\\" and \\\"Don't personalize send time\\\"\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Ledger, reconciliation, DLQ handling, and scheduler release logic are spread across the worker, scheduler, and Sidekiq sender, creating hidden coupling that is hard to test as a whole.",
+     "evidence": "\"The ledger (not the scheduler) is what prevents duplicates.\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The go/no-go schedule has zero slack and a 11-04 QA completion, so any single slip shifts the canary; the artifact acknowledges this and accepts it, which is consistent but leaves no buffer for re-test after a ledger failure.",
+     "evidence": "\"the schedule has no slack by design\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 14018,
+    "tokOut": 3456,
+    "usd": 0.00436192,
+    "critMs": 14904
+   },
+   "wallMs": 55672
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The permanent-failure branch records send_failures but never moves the ledger row out of 'sending'. Reconciliation treats that row as an unknown outcome, and since the artifact gives no Send event for a permanently rejected recipient, the absence of an event moves the row to pending and re-sends it. Rejected or suppressed addresses can therefore be retried.",
+     "evidence": "default: // permanent: invalid address, suppressed, message rejected -> failures.Record(...) with no ledger update; rule: 'no event after a fixed settle window moves the row to pending for re-send'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Account-level suspension is only handled per entry. If SES rejects the whole request for a paused account, the error path calls retryOrDLQ, which consumes batch attempts and dead-letters the batch. The designed account-pause behaviour (queue pause, single page, escalation) is therefore not what runs.",
+     "evidence": "if err != nil { metrics.Inc('send.batch_error'); retryOrDLQ(batch) } versus the per-entry isAccountLevel(res.Status) branch"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "A ledger outage is treated as a per-batch error, so after MaxBatchAttempts the batch is dead-lettered. The artifact says infrastructure outages must never dead-letter batches, but only the limiter store gets that treatment. A ledger outage longer than about 5 minutes can page per issue and move recipients to needs_review.",
+     "evidence": "'Ledger unavailable: nothing was sent, so nack without sending.' followed by retryOrDLQ(batch)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "No described mechanism re-enqueues recipients whose outcome was unknown. A batch containing only held 'sending' rows is acked when empty, reconciliation only changes rows to pending, and the invariant job only flags or pages. Such recipients are delivered only at the 24h deadline, where they are marked delivery_expired.",
+     "evidence": "if len(batch.Recipients) == 0 { q.Ack(ctx, batch) }; 'recipients without one return to pending'; invariant job 'pages on-call and the issue is flagged'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The ledger-write-failure path can enqueue the same recipients twice. Retry recipients are requeued, then the original batch is nacked for redelivery, and both contain the same rows. The artifact also never states that the claim in ClaimAndReconcile is an atomic conditional update, so two workers could claim one recipient and both send it.",
+     "evidence": "if len(retry) > 0 { q.Requeue(ctx, batch.IssueID, retry) } ... if !ledgerOK { retryOrDLQ(batch) // redelivered"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Reconciliation depends on a queryable store of SES Send events tagged with issue_id and subscriber_id. The artifact never names that store, its ingestion path, its lag, or its availability, yet the duplicate-safety design relies on it.",
+     "evidence": "'Reconciliation queries SES Send events for that issue_id + subscriber_id'; 'SES offers no lookup that distinguishes'; ABSENT: event store design, owner, and delay SLO"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The Sidekiq rollback skips only recipients already marked 'sent'. A recipient left in 'sending' by a v2 unknown outcome, which SES may already have accepted, is sent again immediately by Sidekiq, bypassing the settle window. The mixed-switch drill should catch this, but the spec as written permits it.",
+     "evidence": "'already-sent recipients are skipped by both senders'; Sidekiq 'check the send ledger before sending and mark recipients sent after sending'"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The required proof that the cross-host limiter holds 240 msg/s cannot be produced on the stated staging SES, which is limited to 14 msg/s. The canary is 5% of internal and volunteer publications, so the first real exercise of the 240 msg/s ceiling happens at the 100% step, not in a gated pre-canary result.",
+     "evidence": "'verify the cross-host limiter holds 240 msg/s with workers on at least two hosts' versus 'real staging SES (limit 14 msg/s, using a smaller issue sized to the limit)'"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The 2,000-subscriber sample list and outputs are deleted by 10-30, while remediation and notification are left to legal. Deleting the subscriber-level record first is irreversible and removes what legal needs to assess the incident. Only aggregate counts are kept.",
+     "evidence": "'(3) by 2026-10-30 the 2,000-subscriber prediction outputs and sample list are deleted (default is deletion, not retention pending legal)'"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Deletion is said to cover copies in backups and scratch locations, but no backup retention window or purge mechanism is given, so the second-person verification cannot confirm it.",
+     "evidence": "'including copies in backups/scratch locations'; ABSENT: backup expiry date and purge procedure"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The disclosure that open timing is used to choose send time is required in the privacy policy and subscriber footer, but it is missing from the pre-cohort checklist. Smart Send could start profiling subscribers who have not been told.",
+     "evidence": "'Disclosure: privacy policy and each publication's subscriber-facing footer/preferences page will state...' versus the 'Before the 5% cohort, these must be complete' list, which omits it"
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The draft public copy promises that Smart Send delivers 'when each reader is most likely to open it'. The 71% figure is not a lift result, the baseline does not exist yet, and the artifact says accuracy is not evidence of value. This overclaims in a public announcement.",
+     "evidence": "'can deliver each issue when each reader is most likely to open it'"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The launch post says 'faster on average', but the publish gate and the measured metric are median time-to-inbox. The public claim does not match the measured statistic.",
+     "evidence": "'Issues now reach inboxes about [measured]× faster on average' versus 'production-measured median time-to-inbox'"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The capacity model must be complete before go/no-go, but its listed scope omits ledger write load (claim, sent, and pending transitions per recipient at up to the 25M/day cap) and reconciliation Send-event query load. Ledger growth has no retention or partitioning plan.",
+     "evidence": "capacity model scope lists DLQ/needs_review volume and on-call load; ABSENT: ledger row growth and reconciliation query rate"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The ledger redesign that the rollback depends on is merged on 10-30 with no described schema migration, backfill, or rollback for existing send state.",
+     "evidence": "'Idempotency/ledger redesign merged'; ABSENT: migration, backfill, and rollback of the ledger schema"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The 24h delivery deadline runs from scheduled time for normal sends but from release time for Smart Send holds. A held issue can therefore run well past 24h from its scheduled send, and the deadline wording is inconsistent.",
+     "evidence": "'24 h from its scheduled send time, or release time for Smart Send holds'"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The goals are inconsistent. The headline is 'as low as 3.5 min', and an 'under 3 min' goal appears only in Capacity, where it is not defined in What Ships. The quota figure (~400 msg/s) is also not derived.",
+     "evidence": "'The \"under 3 min\" goal requires an SES quota increase to at least ~400 msg/s'"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The units of the lift threshold are undefined. 'open-rate lift ≥ threshold' could be absolute or relative, so the gate cannot be evaluated as written.",
+     "evidence": "'The 3% lift threshold is provisional'"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Gate-critical behaviour is controlled by plain environment booleans and by a legal_signoff flag, with no described authorization for who may set them and no audit trail.",
+     "evidence": "'set only after the measurement supports the window'; 'unless a legal_signoff flag is set by legal/privacy'; ABSENT: who may set the flags and how changes are logged"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "No SES spend or budget figure is given for 10x or 100x volume, the quota request, or the Smart Send release backlog, so the spend ceiling is unstated.",
+     "evidence": "'25M/day' cap given; ABSENT: cost per day at the cap and budget ceiling"
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "All production sending depends on one provider (SES in us-east-1), with no alternate sender or exit path described.",
+     "evidence": "'SES_REGION=us-east-1'; ABSENT: alternate ESP or exit plan"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "Smart Send delays delivery by up to 18h for a feature no customer requested, and its value is unestablished because the baseline does not yet exist. Gating limits the risk, but the value case is unproven.",
+     "evidence": "'Smart Send Time was not a Q3 request; it is a hypothesis, not a committed demand'"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "The preferences page places 'Unsubscribe' beside 'Don't personalize send time'. Subscribers may click the wrong one, and no usability check is described.",
+     "evidence": "'shows both options together'"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "No accessibility review is described for the new Settings toggle, the acknowledgement notice, or the 'paused' state.",
+     "evidence": "ABSENT: accessibility review of Settings → Delivery and the notices"
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The publisher acknowledgement text and the Smart Send Settings copy are not drafted in full, so the presentation cannot be reviewed against the delay and 'Send now' requirements.",
+     "evidence": "'Publisher acknowledgement: enabling Smart Send requires the publisher to accept an explicit notice'; ABSENT: the notice text"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The core loop refers to undefined components (q, ledger, failures, breaker) and to a queue pause 'see below' that is never defined, so the design cannot be tested against the code as written.",
+     "evidence": "'the issue's queue is paused (see below)'"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "A subscriber who opts out during a hold still receives the held issue at the earlier time, because the opt-out applies only from the next issue and held sends are not covered.",
+     "evidence": "'takes effect on the next issue'"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "News classification relies on self-declaration plus a detector whose miss rate is unknown. A missed outlet can enable Smart Send and delay breaking news until support review.",
+     "evidence": "'a missed outlet is afterwards only exposed if it chose to enable it'"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "No additional gate-worthy issue beyond those above. The pipeline canary slip path is explicit.",
+     "evidence": "'Slipping is the expected, acceptable outcome'"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 16552,
+    "tokOut": 29976,
+    "usd": 0.01812872,
+    "critMs": 132123
+   },
+   "wallMs": 184150
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "blocker",
+     "claim": "The sample-list retention and deletion plan leaves personal data (subscriber IDs and region for 2,000 people, with the predicted hours deleted only on a backup expiry date that is unknown) in place for an open-ended period. The default deletion date is 2026-11-20 only if no legal decision is recorded, and backup copies are deleted only on an unspecified expiry date that the artifact never records.",
+     "evidence": "\"Copies in backups that cannot be purged on demand are access-restricted and the deletion is recorded as complete for them only on the recorded backup expiry date, which the verifier logs as an open item\" and \"The data team also records the backup retention window... (aggregate count only)\" with the step 1 deadline 2026-10-28 that may be missed (\"If step 1 is not done by 10-29...\")."
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Profiling of EU/UK and unknown-region subscribers has already occurred in an offline evaluation, and the artifact does not establish whether those subscribers were excluded, while region counts are still unknown. The cleanup depends on a count that may not be recorded in time.",
+     "evidence": "\"the artifact does not establish that EU/UK or unknown-region subscribers were excluded from the sample. Profiling already done cannot be undone\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "blocker",
+     "claim": "Smart Send delays time-sensitive content for publishers, and the artifact itself says legal has not confirmed that the delay is consistent with publisher ToS and commitments. The launch post and the publisher-wide rollout are scheduled before that review, creating a regulatory and contractual exposure, and the Smart Send feature is hypothesized to apply to 60% of publications with no confirmed legal basis for profiling in US states.",
+     "evidence": "\"Legal/privacy's scope includes checking that this delay is consistent with the platform's terms of service and commitments to publishers, and the cohort does not start until they confirm.\" and \"US state privacy laws that treat profiling as regulated processing or require opt-out rights and notices (e.g. California, Colorado)\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The at-least-once design for unknown outcomes can send duplicates, and the duplicate limit is set as a provisional number rather than derived from measured data. Recipients in the ledger can also be silently dropped by the delivery deadline and failure paths. The duplicate threshold is applied after the fact, so a violation only halts progression after the send has already occurred.",
+     "evidence": "\"The residual risk is a Send event delayed past the settle window, which would cause one duplicate for that recipient.\" and \"the limit is provisional and is confirmed or tightened by the go/no-go\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Core throughput and capacity claims rest on mock or projected numbers, and the Smart Send accuracy figure is used to justify the feature despite the artifact saying it is not evidence of value. Several go/no-go items depend on measurements that do not yet exist.",
+     "evidence": "\"Real per-worker throughput is not yet measured. The ~25 msg/s per worker is a mock figure.\" and \"The 71% accuracy figure is not evidence of value and is not used as a gate\" and \"No measured result exists yet because Smart Send has not run\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The go/no-go relies on many unverified items: the Sidekiq ledger change must be merged and drilled by 11-04, the settle window is a placeholder (900 s), and the ingestion-lag alarm and throttle-rate alarm are not yet built. Missing any one blocks the canary, so the schedule is not credible, and the rollback path depends on the same unverified ledger change.",
+     "evidence": "\"SEND_EVENT_SETTLE_SEC=900\" with the note \"The 900 s in the config is a placeholder, not a shipped value\" and \"If the Sidekiq ledger change is not merged and drilled to these criteria, there is no go.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Hourly peak demand from Smart Send at 100% can exceed the limiter ceiling, and the artifact has no measured peak profile. Held backlog release is capped at 120 msg/s, which at 10x or 100x volume can take hours and push daily volume toward the 25M cap.",
+     "evidence": "\"so a large backlog may take several minutes to hours and is also counted against the 25M daily cap and the 60% volume alarm\" and \"the capacity model ... is complete before the go/no-go\" with no modelled values present"
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "The publisher-facing disclosure and acknowledgement text relies on dense multi-clause English copy and a single toggle state (\"paused\"), with no stated accessibility review of the Settings UI or the notice's contrast and screen-reader behaviour.",
+     "evidence": "ABSENT: no accessibility review or verification for the Settings → Delivery toggle, the publisher acknowledgement notice, or the \"Not delivered\" and \"paused\" states."
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "The feature is justified as an experiment with no demand signal, and the artifact admits it was not a customer request. Shipping a feature that delays delivery for up to 18 hours risks harm to publishers who do not want it, with the value unproven.",
+     "evidence": "\"Smart Send Time was not a Q3 request; it is a hypothesis, not a committed demand.\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The Send-event store and reconciliation depend on Firehose and an append-only Postgres table, but there is no stated access control or integrity check on ses_send_events, which decides whether a row is re-sent.",
+     "evidence": "ABSENT: access controls, authn/authz, or tamper detection for the ses_send_events table or the SNS→Firehose path, even though its rows gate re-send decisions."
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Costs are not modelled. The capacity model, cold storage, Firehose ingestion, and Send-event storage costs at 10x and 100x are listed as required but no budget or cost figures exist in the artifact.",
+     "evidence": "ABSENT: any cost or budget figure for SES volume, ledger storage, Firehose, or on-call load."
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "The pipeline is tightly bound to SES, SNS, and Firehose in one region with no described exit path, which increases vendor lock-in for the sending pipeline.",
+     "evidence": "\"SES_REGION=us-east-1\" and \"Amazon SES\" with no stated alternative provider or exit plan."
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The artifact is very long and contains many conditional and provisional items, which makes the gate hard to verify. The go/no-go criteria are spread across multiple sections with inconsistent references.",
+     "evidence": "\"see Rollout plan\", \"see Capacity\", and \"see QA report summary\" cross-references repeated across sections."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 20868,
+    "tokOut": 2434,
+    "usd": 0.0052209199999999996,
+    "critMs": 11226
+   },
+   "wallMs": 65300
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The duplicate-prevention design depends on SES Send events to resolve unknown outcomes, but the artifact admits a Send event delayed past the settle window causes a duplicate, and the settle window (900 s) is an unmeasured placeholder. Duplicates are accepted as a deliberate at-least-once trade-off, yet the duplicate limit (0.01% of recipients) is provisional and not derived from any measurement.",
+     "evidence": "\"SEND_EVENT_SETTLE_SEC=900 ... Placeholder, NOT a shipped value\" and \"The residual risk is a Send event delayed past the settle window, which would cause one duplicate for that recipient.\" ABSENT: measured Send-event p99.9 delay on real SES."
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The core loop calls ledger.ClaimAndReconcile and then SendBulkEmail, but the 'sending' rows left by an earlier unknown outcome are re-sent through reconciliation paths while the runtime duplicate guard only stops re-sends at 50% of the limit. Combined with the positional result mapping (ResultOrderVerified=false until a QA test), the default path is 'every batch unknown-outcome', meaning every recipient outcome is inferred rather than observed; the artifact does not show that this path is ever exercised with real traffic before the canary.",
+     "evidence": "\"SES_RESULT_ORDER_VERIFIED=false ... while false, every batch takes the unknown-outcome path.\" and \"Canary does NOT start with this false (go/no-go requires true)\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Shared limiter sizing is internally inconsistent. Per-worker throughput is a mock figure, 8 workers at ~25 msg/s give ~200 msg/s, below the 240 ceiling, and the canary is set to 60 msg/s with 5% of publications, yet the 'Expected 50k-issue time' of about 3.5 min and the 'under 3 min' goal both assume 240 msg/s. The 14 min baseline versus 3.5 min claim depends on unmeasured throughput.",
+     "evidence": "\"Real per-worker throughput is not yet measured. The ~25 msg/s per worker is a mock figure. If it held, 8 workers would give ~200 msg/s\" and \"Goal: cut median time-to-inbox ... to as low as 3.5 min\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The pipeline canary, Smart Send ramp, and announcements are gated on many items that are not yet measured. The launch post and marketing copy reference a 3.5-min and conservative speedup that cannot be validated before the post publishes. The 71% accuracy figure is treated as a result on a sample whose region composition is unknown, and the lift threshold of 3% is provisional.",
+     "evidence": "\"The 3% lift threshold is provisional\" and \"Launch post ... Issues now reach inboxes about [measured]× faster\" with \"71%. No baseline yet.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "The artifact acknowledges an unconsented profiling incident: prediction outputs for 2,000 subscribers were produced without establishing EU/UK or unknown-region exclusion. The deletion is scheduled for 10-30 but the sealed sample list (subscriber IDs and regions) is retained until legal decides, with a default deletion date of 11-20, and backup copies are retained up to 35 days or until backup expiry. Personal data is retained beyond the deletion commitment, and the backup purge exception bounds retention only by an approval process.",
+     "evidence": "\"the sealed sample list is handled separately\" and \"Copies in backups that cannot be purged on demand are access-restricted, and the deletion is recorded as complete for them on the recorded backup expiry date\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Smart Send profiles subscribers and delays time-sensitive content for non-news publishers, and the artifact itself states legal sign-off on EU/UK consent for profiling, US state privacy rules (CA, CO) opt-out rights, and publisher ToS commitments is not yet obtained. Region detection accuracy is unmeasured, and the news-category detector's miss rate is unknown, so the exclusion relied on for EU/UK and news blocks is not yet demonstrated.",
+     "evidence": "\"Legal/privacy review ... earliest Mon 2026-11-16\" and \"the region data source ... its coverage and accuracy are measured on a sample before the 5% cohort\" with ABSENT: measured region-source accuracy and detector miss rate."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The limiter and ledger both fail closed, and the artifact explicitly says the queue can hold recipients for up to 24 h before expiry as delivery_expired. Combined with the sweeper re-enqueue and the 50% runtime guard routing rows to needs_review that pages per issue, on-call load under a ledger or Send-event ingester stall is not quantified; the capacity model that would bound it is due only on 11-04 and is not yet produced.",
+     "evidence": "\"The capacity model ... is complete before the go/no-go on 2026-11-06, not deferred; its modelled values are its output, due 2026-11-04\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The Sidekiq rollback path is not yet implemented and is itself a go/no-go item. The rollback depends on a Sidekiq change merged 2026-10-30 that is not yet drilled, and until the drill passes the rollback path for v2 unknown outcomes is unproven. The schema migration is additive but the old columns are dropped 14 days after 100%, which is a one-way door for any late-discovered issue.",
+     "evidence": "\"If the Sidekiq ledger change is not merged and drilled to these criteria, there is no go.\" and \"the old columns are not dropped until 14 days after 100%\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "The artifact states Smart Send is not a committed customer demand, the 71% accuracy is not evidence of value, and the opt-in rate is an unmeasured hypothesis. Shipping a feature that delays delivery up to 18 h for a hypothesis, with a 'Send now' override, risks solving a problem publishers did not request.",
+     "evidence": "\"Smart Send Time was not a Q3 request; it is a hypothesis, not a committed demand.\""
+    },
+    {
+     "lens": "accessibility",
+     "severity": "minor",
+     "claim": "The Smart Send opt-in acknowledgement and publisher notice are specified in copy but no accessibility requirement (screen reader, keyboard, contrast) is stated for the Settings toggle, the 'paused' state, or the opt-out preferences page.",
+     "evidence": "ABSENT: accessibility requirements for the Settings → Delivery toggle and the preferences page with the \"Don't personalize send time\" option."
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "The Settings toggle is described as showing 'paused' while the copy for the subscriber-facing preferences page presents 'Unsubscribe' and 'Don't personalize send time' side by side, a layout that could cause a subscriber to unsubscribe when intending only to opt out of timing.",
+     "evidence": "\"shows both options together: \\\"Unsubscribe\\\" and \\\"Don't personalize send time\\\"\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Reconciliation, DLQ recovery, sweeper, scheduler hold logic, and Sidekiq ledger logic are spread across at least four components and must agree on the same ledger states; the artifact does not specify a single owner of the state machine, increasing the risk of divergent behaviour.",
+     "evidence": "\"Both the v2 worker and the Sidekiq sender read the new schema\" and the sweeper, DLQ handler, and scheduler each describe separate state transitions."
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The artifact claims the proposal is not a launch gate for Smart Send but the broad launch post text and the 14-minute baseline are still tied to the same deploy gate; the schedule has no explicit owner for the public post hold decision.",
+     "evidence": "\"Launch post: **held**; publishes only after the gates in the Rollout plan are met\" with no named approver in the Schedule table."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 21704,
+    "tokOut": 2882,
+    "usd": 0.00561212,
+    "critMs": 13024
+   },
+   "wallMs": 78971
+  }
+ ],
+ "artifact": "# Release proposal: Inkwell — Send pipeline v2 + Smart Send Time\n\nOwner: delivery team · Pipeline canary start: Mon 2026-11-09 09:00 UTC, **only if the go/no-go on Fri 2026-11-06 passes** (see Schedule and Rollout plan) · Smart Send Time: experiment, starts only after its legal review and baseline analysis (earliest Mon 2026-11-16) · Launch post: **held**; publishes only after the gates in the Rollout plan are met (not on 2026-11-09)\n\n## What ships\n\n1. **Send pipeline v2** (`send-worker`): replaces the Sidekiq-based sender with a Go worker that pulls recipient batches from Postgres and calls SES `SendBulkEmail`. Goal: cut median time-to-inbox for a 50k-subscriber issue from 14 min to as low as 3.5 min, **bounded by the SES account quota** (300 msg/s means about 167 s minimum for 50k; see Capacity). The final number is whatever is measured on real SES. No figure in this proposal is treated as evidence until it is measured on real SES, and measured throughput is a go/no-go input.\n2. **Smart Send Time (experiment)**: Inkwell predicts each subscriber's most likely open hour from their last 90 days of opens and delivers each issue at that hour. Issues are held for at most 18 hours (publishers can set a lower maximum). **Off for all publications by default. Publishers must opt in; news and local-news publications (4,480 today) cannot enable it at all (server-enforced, see Time-sensitive guardrails).** Opted-in non-news publications are admitted by cohort ramp (see Rollout plan). Publishers manage it in Settings → Delivery. Smart Send delays delivery by design, so it is not counted in the time-to-inbox goal, which is measured on pipeline v2 sends with Smart Send off. A publication that does not opt in sees no change, and no Smart Send traffic, rollout step, or announcement exists before the legal review (including publisher ToS/commitments) is complete and its sign-off flag is set.\n\n## Schedule (today is 2026-10-27)\n\n| Date | Milestone | Owner |\n|---|---|---|\n| Wed 2026-10-28 | Data team records the count of EU/UK and unknown-region subscribers in the 2,000-subscriber evaluation sample (aggregate count only) and hands it to legal/privacy. Data team also records the backup retention window and purge procedure for every location holding the evaluation data (see QA report summary); if this is not recorded by 10-29, the privacy engineer escalates to the head of data and it is obtained by 10-30 | data team lead |\n| Fri 2026-10-30 | Idempotency/ledger redesign merged, **including the schema migration (see Ledger migration), and the Sidekiq sender changed to read and write the same ledger with the same reconciliation rules**; test plan for the QA re-run signed off; the 2,000-subscriber prediction outputs deleted, with deletion verified by a second person and logged (the sealed sample list is handled separately, see QA report summary) | delivery team; deletion: data team lead (verifier: privacy engineer) |\n| Wed 2026-11-04 | QA re-run complete (real staging SES, injected throttling, whole-batch-timeout test, result-order test, DLQ-recovery test, ledger-write-failure test, ledger-outage test, limiter-store-outage test, whole-request account-level error test, Send-event delay and ingestion-lag measurement, rollback drill, migration rehearsal); capacity model for 10x and 100x volume, including hourly peak modelling, DLQ/`needs_review` volume, ledger write load and growth, and reconciliation query load, complete | delivery team + QA |\n| Fri 2026-11-06 | **Go/no-go for pipeline canary.** If any item above is incomplete, the canary slips and nothing routes to v2. Slipping is the expected, acceptable outcome: the schedule has no slack by design, and the canary start date moves rather than any gate being shortened. No external commitment, customer communication, or launch post is tied to the canary date. A failed ledger or dedupe test on 11-04 means no-go, with the canary rescheduled after a fix and a re-test | delivery lead |\n| Mon 2026-11-09 | Canary start (5%), if go | delivery team |\n| by Fri 2026-11-13 | Legal/privacy review complete (scope includes US state privacy laws, publisher ToS/commitments, the region data source, and the evaluation incident including disposition of the sealed sample list), baseline analysis complete | legal/privacy, data |\n| Mon 2026-11-16 (earliest) | Smart Send 5% cohort starts, only if the review and baseline are done; otherwise it slips independently of the pipeline | delivery team |\n\nThe pipeline does not depend on the legal review. Smart Send does not run before it. The two are decoupled on purpose, so a slip in one does not move the other. The coupling that matters is enforced in code: the Smart Send flag cannot be enabled until the legal sign-off flag is set (see Smart Send privacy). The sign-off is not yet a fact and is not assumed: until it is set, no Smart Send traffic exists.\n\n## send-worker core loop (`internal/send/worker.go`)\n\nRevised to classify errors, retry transient ones, track attempts per recipient, and avoid duplicate sends. **We do not rely on SES for deduplication.** `SendBulkEmail` has no documented idempotency guarantee, so duplicate protection comes from our own send ledger in Postgres.\n\n**Claim atomicity:** the claim in `ClaimAndReconcile` is a single conditional update (`UPDATE send_ledger SET state='sending', claimed_by=…, claimed_at=… WHERE issue_id=? AND subscriber_id = ANY(?) AND state='pending' RETURNING …`, using row locks / `SKIP LOCKED`). Only rows the update actually returns belong to the caller, so two workers (or a worker and the legacy Sidekiq sender) can never both claim, and then send, the same recipient. A redelivered or duplicated batch simply claims nothing for rows already claimed or sent.\n\n```go\n// Shared limiter: backed by a Postgres/Redis-based distributed token bucket keyed on the SES account,\n// so the configured ceiling (240 msg/s at full ramp) holds across ALL worker hosts, not per process (see Capacity).\n// Failure behaviour: if the backing store is unavailable the limiter FAILS CLOSED (no sends without a token)\n// and returns dlimit.ErrStoreUnavailable, which is handled separately from per-batch errors below.\nlimiter := dlimit.NewShared(cfg.SESRatePerSec, cfg.SESBurst)\n\nretryOrDLQ := func(b Batch) {\n    if b.Attempts >= cfg.MaxBatchAttempts {\n        // Poison batch: recipients stay 'sending' and are moved to 'needs_review' by the DLQ handler (see below).\n        q.DeadLetter(ctx, b)               // poison batch goes to DLQ, alerted\n        metrics.Inc(\"send.batch_dead_lettered\")\n    } else {\n        q.NackWithBackoff(ctx, b)          // increments b.Attempts\n    }\n}\n\nfor batch := range q.Batches(ctx, cfg.BatchSize) {\n    // Ledger: recipients already 'sent' or 'failed' for this issue are dropped from the batch.\n    // Remaining 'pending' recipients are atomically claimed and marked 'sending'. 'sending' rows left over from an\n    // unknown outcome are reconciled against SES configuration-set Send events (tagged with\n    // issue_id + subscriber_id) before they may be re-sent (see reconciliation rules below).\n    // Rows still inside the settle window are HELD: not sent, and counted in batch.HeldCount.\n    batch, err := ledger.ClaimAndReconcile(ctx, batch)\n    if err != nil {\n        if errors.Is(err, ledger.ErrUnavailable) {\n            // Ledger/Send-event store down: an infrastructure outage, not a batch problem.\n            // Nothing was sent. Release the lease, consume NO attempt: batches can never be\n            // dead-lettered because the ledger is down. Same breaker as the limiter store.\n            metrics.Inc(\"send.ledger_unavailable\")\n            q.Release(ctx, batch)\n            breaker.Trip(ctx) // all workers stop pulling and probe with capped backoff; ONE alert, not one per batch\n            continue\n        }\n        // Other ledger errors (e.g. malformed batch) count toward attempts.\n        metrics.Inc(\"send.ledger_error\")\n        retryOrDLQ(batch)\n        continue\n    }\n    if len(batch.Recipients) == 0 {\n        if batch.HeldCount > 0 {\n            // Only held 'sending' rows remain: do NOT ack (that would orphan them until the deadline).\n            // Redeliver after the earliest settle-window expiry among the held rows; no attempt consumed.\n            q.ReleaseAfter(ctx, batch, batch.EarliestSettleExpiry())\n        } else {\n            q.Ack(ctx, batch)\n        }\n        continue\n    }\n\n    if err := limiter.WaitN(ctx, len(batch.Recipients)); err != nil {\n        switch {\n        case ctx.Err() != nil:\n            ledger.ReleaseBatchToPending(ctx, batch) // claimed rows go back to 'pending'; nothing was sent\n            q.Release(ctx, batch) // shutdown: lease released, no attempt consumed, batch is redelivered, never dropped\n            return\n        case errors.Is(err, dlimit.ErrStoreUnavailable):\n            // Limiter backing store down: an infrastructure outage, not a batch problem.\n            // Nothing was sent, so rows go back to 'pending', the lease is released, and NO attempt is consumed:\n            // batches can never be dead-lettered because the limiter store is down.\n            metrics.Inc(\"send.limiter_store_unavailable\")\n            ledger.ReleaseBatchToPending(ctx, batch)\n            q.Release(ctx, batch)\n            breaker.Trip(ctx) // all workers stop pulling and probe the store with capped backoff; ONE alert, not one per batch\n            continue\n        default:\n            metrics.Inc(\"send.limiter_error\") // e.g. batch larger than burst; counts toward attempts\n            ledger.ReleaseBatchToPending(ctx, batch)\n            retryOrDLQ(batch)\n            continue\n        }\n    }\n\n    // Idempotency key = hash(issue_id, sorted subscriber_ids of THIS recipient set).\n    // A requeued subset is a different recipient set and therefore gets a different key.\n    // The key is recorded in the ledger and sent as a tag; it is a tracing aid, not the dedupe mechanism.\n    out, err := ses.SendBulkEmail(ctx, buildBulkInput(batch, batch.IdempotencyKey()))\n    if err != nil {\n        if isAccountLevelErr(err) {\n            // Whole request rejected because the account is paused/suspended: SES did not accept anything.\n            // Not a batch problem: rows return to 'pending', the lease is released, NO attempt is consumed,\n            // the issue's queue is paused and on-call is paged once (same path as per-entry account-level results).\n            metrics.Inc(\"send.ses_account_level\")\n            ledger.ReleaseBatchToPending(ctx, batch)\n            q.Release(ctx, batch)\n            queuePause.Pause(ctx, batch.IssueID) // single page per issue, escalation at ACCOUNT_PAUSE_ESCALATE_MIN\n            continue\n        }\n        // Whole-batch error: outcome unknown (SES may have accepted some/all).\n        // Do NOT mark recipients failed. Recipients stay 'sending' and are reconciled\n        // against SES Send events before any retry.\n        metrics.Inc(\"send.batch_error\")\n        retryOrDLQ(batch)\n        continue\n    }\n    // Results are attributed to recipients by position only if result order has been verified\n    // against real SES (cfg.ResultOrderVerified, set true only after the QA order test passes and\n    // the go/no-go confirms it). Until then, and on any length mismatch, the outcome is treated as\n    // unknown and resolved by reconciliation. A reordering therefore can never be silently attributed.\n    if !cfg.ResultOrderVerified || len(out.BulkEmailEntryResults) != len(batch.Recipients) {\n        // Cannot attribute results to recipients: treat as unknown outcome, never guess.\n        metrics.Inc(\"send.result_count_mismatch\")\n        retryOrDLQ(batch)\n        continue\n    }\n    var retry []Recipient\n    ledgerOK := true\n    for i, res := range out.BulkEmailEntryResults {\n        r := batch.Recipients[i] // positional mapping, valid only when ResultOrderVerified; every entry also carries a subscriber_id tag used by reconciliation\n        switch {\n        case res.Status == types.BulkEmailStatusSuccess:\n            if err := ledger.MarkSent(ctx, batch.IssueID, r.SubscriberID); err != nil {\n                // SES accepted but the ledger write failed: do not ack. Recipient stays 'sending'\n                // and is resolved by reconciliation against the Send event (which will show it as sent).\n                metrics.Inc(\"send.ledger_write_error\")\n                ledgerOK = false\n            }\n        case isAccountLevel(res.Status): // account sending paused, account-level suspension\n            // Not a recipient problem: never counts toward per-recipient attempts or failures.\n            // Recipient returns to 'pending' (not 'sending') and the issue's queue is paused (see below).\n            metrics.Inc(\"send.ses_account_level\")\n            ledger.ReleaseToPending(ctx, batch.IssueID, r.SubscriberID)\n            retry = append(retry, r)\n        case isTransient(res.Status): // throttling, temporary failure\n            metrics.Inc(\"send.ses_throttled_or_transient\")\n            // SES returned a definitive per-recipient \"not accepted\" result, so the ledger row is set back to\n            // 'pending' (explicit state change). No Send event is expected for it, and none is required.\n            r.Attempts++ // per-recipient counter persisted in the ledger; survives re-batching\n            if r.Attempts >= cfg.MaxRecipientAttempts {\n                // Terminal: row leaves 'sending' so reconciliation can never re-send it.\n                ledger.MarkFailed(ctx, batch.IssueID, r.SubscriberID, \"retries_exhausted:\"+string(res.Status))\n                failures.Record(ctx, batch.IssueID, r.SubscriberID, \"retries_exhausted:\"+string(res.Status))\n            } else {\n                ledger.ReleaseToPending(ctx, batch.IssueID, r.SubscriberID)\n                retry = append(retry, r)\n            }\n        default: // permanent: invalid address, suppressed, message rejected\n            // Terminal: SES definitively rejected it, so no Send event will ever exist. The row is moved to\n            // 'failed' in the same step so reconciliation can never treat it as an unknown outcome and re-send it.\n            ledger.MarkFailed(ctx, batch.IssueID, r.SubscriberID, string(res.Status))\n            failures.Record(ctx, batch.IssueID, r.SubscriberID, string(res.Status))\n        }\n    }\n    if !ledgerOK {\n        // Do NOT requeue the retry set separately: the original batch is redelivered and contains the same rows.\n        // Rows already returned to 'pending' are claimed by the redelivered batch's ClaimAndReconcile, while\n        // 'sent'/'failed' rows are dropped and 'sending' rows are reconciled. Requeuing too would enqueue them twice.\n        retryOrDLQ(batch) // redelivered; ClaimAndReconcile resolves 'sending' rows via Send events\n        continue\n    }\n    if len(retry) > 0 { q.Requeue(ctx, batch.IssueID, retry) } // backoff computed from each recipient's own Attempts, capped\n    q.Ack(ctx, batch)\n}\n```\n\nOnly permanent failures and retry-exhausted recipients are written to `send_failures`, and in the same step their ledger rows move to the terminal `failed` state. Those recipients are excluded from the issue's remaining sends and shown to publishers under \"Not delivered\". Transient results are retried up to `MaxRecipientAttempts` per recipient and only recorded as failures after retries are exhausted.\n\n**Reconciliation rules (ledger states: `pending` → `sending` → `sent` or `failed`, plus `needs_review`):**\n- A definitive per-recipient SES \"not accepted\" result (transient or account-level) moves the row back to `pending`. A definitive permanent rejection or retry exhaustion moves it to `failed`. Neither needs a Send event, and neither is ever left in `sending`.\n- `sending` is only left over after an unknown outcome (whole-batch error, timeout, ledger write failure, worker crash, unverified or mismatched result order). Reconciliation queries the Send-event store (see below) for that issue_id + subscriber_id: a Send event found marks the row `sent` (never re-sent); no event after a fixed settle window (`SEND_EVENT_SETTLE_SEC`) moves the row to `pending` for re-send. Before the settle window elapses the row is held, not re-sent. **The settle window is provisional (900 s) and is set from measured data:** the QA re-run measures Send-event delay on real SES, and the window must exceed the measured p99.9 delay with margin. The 900 s in the config is a placeholder, not a shipped value: the worker refuses to start in production unless `SEND_EVENT_SETTLE_VERIFIED=true`, which is set only after the measurement supports the window. If the measurement does not support the window, it is raised before go/no-go, and if it cannot be supported the result is no-go. **This is a deliberate at-least-once choice for unknown outcomes, not a claim of exactly-once.** SES offers no lookup that distinguishes \"never accepted\" from \"accepted, event delayed\", so the absence of a Send event is evidence, not proof. The residual risk is a Send event delayed past the settle window, which would cause one duplicate for that recipient. A duplicate in that case is judged preferable to a silent drop of a newsletter. The risk is bounded to unknown-outcome rows only, counted by `send.possible_duplicate`, reported per issue, and held to an explicit rate limit in the canary and publish gates (see Rollout plan). **The limit is also enforced at runtime, not only after the fact:** the sweeper keeps a running count of `send.possible_duplicate` re-sends per issue and per ramp step, and when it reaches 50% of the limit it stops moving unknown-outcome rows to `pending` for re-send. Those rows go to `needs_review` instead, with one page per issue, so a worse-than-measured duplicate rate is capped before the limit is crossed. The QA timeout test (SES accepted, client saw an error) measures the actual duplicate rate against this design, and this runtime guard is tested there too.\n- **Send-event store (what reconciliation depends on):** the SES configuration set `inkwell-prod` publishes Send events (tagged `issue_id` + `subscriber_id`) through an SNS → Kinesis Firehose delivery stream into an append-only Postgres table `ses_send_events`, indexed by (`issue_id`, `subscriber_id`). Owner: delivery team. The ingester records its high-water mark (latest event timestamp ingested). Reconciliation treats the store as unavailable, and holds rows rather than moving them to `pending`, if the ingester's lag exceeds `SEND_EVENT_MAX_INGEST_LAG_SEC` or the store is unreachable, so a stalled pipeline can cause holds but never premature re-sends. The ingestion lag SLO is set from the QA measurement of end-to-end Send-event delay (included in the settle-window measurement), the ingest-lag alarm is built and tested in staging before the canary, and store unavailability follows the same fail-held path as the DLQ handler (`needs_review`, one page per issue).\n- **Re-enqueue of resolved rows:** a sweeper job runs every minute and (a) resolves held `sending` rows whose settle window has elapsed (Send event → `sent`, none → `pending`), and (b) re-enqueues every issue's `pending` rows that have no queued batch, as new batches. The worker also redelivers batches containing only held rows after the settle-window expiry (see core loop), so recipients with unknown outcomes are re-sent promptly after the window instead of waiting for the delivery deadline. QA verifies that unknown-outcome recipients are re-sent within one sweep interval after the window.\n- **Account-level states** (sending paused, suspension) are not recipient failures, whether reported per entry or as a whole-request error. They never count toward `MaxRecipientAttempts` or batch attempts, never write `send_failures`, never dead-letter a batch, and pause the issue's queue and page on-call. Recipients stay `pending` and resume when the account recovers, so no subscriber is dropped because of an account-level event. **The pause is bounded:** if the pause lasts longer than `ACCOUNT_PAUSE_ESCALATE_MIN` (60 min), the page escalates to an incident and publishers with affected issues are notified in-app. Every issue also has a delivery deadline (`ISSUE_DELIVERY_DEADLINE_HOURS`, 24 h from its scheduled send time, or release time for Smart Send holds). Recipients still `pending` at the deadline are marked failed with reason `delivery_expired`, which appear under \"Not delivered\", so no issue can sit indefinitely. These are recorded, visible failures counted in the invariant check below, not silent drops.\n- **Ledger outage:** like the limiter store, a ledger outage is infrastructure, not a batch problem. Workers release batches without consuming attempts, trip the shared breaker, and probe with capped backoff, with one alert and no DLQ entries.\n- **DLQ recovery (automated first, human only for the residue):** a dead-lettered batch's `sending` recipients are moved to `needs_review` by the DLQ handler. An automated job then runs the same reconciliation against SES Send events once the settle window has elapsed: recipients with a Send event are marked `sent`, recipients without one return to `pending` (and are re-enqueued by the sweeper). Only recipients the automation cannot resolve (e.g. Send-event store unreachable) stay in `needs_review` and go to on-call. Pages are deduplicated per issue and per incident (one page per issue, updated with counts), not per batch or per recipient, so on-call load scales with the number of affected issues, not with batch volume. `needs_review` recipients not resolved by the delivery deadline are marked failed with reason `dlq_unresolved` automatically (shown under \"Not delivered\") and the page re-fires. The reconciliation job below counts `needs_review` as unaccounted. Expected DLQ and `needs_review` volume at 10x and 100x, including under sustained throttling, and the resulting on-call load are modelled in the capacity model; the DLQ handler's automated resolution rate is measured in the QA DLQ-recovery test.\n\n**Invariant enforcement:** when an issue's queue drains, or at its delivery deadline, a reconciliation job checks `delivered + permanently_failed = recipients` against the ledger. Any recipient still `sending`, `needs_review`, or unaccounted for pages on-call and the issue is flagged, so the invariant is checked, not assumed.\n\n## Ledger migration\n\nThe ledger redesign changes existing send state, so it ships as an expand/contract migration: new columns and the new `failed`/`needs_review` states are added additively, with no destructive change, and old readers keep working. In-flight and recent issues are backfilled (recipients with delivery records → `sent`, recorded failures → `failed`, everything else → `pending`) by a script that is idempotent and re-runnable, and the migration and backfill are rehearsed on a staging copy of production data in the QA re-run, with row counts reconciled. Rollback: the migration is additive, so rolling back means stopping the new writers and reverting readers; the old columns are not dropped until 14 days after 100% (the Sidekiq idle window), and the contract step (dropping legacy columns) is a separate later change. Both the v2 worker and the Sidekiq sender read the new schema, so the rollback to Sidekiq does not need a schema rollback. The migration is a go/no-go item.\n\n**Ledger growth and retention:** `send_ledger` is partitioned by month on issue send date. Rows older than 90 days are exported to cold storage in aggregate form (counts per issue and outcome) and the partition is dropped. Sizing (rows per recipient, transitions per recipient, and growth at 10x and 100x up to the 25M/day cap) is part of the capacity model.\n\n## Production config (`deploy/prod/send-worker.env`)\n\n```\nSEND_WORKERS=8\nBATCH_SIZE=50\n# Staged ramp, raised only after measured aggregate rate <= configured rate at the previous step (see Capacity):\n# 60 for the 5% canary, 120 at 25%, 240 at 100%\nSES_RATE_PER_SEC=60\nSES_BURST=50\nMAX_BATCH_ATTEMPTS=5\nMAX_RECIPIENT_ATTEMPTS=5\nRETRY_BACKOFF_CAP_SEC=60\n# Placeholder, NOT a shipped value: set from measured Send-event delay in the QA re-run (see Reconciliation rules)\nSEND_EVENT_SETTLE_SEC=900\n# false until the measurement supports SEND_EVENT_SETTLE_SEC; the worker refuses to start in prod while false\nSEND_EVENT_SETTLE_VERIFIED=false\n# Set from the measured ingestion lag SLO; reconciliation holds rows (never re-sends) while lag exceeds it\nSEND_EVENT_MAX_INGEST_LAG_SEC=120\n# false until the real-SES result-order test passes and go/no-go confirms; while false, every batch takes the unknown-outcome path.\n# Canary does NOT start with this false (go/no-go requires true), so reconciliation is never the only path carrying canary traffic.\nSES_RESULT_ORDER_VERIFIED=false\nACCOUNT_PAUSE_ESCALATE_MIN=60\nISSUE_DELIVERY_DEADLINE_HOURS=24\nSES_REGION=us-east-1\nSES_CONFIGURATION_SET=inkwell-prod\nSMART_SEND_DEFAULT=off\nSMART_SEND_MAX_HOLD_HOURS=18\n```\n\nSES production account limits (us-east-1): 300 messages/second, 25M/day.\n\n## Capacity\n\n- A limiter shared across all worker hosts (a distributed token bucket keyed on the SES account, not a per-process limiter) holds the fleet to 240 msg/s at full ramp (80% of quota, leaving headroom for retries and other Inkwell mail). **The limiter fails closed if its backing store is unavailable:** workers stop sending, release batches without consuming attempts, and probe with capped backoff, raising a single alert after 5 minutes. This outage never dead-letters batches (see core loop). **Verification is split because staging SES is limited to 14 msg/s and cannot show 240 msg/s:** before the canary, a staging test with workers on at least two hosts, with the limiter configured to a scaled-down rate (e.g. 10 msg/s, under the 14 msg/s staging limit), verifies the aggregate rate across hosts stays at or below the configured rate, and a store-outage test verifies fail-closed behaviour with no DLQ entries. The 240 msg/s ceiling itself is first exercised in production, so it is reached by staged ramp (`SES_RATE_PER_SEC` 60 → 120 → 240 across the canary, 25%, and 100% steps), and each increase is gated on the measured aggregate rate (from limiter metrics across all hosts) having stayed at or below the configured rate at the previous step, plus SES throttle rate under its alarm threshold. **Real per-worker throughput is not yet measured.** The ~25 msg/s per worker is a mock figure. If it held, 8 workers would give ~200 msg/s of raw capacity, below the 240 limiter ceiling, so worker capacity could be the binding constraint. The QA re-run measures per-worker throughput on real staging SES up to its limit, and production per-worker throughput is measured during the ramp. If 8 workers cannot sustain 240 msg/s, `SEND_WORKERS` is raised before the 100% step. Measured real-SES throughput is a go/no-go input: the staging measurement must exist for go, and the full-rate sizing here is provisional until the ramp confirms it. Raising workers beyond the limiter ceiling only helps if the SES quota is raised first.\n- Expected 50k-issue time: about 208 s (~3.5 min) at 240 msg/s, and about 250 s (~4.2 min) if workers sustain only 200 msg/s. These are projections from the quota, not measurements. **The \"under 3 min\" goal requires an SES quota increase to at least ~400 msg/s. The request is pending and not approved, so no rollout step or launch copy depends on it.** Launch copy uses the measured number only.\n- Daily volume: 240 msg/s is a ceiling of about 20.7M/day, below the 25M/day SES cap, so the limiter is the effective daily cap. The \"about 100x current peak\" figure is an estimate and is re-derived from actual volume data in the capacity model. **The capacity model (current peak, 10x, and 100x projections vs the 20.7M/day limiter ceiling and the 25M/day SES cap, with the trigger for a quota increase, plus projected DLQ/`needs_review` volume and on-call load) is complete before the go/no-go on 2026-11-06, not deferred; its modelled values are its output, due 2026-11-04, and no step relies on a value that does not yet exist.** It also covers **ledger load**: write rate for claim, `sent`/`failed`, and `pending` transitions per recipient at up to the 25M/day cap and at peak-hour rates, table and index growth under the partitioning/retention plan above, and the **reconciliation query load** on `ses_send_events` (sweeper and DLQ handler query rate, and Send-event ingestion volume) at 10x and 100x. Dashboard and alarms: daily volume at 60% of the cap, plus an alarm at 3x the trailing 30-day peak.\n- **Hourly peaks (Smart Send):** predicted open hours cluster at common times, so Smart Send concentrates sends into peak hours rather than spreading them over the day. The capacity model includes an hourly demand profile built from the open-hour distribution, projected for the opted-in cohorts at each ramp step, compared with 240 msg/s × 3,600 s ≈ 864k messages/hour and with expected queue lag. **The projection counts all traffic in the peak hour:** Smart Send releases from admitted (non-holdout) publications, holdout publications' normal-time sends, non-participating publications, and retries, so holdouts and the 100% step are included. It also models the release time of a held backlog under the 120 msg/s scheduler cap at 10x and 100x volume and its effect on daily volume against the 25M cap. A ramp step does not start unless the modelled peak-hour demand is below 70% of the hourly ceiling and the modelled backlog release fits within the 18 h maximum hold; otherwise the quota increase or a per-publication hold-release spread is applied first. **From the second step on, the model is also checked against measured data:** the previous step's actual peak-hour volume replaces the modelled value, and a step does not start if the measured peak exceeded the model by more than 20% or the re-projected demand is not below 70%. **The gate fails closed: if the hourly model is missing or stale for a step, that step does not start.** The queue-lag alarm and pager below cover this at runtime.\n\n## QA report summary (staging)\n\nThe mock results below are not used for any sizing or go/no-go decision; the required re-run below replaces them.\n\n| Check | Config | Result |\n|---|---|---|\n| 50k-recipient issue end to end (sandbox mock, throttling off) | 4 workers, batch 50 | 0 failures, 11 min in the mock. **Not counted as a pass: mock with throttling off is not valid evidence for production behaviour.** Replaced by the re-run below |\n| Per-worker throughput (sandbox mock) | 1 worker, batch 50 | ~25 msg/s. Mock figure, inconsistent with the 14 msg/s staging SES limit; not real SES throughput |\n| Throttling in staging | 4 workers vs 14 msg/s limit | Intermittently throttled; QA worked around it by turning throttling off in the mock, so throttle handling was **not exercised**. The re-run below exercises retry, backoff, and per-recipient attempt paths with injected throttling and is a go/no-go requirement |\n| Bounce/complaint webhooks still processed | — | Pass |\n| Smart Send Time: predicted hour within ±1h of actual top open hour, 2,000 sampled subscribers | — | 71%. No baseline yet. The baseline comparison (same metric for a fixed send hour and for a random hour on the same sample) is required before the ramp; see Rollout plan. **Privacy note:** this was an offline evaluation on already-collected open data, and the artifact does not establish that EU/UK or unknown-region subscribers were excluded from the sample. Profiling already done cannot be undone, so the actions limit further exposure while keeping what legal needs to assess the incident, and hand the decision on remediation to legal. **The cleanup does not depend on the region count being recorded in time:** deletion proceeds on its dates regardless, and if the count is missing legal computes it from the sealed list. **Actions, in order: (1) by 2026-10-28 the data team lead records how many sampled subscribers were EU/UK or unknown-region (aggregate count only) and gives it to legal/privacy, who review the evaluation as part of their scope and decide whether any further remediation or notification is needed; the data team also records the backup retention window, expiry dates, and purge procedure for every location (primary, scratch, backups) holding the sample list or outputs; (2) no further prediction jobs run; (3) by 2026-10-30 the 2,000-subscriber prediction outputs (the per-subscriber predicted hours, i.e. the profiling itself) are deleted from primary and scratch locations by the data team lead, with a second person (privacy engineer) verifying and logging the deletion. Copies in backups that cannot be purged on demand are access-restricted, and the deletion is recorded as complete for them on the recorded backup expiry date, which the verifier logs as an open item with that date until then. **Retention is not open-ended: any backup location whose recorded expiry is later than 2026-12-04 (35 days after the outputs deletion) is purged on demand by the data team lead under an exception approved by the privacy engineer, completed by 2026-11-13 and verified and logged by a second person; the same bound applies to backups of the sealed sample list, measured from its deletion date.** (4) The sample list itself (subscriber IDs and region only, no predictions) is not deleted by 10-30: it is sealed, with access limited to the privacy engineer and legal, because legal needs it to assess whether any EU/UK or unknown-region subscribers were included and whether notification is required, and deleting it first would be irreversible. Legal/privacy decides disposition as part of the review due by 2026-11-13, and the sealed list is deleted, with the same second-person verification, within 7 days of that decision, or on 2026-11-20 if no decision has been recorded (default is deletion, not indefinite retention). Only the aggregate 71% figure and the aggregate region count are kept beyond that.** If step 1 is not done by 10-29, outputs deletion still proceeds on 10-30 and the region count is reported as unavailable to legal, who can instead compute it from the sealed list. Any future evaluation applies the region exclusions below and runs only if legal approves it. |\n| Unsubscribe link and List-Unsubscribe-Post header present | — | Pass |\n\n**Required before any production traffic, including the canary (go/no-go 2026-11-06):**\n- Re-run the end-to-end with the limiter on and real staging SES (limit 14 msg/s, using a smaller issue sized to the limit) and with throttling injected in the mock at 5%, 20%, and 50% rates. Pass criteria: zero silently dropped recipients, all transient results retried, per-recipient attempt counts survive re-batching and exhaust at `MaxRecipientAttempts`, permanent failures and exhausted recipients reach the terminal `failed` state and are never re-sent by reconciliation, final delivered + permanent-failed = recipients.\n- Test whole-batch timeouts where SES actually accepted the send: verify no duplicate delivery through the ledger and SES-event reconciliation (not through SES idempotency), verify a requeued subset never reuses the original batch's key, verify unknown-outcome recipients are re-sent within one sweep interval after the settle window (including batches containing only held rows), and verify poison batches reach the DLQ and are resolved through the DLQ recovery path (including the automated-resolution rate and that pages are deduplicated per issue). Record the measured duplicate rate; it must be within the duplicate limit in the Rollout plan, and the runtime duplicate guard (re-sends stop at 50% of the limit) must be shown to trigger.\n- Test limiter-error, limiter-store-outage, ledger-outage, and shutdown paths: batches are released or retried, never dropped; a limiter-store or ledger outage produces no DLQ entries, consumes no attempts, and raises one alert.\n- Test ledger failures: `ClaimAndReconcile` error and `MarkSent` error after SES accepted the send; the batch is not acked, retry recipients are not enqueued twice, and the recipient is resolved by reconciliation with no duplicate and no silent drop. Test concurrent claim: two workers racing on the same recipients never both send one.\n- Test account-level results, both per entry and as a whole-request error: no recipient is recorded as failed, no batch attempt is consumed and nothing is dead-lettered, the queue pauses, on-call is paged once, escalation fires at `ACCOUNT_PAUSE_ESCALATE_MIN`, sends resume on recovery, and pending recipients expire as `delivery_expired` at the deadline.\n- Measure Send-event delay and ingestion lag on real SES through the production event pipeline (SNS → Firehose → `ses_send_events`), set `SEND_EVENT_SETTLE_SEC` and `SEND_EVENT_MAX_INGEST_LAG_SEC` from it (then set `SEND_EVENT_SETTLE_VERIFIED=true`), verify that reconciliation holds rows when the ingester is stalled, and verify, with workers on at least two hosts, that the cross-host limiter holds the aggregate at or below a scaled-down configured rate (staging SES cannot show 240 msg/s; the ceiling is ramped in production, see Capacity).\n- Build and alarm-test in staging, with injected faults, the Send-event ingest-lag alarm and the SES throttle-rate metric and alarms (see Monitoring); both must exist and fire correctly before the canary.\n- Verify against real SES that `BulkEmailEntryResults` order matches the request entries (including partial-failure batches). Only a pass allows `SES_RESULT_ORDER_VERIFIED=true`; a failure means the worker keeps treating every batch as unknown-outcome, which is a no-go (the canary does not run on the reconciliation-only path). Also verify that a length mismatch takes the unknown-outcome path.\n- Rehearse the ledger migration and backfill on a staging copy, with row counts reconciled (see Ledger migration).\n- Rollback drill (see Rollout plan), including Sidekiq-with-ledger behaviour, against the pass criteria stated there.\n- Measured real-SES throughput numbers replace the mock numbers in this report.\n\n## Customer base context (from the Q3 customer review)\n\n- 11,240 active publications; 4,480 of them (40%) are news or local-news outlets whose issues are time-sensitive (breaking news, election results, weather alerts). Smart Send is unavailable to them.\n- Top customer request in Q3: scheduled sends with time zone support (shipped in 2026.08). Smart Send Time was not a Q3 request; it is a hypothesis, not a committed demand. We treat it as an experiment: it is opt-in and off by default, so publishers who do not want it are unaffected, the opt-in rate among eligible publications is tracked as a demand signal, and the ramp does not go past 25% and the feature is not broadly announced unless the lift gate and the opt-in signal support it. The 71% accuracy figure is not evidence of value and is not used as a gate; only the randomized lift against control is.\n\n## Time-sensitive guardrails (Smart Send)\n\n- **Server-enforced block:** publications categorized as news or local news cannot enable Smart Send. The Settings toggle is disabled for them and the API rejects the change, so this does not rely on the default. The block ships with the feature flag code and is verified before any Smart Send traffic, so it is in force before the first cohort, not after.\n- **Category accuracy:** categories are self-declared at signup, so the block does not rely on self-declaration alone. Before the 5% cohort, a classifier/heuristic pass (domain, publication name and description, content keywords, posting cadence) flags likely unlabelled news outlets, and flagged publications are blocked from Smart Send pending support review. The same check re-runs weekly. Publications can request a category review; support responds to review requests within 2 business days. Recategorization out of news is manual, by support. A publication that later recategorizes into news, or is flagged by the detector, has Smart Send turned off automatically. The detector's miss rate is measured on a labelled sample before the 5% cohort, and the result is given to legal/privacy; a miss rate they judge too high blocks the cohort. Because Smart Send is opt-in and off until the cohort starts, no outlet, labelled or not, is exposed before the detector has run, and a missed outlet is afterwards only exposed if it chose to enable it.\n- **Publisher acknowledgement:** enabling Smart Send requires the publisher to accept an explicit notice that deliveries may be delayed up to the maximum hold and that time-critical issues must use \"Send now\". Legal/privacy's scope includes checking that this delay is consistent with the platform's terms of service and commitments to publishers, and the cohort does not start until they confirm.\n- **Per-issue override:** every issue has \"Send now\" that bypasses Smart Send for that issue. Issue-creation UI states plainly that Smart Send delays delivery up to the maximum hold. Publishers can set a lower maximum hold than 18 hours.\n- Non-news publishers sending time-critical content (e.g. weather or election-related alerts) are told in the Settings copy to use \"Send now\".\n\n## Smart Send privacy\n\n- **Data used:** per-subscriber open events already collected for issue reports; no new tracking is added.\n- **Disclosure:** privacy policy and each publication's subscriber-facing footer/preferences page will state that open timing is used to choose send time. **The disclosure is live in production, verified on the privacy policy, the footer template, and the preferences page, before the 5% cohort starts and before any subscriber is profiled (it is on the pre-cohort checklist in the Rollout plan).**\n- **Legal gate:** legal/privacy review is **a prerequisite for any Smart Send traffic, including the 5% cohort in week 1.** Its scope includes EU/UK consent for profiling and US state privacy laws that treat profiling as regulated processing or require opt-out rights and notices (e.g. California, Colorado), the earlier 2,000-subscriber accuracy evaluation (including disposition of the sealed sample list), publisher ToS/commitments (see guardrails), and the region data source below. No Smart Send ramp step starts before sign-off, and the sign-off is not assumed to be coming: if it is delayed or withheld, Smart Send stays off and nothing else in this proposal changes. **Enforced in code, not by schedule:** the Smart Send feature flag cannot be turned on, and the prediction job cannot run, unless a `legal_signoff` flag is set by legal/privacy. The scheduler refuses to hold any issue while it is unset.\n- **Retention:** open-hour predictions are recomputed from the rolling 90-day window and expire with it. They are deleted on subscriber unsubscribe, on a deletion request, **and on the subscriber's timing-personalization opt-out**. Raw open events follow the existing retention policy.\n- **Subscriber opt-out:** subscribers can turn off timing personalization from the preferences page. The preferences page is also where the unsubscribe link lands, and shows both options together: \"Unsubscribe\" and \"Don't personalize send time\". Opting out of timing is distinct from unsubscribing and does not change subscription status. Opted-out subscribers receive the issue at the normal send time, are excluded from prediction, and their stored prediction is deleted. One-click unsubscribe (List-Unsubscribe-Post) is unaffected. QA adds a check that the opt-out takes effect on the next issue and deletes the prediction; **this check must pass before the 5% cohort starts**, so the control is verified before any subscriber is profiled.\n- **Regions:** subscribers in EU/UK, and any other jurisdiction the review identifies as requiring consent for profiling, are excluded until the review confirms the legal basis. Subscribers with unknown region are excluded. **Enforced as default-deny in the prediction job and the scheduler:** a subscriber is eligible only if they have a recorded region that is not in the exclusion list, otherwise they are sent at the normal time and no prediction is computed. This means production prediction never runs on unknown-region or EU/UK subscribers; the only known gap is the past offline evaluation, handled in the QA report summary. **Region source:** the region data source (how each subscriber's region is determined, e.g. signup country or IP-derived) is documented, and its coverage and accuracy are measured on a sample before the 5% cohort. It is part of legal/privacy's review. If the measured accuracy is too low for the exclusion to be reliable, the cohort does not start.\n\n## Rollout plan\n\n- **Send pipeline v2: canary first, gated on go/no-go.** The go/no-go on 2026-11-06 requires the QA re-run above (including `SES_RESULT_ORDER_VERIFIED=true` and `SEND_EVENT_SETTLE_VERIFIED=true`), the ledger migration rehearsal, the rollback drill, the ingest-lag and throttle-rate alarms built and tested, and the capacity model to be complete. No go/no-go item is satisfied by a mock or projected number; each needs a measurement on real SES or a completed test. If any is incomplete, no traffic goes to v2 (the canary slips). If go: Mon 2026-11-09 09:00 UTC route 5% of publications (internal and volunteer, non-news) to v2 with `SES_RATE_PER_SEC=60`; 25% on day 3 with 120; 100% on day 6 with 240, each step gated on: measured aggregate send rate at or below the configured limiter rate at the previous step (the limiter is raised only after this holds), zero silently dropped recipients (delivered + failed = recipients, from the reconciliation job), `send.batch_dead_lettered` = 0 unexplained, **duplicate limit: confirmed duplicates (`send.possible_duplicate` rows later shown by Send events to have been delivered twice) ≤ 0.01% of recipients across the step and ≤ 0.1% on any single issue, with every occurrence reviewed (the limit is provisional and is confirmed or tightened by the go/no-go against the duplicate rate measured in the QA timeout test; exceeding it halts progression and routes back to the previous step; the runtime guard in the Reconciliation rules stops further unknown-outcome re-sends at 50% of the limit, so the limit is capped during the step and not only checked afterwards)**, SES bounce rate < 2%, complaint rate < 0.05%, queue lag < 5 min. Keep the Sidekiq sender deployed but idle for 14 days after 100%.\n- **Smart Send Time: off for everyone at launch.** Before the 5% cohort starts, these must be complete: legal/privacy sign-off (and the `legal_signoff` flag), the **subscriber-facing disclosure live and verified (privacy policy, footer, preferences page)**, the baseline analysis, the opt-out check, the region-source check, the news-detector miss-rate measurement, and the Smart Send rollback drill result (see Rollback (Smart Send)). The baseline analysis computes the 71%-style accuracy for a fixed send hour and a random hour on the same sample, plus a power analysis that sets the minimum detectable lift and cohort size. The 3% lift threshold is provisional, chosen as the smallest effect we judge worth the delivery delay, and is confirmed or changed by the power analysis before the ramp. Ramp by publication cohort among eligible (non-news) publications who have opted in. The ramp steps are the share of eligible opted-in publications admitted to the experiment, and within each admitted cohort half remain in the holdout: 5% admitted (week 1), 25% admitted (week 2), 100% admitted (week 3). **The weeks are earliest dates, not commitments: each step starts only when the previous step's gate is met, with the measurement window of at least 3 issues per publication complete.** In every step, 50% of the admitted publications are the holdout, so at the 100% step only half of eligible publications actually receive Smart Send until the experiment concludes. Holdout publications get Smart Send after the experiment concludes and the gate has passed. Steps are gated on open-rate lift ≥ the confirmed threshold vs control and \"issue arrived late\" support tickets < 20/week. The ramp holds at 25% unless the gate is met with the confidence interval below, and **moving from 25% to 100% is a separate explicit product go decision that also requires the opt-in signal to support it (demand is a hypothesis, not a given).** **Control definition:** within each cohort, publications are randomly assigned 50/50 to Smart Send vs normal send time (holdout), measured on per-issue unique open rate over at least 3 issues per publication with the same send-day mix; lift is computed on the difference in means with a 95% confidence interval and the gate requires the interval's lower bound > 0 and point estimate ≥ the threshold. Publications always keep a settings toggle. Each ramp step also requires the hourly capacity check in Capacity.\n- **Launch post is held.** Numeric publish gate: pipeline at 100% for 7 consecutive days with no gate violations (including the duplicate limit above), and a production-measured median time-to-inbox for 50k-recipient issues (Smart Send off) computed over that window. The post states that measured median, rounded conservatively, and the speedup is computed against the measured 14 min baseline. No figure from the mock, the quota projection, or the pending quota increase appears in it. Smart Send is not mentioned in the broad announcement unless its own gate has passed (which requires legal sign-off); if it has not, it is announced separately and only to eligible non-news publishers.\n- **Rollback (pipeline):** set `SENDER=sidekiq` in the dispatcher. v2 workers stop pulling new batches. In-flight batches complete in < 2 min. Batches in retry backoff finish or dead-letter within the backoff cap (5 attempts × 60 s cap, ≤ ~5 min). Retried batches are safe only because the legacy Sidekiq sender is changed, as part of the ledger redesign merged 2026-10-30, to use the same ledger claim and reconciliation as v2: it claims recipients atomically (`pending` → `sending`), skips `sent` and `failed` rows, **holds `sending` rows left by a v2 unknown outcome until the settle window has elapsed and then resolves them against Send events exactly as v2 does (it never sends a `sending` row immediately)**, and marks recipients `sent` after sending. That change is a go/no-go item, covered by the rollback drill, which includes a mixed v2→Sidekiq switch mid-issue with `sending` rows left by injected unknown outcomes. **Drill pass criteria (all required):** zero duplicate deliveries and zero silently dropped recipients (delivered + failed = recipients) across the switch, including no immediate re-send by Sidekiq of v2 `sending` rows inside the settle window; the issue completes through Sidekiq with the ledger reconciled; measured drain times for in-flight and retrying batches recorded and no greater than the figures above (otherwise the figures are replaced with the measured ones and reviewed at go/no-go); and a second switch back to v2 also shows zero duplicates. The drill runs on staging real SES with retrying batches in the queue, and the rollback is re-exercised at the 5% canary step (switch one canary issue's remaining recipients to Sidekiq with the ledger, outside of customer-visible time-critical sends) before 25%. The merge (10-30) and the drill (during the QA re-run, complete by 11-04) both land before the go/no-go on 11-06, so the rollback is proven before any traffic moves, not after. If the Sidekiq ledger change is not merged and drilled to these criteria, there is no go. Smart Send holds are handled by the scheduler, not the worker, and are unaffected by this rollback.\n- **Rollback (Smart Send):** set `SMART_SEND_DEFAULT=off` and pause the feature flag. The scheduler owns held sends: it releases held issues into the same send ledger and queue the workers use, and the ledger (not the scheduler) is what prevents duplicates. Held issues are released in chunks rate-limited by the scheduler (at most 50% of the limiter ceiling, 120 msg/s, so regular sends keep headroom), through the shared limiter (240 msg/s), so a large backlog may take several minutes to hours and is also counted against the 25M daily cap and the 60% volume alarm. Subscribers who were being held receive the issue earlier than their predicted hour, once. **The no-duplicate property is a precondition of the 5% cohort, not an after-the-fact claim:** the QA rollback drill, run before the cohort starts, pauses Smart Send with held issues in flight, including a retry in progress, and must show zero duplicates via the ledger and a measured release time for a backlog sized to the 5% cohort's expected held volume, with release volume staying within the 120 msg/s scheduler cap. No measured result exists yet because Smart Send has not run; the cohort does not start without it, and the drill is repeated before each ramp step with the larger expected backlog. Publishers get an in-app and email notice that Smart Send is paused. Their Settings toggle shows \"paused\" and their saved preference is kept. Stored predictions are retained, so re-enabling does not start cold. They expire on the 90-day window and are still deleted on any unsubscribe, deletion request, or opt-out. If the rollback is due to a privacy finding, predictions are deleted instead.\n\n## Monitoring\n\n- Dashboards: send throughput and measured aggregate rate vs configured limiter rate, `send.batch_error`, `send.batch_dead_lettered`, `send.limiter_error`, `send.limiter_store_unavailable`, `send.ledger_unavailable`, `send.result_count_mismatch`, `send.ledger_error`, `send.ledger_write_error`, `send.ses_account_level`, `send.possible_duplicate` and confirmed-duplicate rate, **SES throttle rate (`send.ses_throttled_or_transient` ÷ recipients attempted, 5-min window)**, `send_failures` count and \"Not delivered\" rate per issue, `delivery_expired` count, transient-retry count, ledger reconciliation mismatches, `needs_review` count and automated-resolution rate, Send-event ingestion lag, ledger write rate and table growth, SES bounce/complaint rate, queue lag, hourly send volume vs the ~864k/hour limiter ceiling, daily volume vs the 25M cap and the 20.7M limiter ceiling.\n- Alarms (warn, below SES enforcement levels and below every pager threshold): bounce rate 2%, complaint rate 0.05%, \"Not delivered\" rate > 1% of any issue, SES throttle rate > 5% for 5 min, daily volume 60% of cap, Send-event ingestion lag above `SEND_EVENT_MAX_INGEST_LAG_SEC`.\n- On-call pager (deduplicated per issue/incident, not per batch): queue lag > 10 min, bounce rate > 3%, complaint rate > 0.08%, \"Not delivered\" rate > 3% on any issue, DLQ activity on an issue (one page per issue, updated with counts), any `needs_review` recipient the automated reconciliation could not resolve, any `send.ses_account_level` event (escalating at `ACCOUNT_PAUSE_ESCALATE_MIN`), limiter store or ledger unavailable > 5 min (one page), Send-event ingestion stalled > 15 min, any ledger reconciliation mismatch, confirmed-duplicate rate above the Rollout plan limit, SES throttle rate > 10% sustained for 5 min (uses the throttle-rate metric above, which is built and alarm-tested in staging with injected throttling before the canary).\n\n## Launch post (blog + newsletter to all publishers) — HELD, draft only\n\nPublishes only after the numeric gate in the Rollout plan and with measured numbers; wording will be revised to match. Smart Send is excluded from this post unless its gate has passed, and then it is announced only to eligible non-news publishers:\n\n> **Faster sends.** Issues now reach inboxes about [measured]× faster at the median.\n\nDraft Smart Send paragraph (separate, only after its gate, eligible non-news publishers only; it describes what the feature does and makes no claim about results unless the measured lift from the gate is stated with its measured value):\n\n> **Smart Send Time**, optional and rolling out gradually, delivers each issue around the hour each reader has tended to open email, based on their recent opens. Not available for news publications. Publishers choose whether to turn it on in Settings → Delivery, can send any issue immediately with \"Send now\", and readers can opt out of timing personalization.",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 91555,
+  "tokOut": 103566,
+  "usd": 1.401852,
+  "critMs": 590984
+ },
+ "status": "cap"
+}

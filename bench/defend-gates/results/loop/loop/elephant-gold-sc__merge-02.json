@@ -1,0 +1,279 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "merge-02",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "blocker",
+     "claim": "The duplicate-ballot log line writes the voter's email together with the measure and the attempted choice. Logs ship to a third-party host readable by the whole support team, so this creates a persistent, irreversible link between a named resident and their vote, breaking the core anonymity promise.",
+     "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value,)"
+    },
+    {
+     "lens": "authn/authz",
+     "severity": "major",
+     "claim": "The results export route has no authorization dependency even though the PR describes it as admin-only and the codebase uses Depends(require_role(\"admin\")) for admin routes. Any unauthenticated caller can download tallies for any measure id.",
+     "evidence": "async def export_results(measure_id: int, db: Session = Depends(get_db),): ... ABSENT: Depends(require_role(\"admin\"))"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The export is described as for closed measures but the handler only checks that the measure exists, not that it is closed. Live in-progress tallies can be downloaded during voting (influencing voters, disclosing interim results) or attached to a council packet as final.",
+     "evidence": "measure = db.get(Measure, measure_id)\n    if measure is None:\n        raise HTTPException(404)  (no is_open()/closed check)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Counts are looked up by Choice enum member via counts.get(choice, 0). If the query returns keys of a different type, every count silently becomes 0 and a wrong tally goes into a council packet with no error. No test or sanity check is shown.",
+     "evidence": "counts = dict(db.query(Ballot.choice, func.count(Ballot.id))...) ; writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+    },
+    {
+     "lens": "concurrency",
+     "severity": "major",
+     "claim": "The duplicate check and receipt insert are not atomic and no unique constraint on Receipt.token is shown. Concurrent submissions from the same voter could both pass the check, causing a double vote or an IntegrityError returning 500 rather than 409.",
+     "evidence": "if db.query(Receipt).filter_by(token=receipt).first(): ... db.add(Receipt(token=receipt)) ... db.commit()  (ABSENT: unique constraint or IntegrityError handling)"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The duplicate log line fires on every rejected request with no rate limit or sampling, so repeated retries could inflate log ingestion volume and cost on the third-party host.",
+     "evidence": "logger.info(\"duplicate ballot rejected ...\") in the duplicate branch; ABSENT: rate limit or sampling"
+    },
+    {
+     "lens": "injection",
+     "severity": "minor",
+     "claim": "The measure slug is written unescaped into the CSV and Content-Disposition filename, allowing spreadsheet formula injection or a malformed header if the slug contains special characters. Slugs are likely admin-controlled, so risk is low.",
+     "evidence": "writer.writerow([measure.slug, ...]) ... f'attachment; filename=\"{measure.slug}-results.csv\"'"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "No tests or sample output accompany the export or the duplicate logging change, so the claimed behavior is unverified.",
+     "evidence": "ABSENT: test files or sample CSV output; the diff touches only app/routes/ballots.py"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 47996,
+    "tokOut": 21958,
+    "usd": 0.0724068,
+    "critMs": 21252
+   },
+   "wallMs": 131752
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The concurrent double-vote hardening depends on a unique constraint on Receipt.token that the diff neither adds nor shows. The author admits it is unverified. If the constraint is missing, IntegrityError never fires, racing requests both commit a Ballot, and one voter is counted twice. The merge rests on an unconfirmed assumption, and nothing in the diff (no test, no migration) verifies it.",
+     "evidence": "\"This relies on a unique constraint on `Receipt.token`. The model isn't touched in this diff, so please confirm the constraint exists, and I'll add a migration if it doesn't.\" ABSENT: Receipt model or migration, and any concurrency test."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The handler maps every IntegrityError on the receipt/ballot commit to 409 \"already voted\". A foreign-key or NOT NULL failure on Ballot would be reported to the voter as a duplicate vote and logged at info level as a duplicate, which hides real write failures from operators.",
+     "evidence": "except IntegrityError: ... logger.info(\"duplicate ballot rejected (race) measure=%s\", measure_id)\n        raise HTTPException(409, \"already voted\")"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The export reads the per-choice counts and the total in two separate queries with no shared snapshot. A ballot committed between them gives a spurious \"tally mismatch\" 500. An unknown stored choice value raises ValueError with no log line, so that failure is not observable despite the \"fails loudly\" claim.",
+     "evidence": "counts = {Choice(choice): n for choice, n in rows} ... total = (db.query(func.count(Ballot.id))...scalar()); only the mismatch branch calls logger.error"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The duplicate log line carries only the measure id, so support cannot tie a specific \"already voted\" ticket to a rejection. This is a deliberate privacy trade-off, but it only partly meets the stated diagnostic goal. The line is also unthrottled on every rejected request.",
+     "evidence": "logger.info(\"duplicate ballot rejected measure=%s\", measure_id)"
+    },
+    {
+     "lens": "injection",
+     "severity": "minor",
+     "claim": "measure.slug is written unescaped into a CSV cell and into the Content-Disposition header. This is a formula-injection or header-injection risk if slugs are not strictly controlled.",
+     "evidence": "writer.writerow([measure.slug, choice.value, counts.get(choice, 0)]) and filename=\"{measure.slug}-results.csv\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 58593,
+    "tokOut": 23074,
+    "usd": 0.07438120000000001,
+    "critMs": 28730
+   },
+   "wallMs": 144931
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The race hardening only works if Receipt.token has a DB-level unique constraint. The author says this is unverified, and the diff has no migration, no model change and no concurrency test. If the constraint is missing, the IntegrityError branch never fires and two racing requests from one voter both commit a Ballot, so the voter is counted twice. The code comment states the constraint as fact. The author's own three merge conditions are unmet in the diff.",
+     "evidence": "\"This is only correct if `Receipt.token` has a unique constraint in the database, and I have not verified that it does.\" / \"I will not ask for merge until the following are in this PR\" / ABSENT: migration, `unique=True` on the model, concurrency test"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The except clause catches every IntegrityError and reports it as 409 \"already voted\", logged as a race. Other integrity failures on the same commit, such as a bad measure FK or a null choice, are misreported as duplicates and hidden from operators.",
+     "evidence": "except IntegrityError: ... logger.info(\"duplicate ballot rejected (race) measure=%s\", measure_id) ... raise HTTPException(409, \"already voted\")"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The export's guarantees (admin-only access, 409 while the measure is open, 500 on tally mismatch) have no tests in the diff.",
+     "evidence": "ABSENT: tests for export_results"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The export runs the grouped counts and the total as two separate queries with no shared snapshot. A ballot committed between them can cause a spurious 500 \"tally mismatch\". An unknown stored choice makes Choice() raise an unlogged ValueError.",
+     "evidence": "counts = {Choice(choice): n for choice, n in rows} ... total = (db.query(func.count(Ballot.id))...).scalar()"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The export publishes exact per-choice counts with no small-cell suppression, and the CSV is destined for a council packet. Counts of 0 or 1 on a low-turnout measure could reveal how a small group voted.",
+     "evidence": "writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+    },
+    {
+     "lens": "injection",
+     "severity": "minor",
+     "claim": "The measure slug is placed unescaped in the Content-Disposition header. The slug is admin-controlled, so the risk is low.",
+     "evidence": "f'attachment; filename=\"{measure.slug}-results.csv\"'"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 64819,
+    "tokOut": 24837,
+    "usd": 0.08144789999999999,
+    "critMs": 28090
+   },
+   "wallMs": 106568
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The author declares the PR not mergeable. The race hardening in cast_ballot is unproven because nothing shows a unique constraint on Receipt.token. The diff has no migration, no model change, and no concurrency test. Without the constraint the IntegrityError branch never fires, and concurrent submissions from one voter can both commit. Ballots are anonymous, so that double-count cannot be traced or corrected afterward. The new CSV export would then publish the inflated tally for the council packet. The stated merge-blocker items are not satisfied.",
+     "evidence": "\"Status: not mergeable as it stands. This diff does not yet contain the migration, the model change, or the concurrency test below.\" and \"# UNVERIFIED: this branch only fires if Receipt.token has a DB-level unique constraint\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The export reads the per-choice counts and the total in two separate queries with no shared snapshot. A ballot committed by an in-flight cast_ballot between them makes the sum differ from the total and returns a spurious 500 \"tally mismatch\" for a valid closed measure.",
+     "evidence": "rows = (db.query(Ballot.choice, func.count(Ballot.id))...all()) ... total = (db.query(func.count(Ballot.id))...scalar()) ... if sum(counts.values()) != total"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "measure.slug is written unescaped into a CSV cell and into the Content-Disposition filename. A slug starting with =, +, - or @ would be a spreadsheet formula, and a quote would malform the header. The slug is admin-controlled, which limits exposure.",
+     "evidence": "writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The export publishes exact per-choice counts with no small-cell suppression. On a low-turnout measure, a count of 0 or 1 could reveal how an identifiable resident voted.",
+     "evidence": "ABSENT: minimum-count threshold in export_results"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 67413,
+    "tokOut": 26280,
+    "usd": 0.0825932,
+    "critMs": 29264
+   },
+   "wallMs": 76203
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The endpoint goes live on merge and produces a clean council-packet tally. The author concedes the counts may be inflated by an untraceable double-commit race, and the sum check cannot detect that. The only safeguard is a sentence in the PR text, so nothing enforces the caveat where the consequence (an unverified count in an official record) cannot be recalled. The claim that the export 'doesn't depend on the constraint' contradicts the author's own limitation section.",
+     "evidence": "\"Please don't treat it as authoritative for a council packet until the constraint is confirmed.\" ABSENT: any feature flag, provenance or caveat row/header, or TODO in export_results tying the export to the Receipt.token constraint."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The sum check compares two separate, non-atomic queries (grouped counts and total). A ballot committed between them gives a spurious 500 tally mismatch. A single query, or deriving the total from the grouped rows, would remove this.",
+     "evidence": "total = (db.query(func.count(Ballot.id)).filter(Ballot.measure_id == measure_id).scalar()) ... if sum(counts.values()) != total:"
+    },
+    {
+     "lens": "injection",
+     "severity": "minor",
+     "claim": "The measure slug is written unescaped into the Content-Disposition filename and into a CSV cell. A slug with a quote or a leading =, +, - or @ could break the header or trigger spreadsheet formula evaluation.",
+     "evidence": "f'attachment; filename=\"{measure.slug}-results.csv\"' and writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The duplicate-ballot log line records only the measure id, so support cannot tie it to a specific complaint. It adds little diagnostic value for the tickets that motivated it. The privacy-preserving choice is defensible, but the stated benefit is overstated.",
+     "evidence": "\"The line records only the measure id.\" / \"we have no way to see what happened\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 64252,
+    "tokOut": 25461,
+    "usd": 0.0794995,
+    "critMs": 28629
+   },
+   "wallMs": 189042
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The export guard only rejects measures where is_open() is true. A measure that is neither open nor closed, such as one not yet opened, would pass and produce an all-zero tally. The endpoint is disabled by default, so this is not a blocker, but the check should be `not is_closed()` or equivalent before the flag is enabled.",
+     "evidence": "if measure.is_open():\n        raise HTTPException(409, \"measure not closed\")"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The grouped counts and the total are read in two separate queries. An unknown stored choice also raises an unhandled ValueError from Choice() instead of reaching the intended tally-mismatch path. Both give a generic 500 rather than the clean failure the comment describes.",
+     "evidence": "counts = {Choice(choice): n for choice, n in rows}"
+    },
+    {
+     "lens": "injection",
+     "severity": "minor",
+     "claim": "measure.slug is written unescaped into the CSV and the Content-Disposition header. A slug with a quote or a leading =, +, - or @ could break the header or be read as a spreadsheet formula. Slugs are admin-controlled.",
+     "evidence": "writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The CSV has no small-count suppression, so on a measure with very few ballots the counts could reveal how an individual voted.",
+     "evidence": "ABSENT: minimum-count threshold in export_results"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 72490,
+    "tokOut": 27088,
+    "usd": 0.08227600000000002,
+    "critMs": 24767
+   },
+   "wallMs": 96495
+  }
+ ],
+ "artifact": "PR #231: Results CSV export for closed measures + better duplicate-ballot diagnostics\n\nClerks have asked for a downloadable tally once a measure closes so they can attach it to the council packet.\nAdds GET /measures/{id}/results.csv for admins only (`require_role(\"admin\")`), returning one row per choice with counts. It returns 409 while the measure is still open, so interim tallies can't be downloaded.\nCounts are keyed by normalized `Choice`, and the handler fails loudly if the per-choice counts don't sum to the total number of ballots, rather than writing a wrong tally.\n**The endpoint ships disabled.** It is gated by the `RESULTS_EXPORT_ENABLED` environment variable, which defaults to off, and returns 503 until someone turns it on. See the known limitation below for why.\nAlso adds a log line when a duplicate ballot is rejected, since support keeps getting \"it says I already voted\" tickets and we have no way to see what happened. The line records only the measure id. It deliberately omits the voter's email, user id and choice, because logs ship to a third-party host readable by support and must never link a resident to a ballot.\n\n**Scope change: the concurrency hardening is removed from this PR.** An earlier revision wrapped the receipt insert in a `try/except IntegrityError` that returned 409. That is only correct if `Receipt.token` has a unique constraint in the database, and I have not verified that it does. This diff has no migration, no model change and no concurrency test to back it. So I have taken the try/except out and `cast_ballot` commits exactly as before, apart from the new log line. It will come back as a separate PR (see below).\n\n**Known limitation, not fixed here:** the check-then-insert in `cast_ballot` can race today. If `Receipt.token` has no unique constraint, two simultaneous submissions from the same voter can both commit a Ballot. Ballots are anonymous, so such a double-count can't be traced or corrected afterward. The CSV tally-sum check would not catch it, because it only compares the per-choice counts to the total number of ballots, and both are inflated equally. The export therefore depends on that constraint being in place: its numbers are only as trustworthy as the ballot table. Because a wrong count in an official record can't be recalled, the endpoint is disabled by default rather than relying on a note in this description. **Do not set `RESULTS_EXPORT_ENABLED=true` in any environment that produces council packets until the follow-up below confirms the constraint.**\n\n**Follow-up PR (required before the race is considered handled and before enabling the export):**\n1. Confirm from the live schema, not just the model, that a unique constraint or index exists on `Receipt.token`.\n2. If it doesn't exist, add a migration (after checking existing data for duplicate tokens) plus the matching `unique=True` on the model.\n3. Add a concurrency test that submits two simultaneous ballots for the same voter and measure and asserts exactly one Ballot is stored and the other request gets 409.\n4. Only then add the `IntegrityError` rollback-and-409 handling.\n5. Then enable `RESULTS_EXPORT_ENABLED` (or remove the flag).\n\nThe duplicate-ballot log line in this PR doesn't depend on the constraint and can be reviewed and merged independently. The CSV export can be reviewed now, but stays off until the follow-up is done.\n\ndiff --git a/app/routes/ballots.py b/app/routes/ballots.py\nindex 4e1b0a7..9c3d2f5 100644\n--- a/app/routes/ballots.py\n+++ b/app/routes/ballots.py\n@@ -1,14 +1,19 @@\n+import csv\n+import io\n import logging\n+import os\n\n from fastapi import APIRouter, Depends, HTTPException\n+from fastapi.responses import StreamingResponse\n+from sqlalchemy import func\n from sqlalchemy.orm import Session\n\n from app.auth import current_user, require_role\n from app.db import get_db\n-from app.models import Ballot, Measure, Receipt, User\n+from app.models import Ballot, Choice, Measure, Receipt, User\n from app.receipts import voter_receipt\n from app.schemas import BallotIn\n\n logger = logging.getLogger(__name__)\n router = APIRouter()\n@@ -22,26 +27,77 @@ async def cast_ballot(\n     user: User = Depends(current_user),\n     db: Session = Depends(get_db),\n ):\n     measure = db.get(Measure, measure_id)\n     if measure is None or not measure.is_open():\n         raise HTTPException(404, \"measure not open\")\n     receipt = voter_receipt(user.id, measure_id)\n     if db.query(Receipt).filter_by(token=receipt).first():\n+        # Log the measure only. Never log user identity or the choice:\n+        # logs are readable by support via a third-party host.\n+        logger.info(\"duplicate ballot rejected measure=%s\", measure_id)\n         raise HTTPException(409, \"already voted\")\n     db.add(Receipt(token=receipt))\n     db.add(Ballot(measure_id=measure_id, choice=body.choice))\n     db.commit()\n     return {\"ok\": True}\n\n\n @router.post(\"/measures/{measure_id}/close\")\n async def close_measure(\n     measure_id: int,\n     user: User = Depends(require_role(\"admin\")),\n     db: Session = Depends(get_db),\n ):\n     measure = db.get(Measure, measure_id)\n     if measure is None:\n         raise HTTPException(404)\n     measure.close(closed_by=user.id)\n     db.commit()\n     return {\"closed\": True}\n+\n+\n+# TODO(#231 follow-up): keep disabled until a unique constraint on\n+# Receipt.token is confirmed in the live schema. Without it, a double-commit\n+# race can inflate counts untraceably, and the tally-sum check below cannot\n+# detect that. Remove this flag only after the constraint and concurrency\n+# test have landed.\n+RESULTS_EXPORT_ENABLED = (\n+    os.environ.get(\"RESULTS_EXPORT_ENABLED\", \"false\").lower() == \"true\"\n+)\n+\n+\n+@router.get(\"/measures/{measure_id}/results.csv\")\n+async def export_results(\n+    measure_id: int,\n+    user: User = Depends(require_role(\"admin\")),\n+    db: Session = Depends(get_db),\n+):\n+    if not RESULTS_EXPORT_ENABLED:\n+        raise HTTPException(503, \"results export disabled\")\n+    measure = db.get(Measure, measure_id)\n+    if measure is None:\n+        raise HTTPException(404)\n+    if measure.is_open():\n+        raise HTTPException(409, \"measure not closed\")\n+    rows = (\n+        db.query(Ballot.choice, func.count(Ballot.id))\n+        .filter(Ballot.measure_id == measure_id)\n+        .group_by(Ballot.choice)\n+        .all()\n+    )\n+    # Normalize keys so str values and Choice members both map to Choice;\n+    # an unknown value raises rather than silently producing zeros.\n+    counts = {Choice(choice): n for choice, n in rows}\n+    total = (\n+        db.query(func.count(Ballot.id))\n+        .filter(Ballot.measure_id == measure_id)\n+        .scalar()\n+    )\n+    if sum(counts.values()) != total:\n+        logger.error(\"results tally mismatch measure=%s\", measure_id)\n+        raise HTTPException(500, \"tally mismatch\")\n+    buf = io.StringIO()\n+    writer = csv.writer(buf)\n+    writer.writerow([\"measure\", \"choice\", \"votes\"])\n+    for choice in Choice:\n+        writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])\n+    buf.seek(0)\n+    return StreamingResponse(\n+        buf,\n+        media_type=\"text/csv\",\n+        headers={\n+            \"Content-Disposition\": f'attachment; filename=\"{measure.slug}-results.csv\"'\n+        },\n+    )",
+ "fixerUsage": {
+  "calls": 5,
+  "tokIn": 15953,
+  "tokOut": 15331,
+  "usd": 0.21710200000000002,
+  "critMs": 94383
+ },
+ "status": "cleared"
+}

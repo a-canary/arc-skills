@@ -1,0 +1,71 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-10",
+ "rep": 1,
+ "wallMs": 293817,
+ "verdict": "CLEAR",
+ "confidence": 0.7,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Shutdown returns nil whenever ctx is cancelled, even after a successful render, so the completed result is discarded and the job is re-rendered. The in-flight job also waits up to jobTimeout+1m before reclaim, where the old startup ResetRunning requeued it immediately. Each Recreate deploy adds this delay, and the PR does not mention it.",
+   "evidence": "\"if ctx.Err() != nil {\\n\\t\\t\\treturn nil // shutting down: leave the lease to expire so another worker retries the job\" / \"Startup ResetRunning is removed.\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Nothing caps reclaims, so a job that reliably crashes its worker is reclaimed every lease period. The attempts cap is deferred to #215. The old restart-driven requeue had the same unbounded loop, so this is mostly pre-existing, but reclaim now runs on a timer instead of only on restart.",
+   "evidence": "\"a poison-job attempts cap (#215) are separate changes\"; WHERE clause has \"(status = 'running' AND (locked_until IS NULL OR locked_until < now()))\" with no attempts check"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The claim subquery filters on status and an OR over locked_until and sorts by created_at, id, but the migration adds no index for these. At about 20k rows the cost is probably small, though the artifact gives no plan or timing data.",
+   "evidence": "ABSENT: no CREATE INDEX in db/migrations/0042_thumbnail_job_leases.sql; migration is only \"ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz;\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The claim \"a live worker never outlives its lease\" depends on render returning promptly after jobCtx is cancelled, and the artifact shows no evidence of that. If render ignores cancellation, a reclaimed job can render concurrently with its new holder. The output key is job-derived and overwrites idempotently, so the harm is limited to duplicate work.",
+   "evidence": "\"the job context is cancelled at jobTimeout, so a live worker never outlives its lease\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Claim now returns the post-increment attempts value, while the old code returned the pre-increment value. Any caller that uses Job.Attempts for retry or cap logic will see a silent off-by-one change, and no test covers the returned value.",
+   "evidence": "old: SELECT ... attempts ... then UPDATE ... attempts = attempts + 1; new: \"SET status = 'running', ... attempts = attempts + 1 ... RETURNING id, video_key, offsets, attempts\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Lease ownership is keyed only on w.id. The artifact does not show how w.id is generated, so uniqueness per live worker is unverified. A shared or reused ID would let a stale holder pass the locked_by check.",
+   "evidence": "ABSENT: definition of w.id in worker.go; only \"w.store.Claim(ctx, w.id, ...)\" and \"Complete(ctx, job.ID, w.id, ...)\" are shown"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The tests cover the store only. The worker.go shutdown branch and the ErrLeaseLost log branch have no tests. Reclaim is exercised with a negative lease duration on the production API rather than a real crash. The concurrency test uses context.Background() with no deadline, so a hang would stall the run instead of failing it.",
+   "evidence": "\"s.Claim(ctx, \\\"a\\\", -time.Second) // lease already expired\" and \"s.Claim(context.Background(), worker, time.Minute)\"; no worker-level test in diff"
+  },
+  {
+   "lens": "rollback",
+   "severity": "minor",
+   "claim": "The migration has no down migration and no rollback note. Rollback to the old binary is probably safe, since Recreate prevents overlap and old startup ResetRunning requeues stranded rows, but the PR does not state that.",
+   "evidence": "ABSENT: no down migration and no rollback note; diff shows only \"ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz;\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The title says the change lets \"more than one worker can run\", but the body keeps the replica count at 1 and defers scale-out to a later change. The title overstates what this PR delivers.",
+   "evidence": "TITLE: \"thumbnailer: lease-based job claiming so more than one worker can run\" vs. \"Replica count stays 1 here; scale-out and a poison-job attempts cap (#215) are separate changes.\""
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 77884,
+  "tokOut": 36518,
+  "usd": 0.0338324,
+  "critMs": 64371
+ }
+}

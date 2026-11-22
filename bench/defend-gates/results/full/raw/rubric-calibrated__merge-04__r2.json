@@ -1,0 +1,131 @@
+{
+ "approach": "rubric-calibrated",
+ "case": "merge-04",
+ "rep": 2,
+ "wallMs": 108347,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The up migration adds `private_notes` and then drops `notes` without copying any data, so every existing user note is destroyed on deploy. Migrations run automatically after merge to main, and the notes are user-written text that cannot be recovered elsewhere. The down migration only re-adds an empty `notes` column, so the loss is not reversible.",
+   "evidence": "0087_private_notes.up.sql: \"ALTER TABLE user_recipes ADD COLUMN private_notes text;\" \"ALTER TABLE user_recipes DROP COLUMN notes;\"; down: \"ALTER TABLE user_recipes ADD COLUMN notes text;\" \"ALTER TABLE user_recipes DROP COLUMN private_notes;\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The PR describes the change as a pure rename with no data change, but the migration is a drop-and-add that discards column contents. The stated spec and the SQL contradict each other, and the SQL is what runs in production.",
+   "evidence": "\"Pure rename, no data change; the down migration restores the old name.\" vs \"ALTER TABLE user_recipes DROP COLUMN notes;\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Each page request loads every saved row for the user, joins recipes, sorts, and slices in JavaScript. For users with more than 200k saved recipes, each request pulls and sorts the full set and carries all notes text. That breaks the 300ms p99 budget and risks memory pressure on the API.",
+   "evidence": "\"WHERE ur.user_id = $1 ORDER BY ur.saved_at DESC, ur.id DESC\", [userId] with no LIMIT; then \"const page = rows.slice(start, start + limit);\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "If the cursor row no longer exists (e.g., the recipe was unsaved between page loads), `findIndex` returns -1, so `start` becomes 0. The client silently receives the first page again, causing duplicates and possibly an endless paging loop instead of an error.",
+   "evidence": "\"const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Migration and code deploy are not sequenced. During a rolling deploy, old app instances still select `ur.notes`, which no longer exists after the migration runs, so those requests error. The DROP COLUMN also takes an ACCESS EXCLUSIVE lock on a 140M-row table. Neither risk is addressed.",
+   "evidence": "\"ALTER TABLE user_recipes DROP COLUMN notes;\" with \"Migrations run automatically on deploy after merge to main.\"; old code still has \"ur.notes\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "The removed `offset` parameter is not backward compatible for any client that still pages by offset. Such clients would keep receiving page one. The PR asserts that the client already uses `cursor`, but no evidence covers other consumers.",
+   "evidence": "\"The client already sends `cursor` from the previous page's `nextCursor`.\" vs removed \"const offset = Math.max(Number(req.query.offset) || 0, 0);\"; ABSENT: list of other API consumers"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR does not show that other code paths referencing `user_recipes.notes` were updated. Dropping the column will break any remaining reader or writer, and no search or grep result is provided.",
+   "evidence": "ABSENT: search results for `notes` across the repo; only saved.ts is shown updated"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "Nothing blocking found. The query is parameterized and filters by the authenticated user, and the cursor is only compared in JavaScript, not interpolated into SQL.",
+   "evidence": "\"requireUser\"; \"WHERE ur.user_id = $1\", [userId]"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Nothing new exposed. private_notes is returned only through the owner-scoped query, which is unchanged in access terms. The field-level protection for shared views is future work.",
+   "evidence": "\"WHERE ur.user_id = $1\""
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "Nothing found. The change is a schema and query change within the existing Postgres dependency.",
+   "evidence": "ABSENT: no new vendor or data-location change"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Nothing separately beyond the scale issue above. Full-set fetch per page multiplies database and compute cost for heavy users, which is covered under scale.",
+   "evidence": "\"const { rows } = await db.query<SavedRow>(\" with no LIMIT"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Destroying user-authored notes without notice or export may conflict with user-data handling commitments. This is a compliance question, covered separately.",
+   "evidence": "\"notes are user-written free text that users cannot recover elsewhere\" (context)"
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "Nothing found. The response shape adds nextCursor and renames the notes field, which the client must handle, but no rendering change is shown.",
+   "evidence": "\"res.json({ items: page, nextCursor });\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Nothing blocking. Cursor paging addresses the stated offset-drift problem, though the value depends on the client actually using cursors.",
+   "evidence": "\"Offsets were drifting when users saved recipes while scrolling.\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "Nothing found. Paging behavior is unchanged in latency terms except for the full-set fetch, covered under scale.",
+   "evidence": "ABSENT: latency measurements"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "Nothing found. The change has no interface or presentation impact.",
+   "evidence": "ABSENT: any UI change"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Irreversible deletion of user-written content with no migration, export, or notice may conflict with platform or data-handling obligations. This needs review before crossing.",
+   "evidence": "\"ALTER TABLE user_recipes DROP COLUMN notes;\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Renaming the column and changing pagination in one PR couples two unrelated risks, so a rollback of one forces a rollback of both. The test also does not cover cursor deletion or invalid cursors.",
+   "evidence": "\"Two small changes bundled because they touch the same table.\"; test cases only cover valid cursors"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Nothing further found beyond the issues listed above.",
+   "evidence": "ABSENT: additional gate-worthy concerns"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3589,
+  "tokOut": 4948,
+  "usd": 0.00251007,
+  "critMs": 22564
+ }
+}

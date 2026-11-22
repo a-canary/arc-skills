@@ -1,0 +1,155 @@
+{
+ "approach": "elephant-gold",
+ "case": "plan-06",
+ "rep": 2,
+ "wallMs": 211104,
+ "verdict": "ATTACKS",
+ "confidence": 0.82,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The binary swap has no defined ordering or crash recovery. The plan does not say whether kvx.prev is created by copy or rename, or in what order that happens relative to the rename over the live binary. A crash or power loss mid-swap can leave no kvx binary at the expected path, and the spec gives no recovery logic.",
+   "evidence": "\"Writes the new binary to a temp file in the same directory, fsyncs, then atomic rename over the current binary. The previous binary is kept as kvx.prev\"; ABSENT: ordering of the two steps and recovery for an interrupted swap"
+  },
+  {
+   "lens": "logic",
+   "severity": "major",
+   "claim": "Rollback semantics are undefined when kvx.prev is missing (first update, or after a prior rollback), and when a second self-update overwrites kvx.prev. Rollback can only reach the immediately prior version, and the plan does not say what happens when no kvx.prev exists.",
+   "evidence": "\"kvx self-update --rollback swaps them back.\"; ABSENT: behaviour when kvx.prev is absent or overwritten"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "A release that passes signature verification but crashes at startup has no automatic detection or revert. The user must notice and run a rollback command, and if the new version breaks the --rollback code path itself, the mechanism fails. The plan has no smoke test and no rollback that does not depend on the new binary.",
+   "evidence": "ABSENT: post-install smoke test (for example running kvx version) and automatic revert on failure; \"kvx self-update --rollback swaps them back.\""
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The --version flag lets any user install any older tagged release, including versions with known security fixes such as v2.6.2 and earlier. The signature proves provenance, not currency, and the plan sets no minimum version or anti-rollback check. Rollback has the same gap, since it restores whatever kvx.prev contains. This works against the stated goal of moving users off vulnerable versions.",
+   "evidence": "\"Command: kvx self-update [--check] [--version vX.Y.Z]\"; \"kvx self-update --rollback swaps them back.\"; ABSENT: minimum-version or known-vulnerable check"
+  },
+  {
+   "lens": "secrets",
+   "severity": "major",
+   "claim": "The minisign public key is compiled into every binary, and the plan has no rotation, revocation, or key-compromise recovery path. If the key leaks or is lost, shipped clients keep trusting it, and a replacement key cannot be pushed through self-update to binaries that only accept the old key.",
+   "evidence": "\"The minisign public key is compiled into the binary; the archive is rejected unless the signature verifies.\"; ABSENT: key rotation, revocation, or recovery procedure"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The install ID is a persistent random identifier sent with every daily telemetry POST, so each installation is linkable across all runs. The plan does not say it is rotated, reset on opt-out, or deleted on 'telemetry off', and it does not describe deleting IDs already sent.",
+   "evidence": "\"a random install ID generated locally (not derived from hostname, user, or MAC)\"; ABSENT: rotation, deletion on 'kvx telemetry off', and erasure of previously sent IDs"
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "The consent copy calls the data 'anonymous', yet it is sent with a persistent install ID and a per-install daily POST, so it is likely pseudonymous personal data. The prompt also omits that the install ID persists and that the collector sees the client IP, and it does not name the operator or location of the collector. Consent given on this description is not informed. The plan also gives no retention period for raw events or collector access logs, and no lawful basis.",
+   "evidence": "\"Share anonymous usage stats (command name, backend type, kvx version, OS/arch)? [y/N]\"; \"raw events discarded after aggregation\"; ABSENT: retention for raw events and access logs, IP handling, collector operator/location, and lawful basis"
+  },
+  {
+   "lens": "free",
+   "severity": "major",
+   "claim": "The schedule does not fit the 3-week window. Week 3 includes the collector, docs, release notes, and a one-week v2.8.0-rc1 soak before v2.8.0, which lands the final release in about week 4. Week 2 also packs package-manager detection, the startup notice, the telemetry client, and the consent flow onto two maintainers.",
+   "evidence": "\"Maintainers: 2 | 3 weeks | Target release: v2.8.0\"; \"Week 3: collector service, docs/telemetry.md, release notes, v2.8.0-rc1 for 1 week, then v2.8.0.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The success metric cannot be measured or moved as stated. The 41% and 59% figures come from per-asset download counts, which include mirrors, CI pulls, and package caches, not installed versions. The plan gives no query, window, or source for the 59% baseline. Package-manager installs are excluded from self-update, so the 75% target may be unreachable for a large share of users regardless of the feature.",
+   "evidence": "\"41% of release-asset downloads 60 days later were still for versions <= v2.6.2 (GitHub release download counts, tallied per asset).\"; \"share of downloads on the latest minor version >= 75% (from 59%)\"; \"if the binary path is under a Homebrew Cellar ... self-update refuses\""
+  },
+  {
+   "lens": "trust-boundary",
+   "severity": "minor",
+   "claim": "The plan lists the verify step before the temp-file write but does not state that ordering explicitly. The temp file lives in the install directory, which may be privileged, and the plan names no secure temp-file creation (random name, O_EXCL). The --version value is also used to build the download URL and file paths with no tag-pattern validation, so a crafted value could redirect the fetch or the write.",
+   "evidence": "\"Writes the new binary to a temp file in the same directory, fsyncs, then atomic rename\"; ABSENT: verify-before-write ordering, secure temp creation, and validation of the --version string"
+  },
+  {
+   "lens": "trust-boundary",
+   "severity": "minor",
+   "claim": "The telemetry collector accepts POSTs from anyone with no authentication or request signing, so anyone can inject fake events and distort the published prioritisation stats. The endpoint URL and TLS policy are also unspecified.",
+   "evidence": "\"Collector: a ~150-line Go service on the project's existing donated VPS\"; ABSENT: endpoint URL, TLS requirements, and authentication for POSTs"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The collector is a single donated VPS with no uptime monitoring, alerting, supervisor, or check that aggregates were received before publication. Telemetry failures are dropped silently, so an outage or payload break could leave stats/ empty or wrong without anyone noticing. Capacity at higher install counts is also unsized.",
+   "evidence": "\"Collector: a ~150-line Go service on the project's existing donated VPS, writing daily aggregate counts only\"; \"failures are dropped, never retried in the foreground\"; ABSENT: monitoring, alerting, and capacity estimate"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Opt-in telemetry will skew toward interactive desktop users, because the prompt is skipped for non-TTY and CI contexts. The plan states no expected opt-in rate and no minimum sample size needed to rank the three backends, so it cannot show the data will be usable for the prioritisation decision.",
+   "evidence": "\"The prompt is never shown when stdin is not a TTY or CI=true.\"; \"Telemetry opt-in rate reported transparently in stats/; no target\"; ABSENT: expected sample size or minimum-responses criterion"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Windows is not addressed for self-update. Renaming over a running executable typically fails on Windows, and the plan's atomic-rename design is POSIX-only. Windows appears only as a telemetry exclusion, so it is unclear whether self-update is supported there at all.",
+   "evidence": "\"atomic rename over the current binary\"; \"Telemetry for kvx running as a Windows service ... it stays off.\"; ABSENT: Windows self-update behaviour and tests"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The startup notice tells every user to run 'kvx self-update', but for Homebrew and dpkg/rpm installs that command refuses and only prints a package-manager hint. The notice and the refusal behaviour are inconsistent for these users.",
+   "evidence": "\"a single stderr line \\\"kvx vX.Y.Z available (kvx self-update)\\\"\"; \"self-update refuses and prints the matching brew/apt/dnf command instead\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "The update check uses unauthenticated GitHub Releases API calls, which are rate-limited per IP. Users behind shared NAT or CI hosts can exhaust that quota, and the feature depends entirely on GitHub with no alternative source for self-update.",
+   "evidence": "\"Queries the GitHub Releases API for the latest non-prerelease tag\"; \"The check is a single HTTPS GET with a 1.5 s timeout\""
+  },
+  {
+   "lens": "logic",
+   "severity": "minor",
+   "claim": "The once-per-24h throttle has no defined persistence location, and no behaviour when the timestamp is unwritable or the clock moves backwards. The guarantee is therefore not well defined.",
+   "evidence": "ABSENT: where the last-check timestamp is stored, whether it is written on failure, and how the 24 h window is computed"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Self-update downloads the full archive on every invocation with no retry limit or cap for failed verification. A release-day surge could also hit GitHub hard, and the plan has no mirror or rate-limit plan.",
+   "evidence": "\"Downloads the platform archive and its .minisig signature\"; ABSENT: retry limit, download cap, and surge plan"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The plan bundles two independent features (signed self-update with rollback, and an opt-in telemetry pipeline with a new collector service) into one 3-week build. They could be gated and shipped separately, but the plan treats them as one release.",
+   "evidence": "\"Maintainers: 2 | 3 weeks | Target release: v2.8.0\"; \"Week 3: collector service, docs/telemetry.md, release notes\""
+  },
+  {
+   "lens": "untestable design",
+   "severity": "minor",
+   "claim": "The privacy guarantees (raw events discarded after aggregation, no keys or paths ever sent) are asserted but untested. The testing section covers only the nothing-sent-when-disabled cases and a schema golden test, not the collector's aggregation, deletion, or retention behaviour.",
+   "evidence": "\"Telemetry: test that nothing is sent when unset, off, CI=true, KVX_TELEMETRY=0, or non-TTY; golden test that the payload schema matches docs/telemetry.md.\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "Monthly publication of aggregates under stats/ has no minimum-count or small-cell suppression rule. Small cells in a public repo could allow re-identification of a narrow group of users.",
+   "evidence": "ABSENT: minimum-count or suppression threshold for aggregates published under stats/"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "The feature only notifies and requires a manual command, and auto-install is explicitly out of scope. The stated problem is slow uptake of security fixes, so this design may not change adoption much, and the plan does not argue otherwise.",
+   "evidence": "\"Auto-installing updates without the user running kvx self-update (we only notify).\""
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "Self-update does not say whether it confirms before replacing the binary or shows progress during the roughly 12 MB download, verify, and replace steps.",
+   "evidence": "\"Downloads the platform archive and its .minisig signature ... atomic rename over the current binary.\"; ABSENT: confirmation and progress behaviour"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 57863,
+  "tokOut": 23582,
+  "usd": 0.01585805,
+  "critMs": 52174
+ }
+}

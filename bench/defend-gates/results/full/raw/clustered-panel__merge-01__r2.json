@@ -1,0 +1,77 @@
+{
+ "approach": "clustered-panel",
+ "case": "merge-01",
+ "rep": 2,
+ "wallMs": 156178,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "A new client_order_id is generated on every attempt, so the broker's dedupe cannot match a retry to an order that a timed-out or 502/503/504 attempt already placed. Attempt 2 can create a second live order and double-fill, which violates the agreed no-duplicate-fill constraint. Retrying a timeout also needs a lookup of the original client_order_id before resubmitting, and none exists.",
+   "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { const clientOrderId = randomUUID(); try { const res = await broker.post(\"/v2/orders\", { ... client_order_id: clientOrderId ... })"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Changing floor to ceil lets sizeBuy return a quantity whose notional exceeds maxNotional, which sizing must never do. Example: maxNotional 10000, price 33, lotSize 1 gives ceil(303.03)=304 shares, $10,032. The new tests use only exact multiples, so this path is not exercised.",
+   "evidence": "const lots = headroom / price / lotSize; return Math.ceil(lots) * lotSize;  |  tests: sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 }) → 100 (exact division only)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The safety argument rests on the broker deduping on client_order_id, with no documentation, integration test, or stated dedupe window in the artifact. The argument also does not hold for the code as written, because the ID changes per attempt.",
+   "evidence": "Retries are safe: every order carries a client_order_id and the broker dedupes on it, so a retry after a timeout cannot double-fill."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Timeout handling depends on a per-call timeoutMs option and on the thrown error being named \"TimeoutError\". Neither is shown in the diff, and src/broker/client.ts is not changed. Abort-based timeouts often surface as \"AbortError\", in which case timeouts are not retried and the fix does not work.",
+   "evidence": "{ timeoutMs: 4000 } ... (err as Error).name === \"TimeoutError\"  |  ABSENT: src/broker/client.ts in diff"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "No tests cover the retry path: 4xx no-retry, 502/503/504 retry, timeout retry, attempt limit, or the duplicate-order case. The only test changes are sizing tests, so the highest-risk change ships unverified on a live-money path.",
+   "evidence": "ABSENT: no submit.test.ts or retry test; src/risk/sizing.test.ts is the only test file in the diff"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Exhausted retries throw with only a per-retry warn log. There is no final-failure log, metric, or alert, so orders dropped during the open would still be silent. The warn log also omits clientOrderId and the error, so operators cannot tell whether a retried order may already exist at the broker.",
+   "evidence": "log.warn(\"order submit retry\", { symbol: intent.symbol, attempt }); if (!retryable || attempt === MAX_ATTEMPTS) throw err;"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Worst-case per-order latency is about 12.75s (3×4000ms timeouts plus backoff). The limit price may be stale when a late retry is placed, and no price re-check occurs. Backoff has no jitter, so synchronized retries add load during a broker brownout.",
+   "evidence": "{ timeoutMs: 4000 } ... await sleep(250 * 2 ** (attempt - 1));"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "429 (rate limit) is not retryable, although it is a likely transient response under open-time load, so orders can still be dropped in that case.",
+   "evidence": "const RETRYABLE_STATUS = new Set([502, 503, 504]);"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The PR bundles retry-on-submit with a sizing rounding-direction change (floor to ceil). The description says only that quantities are rounded to lot size, so the behavior change is hidden and the two changes cannot be reviewed or reverted separately.",
+   "evidence": "\"Also tidies the sizing helper so quantities are rounded to the broker's lot size before submit.\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Duplicate orders created under the new retry logic cannot be unwound by reverting the PR. No reconciliation procedure is described, and the deploy is timed for just before market open.",
+   "evidence": "ABSENT: rollback or reconciliation plan for duplicate orders; deploy scheduled \"before the next market open\""
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 19108,
+  "tokOut": 12310,
+  "usd": 0.007767039999999999,
+  "critMs": 23392
+ }
+}

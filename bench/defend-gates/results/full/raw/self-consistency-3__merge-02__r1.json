@@ -1,0 +1,208 @@
+{
+ "approach": "self-consistency-3",
+ "case": "merge-02",
+ "rep": 1,
+ "wallMs": 85127,
+ "verdict": "ATTACKS",
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "blocker",
+   "claim": "The new duplicate-ballot log line writes the voter's email together with the measure and their choice. That links a named resident to how they voted, which breaks the anonymity promise. Application logs ship to a third-party host readable by the whole support team, so the exposure is already irreversible once merged.",
+   "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value)"
+  },
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "The new results export route has no authentication or role check, although the spec says admin routes use require_role(\"admin\"). Anyone can call it, including for measures that are still open, which exposes live tallies.",
+   "evidence": "async def export_results(\n    measure_id: int,\n    db: Session = Depends(get_db),\n):"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The export does not check whether the measure is closed, although the stated purpose is a tally 'once a measure closes'. It returns running counts for open measures, which contradicts the spec and can be used to watch results while voting is in progress.",
+   "evidence": "measure = db.get(Measure, measure_id)\n    if measure is None:\n        raise HTTPException(404)\n    counts = dict("
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The counts dict is keyed by whatever type the Ballot.choice column returns, but it is looked up with the Choice enum member. If the column is stored as a string, every lookup misses and the CSV silently reports zero votes for every choice. The diff does not show the column type, so this cannot be ruled out.",
+   "evidence": "counts.get(choice, 0)  ...  db.add(Ballot(measure_id=measure_id, choice=body.choice))"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "No tests are included for the new export route, its closed-measure behaviour, its auth, or the enum-keyed counting, so none of the above is verified.",
+   "evidence": "ABSENT: no test changes in PR #231 diff"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The measure slug is interpolated unescaped into the Content-Disposition header. If slugs can contain quotes or CR/LF, this allows header manipulation.",
+   "evidence": "headers={\"Content-Disposition\": f'attachment; filename=\"{measure.slug}-results.csv\"'}"
+  },
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "The new results export route has no admin dependency, so any unauthenticated caller can download tallies. The PR describes the route as admin-only, and the rest of the file uses Depends(require_role(\"admin\")) for admin routes.",
+   "evidence": "@router.get(\"/measures/{measure_id}/results.csv\")\nasync def export_results(\n    measure_id: int,\n    db: Session = Depends(get_db),\n):"
+  },
+  {
+   "lens": "privacy",
+   "severity": "blocker",
+   "claim": "The duplicate-ballot log line writes the voter's email together with the measure and the choice they attempted. Ballots are anonymous by design, and this ties a voter's choice to their identity in logs that the third-party host shares with the whole support team. The PR's own context says a choice must never be linkable to identity outside the tally.",
+   "evidence": "\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "Once the log line ships to the third-party host, the exposed emails and choices cannot be recalled. The change has no retention limit, redaction step, or rollback for the data already logged.",
+   "evidence": "logger.info(\n    \"duplicate ballot rejected measure=%s voter=%s choice=%s\", ..."
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Logging voter identity alongside ballot choice in a log stream that third parties host and support staff can read likely conflicts with the ballot-secrecy commitments that apply to this voting system. The PR gives no legal or policy review for this.",
+   "evidence": "ABSENT: any review, data-processing basis, or retention policy for the log data. The log line includes user.email and body.choice.value."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The PR says the export is for closed measures, but the handler never checks whether the measure is closed. Admins or anyone else can pull running tallies from an open measure, which breaks the integrity of the vote.",
+   "evidence": "measure = db.get(Measure, measure_id)\n    if measure is None:\n        raise HTTPException(404)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The counts dict is keyed by whatever the Ballot.choice column returns, but the lookup uses the Choice enum member. If the column returns plain strings, every lookup falls back to 0 and the council packet shows zero votes for every choice without any error. The PR does not show that the types match.",
+   "evidence": "counts = dict(db.query(Ballot.choice, func.count(Ballot.id))...)\n...\nwriter.writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The motivation for the logging change rests on support tickets, but the PR offers no evidence that logging the email and choice is the only or least invasive way to diagnose them. A receipt lookup or a log line with only a hashed or internal identifier was not considered.",
+   "evidence": "ABSENT: any analysis of alternatives. The PR says only \"support keeps getting 'it says I already voted' tickets.\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The measure slug is interpolated into the Content-Disposition header and into CSV cells without escaping. Slugs are admin-controlled, so the risk is low, but the export should still sanitize them.",
+   "evidence": "headers={\"Content-Disposition\": f'attachment; filename=\"{measure.slug}-results.csv\"'}"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The export buffers the whole CSV in memory and then wraps it in StreamingResponse, which adds nothing for a few rows. The handler also repeats the measure-lookup and 404 pattern without a shared helper.",
+   "evidence": "buf = io.StringIO()\n    ...\n    return StreamingResponse(\n        buf,"
+  },
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "The new results export route has no authentication or role check, so anyone who can reach the URL can download tallies. The spec requires admin-only routes to use require_role(\"admin\"), and this one does not.",
+   "evidence": "@router.get(\"/measures/{measure_id}/results.csv\")\nasync def export_results(\n    measure_id: int,\n    db: Session = Depends(get_db),\n):"
+  },
+  {
+   "lens": "privacy",
+   "severity": "blocker",
+   "claim": "The duplicate-ballot log line writes the voter's email together with the choice they attempted. That links a named resident to a ballot choice, which breaks the anonymity promise. The logs also ship to a third-party host readable by the whole support team, so the exposure cannot be contained after the fact.",
+   "evidence": "logger.info(\n    \"duplicate ballot rejected measure=%s voter=%s choice=%s\",\n    measure_id,\n    user.email,\n    body.choice.value,\n)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The export does not check whether the measure is closed, although the stated purpose is a tally for closed measures. Any admin, or any unauthenticated caller once the auth gap is fixed, can pull interim counts while voting is still open.",
+   "evidence": "measure = db.get(Measure, measure_id)\n    if measure is None:\n        raise HTTPException(404)\n    counts = dict("
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Releasing running tallies of an open local measure may breach election-disclosure rules. The artifact contains no rule or policy review that would allow it.",
+   "evidence": "ABSENT: no check of measure.is_open() or closed state in export_results, and no compliance review referenced in the PR"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The PR contains no tests for the auth requirement, the closed-measure gate, or the log redaction. It also does not confirm that Ballot.choice keys match the Choice enum in the dict lookup, so a type mismatch would silently report zeros.",
+   "evidence": "ABSENT: test changes or verification for export_results and the duplicate-ballot log path"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Support's real need is to tell whether a duplicate attempt happened. Logging the email and choice goes beyond that and creates the privacy problem, so a non-identifying event (measure id and outcome, no voter or choice) would meet the need.",
+   "evidence": "\"Also adds a log line when a duplicate ballot is rejected, since support keeps getting 'it says I already voted' tickets\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The measure slug goes straight into the Content-Disposition header without sanitising. A slug containing quotes or CR/LF could break the header or enable response splitting.",
+   "evidence": "headers={\"Content-Disposition\": f'attachment; filename=\"{measure.slug}-results.csv\"'}"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Removing the log line stops new emails from being written, but lines already shipped to the third-party host cannot be recalled. The PR has no purge or retention step for those lines.",
+   "evidence": "ABSENT: any plan to purge or rotate already-shipped log lines containing voter emails"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The export is a single GROUP BY on ballots, which is fine at current size. Its async handler, though, runs blocking DB calls on the event loop, which will hurt under concurrent exports or large ballot tables.",
+   "evidence": "async def export_results(...): ... db.query(Ballot.choice, func.count(Ballot.id))"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "Nothing in the change adds vendor or residency concerns. The log path still depends on a third-party host, which the PR does not mention.",
+   "evidence": "ABSENT: no change in sovereignty risk stated; logs ship to third-party host per context"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "No material cost concern: the export is one aggregate query and the response is small.",
+   "evidence": "ABSENT: no cost-relevant change in the diff"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The export has no error handling beyond a 404, and no alerting or metric exists to see export or duplicate-rejection volume.",
+   "evidence": "ABSENT: observability or alerting for export_results or the duplicate-ballot path"
+  },
+  {
+   "lens": "ui",
+   "severity": "minor",
+   "claim": "No rendering or display concern in the diff, since the output is CSV.",
+   "evidence": "ABSENT: no UI change in diff"
+  },
+  {
+   "lens": "ux-efficiency",
+   "severity": "minor",
+   "claim": "No friction concern in the diff, though clerks still need an admin route to fetch the file.",
+   "evidence": "ABSENT: no UX flow change in diff"
+  },
+  {
+   "lens": "accessibility",
+   "severity": "minor",
+   "claim": "No accessibility concern: the change is a backend CSV download with no UI.",
+   "evidence": "ABSENT: no UI or accessibility-relevant change in diff"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Export logic lives in the ballots routes module, so reporting and voting are coupled. The CSV build is also inline rather than a reusable function.",
+   "evidence": "@router.get(\"/measures/{measure_id}/results.csv\") defined inside app/routes/ballots.py"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The 404 for an unknown measure is returned without a body. The export also always emits every Choice row, including zero counts, which is intended but is not stated in the PR text.",
+   "evidence": "for choice in Choice:\n        writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+  }
+ ],
+ "usage": {
+  "calls": 3,
+  "tokIn": 8559,
+  "tokOut": 9029,
+  "usd": 0.00460063,
+  "critMs": 15621
+ }
+}

@@ -1,0 +1,143 @@
+{
+ "approach": "clustered-panel",
+ "case": "plan-07",
+ "rep": 1,
+ "wallMs": 197305,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "The cost model uses one day's volume but reports a monthly figure. 38M lines/day x 60 tokens = 2.28B tokens/day, about $1,140/day at $0.50/1M, or roughly $34k/month. The ~$1,150/month estimate and the 'within the $1,500 budget' conclusion are wrong by about 20-30x, and peak days (61M lines) cost more still.",
+   "evidence": "\"Input: 38M lines x 60 tokens = 2.28B tokens -> ~$1,140\" and \"Estimated total: ~$1,150/month, within the $1,500 budget.\""
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The output cost has the same daily-versus-monthly error. 8,640 x 400 = 3.46M tokens/day, about $7/day or roughly $200/month, not $7/month. The cost model also omits the fixed system-prompt tokens sent on each of 8,640 calls/day, retries, and growth. Budget headroom is not stated.",
+   "evidence": "\"Output: 8,640 x 400 = 3.5M tokens -> ~$7\" and \"(no fixed prompt tokens, no retry allowance)\""
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "log-tap forwards every application line, including debug output, with no level filter. That is the dominant cost driver, and the plan does not justify it.",
+   "evidence": "\"forwards every application log line to the summarizer queue\""
+  },
+  {
+   "lens": "staffing",
+   "severity": "major",
+   "claim": "Staffing assumes both engineers work full-time for 6 weeks, but the charter says on-call and interrupt work averages 50% of their time. Effective build capacity is about 6 eng-weeks against 12 required, with no contingency or cover planned.",
+   "evidence": "\"Staffing: both platform engineers full-time for 6 weeks (2 x 6 = 12 eng-weeks).\" vs context: \"on-call/interrupt work averages 50% of their time\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "The privacy argument rests on redaction of emails, tokens, card numbers and IPs only. Names, phone numbers, customer or tenant identifiers, and free-text payloads are not covered, and the Q1 audit was scoped to log retention, not to external LLM egress. Unredacted personal data would reach a third-party model every 5 minutes.",
+   "evidence": "\"already masks emails, tokens, card numbers and IPs for our log retention policy (audited in Q1)\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Sending all application logs from a multi-tenant B2B platform to an external model provider may require customer-facing sub-processor disclosure and possibly residency or cross-border review. The plan cites only a signed DPA and a zero-retention setting.",
+   "evidence": "\"Corvid account has zero-retention enabled; data processing addendum signed by Legal (ref DPA-0417).\""
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "No retention period is defined for stored summaries, Redis queue contents, or raw log windows held by log-tap and the summarizer. These create new copies of production log data that the existing retention policy may not govern.",
+   "evidence": "\"stores a structured summary\" and \"forwards every application log line to the summarizer queue\""
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "Logs contain attacker-controlled strings (request paths, user agents, query parameters, error payloads). Feeding them to an LLM creates a prompt-injection path, and the output is written automatically into a PagerDuty incident and may name a 'suspected deploy'. There is no sanitization or output validation, so injected or hallucinated content could mislead responders mid-incident.",
+   "evidence": "\"the PagerDuty incident gets an auto-comment with the latest summaries\" and \"stores a structured summary (top errors, new error signatures, affected endpoints, suspected deploy)\""
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "log-tap creates a new read path to every application log line across 30 services, but the plan specifies no authn/authz for log-tap, the summarizer queue, summary storage, or PagerDuty comments, and no secrets handling for the Corvid API key.",
+   "evidence": "ABSENT: authn/authz model for log-tap, the summarizer queue, summary storage, and the Corvid API credentials."
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "major",
+   "claim": "The design depends on one external model provider with no fallback, no self-hosted or alternative model, and no exit path. Losing access during an incident would remove the feature.",
+   "evidence": "\"Model: Corvid-mini, $0.50 per 1M input tokens, $2.00 per 1M output tokens.\" with ABSENT: fallback model, self-hosting option, or migration plan."
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "Data residency and processing region for Corvid requests are not stated, so jurisdictional pinning cannot be verified.",
+   "evidence": "ABSENT: data residency or processing region for Corvid requests."
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Each 5-minute window sends the full last 5 minutes of logs per service. At peak a hot service's window can exceed model context limits, and the plan has no chunking, truncation, or sampling strategy. The noisiest services, most relevant during incidents, may fail or be truncated silently.",
+   "evidence": "\"sends the last 5 minutes of logs per service to the LLM with a fixed prompt\" (no max-size or sampling bound stated)"
+  },
+  {
+   "lens": "ux-latency",
+   "severity": "major",
+   "claim": "The goal promises a summary 'within seconds of a page', but summaries are regenerated on a 5-minute batch cycle. The attached summary can be up to 5 minutes stale plus LLM latency, and the plan does not say what happens when a page falls between windows or the summarizer lags.",
+   "evidence": "\"within seconds of a page\" vs. \"every 5 minutes, sends the last 5 minutes of logs per service\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "major",
+   "claim": "The page-time comment attaches only the latest 5-minute window. Incidents often start before the page, so the summary may omit onset, the first error signature, or the suspected deploy, which responders most need.",
+   "evidence": "\"the PagerDuty incident gets an auto-comment with the latest summaries for the paging service\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "No behaviour is defined for LLM API failure, rate limiting, timeouts, or backlog. A stalled queue during a real incident would produce stale or missing summaries exactly when needed, and the plan does not say whether stale comments are marked or omitted.",
+   "evidence": "ABSENT: retry, timeout, backoff, dead-letter, or staleness handling for the summarizer and the PagerDuty auto-comment"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The summarizer sits on the critical incident path but has no monitoring or alerting on lag, error rate, or freshness. The only ops item is 2 weeks of 'hardening, dashboards, runbook', and no ops ownership is planned.",
+   "evidence": "ABSENT: monitoring/alerting on summarizer lag or errors; \"Hardening, dashboards, runbook | 2\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "There is no kill switch or rollback for log-tap, the summarizer, or the PagerDuty comment. The plan accepts up to 5% misleading summaries, including a 'suspected deploy' field, reaching live responders, with only a runbook as mitigation.",
+   "evidence": "\"Hardening, dashboards, runbook\" and \"<= 5% misleading\"; ABSENT: disable or rollback mechanism"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The 'suspected deploy' field needs deploy-event data that appears in no work item or dependency, so the output may be unavailable or fabricated.",
+   "evidence": "\"suspected deploy\" (no deploy-event source listed in section 2 or 6)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The launch gate uses 40 past incidents graded by one commander, with no false-positive or noise check under normal load and no criterion for the 'suspected deploy' field. The replay also assumes historical logs are still retained and reproducible, which the plan does not confirm.",
+   "evidence": "\"Eval set from last 40 incidents\" and \"Launch gate: >= 70% useful, <= 5% misleading.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The MTTR target (47 to 30 min) has no defined measurement method or attribution plan, so the tool's contribution cannot be separated from other changes.",
+   "evidence": "\"Target: median MTTR 47 min -> 30 min within one quarter of launch.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The PagerDuty comment's dependency set comes from the service catalog. Stale or incomplete catalog data would silently attach summaries for the wrong services during an incident.",
+   "evidence": "\"its direct dependencies (from the service catalog)\""
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 17886,
+  "tokOut": 16522,
+  "usd": 0.0118372,
+  "critMs": 34992
+ }
+}

@@ -1,0 +1,58 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "merge-11",
+ "rounds": [
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "TRAILING_PUNCT strips every trailing ')' or ']', including ones that belong to the URL (e.g. Wikipedia-style paths ending in '(tool)'). The href loses its last character and a stray ')' is left as text.",
+     "evidence": "const TRAILING_PUNCT = /[.,;:!?)\\]]+$/;  ABSENT: balanced-parenthesis handling or a test for it"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "A leading link is shown whole when collapsed, even if it is longer than the limit. A very long URL at the start of a description therefore defeats the collapse. The case is rare and the code comment says it is deliberate.",
+     "evidence": "else if (out.length === 0) { out.push(t); // a leading link is shown whole rather than collapsing to nothing"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The PR text says truncation never splits a word. The fallback hard-cuts a whitespace-free text run at the limit when nothing has been emitted yet, and the test asserts this. The PR description is slightly inaccurate, but the behaviour is intentional.",
+     "evidence": "else if (out.length === 0) out.push({ kind: 'text', value: Array.from(t.value).slice(0, limit).join('') });"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "TRAILING_PUNCT can take quadratic time on a URL token containing a long run of punctuation followed by other characters. No input length cap is visible in the diff.",
+     "evidence": "const raw = m[0].replace(TRAILING_PUNCT, '');  ABSENT: a maximum length for item.description"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The tests do not cover the 'Show less' toggle, the '…' suffix, or the ItemPage integration.",
+     "evidence": "ABSENT: tests for 'Show less' and the ellipsis"
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 22429,
+    "tokOut": 22594,
+    "usd": 0.057745200000000003,
+    "critMs": 47660
+   },
+   "wallMs": 94687
+  }
+ ],
+ "artifact": "PR #342: item page: collapse long descriptions and make URLs clickable\n\nOwners often paste long manuals and product links into item descriptions; on phones the \"Request to borrow\" button ends up several screens down.\nDescriptions over 280 characters now render collapsed with a \"Show more\" toggle, and http(s) URLs in the text become links.\nThe text is never injected as HTML: it is split into text and link tokens rendered as React children, and truncation only cuts at whitespace or between tokens, so a URL is never split.\n\ndiff --git a/web/src/items/linkify.ts b/web/src/items/linkify.ts\n--- /dev/null\n+++ b/web/src/items/linkify.ts\n@@ -0,0 +1,43 @@\n+export type Token = { kind: 'text'; value: string } | { kind: 'link'; value: string; href: string };\n+\n+const URL_RE = /\\bhttps?:\\/\\/[^\\s<>\"]+/gi;\n+const TRAILING_PUNCT = /[.,;:!?)\\]]+$/;\n+\n+export function tokenize(text: string): Token[] {\n+  const tokens: Token[] = [];\n+  let last = 0;\n+  for (const m of text.matchAll(URL_RE)) {\n+    const raw = m[0].replace(TRAILING_PUNCT, '');\n+    const start = m.index ?? 0;\n+    if (start > last) tokens.push({ kind: 'text', value: text.slice(last, start) });\n+    tokens.push(toLink(raw));\n+    last = start + raw.length;\n+  }\n+  if (last < text.length) tokens.push({ kind: 'text', value: text.slice(last) });\n+  return tokens;\n+}\n+\n+function toLink(raw: string): Token {\n+  try {\n+    const url = new URL(raw);\n+    if (url.protocol === 'http:' || url.protocol === 'https:') return { kind: 'link', value: raw, href: url.href };\n+  } catch {} // unparseable: keep as plain text\n+  return { kind: 'text', value: raw };\n+}\n+\n+export function truncate(tokens: Token[], limit: number): { tokens: Token[]; truncated: boolean } {\n+  const out: Token[] = [];\n+  let used = 0;\n+  for (const t of tokens) {\n+    if (used + t.value.length <= limit) {\n+      out.push(t);\n+      used += t.value.length;\n+      continue;\n+    }\n+    if (t.kind === 'text') {\n+      const head = t.value.slice(0, limit - used + 1);\n+      const cut = head.search(/\\s\\S*$/); // last whitespace within the limit\n+      if (cut > 0) out.push({ kind: 'text', value: head.slice(0, cut) });\n+      else if (out.length === 0) out.push({ kind: 'text', value: Array.from(t.value).slice(0, limit).join('') });\n+    } else if (out.length === 0) {\n+      out.push(t); // a leading link is shown whole rather than collapsing to nothing\n+    }\n+    return { tokens: out, truncated: true };\n+  }\n+  return { tokens: out, truncated: false };\n+}\ndiff --git a/web/src/items/ItemDescription.tsx b/web/src/items/ItemDescription.tsx\n--- /dev/null\n+++ b/web/src/items/ItemDescription.tsx\n@@ -0,0 +1,27 @@\n+import { Fragment, useId, useMemo, useState } from 'react';\n+import { tokenize, truncate } from './linkify';\n+\n+export function ItemDescription({ text, limit = 280 }: { text: string; limit?: number }) {\n+  const [expanded, setExpanded] = useState(false);\n+  const bodyId = useId();\n+  const all = useMemo(() => tokenize(text), [text]);\n+  const short = useMemo(() => truncate(all, limit), [all, limit]);\n+  return (\n+    <div className=\"item-description\">\n+      <p id={bodyId} className=\"item-description__body\">\n+        {(expanded ? all : short.tokens).map((t, i) =>\n+          t.kind === 'link'\n+            ? <a key={i} href={t.href} target=\"_blank\" rel=\"noopener noreferrer nofollow\">{t.value}</a>\n+            : <Fragment key={i}>{t.value}</Fragment>,\n+        )}\n+        {short.truncated && !expanded && '…'}\n+      </p>\n+      {short.truncated && (\n+        <button type=\"button\" className=\"link-button\" aria-expanded={expanded} aria-controls={bodyId} onClick={() => setExpanded((e) => !e)}>\n+          {expanded ? 'Show less' : 'Show more'}\n+        </button>\n+      )}\n+    </div>\n+  );\n+}\ndiff --git a/web/src/items/ItemPage.tsx b/web/src/items/ItemPage.tsx\n--- a/web/src/items/ItemPage.tsx\n+++ b/web/src/items/ItemPage.tsx\n@@ -5,1 +5,2 @@ import { formatCondition } from './condition';\n+import { ItemDescription } from './ItemDescription';\n import type { Item } from './types';\n@@ -48,3 +49,3 @@ export function ItemPage({ item }: { item: Item }) {\n       <h1>{item.name}</h1>\n-      <p className=\"item-description__body\">{item.description}</p>\n+      <ItemDescription text={item.description} />\n       <BorrowRequestButton itemId={item.id} />\ndiff --git a/web/src/items/ItemDescription.test.tsx b/web/src/items/ItemDescription.test.tsx\n--- /dev/null\n+++ b/web/src/items/ItemDescription.test.tsx\n@@ -0,0 +1,31 @@\n+import { render, screen } from '@testing-library/react';\n+import userEvent from '@testing-library/user-event';\n+import { ItemDescription } from './ItemDescription';\n+import { tokenize, truncate } from './linkify';\n+\n+const long = 'Cordless drill, two batteries. '.repeat(12) + 'Manual: https://example.com/manual.pdf.';\n+\n+test('long descriptions collapse at a word boundary and expand', async () => {\n+  render(<ItemDescription text={long} />);\n+  const toggle = screen.getByRole('button', { name: 'Show more' });\n+  expect(toggle).toHaveAttribute('aria-expanded', 'false');\n+  expect(screen.queryByRole('link')).toBeNull();\n+  await userEvent.click(toggle);\n+  expect(toggle).toHaveAttribute('aria-expanded', 'true');\n+  expect(screen.getByRole('link')).toHaveAttribute('href', 'https://example.com/manual.pdf');\n+});\n+\n+test('short text: no toggle, only http(s) URLs become links, markup stays text', () => {\n+  const { container } = render(<ItemDescription text={'javascript:alert(1) <img src=x onerror=alert(1)> http://a.example/x).'} />);\n+  expect(screen.queryByRole('button')).toBeNull();\n+  expect(container.querySelector('img')).toBeNull();\n+  expect(screen.getAllByRole('link').map((a) => a.getAttribute('href'))).toEqual(['http://a.example/x']);\n+  expect(container).toHaveTextContent('javascript:alert(1) <img src=x onerror=alert(1)>');\n+});\n+\n+test('truncation never splits a link or a word', () => {\n+  expect(truncate(tokenize('see https://example.com/a-very-long-path then more words'), 12).tokens).toEqual([{ kind: 'text', value: 'see ' }]);\n+  expect(truncate(tokenize('https://example.com/abc'), 5).tokens[0]).toMatchObject({ kind: 'link' });\n+  expect(truncate(tokenize('alpha beta gamma'), 8).tokens).toEqual([{ kind: 'text', value: 'alpha' }]);\n+  expect(truncate(tokenize('x'.repeat(400)), 280).tokens).toEqual([{ kind: 'text', value: 'x'.repeat(280) }]);\n+});",
+ "fixerUsage": {
+  "calls": 0,
+  "tokIn": 0,
+  "tokOut": 0,
+  "usd": 0,
+  "critMs": 0
+ },
+ "status": "cleared"
+}

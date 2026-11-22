@@ -1,0 +1,95 @@
+{
+ "approach": "triage-routed",
+ "case": "merge-04",
+ "rep": 2,
+ "wallMs": 265627,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "data-loss",
+   "severity": "blocker",
+   "claim": "The up migration is not a rename. It adds an empty private_notes column and drops notes without copying any data, so every existing user note is destroyed when the migration auto-runs on deploy. The PR's 'pure rename, no data change' claim is false, and the notes are unrecoverable elsewhere.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text; ALTER TABLE user_recipes DROP COLUMN notes;"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The down migration cannot restore data. It re-adds notes as NULL and drops private_notes, so any rollback after the up migration permanently loses all note text written before and after the change.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN notes text; ALTER TABLE user_recipes DROP COLUMN private_notes;"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Migrations auto-run on deploy with no backup, snapshot, or pre-migration checkpoint, and the change is irreversible. Nothing protects the 140M-row table before the destructive DROP.",
+   "evidence": "Migrations run automatically on deploy after merge to main. ... the down migration restores the old name."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "DROP COLUMN notes runs in the same deploy as the new code with no expand/contract sequencing. Old instances still selecting ur.notes fail during the rolling deploy, and rolling back app code after the migration also breaks the endpoint.",
+   "evidence": "-      ur.notes\n+      ur.private_notes"
+  },
+  {
+   "lens": "hot-path",
+   "severity": "blocker",
+   "claim": "The handler loads every saved row for the user (up to 200k+, joined to recipes, including notes text) on every request and slices one page in memory. This is unbounded work per request and will not fit the 300ms p99 budget.",
+   "evidence": "const { rows } = await db.query<SavedRow>(` ... `WHERE ur.user_id = $1` ... `ORDER BY ur.saved_at DESC, ur.id DESC`, `[userId],` ... `const page = rows.slice(start, start + limit);`"
+  },
+  {
+   "lens": "hot-path",
+   "severity": "major",
+   "claim": "The cursor is resolved by a linear findIndex over the full result, with no keyset predicate, so the database cannot seek to the cursor. Each page costs O(n).",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "hot-path",
+   "severity": "major",
+   "claim": "No index supports the (user_id, saved_at DESC, id DESC) sort or filter, and the migration adds none. Each request sorts up to 200k rows per user on a 140M-row table.",
+   "evidence": "ABSENT: no CREATE INDEX on user_recipes(user_id, saved_at DESC, id DESC) in 0087_private_notes.up.sql or the PR."
+  },
+  {
+   "lens": "hot-path",
+   "severity": "major",
+   "claim": "DROP COLUMN takes ACCESS EXCLUSIVE on the 140M-row table with no lock_timeout, so it can queue behind a long-running query and then block all reads and writes on user_recipes.",
+   "evidence": "BEGIN; ALTER TABLE user_recipes ADD COLUMN private_notes text; ALTER TABLE user_recipes DROP COLUMN notes; COMMIT; (no SET lock_timeout)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "An unknown or stale cursor (for example, the item was unsaved between pages) makes findIndex return -1, so start becomes 0. The client silently gets page one again and can loop forever or duplicate items instead of receiving an error.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "A non-positive limit is not clamped below. Math.min does not stop negatives, so limit=-1 yields an empty page, nextCursor is computed as non-null, and page[page.length - 1] is undefined, which throws and returns a 500.",
+   "evidence": "const limit = Math.min(Number(req.query.limit) || 50, 100); ... start + limit < rows.length ? page[page.length - 1].id : null;"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Removing offset is a silent breaking change. Clients still sending offset get the first page on every request, with no error, versioning, or deprecation signal.",
+   "evidence": "-  const offset = Math.max(Number(req.query.offset) || 0, 0);"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The response now returns private_notes from a user-scoped endpoint. The PR's stated rationale is that this field must never reach shared views, so the PR should confirm this route is never reachable from a shared or public surface.",
+   "evidence": "SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.private_notes"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Tests cover only the happy path. They do not cover unknown or stale cursors, zero or negative limits, or empty results, which are the cases where the new code fails.",
+   "evidence": "it(\"pages with cursor\", async () => { const a = await get(\"/api/recipes/saved?limit=2\"); ..."
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 26935,
+  "tokOut": 14110,
+  "usd": 0.0096267,
+  "critMs": 24125
+ }
+}

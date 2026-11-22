@@ -1,0 +1,65 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "merge-04",
+ "rep": 2,
+ "wallMs": 219804,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The up migration adds an empty `private_notes` column and then drops `notes` without copying any data. Every existing user note is permanently destroyed on automatic deploy. The PR calls this a 'pure rename, no data change', but the SQL is not a rename, and the context says users cannot recover notes elsewhere.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;  (PR: \"Pure rename, no data change\")"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The down migration does not restore data. It re-adds an empty `notes` and drops `private_notes`, so rollback loses any notes written after deploy and cannot undo the up migration's loss. The claim that it 'restores the old name' is misleading.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN notes text;\nALTER TABLE user_recipes DROP COLUMN private_notes;"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The destructive schema change and the code change ship in one deploy with no expand/contract sequencing, no backfill, and no backup or approval gate. During a rolling deploy, old instances selecting `ur.notes` will fail once the column is dropped.",
+   "evidence": "ABSENT: UPDATE ... SET private_notes = notes, separate expand/contract migrations, or deploy-ordering note; \"Migrations run automatically on deploy after merge to main.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "blocker",
+   "claim": "The handler fetches every saved row for the user, including full notes text, on every page request, then slices in memory. For users with 200k+ saves this is an unbounded O(N) fetch per page. It will break the 300ms p99 budget, risks memory exhaustion, and defeats the purpose of pagination. Keyset pagination with LIMIT in SQL is absent.",
+   "evidence": "`WHERE ur.user_id = $1 ORDER BY ur.saved_at DESC, ur.id DESC`, [userId]); ... rows.findIndex((r) => r.id === cursor) ... rows.slice(start, start + limit)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "An unknown, stale, or deleted cursor makes `findIndex` return -1, so `start` becomes 0. The client silently receives page one again instead of an error or resync signal, which can cause loops or duplicates.",
+   "evidence": "const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "`offset` support is removed with no compatibility or deprecation path, and the response field is renamed `notes` to `private_notes` with no alias. Clients still sending `offset` get page one forever, and clients reading `notes` show blanks. The claim that the client already sends `cursor` is unverified, since the old endpoint never returned `nextCursor`.",
+   "evidence": "-  const offset = Math.max(Number(req.query.offset) || 0, 0); ... \"The client already sends `cursor` from the previous page's `nextCursor`.\" (no client evidence in diff)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "`limit` is not validated for negative values. A negative limit yields an empty page, and `page[page.length - 1].id` would then throw. Empty result sets with a start of 0 and a non-matching condition are also not tested.",
+   "evidence": "const limit = Math.min(Number(req.query.limit) || 50, 100); ... page[page.length - 1].id"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "Tests cover only the happy path on a small fixture. They do not cover an invalid or deleted cursor, bad limits, an empty result, concurrent saves (the drift scenario the PR claims to fix), or scale.",
+   "evidence": "it(\"pages with cursor\", ...) ... expect(c.nextCursor).toBeNull();"
+  }
+ ],
+ "usage": {
+  "calls": 5,
+  "tokIn": 21679,
+  "tokOut": 13002,
+  "usd": 0.05787068,
+  "critMs": 28562
+ }
+}

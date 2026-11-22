@@ -1,0 +1,83 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "merge-07",
+ "rep": 2,
+ "wallMs": 232373,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "injection",
+   "severity": "blocker",
+   "claim": "`_upload` builds a shell command string with `shell=True` that embeds partner-chosen filenames (`src.stem`) unquoted. A crafted SFTP filename with shell metacharacters (`$(...)`, backticks, `;`) executes arbitrary commands on a worker that holds GCS write credentials for the whole raw bucket. Filenames beginning with `-` can also be read as gsutil options, since there is no `--` separator.",
+   "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True) with dest containing src_name = src.stem from drop_dir.glob(\"*.csv\")"
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "`write_success_marker` is called unconditionally after the file loop, even when files failed. Dashboards read a partition as soon as `_SUCCESS` appears, so a partner run with failed files is published as complete with silently missing data. Retracting it means deleting objects consumers may have already read.",
+   "evidence": "except Exception:\n            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n            failed += 1\n    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "`partition_date()` switches from UTC to naive local time. Workers run with TZ=America/Los_Angeles and the job fires at 01:30 UTC (the previous evening in PT), so each run writes to the prior UTC day's dt partition. That partition was already published and marked complete, and dashboards read UTC dates.",
+   "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Failure handling leaves debris. Chunks already uploaded for a failed file stay in GCS, and local gzip chunks in work_dir are only unlinked on the success path. A retry mixes attempts, since chunk names are deterministic but counts can differ and there is no prefix cleanup. Repeated failures can also fill the worker disk, and this PII is left unencrypted on local disk.",
+   "evidence": "for chunk in _write_chunks(src, work_dir):\n                _upload(chunk, partner, dt, src.stem)\n                chunk.unlink()\n            ok += 1\n        except Exception:  (ABSENT: any cleanup of local or uploaded chunks)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Failures are only logged and counted. The task exits normally, so Airflow shows green and nothing alerts on a partial ingest. The gsutil subprocess also has no timeout or retry, so a hung transfer blocks the worker and a transient error fails the whole file.",
+   "evidence": "log.info(\"partner=%s dt=%s ok=%d failed=%d\", partner, dt, ok, failed)  |  subprocess.run(..., shell=True, check=True)  (ABSENT: timeout, retry, raise on failed>0)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The object layout changes from `dt=…/{stem}.csv.gz` to `dt=…/{stem}/{stem}-NNNN.csv.gz`. Downstream readers of the old path will miss the data, and old and new objects can coexist under one dt. The diff has no consumer update or migration.",
+   "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\" (previously raw/{partner}/dt={dt}/{src.stem}.csv.gz)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The claim that normalisation is unchanged is unsupported. `normalise_row` previously received a pandas Series via `df.apply(axis=1)` and now receives a `csv.DictReader` dict. NaN versus empty-string handling and any Series-specific access may differ, and the header is now taken from the first normalised row of each chunk. No test or output comparison is shown.",
+   "evidence": "\"Schema normalisation is unchanged (same `normalise_row`).\" | norm = normalise_row(row) | ABSENT: tests or output comparison"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "`_write_chunks` returns only after the whole source file has been gzipped, so every chunk for a file sits on local disk before any upload begins. Peak disk therefore scales with the full compressed file size, which undercuts the streaming goal for multi-GB feeds.",
+   "evidence": "for chunk in _write_chunks(src, work_dir):  (function builds and returns the full `chunks` list after reading the whole file)"
+  },
+  {
+   "lens": "other",
+   "severity": "major",
+   "claim": "`ingest_partner` gains a required `work_dir` parameter, but the diff shows no updated call sites and no provisioning of that directory. Existing callers would raise TypeError.",
+   "evidence": "def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None:  (ABSENT: updated callers)"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "`gsutil cp` silently overwrites existing objects at the same deterministic names, so a rerun can replace earlier good data with no record of the prior version.",
+   "evidence": "gsutil ... cp {local} {dest} — ABSENT: -n flag or generation-match precondition"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "An empty or header-only source file produces zero chunks but is counted as `ok`. The per-file row-count log was also removed, so completeness cannot be verified.",
+   "evidence": "-        log.info(\"uploaded %s rows=%d\", src.name, len(df))  |  ok += 1 with no chunk produced"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 59297,
+  "tokOut": 33719,
+  "usd": 0.10552262,
+  "critMs": 30192
+ }
+}

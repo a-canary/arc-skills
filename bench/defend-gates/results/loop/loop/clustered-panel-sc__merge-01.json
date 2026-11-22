@@ -1,0 +1,302 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "merge-01",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "A new randomUUID() client_order_id is generated on every retry attempt, so the broker cannot dedupe. If attempt 1 was accepted but timed out or returned 5xx, attempt 2 submits a second order with a different ID and can double-fill. This contradicts the PR's own safety claim and the agreed retry-safety constraint.",
+     "evidence": "for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { const clientOrderId = randomUUID(); try { const res = await broker.post(... client_order_id: clientOrderId"
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "sizeBuy changed from floor to ceil, so the returned quantity can exceed remaining headroom and push the symbol past maxNotional, which sizing must never exceed. Example: maxNotional 10000, price 333, lotSize 1 gives 31 shares, notional 10,323.",
+     "evidence": "const lots = headroom / price / lotSize; return Math.ceil(lots) * lotSize;"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "After an ambiguous outcome (timeout or 502/503/504) the code resubmits without checking whether the original order exists at the broker. When attempts are exhausted the error is rethrown with no reconciliation, so the caller cannot tell whether an order is live.",
+     "evidence": "if (!retryable || attempt === MAX_ATTEMPTS) throw err; ... ABSENT: order-status lookup by client_order_id"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The new sizing tests use only exactly divisible inputs, the one case where ceil and floor agree. They cannot catch the cap overshoot, and no test asserts that notional stays at or below maxNotional.",
+     "evidence": "expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 })).toBe(100); ... price: 50, lotSize: 10 ... toBe(200)"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The retry logic, the core of the PR, has no tests. Nothing verifies that retries fire, that 4xx is not retried, or that the client_order_id is stable across attempts.",
+     "evidence": "ABSENT: tests for submitOrder; the test diff only touches src/risk/sizing.test.ts"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Timeout retry depends on the broker client accepting a timeoutMs option and throwing an error named exactly \"TimeoutError\". The artifact never shows this. If it is wrong, hung requests are never retried and the PR does not fix the dropped-order problem it targets.",
+     "evidence": "(err as Error).name === \"TimeoutError\" ... { timeoutMs: 4000 }; ABSENT: broker/client.ts evidence"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Worst-case submit latency is about 12.75s (3x4000ms plus 750ms backoff) with the same limit price, so a retried order may be stale in the volatile minutes after the open. There is no global retry budget or circuit breaker, and the retry log omits clientOrderId and final-failure signals.",
+     "evidence": "{ timeoutMs: 4000 } ... await sleep(250 * 2 ** (attempt - 1)); log.warn(\"order submit retry\", { symbol: intent.symbol, attempt });"
+    }
+   ],
+   "usage": {
+    "calls": 6,
+    "tokIn": 22209,
+    "tokOut": 12789,
+    "usd": 0.050854989999999996,
+    "critMs": 66190
+   },
+   "wallMs": 189336
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "If the post-failure lookup fails with anything other than a 404 (502/503, timeout, auth error, missing method), findByClientOrderId returns null and submitOrder resubmits. An unknown order state is treated as 'not found', which is the duplicate-fill path the agreed constraint forbids on a live account.",
+     "evidence": "} catch (err) { if (!(err instanceof BrokerError && err.status === 404)) { log.warn(\"order lookup failed\", { clientOrderId }); } return null; }"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Retry safety rests on the broker deduplicating by client_order_id and on a lookup endpoint that is consistent right after a submit. The PR admits the tests use a fake client and do not prove the real behavior. A lagging 404 followed by a resubmit could create a second live order.",
+     "evidence": "\"The new submit.test.ts pins this contract with a fake client, but it does not prove the real client behaves this way.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The PR depends on unverified BrokerClient behavior (client.ts is untouched). If post ignores timeoutMs, requests can hang. If the timeout error name differs, timeouts are rethrown with no lookup while the order may be live. If get is missing, the TypeError is swallowed as 'not found' and the code resubmits.",
+     "evidence": "Assumptions for the reviewer to confirm (`src/broker/client.ts` is not touched by this PR): - `BrokerClient.post` accepts `{ timeoutMs }` ... - `BrokerClient.get` exists"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "When attempts are exhausted with the state unconfirmed, the original error is rethrown unchanged and the clientOrderId only appears in a log line. Callers cannot tell a possibly-live order from a definite rejection, and no reconciliation mechanism exists, so position and maxNotional tracking can be wrong. A caller-level retry would also generate a fresh id and bypass dedupe.",
+     "evidence": "log.error(\"order submit failed, state unconfirmed\", { symbol: intent.symbol, clientOrderId }); throw err; / ABSENT: reconciliation job or persisted unconfirmed-order record"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Sizing uses only currentQty and ignores in-flight or unconfirmed orders. Retries make an accepted-but-unconfirmed order more likely, so later sizing can push the symbol above maxNotional once that order fills.",
+     "evidence": "const headroom = maxNotional - currentQty * price; (no pending-order term)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The lookup call has no timeout and there is no overall deadline. Worst case is three 4s posts, lookups, and backoff, so the caller blocks well past 12s at the open on a limit order, and concurrent orders retry in lockstep with no jitter.",
+     "evidence": "{ timeoutMs: 4000 } ... await sleep(250 * 2 ** (attempt - 1)); broker.get(\"/v2/orders:by_client_order_id\", ...) with no timeout"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "submit.ts imports ../util/sleep, which this diff does not create. It probably exists already, but that is not shown.",
+     "evidence": "ABSENT: no diff for src/util/sleep.ts; import { sleep } from \"../util/sleep\";"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "A lookup can return an order in a terminal failed state (rejected or canceled), and it is returned as a normal success.",
+     "evidence": "if (existing) return existing;"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The cap invariant test uses a 1e-9 tolerance, which hides floating-point overshoot, so 'never exceeds' is not strictly proven. The retryable check also dereferences err without a guard.",
+     "evidence": "toBeLessThanOrEqual(10_000 + 1e-9); (err as Error).name === \"TimeoutError\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Tests miss the riskiest paths: a non-404 lookup failure, exhaustion with an unconfirmed state, and a missing get. Casting to any hides contract mismatches.",
+     "evidence": "ABSENT: tests for non-404 lookup error and exhaustion path; fakeBroker returns { post, get } as any"
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 32417,
+    "tokOut": 24096,
+    "usd": 0.0781885,
+    "critMs": 41128
+   },
+   "wallMs": 142491
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "On a retry after an ambiguous failure (timeout/5xx), any 4xx from the resubmit is rethrown as a definite rejection without a lookup. If the broker answers a duplicate client_order_id with 409/422, the first attempt may already be live, yet the caller is told it was rejected and may submit a fresh order, producing the duplicate fill the constraint forbids. 408 is also ambiguous.",
+     "evidence": "`if (isDefiniteRejection(err)) throw err;` runs on every attempt; `isDefiniteRejection` is `err.status >= 400 && err.status < 500`."
+    },
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "Duplicate-fill safety depends on unverified broker behavior: that a repeated POST with the same client_order_id is deduped, and that the 404 lookup is reliable (the PR itself admits a 404 may be lag). The sandbox checks are only listed as merge preconditions, with no evidence they were done. If the broker doesn't dedupe, the confirmed-404 resubmit can create a second live order on a real-money account.",
+     "evidence": "\"Confirm in the broker sandbox that a repeated POST with the same `client_order_id` is rejected or deduped\"; code: \"A 404 may still be lag, so it only licenses a retry\" followed by another broker.post."
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The maxNotional protection for unconfirmed orders is not wired in. pendingQty defaults to 0 and the router neither passes it nor blocks new orders on a symbol with an unconfirmed order. The PR claims an unconfirmed order cannot push the symbol past maxNotional, but in the deployed path it can. There is also no persisted record, so the clientOrderId is lost on restart.",
+     "evidence": "\"The router callers must be wired to pass `pendingQty` and to block new orders on a symbol that has an unconfirmed order... This PR provides the error type and the sizing input, not the wiring.\" and \"There is no persisted record or reconciliation job for unconfirmed orders.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The found path returns the broker's order without checking that it matches the intent (symbol/side/qty/price) or that its status is not rejected/canceled. A reused caller-supplied clientOrderId can return a different or dead order as a successful submit.",
+     "evidence": "`if (lookup.state === \"found\") return lookup.order;` with order built from only `{ id: res.id, clientOrderId, status: res.status }`; `opts.clientOrderId ?? randomUUID()`."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The 15s overall deadline is checked only on the confirmed-404 branch, not before each POST or lookup, and POST timeouts are not clipped to the remaining time. The stated worst-case bound does not hold, and the tests don't exercise the deadline.",
+     "evidence": "`if (attempt === MAX_ATTEMPTS || Date.now() >= deadline) break;` is the only deadline check; PR says \"bounded by the 15s overall deadline plus one in-flight call.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The resubmit after a confirmed 404 reuses the original qty sized earlier. It does not re-run sizing or the maxNotional check against risk state that may have changed during the backoff and lookup window.",
+     "evidence": "Retry loop posts fixed `qty: intent.qty`; submitOrder takes only (broker, intent, opts) with no sizing re-check."
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "4xx is never retried, so a 429 rate-limit response during the open burst is dropped immediately, even though the PR's stated goal is to survive transient open-time errors. A 429 means the order was not accepted, so a same-id retry would be safe.",
+     "evidence": "\"4xx rejections are never retried\""
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "There is no global retry budget, circuit breaker, or concurrency cap. During an open-time 502/503 burst, each order can issue up to three posts plus three lookups, amplifying load on a struggling broker.",
+     "evidence": "ABSENT: any global retry budget, circuit breaker, or cap on concurrent submits."
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "sizeBuy sizes with a single `price`, but orders are limit orders at intent.limitPrice. If the limit price exceeds the sizing price, the filled notional can exceed maxNotional. The PR doesn't show that sizing uses the limit price.",
+     "evidence": "`headroom = maxNotional - (currentQty + pendingQty) * price` vs `limit_price: intent.limitPrice`."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "There is no feature flag or kill switch for a behavior change deployed just before market open on a live-money account. Rollback would require a code deploy during trading, and it cannot undo orders already placed.",
+     "evidence": "ABSENT: feature flag, kill switch, or staged rollout."
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "pendingQty is not validated; a negative value inflates headroom beyond the cap. Floating-point division before floor can also overshoot by one lot at exact boundaries, which the 1e-9 test tolerance would hide.",
+     "evidence": "`pendingQty = 0` default with no range check; `Math.floor(headroom / price / lotSize)`; `toBeLessThanOrEqual(10_000 + 1e-9)`."
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 46909,
+    "tokOut": 25412,
+    "usd": 0.0962799,
+    "critMs": 42384
+   },
+   "wallMs": 107433
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "When a lookup finds an order that fails checkFound, or checkFound throws on a malformed or null response, the code throws without registering the symbol in unconfirmedBySymbol. The found order may be live at the broker, for example when qty or limit price was normalized. A later submit on the same symbol then goes out with a fresh id and can create a duplicate fill. The in-process guard is only set after the loop, so these throws bypass it.",
+     "evidence": "if (mismatch) { throw new FoundOrderMismatchError(clientOrderId, mismatch, lookup.raw); } ... unconfirmedBySymbol.set(intent.symbol, clientOrderId) is reached only after the retry loop"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The flag-off path posts with a fresh randomUUID and never consults the unconfirmed-symbol guard. Turning the kill switch off during an incident is the documented rollback, and it reopens the duplicate-order hazard while an earlier order may still be live. The guard is also lost on restart, which is the other rollback route.",
+     "evidence": "if (!isRetryEnabled()) { const res = await broker.post(\"/v2/orders\", body); return ... } appears before const blocking = unconfirmedBySymbol.get(intent.symbol);"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "A confirmed-404 resubmit fails open when beforeResubmit is absent. It then resubmits the original body with no maxNotional check. Even when beforeResubmit is supplied, it can only veto a resubmit and cannot shrink the qty. The maxNotional invariant the PR is meant to protect is therefore not enforceable on the retry path, and the only safeguard is a checklist item for wiring that is not done.",
+     "evidence": "if (opts.beforeResubmit) { ... if (!ok) break; } log.warn(\"order submit retry\", ...) with no else branch; beforeResubmit?: () => boolean | Promise<boolean>; body is built once"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The guard is checked at entry but set only after the awaits. Two concurrent submits on one symbol can both pass the check. A second unconfirmed order overwrites the first entry, so clearing one lifts the block while the other may still be live. The guard is also keyed by symbol only, so an unconfirmed buy blocks protective sells.",
+     "evidence": "const blocking = unconfirmedBySymbol.get(intent.symbol); ... unconfirmedBySymbol.set(intent.symbol, clientOrderId);"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "A caller-supplied clientOrderId that matches a previously filled order with identical fields is returned as success, because 'filled' is not in DEAD_STATUSES. The new intent is silently never placed.",
+     "evidence": "const DEAD_STATUSES = new Set([\"rejected\", \"canceled\", \"expired\"]);"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The tests miss the guard-bypass paths: flag off with an unconfirmed symbol registered, a found-mismatch followed by a second submit on the same symbol, a malformed lookup response, omitted beforeResubmit, and the MAX_CONCURRENT_RETRIES shed.",
+     "evidence": "ABSENT: tests for the flag-off guard bypass and for the mismatch path leaving the symbol unguarded"
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 78630,
+    "tokOut": 42509,
+    "usd": 0.1422452,
+    "critMs": 93622
+   },
+   "wallMs": 216953
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The unconfirmed-symbol guard is registered only after the whole retry chain (up to ~17s). A concurrent same-symbol submit during that window passes the guard. This only affects the flag-on path, which is off at merge and gated on enablement preconditions, so it should be fixed before enabling.",
+     "evidence": "`const blocking = unconfirmedBySymbol.get(intent.symbol);` is checked once at entry; `unconfirmedBySymbol.set(intent.symbol, clientOrderId);` runs only after the loop."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The guard is keyed by symbol only, so a stuck unconfirmed buy also blocks sells and exits on that symbol until `clearUnconfirmed` is called. The behavior is documented and conservative, but the router wiring should account for it before enablement.",
+     "evidence": "\"further `submitOrder` calls for that symbol, with the flag on or off, are refused\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 429 path resends the same body without `beforeResubmit`, and relies on an unverified assumption that a 429 means the order was not accepted. Neither the 429 semantics nor the missing risk re-check appears in the enablement preconditions. This only matters once the flag is enabled.",
+     "evidence": "\"429 means the broker did not accept the order.\" vs. the four unchecked enablement preconditions, none of which covers 429."
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 85464,
+    "tokOut": 39436,
+    "usd": 0.1308199,
+    "critMs": 78946
+   },
+   "wallMs": 169942
+  }
+ ],
+ "artifact": "PR #412: Retry transient broker errors on order submit\n\nDuring the first minutes after the open the broker intermittently returns 502/503 or hangs past our timeout, and we drop the order on the floor.\nThis wraps the submit call in a bounded retry (3 attempts, exponential backoff with jitter). It is **behind a kill switch, `ORDER_RETRY_ENABLED`, which defaults to off**. With the flag off, `submitOrder` does exactly one post, as before, with one addition: it still honors the unconfirmed-symbol guard below, so turning the flag off cannot reopen a duplicate-order hazard created while it was on. The flag is read on every call, so it can be turned off without a code deploy (it can be turned off in a running process if the env source is hot-reloadable; otherwise a restart is needed, and a restart loses the in-memory guard, see \"Not done\"). Enabling it is gated on the preconditions below.\n\nRetry safety:\n- The `client_order_id` is generated once per `submitOrder` call and reused on every attempt. Callers may also pass `opts.clientOrderId` so a caller-level retry reuses the same id and cannot bypass dedupe.\n- 4xx responses are definite rejections (rethrown, no retry) only while no earlier attempt has been ambiguous. 408 is treated as ambiguous. Once an earlier attempt was ambiguous, a 4xx from a resubmit (for example 409/422 for a duplicate id) proves nothing, because the first attempt may be live. In that case we look the order up instead of rethrowing.\n- 429 means the broker did not accept the order. If no earlier attempt was ambiguous, we back off and retry with the same id without a lookup. If retries run out, the original `BrokerError` is rethrown (definitely not placed).\n- After any ambiguous failure (timeout, 408, 5xx, non-`BrokerError`) we wait out the backoff, then look the order up by `client_order_id`. The lookup has three outcomes:\n  - **found**: we check that the broker's order matches the intent (symbol, side, qty, limit price) and is not rejected/canceled/expired. If it matches, we return it and send nothing more. If not (or if the response is malformed and cannot be checked), we register the symbol as unconfirmed (the found order may still be live, e.g. if the broker normalized qty or price) and throw `FoundOrderMismatchError` (for example a reused caller-supplied id that points at a different or dead order). Blocking on a dead order is conservative; `clearUnconfirmed` releases it after reconciliation.\n  - **confirmed not found** (explicit 404): the only case where we resubmit, and it **fails closed**. A resubmit requires `opts.beforeResubmit`, which is called first so the caller can re-run sizing and the `maxNotional` check against current risk state. If it is absent, returns false, or throws, we stop with `UnconfirmedOrderError`. `beforeResubmit` can only veto; it cannot shrink the qty, and the resubmit sends the original body. A caller that wants a smaller order must reconcile and submit with the same `clientOrderId` itself.\n  - **unknown** (lookup timed out, 5xx, auth error, missing method, anything else): we do not resubmit. We throw `UnconfirmedOrderError`.\n- When attempts or the overall deadline (15s) are exhausted, we always throw `UnconfirmedOrderError`, even if the last lookup returned 404. A 404 right after a submit may just be lag, so we never report such an order as definitely not placed.\n- `UnconfirmedOrderError` carries `clientOrderId` and `lastError`, so callers can distinguish a possibly-live order from a definite rejection. Callers must not submit a fresh order for the same intent. They should reconcile by `clientOrderId` or pass it back via `opts.clientOrderId`.\n- In-process guard: after an `UnconfirmedOrderError` or `FoundOrderMismatchError`, further `submitOrder` calls for that symbol, with the flag on or off, are refused (`UnconfirmedOrderError` carrying the blocking id) until `clearUnconfirmed(symbol, clientOrderId)` is called or the same `clientOrderId` is passed back. This guard is in memory only and is lost on restart (see \"Not done\").\n- Deadline: it is checked before every post, backoffs are clipped to the time remaining, and each post timeout is clipped to the time remaining. One final lookup (2s) is still allowed after the deadline. The worst case is therefore about 15s + 2s, not \"plus one in-flight call\".\n- Local timeouts in `submit.ts` (4s per post, 2s per lookup) mean we do not depend on `BrokerClient` honoring `timeoutMs` or on the name of its timeout error.\n- Load amplification: each order does at most 3 posts and 3 lookups. A process-wide cap (`MAX_CONCURRENT_RETRIES = 8`) limits how many orders may be in the retry/lookup phase at once. Past the cap, an order that fails ambiguously is not retried or looked up. It throws `UnconfirmedOrderError` immediately. This is a simple cap, not a full circuit breaker. The kill switch is the operational backstop.\n\nSizing: `sizeBuy` takes an optional `pendingQty` (default 0) for accepted-but-unfilled or unconfirmed buys, counted against headroom. It also takes an optional `limitPrice`. Sizing uses `max(price, limitPrice)` so the notional is computed at the worst-case fill price of a limit order. Callers should pass the order's `limitPrice`. Quantities still round down to the lot size. Tests cover the non-divisible cases, the cap invariant, pending quantity, and the limit price.\n\n**The `maxNotional` protection for unconfirmed orders only takes effect once the router passes `pendingQty`, `limitPrice` and `beforeResubmit`. This PR does not do that wiring, so with the flag on and no wiring the protection is not active in the deployed path (a retry that would need a resubmit stops with `UnconfirmedOrderError` instead). That is why the flag stays off at merge.**\n\n**Not done in this PR (needs follow-up, and gates enabling the flag):**\n- There is no persisted record or reconciliation job for unconfirmed orders. The `clientOrderId` is in the thrown error and in a `log.error` line only, and the in-memory symbol guard is lost on restart. Until that exists, a restart (including a restart used to turn the flag off) drops the guard, so operators must reconcile open orders by `clientOrderId` from the logs before restarting during an incident.\n- The router callers must be wired to pass `pendingQty`, `limitPrice` and `beforeResubmit`, and to call `clearUnconfirmed` after reconciliation. This PR provides the error type, the guard and the sizing inputs, not the wiring.\n- No full circuit breaker or persisted retry budget.\n\n**Enablement preconditions (not yet done; none of these has been verified, and the flag stays off until they are). `src/broker/client.ts` is not touched, and the tests use a fake client:**\n- [ ] Confirm in the broker sandbox that a repeated POST with the same `client_order_id` is rejected or deduped and does not create a second order. If it is not deduped, the confirmed-404 resubmit can create a second live order, so do not enable the flag.\n- [ ] Confirm that `GET /v2/orders:by_client_order_id` returns the order immediately after an accepted submit (or document the lag), returns a 404 `BrokerError` when the order is not found, and returns `symbol`, `side`, `qty`, `limit_price` and `status` with the names used in `checkFound`.\n- [ ] Confirm that `BrokerClient.get` exists with the signature used here. If it does not, the failure is treated as \"unknown\", so we throw rather than resubmit.\n- [ ] Router wiring and reconciliation from \"Not done\" are in place.\n\n```diff\ndiff --git a/src/router/submit.ts b/src/router/submit.ts\nindex 3a1f0c2..d27a6b4 100644\n--- a/src/router/submit.ts\n+++ b/src/router/submit.ts\n@@ -1,18 +1,278 @@\n import { randomUUID } from \"node:crypto\";\n import { BrokerClient, BrokerError } from \"../broker/client\";\n import { OrderIntent, SubmittedOrder } from \"../types\";\n+import { sleep } from \"../util/sleep\";\n import { log } from \"../log\";\n\n+const MAX_ATTEMPTS = 3;\n+const POST_TIMEOUT_MS = 4000;\n+const LOOKUP_TIMEOUT_MS = 2000;\n+const OVERALL_DEADLINE_MS = 15000;\n+const MIN_POST_WINDOW_MS = 250;\n+const MAX_CONCURRENT_RETRIES = 8;\n+const DEAD_STATUSES = new Set([\"rejected\", \"canceled\", \"expired\"]);\n+\n+// Kill switch, read on every call. Default OFF: single post, legacy behavior.\n+export function isRetryEnabled(): boolean {\n+  return process.env.ORDER_RETRY_ENABLED === \"true\";\n+}\n+\n+let retriesInFlight = 0;\n+// symbol -> clientOrderId of an order whose state is unconfirmed. In memory only.\n+const unconfirmedBySymbol = new Map<string, string>();\n+\n+export function clearUnconfirmed(symbol: string, clientOrderId: string): void {\n+  if (unconfirmedBySymbol.get(symbol) === clientOrderId) {\n+    unconfirmedBySymbol.delete(symbol);\n+  }\n+}\n+\n+export function _resetStateForTests(): void {\n+  retriesInFlight = 0;\n+  unconfirmedBySymbol.clear();\n+}\n+\n+/**\n+ * The order may be live at the broker. Do NOT submit a new order for the same\n+ * intent; reconcile by clientOrderId (or resubmit passing opts.clientOrderId).\n+ */\n+export class UnconfirmedOrderError extends Error {\n+  constructor(\n+    public readonly clientOrderId: string,\n+    public readonly lastError: unknown,\n+  ) {\n+    super(`order state unconfirmed (client_order_id=${clientOrderId})`);\n+    this.name = \"UnconfirmedOrderError\";\n+  }\n+}\n+\n+/** The order found by client_order_id does not match the intent or is dead. */\n+export class FoundOrderMismatchError extends Error {\n+  constructor(\n+    public readonly clientOrderId: string,\n+    public readonly reason: string,\n+    public readonly order: unknown,\n+  ) {\n+    super(`found order mismatch (client_order_id=${clientOrderId}, reason=${reason})`);\n+    this.name = \"FoundOrderMismatchError\";\n+  }\n+}\n+\n+type Lookup =\n+  | { state: \"found\"; raw: any }\n+  | { state: \"not_found\" }\n+  | { state: \"unknown\" };\n+\n+// Local timeout so we do not depend on BrokerClient honoring timeoutMs.\n+function withTimeout<T>(fn: () => Promise<T>, ms: number): Promise<T> {\n+  let timer: NodeJS.Timeout;\n+  const timeout = new Promise<never>((_, reject) => {\n+    timer = setTimeout(\n+      () => reject(Object.assign(new Error(\"timeout\"), { name: \"TimeoutError\" })),\n+      ms,\n+    );\n+  });\n+  // Promise.resolve().then also turns a synchronous throw (e.g. missing method) into a rejection.\n+  return Promise.race([Promise.resolve().then(fn), timeout]).finally(() =>\n+    clearTimeout(timer),\n+  );\n+}\n+\n+// A definite rejection means the broker did not accept the order. 408 (request\n+// timeout) is ambiguous and 429 (rate limit) is handled separately.\n+function isDefiniteRejection(err: unknown): boolean {\n+  return (\n+    err instanceof BrokerError &&\n+    err.status >= 400 &&\n+    err.status < 500 &&\n+    err.status !== 408 &&\n+    err.status !== 429\n+  );\n+}\n+\n+function isRateLimited(err: unknown): boolean {\n+  return err instanceof BrokerError && err.status === 429;\n+}\n+\n+function backoffMs(attempt: number): number {\n+  return 250 * 2 ** (attempt - 1) * (0.5 + Math.random() / 2);\n+}\n+\n+async function findByClientOrderId(\n+  broker: BrokerClient,\n+  clientOrderId: string,\n+): Promise<Lookup> {\n+  try {\n+    const res = await withTimeout(\n+      () =>\n+        broker.get(\"/v2/orders:by_client_order_id\", {\n+          client_order_id: clientOrderId,\n+        }),\n+      LOOKUP_TIMEOUT_MS,\n+    );\n+    return { state: \"found\", raw: res };\n+  } catch (err) {\n+    if (err instanceof BrokerError && err.status === 404) {\n+      return { state: \"not_found\" };\n+    }\n+    // Anything else is NOT evidence the order is absent.\n+    log.warn(\"order lookup failed\", { clientOrderId });\n+    return { state: \"unknown\" };\n+  }\n+}\n+\n+// Returns a mismatch reason, or null if the found order matches the intent and is live.\n+function checkFound(intent: OrderIntent, res: any): string | null {\n+  if (res.symbol !== intent.symbol) return \"symbol\";\n+  if (res.side !== intent.side) return \"side\";\n+  if (Number(res.qty) !== Number(intent.qty)) return \"qty\";\n+  if (Number(res.limit_price) !== Number(intent.limitPrice)) return \"limit_price\";\n+  if (DEAD_STATUSES.has(res.status)) return `status:${res.status}`;\n+  return null;\n+}\n+\n export async function submitOrder(\n   broker: BrokerClient,\n   intent: OrderIntent,\n+  opts: {\n+    clientOrderId?: string;\n+    // Re-run sizing / maxNotional against current risk state. REQUIRED for a\n+    // resubmit that follows a confirmed 404: if absent, we stop (fail closed).\n+    // Return false to stop. It can only veto; it cannot shrink the qty.\n+    beforeResubmit?: () => boolean | Promise<boolean>;\n+  } = {},\n ): Promise<SubmittedOrder> {\n-  const clientOrderId = randomUUID();\n-  const res = await broker.post(\"/v2/orders\", {\n-    symbol: intent.symbol,\n-    qty: intent.qty,\n-    side: intent.side,\n-    type: \"limit\",\n-    limit_price: intent.limitPrice,\n-    client_order_id: clientOrderId,\n-  });\n-  return { id: res.id, clientOrderId, status: res.status };\n+  // One id for every attempt so the broker can dedupe retries.\n+  const clientOrderId = opts.clientOrderId ?? randomUUID();\n+  const body = {\n+    symbol: intent.symbol,\n+    qty: intent.qty,\n+    side: intent.side,\n+    type: \"limit\",\n+    limit_price: intent.limitPrice,\n+    client_order_id: clientOrderId,\n+  };\n+\n+  // The guard applies with the flag on or off, so the kill switch cannot\n+  // reopen a duplicate-order hazard while an earlier order may still be live.\n+  const blocking = unconfirmedBySymbol.get(intent.symbol);\n+  if (blocking && blocking !== clientOrderId) {\n+    throw new UnconfirmedOrderError(\n+      blocking,\n+      new Error(\"symbol blocked by an unconfirmed order\"),\n+    );\n+  }\n+\n+  if (!isRetryEnabled()) {\n+    const res = await broker.post(\"/v2/orders\", body);\n+    return { id: res.id, clientOrderId, status: res.status };\n+  }\n+\n+  const deadline = Date.now() + OVERALL_DEADLINE_MS;\n+  let lastErr: unknown;\n+  let possiblyLive = false;\n+  let holdsSlot = false;\n+  try {\n+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {\n+      const remaining = deadline - Date.now();\n+      if (remaining < MIN_POST_WINDOW_MS) break;\n+      const postTimeout = Math.min(POST_TIMEOUT_MS, remaining);\n+      try {\n+        const res = await withTimeout(\n+          () => broker.post(\"/v2/orders\", body, { timeoutMs: postTimeout }),\n+          postTimeout,\n+        );\n+        clearUnconfirmed(intent.symbol, clientOrderId);\n+        return { id: res.id, clientOrderId, status: res.status };\n+      } catch (err) {\n+        lastErr = err;\n+        // A 4xx is only a definite rejection if no earlier attempt could have\n+        // been accepted; otherwise it may be a duplicate-id response.\n+        if (isDefiniteRejection(err) && !possiblyLive) throw err;\n+        if (isRateLimited(err) && !possiblyLive) {\n+          // Not accepted: safe to retry with the same id, no lookup needed.\n+          if (attempt === MAX_ATTEMPTS) throw err;\n+          await sleep(Math.min(backoffMs(attempt), Math.max(0, deadline - Date.now())));\n+          continue;\n+        }\n+        // Ambiguous outcome (timeout, 408, 5xx, network error, or any error\n+        // after an earlier ambiguous attempt): the broker may have accepted it.\n+        possiblyLive = true;\n+        if (!holdsSlot) {\n+          if (retriesInFlight >= MAX_CONCURRENT_RETRIES) break; // shed load\n+          retriesInFlight++;\n+          holdsSlot = true;\n+        }\n+        await sleep(Math.min(backoffMs(attempt), Math.max(0, deadline - Date.now())));\n+        const lookup = await findByClientOrderId(broker, clientOrderId);\n+        if (lookup.state === \"found\") {\n+          let mismatch: string | null;\n+          try {\n+            mismatch = checkFound(intent, lookup.raw);\n+          } catch {\n+            mismatch = \"malformed_response\"; // null/odd body: cannot verify\n+          }\n+          if (mismatch) {\n+            // The found order may still be live (e.g. normalized qty/price),\n+            // so block the symbol until it is reconciled.\n+            unconfirmedBySymbol.set(intent.symbol, clientOrderId);\n+            log.error(\"found order mismatch, symbol blocked\", {\n+              symbol: intent.symbol,\n+              clientOrderId,\n+              mismatch,\n+            });\n+            throw new FoundOrderMismatchError(clientOrderId, mismatch, lookup.raw);\n+          }\n+          clearUnconfirmed(intent.symbol, clientOrderId);\n+          return {\n+            id: lookup.raw.id,\n+            clientOrderId,\n+            status: lookup.raw.status,\n+          };\n+        }\n+        if (lookup.state === \"unknown\") break; // never resubmit on unknown state\n+        // Confirmed 404. A 404 may still be lag, so it only licenses a retry,\n+        // never a \"definitely not placed\" conclusion.\n+        if (attempt === MAX_ATTEMPTS || deadline - Date.now() < MIN_POST_WINDOW_MS) break;\n+        // Fail closed: a resubmit needs an explicit risk check from the caller.\n+        if (!opts.beforeResubmit) break;\n+        const ok = await Promise.resolve()\n+          .then(() => opts.beforeResubmit!())\n+          .catch(() => false);\n+        if (!ok) break;\n+        log.warn(\"order submit retry\", { symbol: intent.symbol, clientOrderId, attempt });\n+      }\n+    }\n+  } finally {\n+    if (holdsSlot) retriesInFlight--;\n+  }\n+  // Only 429s (definitely not accepted) can reach here without possiblyLive.\n+  if (!possiblyLive) throw lastErr ?? new Error(\"order submit made no attempt\");\n+  unconfirmedBySymbol.set(intent.symbol, clientOrderId);\n+  log.error(\"order submit failed, state unconfirmed\", {\n+    symbol: intent.symbol,\n+    clientOrderId,\n+  });\n+  throw new UnconfirmedOrderError(clientOrderId, lastErr);\n }\ndiff --git a/src/router/submit.test.ts b/src/router/submit.test.ts\nnew file mode 100644\nindex 0000000..9b3d8f1\n--- /dev/null\n+++ b/src/router/submit.test.ts\n@@ -0,0 +1,250 @@\n+import {\n+  submitOrder,\n+  UnconfirmedOrderError,\n+  FoundOrderMismatchError,\n+  _resetStateForTests,\n+} from \"./submit\";\n+import { BrokerError } from \"../broker/client\";\n+\n+jest.mock(\"../util/sleep\", () => ({ sleep: jest.fn().mockResolvedValue(undefined) }));\n+\n+const intent = { symbol: \"AAPL\", qty: 10, side: \"buy\", limitPrice: 100 } as any;\n+const allow = { beforeResubmit: () => true };\n+const timeoutErr = () => Object.assign(new Error(\"timeout\"), { name: \"TimeoutError\" });\n+const notFound = () => new BrokerError(404, \"not found\");\n+const foundOrder = (over: Record<string, unknown> = {}) => ({\n+  id: \"o9\",\n+  status: \"accepted\",\n+  symbol: \"AAPL\",\n+  side: \"buy\",\n+  qty: \"10\",\n+  limit_price: \"100\",\n+  ...over,\n+});\n+\n+function fakeBroker(post: jest.Mock, get: jest.Mock = jest.fn().mockRejectedValue(notFound())) {\n+  return { post, get } as any;\n+}\n+\n+beforeEach(() => {\n+  process.env.ORDER_RETRY_ENABLED = \"true\";\n+  _resetStateForTests();\n+});\n+afterEach(() => {\n+  delete process.env.ORDER_RETRY_ENABLED;\n+});\n+\n+test(\"kill switch off: single post, original error, no lookup\", async () => {\n+  delete process.env.ORDER_RETRY_ENABLED;\n+  const post = jest.fn().mockRejectedValue(new BrokerError(503, \"unavailable\"));\n+  const get = jest.fn();\n+  await expect(submitOrder(fakeBroker(post, get), intent)).rejects.toBeInstanceOf(BrokerError);\n+  expect(post).toHaveBeenCalledTimes(1);\n+  expect(get).not.toHaveBeenCalled();\n+});\n+\n+test(\"kill switch off still honors the unconfirmed-symbol guard\", async () => {\n+  const post = jest.fn().mockRejectedValueOnce(timeoutErr());\n+  const get = jest.fn().mockRejectedValueOnce(new BrokerError(503, \"unavailable\"));\n+  const first = await submitOrder(fakeBroker(post, get), intent).catch((e) => e);\n+  expect(first).toBeInstanceOf(UnconfirmedOrderError);\n+\n+  delete process.env.ORDER_RETRY_ENABLED;\n+  const post2 = jest.fn().mockResolvedValue({ id: \"o2\", status: \"accepted\" });\n+  const blocked = await submitOrder(fakeBroker(post2), intent).catch((e) => e);\n+  expect(blocked).toBeInstanceOf(UnconfirmedOrderError);\n+  expect(blocked.clientOrderId).toBe(first.clientOrderId);\n+  expect(post2).not.toHaveBeenCalled();\n+});\n+\n+test(\"retries 503 and succeeds\", async () => {\n+  const post = jest\n+    .fn()\n+    .mockRejectedValueOnce(new BrokerError(503, \"unavailable\"))\n+    .mockResolvedValueOnce({ id: \"o1\", status: \"accepted\" });\n+  const res = await submitOrder(fakeBroker(post), intent, allow);\n+  expect(post).toHaveBeenCalledTimes(2);\n+  expect(res.id).toBe(\"o1\");\n+});\n+\n+test(\"client_order_id is identical across attempts\", async () => {\n+  const post = jest\n+    .fn()\n+    .mockRejectedValueOnce(timeoutErr())\n+    .mockRejectedValueOnce(new BrokerError(502, \"bad gateway\"))\n+    .mockResolvedValueOnce({ id: \"o1\", status: \"accepted\" });\n+  await submitOrder(fakeBroker(post), intent, allow);\n+  const ids = post.mock.calls.map((c) => c[1].client_order_id);\n+  expect(ids).toHaveLength(3);\n+  expect(new Set(ids).size).toBe(1);\n+});\n+\n+test(\"uses caller-supplied clientOrderId\", async () => {\n+  const post = jest.fn().mockResolvedValue({ id: \"o1\", status: \"accepted\" });\n+  const res = await submitOrder(fakeBroker(post), intent, { clientOrderId: \"abc\" });\n+  expect(post.mock.calls[0][1].client_order_id).toBe(\"abc\");\n+  expect(res.clientOrderId).toBe(\"abc\");\n+});\n+\n+test(\"does not retry a first-attempt 4xx\", async () => {\n+  const post = jest.fn().mockRejectedValue(new BrokerError(422, \"rejected\"));\n+  const get = jest.fn();\n+  await expect(submitOrder(fakeBroker(post, get), intent)).rejects.toBeInstanceOf(BrokerError);\n+  expect(post).toHaveBeenCalledTimes(1);\n+  expect(get).not.toHaveBeenCalled();\n+});\n+\n+test(\"a 4xx on a resubmit after an ambiguous failure triggers a lookup, not a rejection\", async () => {\n+  const post = jest\n+    .fn()\n+    .mockRejectedValueOnce(timeoutErr())\n+    .mockRejectedValueOnce(new BrokerError(422, \"duplicate client_order_id\"));\n+  const get = jest\n+    .fn()\n+    .mockRejectedValueOnce(notFound())\n+    .mockResolvedValueOnce(foundOrder());\n+  const res = await submitOrder(fakeBroker(post, get), intent, allow);\n+  expect(res.id).toBe(\"o9\");\n+  expect(post).toHaveBeenCalledTimes(2);\n+});\n+\n+test(\"a 409 on a resubmit with an unknown lookup throws UnconfirmedOrderError, not the 409\", async () => {\n+  const post = jest\n+    .fn()\n+    .mockRejectedValueOnce(timeoutErr())\n+    .mockRejectedValueOnce(new BrokerError(409, \"conflict\"));\n+  const get = jest\n+    .fn()\n+    .mockRejectedValueOnce(notFound())\n+    .mockRejectedValueOnce(new BrokerError(503, \"unavailable\"));\n+  await expect(submitOrder(fakeBroker(post, get), intent, allow)).rejects.toBeInstanceOf(\n+    UnconfirmedOrderError,\n+  );\n+});\n+\n+test(\"408 is ambiguous and goes through lookup\", async () => {\n+  const post = jest\n+    .fn()\n+    .mockRejectedValueOnce(new BrokerError(408, \"request timeout\"))\n+    .mockResolvedValueOnce({ id: \"o1\", status: \"accepted\" });\n+  const get = jest.fn().mockRejectedValue(notFound());\n+  const res = await submitOrder(fakeBroker(post, get), intent, allow);\n+  expect(res.id).toBe(\"o1\");\n+  expect(get).toHaveBeenCalledTimes(1);\n+});\n+\n+test(\"429 is retried with the same id and no lookup\", async () => {\n+  const post = jest\n+    .fn()\n+    .mockRejectedValueOnce(new BrokerError(429, \"rate limited\"))\n+    .mockResolvedValueOnce({ id: \"o1\", status: \"accepted\" });\n+  const get = jest.fn();\n+  const res = await submitOrder(fakeBroker(post, get), intent);\n+  expect(res.id).toBe(\"o1\");\n+  expect(get).not.toHaveBeenCalled();\n+  expect(post.mock.calls[0][1].client_order_id).toBe(post.mock.calls[1][1].client_order_id);\n+});\n+\n+test(\"persistent 429 rethrows the BrokerError (definitely not placed)\", async () => {\n+  const post = jest.fn().mockRejectedValue(new BrokerError(429, \"rate limited\"));\n+  await expect(submitOrder(fakeBroker(post), intent)).rejects.toBeInstanceOf(BrokerError);\n+  expect(post).toHaveBeenCalledTimes(3);\n+});\n+\n+test(\"gives up after 3 attempts with UnconfirmedOrderError carrying the id\", async () => {\n+  const post = jest.fn().mockRejectedValue(new BrokerError(503, \"unavailable\"));\n+  const err = await submitOrder(fakeBroker(post), intent, allow).catch((e) => e);\n+  expect(err).toBeInstanceOf(UnconfirmedOrderError);\n+  expect(err.clientOrderId).toBe(post.mock.calls[0][1].client_order_id);\n+  expect(post).toHaveBeenCalledTimes(3);\n+});\n+\n+test(\"returns existing order instead of resubmitting when lookup finds it\", async () => {\n+  const post = jest.fn().mockRejectedValue(timeoutErr());\n+  const get = jest.fn().mockResolvedValue(foundOrder());\n+  const res = await submitOrder(fakeBroker(post, get), intent);\n+  expect(post).toHaveBeenCalledTimes(1);\n+  expect(res.id).toBe(\"o9\");\n+  expect(get.mock.calls[0][1].client_order_id).toBe(post.mock.calls[0][1].client_order_id);\n+});\n+\n+test(\"found order that does not match the intent is not returned as success\", async () => {\n+  const post = jest.fn().mockRejectedValue(timeoutErr());\n+  const get = jest.fn().mockResolvedValue(foundOrder({ qty: \"99\" }));\n+  await expect(submitOrder(fakeBroker(post, get), intent)).rejects.toBeInstanceOf(\n+    FoundOrderMismatchError,\n+  );\n+});\n+\n+test(\"found order in a dead status is not returned as success\", async () => {\n+  const post = jest.fn().mockRejectedValue(timeoutErr());\n+  const get = jest.fn().mockResolvedValue(foundOrder({ status: \"canceled\" }));\n+  await expect(submitOrder(fakeBroker(post, get), intent)).rejects.toBeInstanceOf(\n+    FoundOrderMismatchError,\n+  );\n+});\n+\n+test(\"a found-order mismatch blocks the symbol until the id is passed back\", async () => {\n+  const post = jest.fn().mockRejectedValue(timeoutErr());\n+  const get = jest.fn().mockResolvedValue(foundOrder({ qty: \"99\" }));\n+  const first = await submitOrder(fakeBroker(post, get), intent).catch((e) => e);\n+  expect(first).toBeInstanceOf(FoundOrderMismatchError);\n+\n+  const post2 = jest.fn().mockResolvedValue({ id: \"o2\", status: \"accepted\" });\n+  const blocked = await submitOrder(fakeBroker(post2), intent).catch((e) => e);\n+  expect(blocked).toBeInstanceOf(UnconfirmedOrderError);\n+  expect(blocked.clientOrderId).toBe(first.clientOrderId);\n+  expect(post2).not.toHaveBeenCalled();\n+});\n+\n+test(\"a malformed (null) lookup response is a mismatch and blocks the symbol\", async () => {\n+  const post = jest.fn().mockRejectedValue(timeoutErr());\n+  const get = jest.fn().mockResolvedValue(null);\n+  const first = await submitOrder(fakeBroker(post, get), intent).catch((e) => e);\n+  expect(first).toBeInstanceOf(FoundOrderMismatchError);\n+  expect(first.reason).toBe(\"malformed_response\");\n+\n+  const post2 = jest.fn();\n+  const blocked = await submitOrder(fakeBroker(post2), intent).catch((e) => e);\n+  expect(blocked).toBeInstanceOf(UnconfirmedOrderError);\n+  expect(post2).not.toHaveBeenCalled();\n+});\n+\n+test(\"does NOT resubmit when lookup fails with a non-404 error\", async () => {\n+  const post = jest.fn().mockRejectedValue(timeoutErr());\n+  const get = jest.fn().mockRejectedValue(new BrokerError(503, \"unavailable\"));\n+  await expect(submitOrder(fakeBroker(post, get), intent, allow)).rejects.toBeInstanceOf(\n+    UnconfirmedOrderError,\n+  );\n+  expect(post).toHaveBeenCalledTimes(1);\n+});\n+\n+test(\"does NOT resubmit when lookup times out\", async () => {\n+  const post = jest.fn().mockRejectedValue(timeoutErr());\n+  const get = jest.fn().mockRejectedValue(timeoutErr());\n+  await expect(submitOrder(fakeBroker(post, get), intent, allow)).rejects.toBeInstanceOf(\n+    UnconfirmedOrderError,\n+  );\n+  expect(post).toHaveBeenCalledTimes(1);\n+});\n+\n+test(\"does NOT resubmit when broker.get is missing\", async () => {\n+  const post = jest.fn().mockRejectedValue(timeoutErr());\n+  await expect(submitOrder({ post } as any, intent, allow)).rejects.toBeInstanceOf(\n+    UnconfirmedOrderError,\n+  );\n+  expect(post).toHaveBeenCalledTimes(1);\n+});\n+\n+test(\"a timeout with an unexpected error name is still treated as ambiguous\", async () => {\n+  const post = jest.fn().mockRejectedValue(new Error(\"ECONNRESET\"));\n+  const get = jest.fn().mockResolvedValue(foundOrder({ id: \"o7\" }));\n+  const res = await submitOrder(fakeBroker(post, get), intent);\n+  expect(res.id).toBe(\"o7\");\n+  expect(post).toHaveBeenCalledTimes(1);\n+});\n+\n+test(\"stops resubmitting once the overall deadline is exhausted\", async () => {\n+  let now = 1_000_000;\n+  const spy = jest.spyOn(Date, \"now\").mockImplementation(() => now);\n+  const post = jest.fn().mockImplementation(async () => {\n+    now += 8000;\n+    throw new BrokerError(503, \"unavailable\");\n+  });\n+  const err = await submitOrder(fakeBroker(post), intent, allow).catch((e) => e);\n+  spy.mockRestore();\n+  expect(err).toBeInstanceOf(UnconfirmedOrderError);\n+  expect(post).toHaveBeenCalledTimes(2); // third attempt skipped: deadline passed\n+});\n+\n+test(\"a confirmed 404 without beforeResubmit fails closed: no resubmit\", async () => {\n+  const post = jest.fn().mockRejectedValue(timeoutErr());\n+  const err = await submitOrder(fakeBroker(post), intent).catch((e) => e);\n+  expect(err).toBeInstanceOf(UnconfirmedOrderError);\n+  expect(post).toHaveBeenCalledTimes(1);\n+});\n+\n+test(\"beforeResubmit returning false stops the resubmit\", async () => {\n+  const post = jest.fn().mockRejectedValue(timeoutErr());\n+  const err = await submitOrder(fakeBroker(post), intent, {\n+    beforeResubmit: () => false,\n+  }).catch((e) => e);\n+  expect(err).toBeInstanceOf(UnconfirmedOrderError);\n+  expect(post).toHaveBeenCalledTimes(1);\n+});\n+\n+test(\"beforeResubmit throwing stops the resubmit\", async () => {\n+  const post = jest.fn().mockRejectedValue(timeoutErr());\n+  const err = await submitOrder(fakeBroker(post), intent, {\n+    beforeResubmit: () => {\n+      throw new Error(\"risk state unavailable\");\n+    },\n+  }).catch((e) => e);\n+  expect(err).toBeInstanceOf(UnconfirmedOrderError);\n+  expect(post).toHaveBeenCalledTimes(1);\n+});\n+\n+test(\"an unconfirmed order blocks new orders on the symbol until the id is passed back\", async () => {\n+  const post = jest.fn().mockRejectedValueOnce(timeoutErr());\n+  const get = jest.fn().mockRejectedValueOnce(new BrokerError(503, \"unavailable\"));\n+  const first = await submitOrder(fakeBroker(post, get), intent).catch((e) => e);\n+  expect(first).toBeInstanceOf(UnconfirmedOrderError);\n+\n+  const post2 = jest.fn().mockResolvedValue({ id: \"o2\", status: \"accepted\" });\n+  const blocked = await submitOrder(fakeBroker(post2), intent).catch((e) => e);\n+  expect(blocked).toBeInstanceOf(UnconfirmedOrderError);\n+  expect(blocked.clientOrderId).toBe(first.clientOrderId);\n+  expect(post2).not.toHaveBeenCalled();\n+\n+  const res = await submitOrder(fakeBroker(post2), intent, {\n+    clientOrderId: first.clientOrderId,\n+  });\n+  expect(res.id).toBe(\"o2\");\n+});\ndiff --git a/src/risk/sizing.ts b/src/risk/sizing.ts\nindex 77c2e10..8d41b5a 100644\n--- a/src/risk/sizing.ts\n+++ b/src/risk/sizing.ts\n@@ -8,13 +8,21 @@ export interface SizingInput {\n   maxNotional: number; // USD cap per symbol, from risk config\n   price: number;\n   currentQty: number; // signed: negative when short\n   lotSize: number;\n+  pendingQty?: number; // accepted-but-unfilled or unconfirmed buy qty; counted against headroom\n+  limitPrice?: number; // the order's limit price; sizing uses max(price, limitPrice) as the worst-case fill\n }\n\n export function sizeBuy(input: SizingInput): number {\n-  const { maxNotional, price, currentQty, lotSize } = input;\n-  const headroom = maxNotional - currentQty * price;\n-  if (headroom <= 0) return 0;\n-  return Math.floor(headroom / price / lotSize) * lotSize; // always round down: never exceed maxNotional\n+  const { maxNotional, currentQty, lotSize, pendingQty = 0 } = input;\n+  const price = Math.max(input.price, input.limitPrice ?? input.price);\n+  const headroom = maxNotional - (currentQty + pendingQty) * price;\n+  if (headroom <= 0) return 0;\n+  return Math.floor(headroom / price / lotSize) * lotSize; // always round down: never exceed maxNotional\n }\ndiff --git a/src/risk/sizing.test.ts b/src/risk/sizing.test.ts\nindex 19be4c2..a4e8d2c 100644\n--- a/src/risk/sizing.test.ts\n+++ b/src/risk/sizing.test.ts\n@@ -3,6 +3,41 @@ import { sizeBuy } from \"./sizing\";\n test(\"no headroom when at cap\", () => {\n   expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 100, lotSize: 1 })).toBe(0);\n });\n+\n+test(\"sizes to the cap in whole lots\", () => {\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1 })).toBe(100);\n+  expect(sizeBuy({ maxNotional: 10_000, price: 50, currentQty: 0, lotSize: 10 })).toBe(200);\n+});\n+\n+test(\"rounds down when headroom is not a whole number of lots\", () => {\n+  // 10000 / 333 = 30.03 -> 30, not 31 (31 * 333 = 10,323 > cap)\n+  expect(sizeBuy({ maxNotional: 10_000, price: 333, currentQty: 0, lotSize: 1 })).toBe(30);\n+  expect(sizeBuy({ maxNotional: 10_000, price: 33, currentQty: 0, lotSize: 10 })).toBe(300);\n+});\n+\n+test(\"resulting notional never exceeds maxNotional\", () => {\n+  for (const price of [7, 33.3, 99.99, 333, 1234.56]) {\n+    for (const lotSize of [1, 5, 10, 100]) {\n+      for (const currentQty of [-20, 0, 10]) {\n+        for (const pendingQty of [0, 5, 40]) {\n+          const qty = sizeBuy({ maxNotional: 10_000, price, currentQty, lotSize, pendingQty });\n+          expect((currentQty + pendingQty + qty) * price).toBeLessThanOrEqual(10_000 + 1e-9);\n+        }\n+      }\n+    }\n+  }\n+});\n+\n+test(\"short position frees headroom for the cover\", () => {\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: -20, lotSize: 1 })).toBe(120);\n+});\n+\n+test(\"pending buys reduce headroom\", () => {\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 0, lotSize: 1, pendingQty: 30 })).toBe(70);\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, currentQty: 50, lotSize: 1, pendingQty: 50 })).toBe(0);\n+});\n+\n+test(\"a limit price above the sizing price is used as the worst-case fill price\", () => {\n+  // sized at 125, not 100: 80 * 125 = 10,000\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, limitPrice: 125, currentQty: 0, lotSize: 1 })).toBe(80);\n+  // a lower limit price never loosens the cap\n+  expect(sizeBuy({ maxNotional: 10_000, price: 100, limitPrice: 90, currentQty: 0, lotSize: 1 })).toBe(100);\n+});\n```",
+ "fixerUsage": {
+  "calls": 4,
+  "tokIn": 32781,
+  "tokOut": 52249,
+  "usd": 0.653598,
+  "critMs": 293774
+ },
+ "status": "cleared"
+}

@@ -1,0 +1,77 @@
+{
+ "approach": "triage-routed",
+ "case": "merge-10",
+ "rep": 1,
+ "wallMs": 430581,
+ "verdict": "CLEAR",
+ "confidence": 0.72,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Lease safety assumes render returns on jobCtx cancellation and finishes its object-store write within jobTimeout+1m. No renewal exists and the artifact does not show render honoring ctx. A stale holder could therefore overlap with a reclaiming worker. The object key is derived only from the job, so the overlap wastes work but does not corrupt output.",
+   "evidence": "\"the job context is cancelled at jobTimeout, so a live worker never outlives its lease.\" ABSENT: render implementation showing ctx propagation to subprocesses and object-store writes, and any lease renewal."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Shutdown returns without completing or releasing the job. Each Recreate deploy strands the in-flight job for up to jobTimeout+1m, where ResetRunning previously requeued it immediately. Each reclaim also increments attempts, which will affect the #215 cap. A job that finished just before SIGTERM is re-rendered.",
+   "evidence": "\"if ctx.Err() != nil { return nil // shutting down: leave the lease to expire so another worker retries the job\"; removed \"if err := w.store.ResetRunning(ctx)\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The PR claims NULL locked_until rows from the old worker are reclaimed, but no test seeds a running row with NULL locked_until. The only reclaim test uses a non-NULL expired timestamp.",
+   "evidence": "\"Expired leases (crashed/shut-down worker, or NULL from the old worker) are reclaimed\" versus TestExpiredLeaseIsReclaimedAndStaleHolderLosesIt, which calls Claim(ctx, \"a\", -time.Second)."
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The claim predicate uses an OR across status and locked_until with ORDER BY created_at, id, and the migration adds no index. Each poll scans and sorts the table. At ~20k rows this is likely cheap, but no plan or index is shown.",
+   "evidence": "migration: \"ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz;\" with no CREATE INDEX; ABSENT: EXPLAIN output or index definition."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Complete fencing relies on w.id being unique per running process. The artifact does not show how w.id is generated. A shared ID would let a stale holder pass the locked_by check.",
+   "evidence": "ABSENT: definition or source of w.id in internal/worker; w.id is passed as $2 to Complete."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The no-double-handout test checks only the total claim count, not that each job ID was claimed exactly once. It also does not exercise reclaim under contention.",
+   "evidence": "\"if n := claims.Load(); n != 40 { t.Fatalf(\\\"got %d claims for 40 jobs\\\", n) }\" with no per-ID tracking."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Tests and store calls use context.Background() with no deadline, so a deadlock in Claim or Complete would hang the suite instead of failing. Production store calls have no DB-level timeout either.",
+   "evidence": "\"s.Claim(context.Background(), worker, time.Minute)\"; ABSENT: any timeout on store calls."
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "ErrLeaseLost and reclaims of expired leases are only logged at Warn. No counter or alert exists, so duplicate execution is hard to observe.",
+   "evidence": "\"w.log.Warn(\\\"lease lost before completion\\\", \\\"job\\\", job.ID)\"; ABSENT: counters or alerts for reclaims, ErrLeaseLost, or attempts > 1."
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The title says more than one worker can run, but the body says the replica count stays at 1 and scale-out is separate. Readers could assume multi-replica operation is enabled.",
+   "evidence": "TITLE: \"thumbnailer: lease-based job claiming so more than one worker can run\" versus \"Replica count stays 1 here; scale-out and a poison-job attempts cap (#215) are separate changes.\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "A job that crashes its worker is reclaimed after each lease expiry with no attempts cap in this PR. Because it sorts first by created_at, it can block the queue. The cap is explicitly deferred to #215.",
+   "evidence": "\"Expired leases (crashed/shut-down worker, or NULL from the old worker) are reclaimed\"; \"a poison-job attempts cap (#215) are separate changes.\""
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 33997,
+  "tokOut": 27625,
+  "usd": 0.020501250000000002,
+  "critMs": 51886
+ }
+}

@@ -1,0 +1,71 @@
+{
+ "approach": "rubric-calibrated",
+ "case": "merge-06",
+ "rep": 1,
+ "wallMs": 126545,
+ "verdict": "ATTACKS",
+ "confidence": 0.72,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The upstream 429 retry sleeps up to 5s while holding the client connection, then issues a second upstream call without consuming a bucket token or re-checking the limiter. During an upstream throttling event, every throttled request becomes two upstream calls, and the retries are not jittered, so they synchronize and hit the upstream again at the same moment.",
+   "evidence": "await new Promise((r) => setTimeout(r, delay));\n      res = await upstream.chat(req.body, { signal: req.signal });"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Each throttled request holds a server socket and memory for up to 5s, and the single process has no horizontal scale-out. A 429 storm across 120 tenants can exhaust the process's concurrent connections, which turns an upstream throttle into a gateway-wide outage.",
+   "evidence": "MAX_UPSTREAM_RETRY_MS = 5_000; ... await new Promise((r) => setTimeout(r, delay));"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The per-tenant limit does not bound upstream traffic. A tenant admitted once at its configured rate can produce a second upstream call on a 429, so its effective upstream rate can reach roughly twice the configured limit. This works against the stated goal of stopping tenants from starving each other.",
+   "evidence": "const waitMs = limiter.take(tenant.id, limitsFor(tenant)); ... let res = await upstream.chat(req.body, { signal: req.signal }); if (res.status === 429) {"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The stated incident (one tenant at 400 rps starving others) is only fixed if the configured per-tenant limits sum to less than the upstream quota. The artifact has no global or upstream-aware cap and does not show the limit values for the batch tenant, so the fix is asserted rather than demonstrated.",
+   "evidence": "limits from tenant config, default 20 rps / burst 40; ABSENT: any global or aggregate upstream cap, or the batch tenant's configured limit"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The log line records an unsalted, truncated SHA-256 of the raw tenant API key (40 bits). If keys are not high-entropy random strings, the fingerprint can be brute-forced offline and it links log entries to a specific key. This sits close to the 'keys must never appear in logs' rule.",
+   "evidence": "{ tenant: tenant.id, key: keyFingerprint(tenant.apiKey), waitMs }; export function keyFingerprint(apiKey: string) { return createHash(\"sha256\").update(apiKey).digest(\"hex\").slice(0, 10); }"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The limiter uses wall-clock Date.now. A backward clock step makes elapsed time negative, which drains tokens and can block a tenant for a long time. A monotonic clock would avoid this.",
+   "evidence": "constructor(private now: () => number = Date.now) {}"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "There is no validation of tenant limits. ratePerSec of 0 makes waitMs Infinity, so the response sends 'Retry-After: Infinity'. burst of 0 rejects every request.",
+   "evidence": "return Math.ceil(((1 - b.tokens) / limits.ratePerSec) * 1000);  // and: .header(\"Retry-After\", String(Math.ceil(waitMs / 1000)))"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The retry sleep is not cancelled when the client disconnects, and the first 429 response body is never consumed or released. Both hold resources for the remainder of the wait.",
+   "evidence": "await new Promise((r) => setTimeout(r, delay)); // no abort on req.signal; first res body not consumed"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "Tests cover only the bucket math and tenant isolation. Nothing exercises the upstream 429 retry, the 5s Retry-After cap, the malformed Retry-After fallback, or LRU eviction. The claim that idle tenants do not accumulate is untested.",
+   "evidence": "test(\"admits burst, then rate-limits, then refills\" ...); test(\"tenants are isolated\" ...); ABSENT: tests for retryAfterMs, the completions retry path, or LRU bounds"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3815,
+  "tokOut": 5869,
+  "usd": 0.0035019800000000005,
+  "critMs": 27622
+ }
+}

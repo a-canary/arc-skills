@@ -1,0 +1,167 @@
+{
+ "approach": "rubric-stop-early@v100",
+ "case": "merge-04",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The migration drops the original `notes` column without copying its contents into `private_notes`, so all existing user notes are permanently deleted when the up migration runs. This is an irreversible data loss for 140M rows of user-written text that users cannot recover elsewhere.",
+     "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text;\nALTER TABLE user_recipes DROP COLUMN notes;"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1945,
+    "tokOut": 113,
+    "usd": 0,
+    "critMs": 36506
+   },
+   "wallMs": 39070
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Cursor pagination fetches ALL user rows into memory and slices in-process, so for the stated 200k-row users it will far exceed the 300ms p99 budget and scale linearly with the heaviest user, defeating the purpose of the migration.",
+     "evidence": "const { rows } = await db.query<SavedRow>(`SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.private_notes FROM user_recipes ur ... WHERE ur.user_id = $1 ORDER BY ur.saved_at DESC, ur.id DESC`, [userId]); const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0; const page = rows.slice(start, start + limit);"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1957,
+    "tokOut": 184,
+    "usd": 0,
+    "critMs": 48246
+   },
+   "wallMs": 48247
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "The column rename migration runs inside a transaction (BEGIN/COMMIT), which is not allowed for ALTER TABLE ... RENAME COLUMN on a 140M-row table in Postgres — this will fail at deploy time and block all migrations after merge.",
+     "evidence": "BEGIN;\nALTER TABLE user_recipes RENAME COLUMN notes TO private_notes;\nCOMMIT;"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2538,
+    "tokOut": 108,
+    "usd": 0,
+    "critMs": 10292
+   },
+   "wallMs": 41202
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The PR assumes the `(user_id, saved_at DESC, id DESC)` index already exists, but provides no migration for it and no verification. On a 140M-row table, cursor pagination without this index will do sequential scans, blowing the 300ms p99 budget and causing production performance regression on merge.",
+     "evidence": "\"This relies on an index on user_recipes (user_id, saved_at DESC, id DESC). Confirm it exists before merge.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2631,
+    "tokOut": 130,
+    "usd": 0,
+    "critMs": 27813
+   },
+   "wallMs": 70153
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The keyset pagination query compares `(ur.saved_at, ur.id) < ($2, $3)` which is strictly less-than, causing duplicate rows when multiple recipes share the same `saved_at` timestamp. Since `saved_at` has only second-level precision by default in Postgres and heavy users can save multiple recipes rapidly, the cursor will skip rows on subsequent pages or return duplicates, breaking pagination correctness.",
+     "evidence": "`AND (ur.saved_at, ur.id) < ($2::timestamptz, $3)` — uses `<` instead of `<=` with proper tie-breaking, and the ORDER BY is `saved_at DESC, id DESC` but the comparison is ascending-style tuple comparison"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3136,
+    "tokOut": 176,
+    "usd": 0,
+    "critMs": 71718
+   },
+   "wallMs": 77423
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "Migration 0087 takes a momentary ACCESS EXCLUSIVE lock on user_recipes, a 140M-row table that is the app's heaviest write target. On a table this size, even a brief exclusive lock will block all concurrent reads and writes, causing request timeouts and p99 budget violations (300ms) for the entire app during deploy. The PR acknowledges the lock but dismisses it as safe without providing evidence of acceptable lock duration at this scale, and without any strategy like running during low-traffic windows or using pg_advisory_lock.",
+     "evidence": "\"The only cost is a momentary ACCESS EXCLUSIVE lock on user_recipes for the catalog update.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3313,
+    "tokOut": 177,
+    "usd": 0,
+    "critMs": 17131
+   },
+   "wallMs": 21934
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The new cursor-paginated query joins `user_recipes` to `recipes` and filters on `ur.user_id`, but the new index is only on `user_recipes (user_id, saved_at DESC, id DESC)` and does not cover the join to `recipes`. For a heavy user with 200k+ saved recipes, the query must still join each row to `recipes` to get `r.title`. Without an index on `recipes.id` (or a covering index), this becomes a nested loop with a full table scan or seq scan on `recipes` for each page, which will blow the 300ms p99 budget. The PR's own note says to `EXPLAIN` in staging, but this is a known anti-pattern that should be verified before merge, not after.",
+     "evidence": "The query is `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.private_notes, ur.saved_at::text AS cursor_ts FROM user_recipes ur JOIN recipes r ON r.id = ur.recipe_id WHERE ur.user_id = $1 ... ORDER BY ur.saved_at DESC, ur.id DESC LIMIT ...`. The new index `user_recipes_user_saved_at_id_idx` is on `user_recipes` only. There is no mention of an index on `recipes.id` or a covering index. The PR notes: 'Before merge, run EXPLAIN on the new query for a heavy user in staging and confirm an index scan with no sort node.' This is a pre-merge requirement, not a post-merge one."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3568,
+    "tokOut": 356,
+    "usd": 0,
+    "critMs": 29928
+   },
+   "wallMs": 62697
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Migration 0087 holds an ACCESS EXCLUSIVE lock on user_recipes, which blocks all reads and writes on a 140M-row production table. The 2-second lock_timeout only limits how long the migration waits to acquire the lock; it does not limit how long the lock is held or how long dependent queries are stalled once the ALTER begins. If any long-running transaction holds a lock on the table, the ALTER queues, and then all new queries queue behind the ALTER, potentially stalling the entire API well beyond the 300ms p99 budget. The PR itself admits 'I have not measured the lock hold time in staging,' making this an unverified risk to production availability.",
+     "evidence": "\"the rename needs an ACCESS EXCLUSIVE lock on user_recipes\" and \"If a long-running transaction holds any lock on user_recipes, the ALTER queues behind it, and every new query on the table then queues behind the ALTER. That stall could blow the 300ms p99 budget.\" and \"I have not measured the lock hold time in staging.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3817,
+    "tokOut": 257,
+    "usd": 0,
+    "critMs": 55074
+   },
+   "wallMs": 70391
+  }
+ ],
+ "artifact": "PR #1907: Rename recipe notes column + cursor pagination for saved recipes\n\nTwo small changes bundled because they touch the same table.\n\n1. `user_recipes.notes` becomes `user_recipes.private_notes` ahead of the shared-collections work, so it is obvious in queries which field must never be exposed on shared views. Pure rename, no data change: the migration uses `ALTER TABLE ... RENAME COLUMN`, which is metadata-only (no table rewrite, no copy, existing notes are preserved in place). The down migration renames it back. The `BEGIN`/`COMMIT` wrapper is intentional and safe. Postgres supports transactional DDL, and `RENAME COLUMN` is allowed inside a transaction block (unlike `CREATE INDEX CONCURRENTLY`). The transaction also makes the rename atomic if the migration runner fails partway.\n   - Lock behavior (review objection): the rename needs an ACCESS EXCLUSIVE lock on `user_recipes`. Once it has the lock, the hold time is just a catalog update and does not depend on table size, since no rows are touched. The real risk is not the hold time but the wait to acquire the lock. If a long-running transaction holds any lock on `user_recipes`, the `ALTER` queues behind it, and every new query on the table then queues behind the `ALTER`. That stall could blow the 300ms p99 budget. To bound it, both the up and down migrations now run `SET LOCAL lock_timeout = '2s'` inside the transaction. If the lock cannot be acquired within 2s, the migration fails and rolls back, so the table is stalled for at most about 2s and no schema change is applied. The deploy can then be retried, ideally off-peak. A transaction-level `pg_advisory_lock` would not help here, since it only serializes our own migration runners and does not affect other sessions' locks on the table. I have not measured the lock hold time in staging. Please check for long-running transactions on `user_recipes` (`pg_stat_activity`) before merge and watch the deploy.\n\n2. `GET /api/recipes/saved` moves from offset to cursor pagination. Offsets were drifting when users saved recipes while scrolling. The client already sends `cursor` from the previous page's `nextCursor`. Pagination is keyset-based and done in SQL: the query uses `WHERE (ur.saved_at, ur.id) < ($2, $3)` with `LIMIT limit + 1`, so each request reads only one page of rows regardless of how many recipes the user has saved (200k+ for the heaviest users). The cursor is an opaque base64url-encoded `(saved_at, id)` pair, with `saved_at` carried as Postgres text so microsecond precision is preserved. A malformed cursor returns 400.\n   - Note on tie handling (review objection): the strict `<` is intentional and correct. The `ORDER BY` is `saved_at DESC, id DESC`, and the row-value comparison `(saved_at, id) < (cursor_ts, cursor_id)` is lexicographic, so it selects exactly the rows that sort after the cursor row in that order. Rows sharing the cursor's `saved_at` are separated by the `id` tiebreak, so none are skipped or repeated. The cursor row itself was already returned on the previous page, so it must be excluded, which is why `<=` would be wrong (it would duplicate that row). Also, `saved_at` is `timestamptz`, which has microsecond precision, not second-level, and the cursor carries the full-precision text value, so ties are rare and handled anyway.\n   - Note on the join to `recipes` (review objection): the join is `r.id = ur.recipe_id`, i.e. on `recipes.id`, which I expect to be the primary key and therefore already indexed. This PR adds no index on `recipes` because none should be needed. The new `user_recipes` index delivers rows already in `(saved_at DESC, id DESC)` order for the user, and the `LIMIT limit + 1` lets the planner stop after about 51 rows. The expected plan is a nested loop that does a primary-key lookup on `recipes` for those ~51 rows, not a scan of `recipes` per row and not a join over all 200k+ saved rows. I have not confirmed the `recipes` primary key from the schema in this PR, so the pre-merge `EXPLAIN` (see item 3) must also confirm that `recipes` is accessed via an index scan on its primary key (for example `recipes_pkey`) and not a seq scan. If it is not, add the index before merge.\n\n3. Supporting index (migration 0088). The keyset query depends on an index on `user_recipes (user_id, saved_at DESC, id DESC)`. Rather than assume it exists, this PR adds it in its own migration, `0088_saved_recipes_cursor_index`, using `CREATE INDEX CONCURRENTLY IF NOT EXISTS` so it does not block writes on the ~140M-row table. It is deliberately a separate file with no `BEGIN`/`COMMIT`, because `CONCURRENTLY` cannot run inside a transaction block. This assumes the migration runner does not wrap files in an implicit transaction. Existing migrations carry their own explicit `BEGIN`/`COMMIT`, which suggests it does not, but please confirm. If an equivalent index already exists under another name, this creates a redundant one, which costs some write overhead and can be dropped later. Before merge, run `EXPLAIN` on the new query for a heavy user in staging and confirm an index scan on `user_recipes` with no sort node, and a primary-key index scan on `recipes` for the join. Also be aware that if a concurrent build fails, Postgres leaves an INVALID index behind. `IF NOT EXISTS` would then skip it on retry, so check `pg_index.indisvalid` after deploy and drop and re-run if needed. The down migration uses `DROP INDEX CONCURRENTLY IF EXISTS`.\n\ndiff --git a/db/migrations/0087_private_notes.up.sql b/db/migrations/0087_private_notes.up.sql\nnew file mode 100644\nindex 0000000..c41e9d2\n--- /dev/null\n+++ b/db/migrations/0087_private_notes.up.sql\n@@ -0,0 +1,4 @@\n+BEGIN;\n+SET LOCAL lock_timeout = '2s';\n+ALTER TABLE user_recipes RENAME COLUMN notes TO private_notes;\n+COMMIT;\ndiff --git a/db/migrations/0087_private_notes.down.sql b/db/migrations/0087_private_notes.down.sql\nnew file mode 100644\nindex 0000000..8a02b7f\n--- /dev/null\n+++ b/db/migrations/0087_private_notes.down.sql\n@@ -0,0 +1,4 @@\n+BEGIN;\n+SET LOCAL lock_timeout = '2s';\n+ALTER TABLE user_recipes RENAME COLUMN private_notes TO notes;\n+COMMIT;\ndiff --git a/db/migrations/0088_saved_recipes_cursor_index.up.sql b/db/migrations/0088_saved_recipes_cursor_index.up.sql\nnew file mode 100644\nindex 0000000..d5e1b07\n--- /dev/null\n+++ b/db/migrations/0088_saved_recipes_cursor_index.up.sql\n@@ -0,0 +1,4 @@\n+-- No BEGIN/COMMIT: CREATE INDEX CONCURRENTLY cannot run inside a transaction block.\n+CREATE INDEX CONCURRENTLY IF NOT EXISTS user_recipes_user_saved_at_id_idx\n+  ON user_recipes (user_id, saved_at DESC, id DESC);\ndiff --git a/db/migrations/0088_saved_recipes_cursor_index.down.sql b/db/migrations/0088_saved_recipes_cursor_index.down.sql\nnew file mode 100644\nindex 0000000..e3f9a42\n--- /dev/null\n+++ b/db/migrations/0088_saved_recipes_cursor_index.down.sql\n@@ -0,0 +1,2 @@\n+-- No BEGIN/COMMIT: DROP INDEX CONCURRENTLY cannot run inside a transaction block.\n+DROP INDEX CONCURRENTLY IF EXISTS user_recipes_user_saved_at_id_idx;\ndiff --git a/server/routes/saved.ts b/server/routes/saved.ts\nindex 2c9f1ab..e7a50d3 100644\n--- a/server/routes/saved.ts\n+++ b/server/routes/saved.ts\n@@ -1,36 +1,64 @@\n import { Router } from \"express\";\n import { db } from \"../db\";\n import { requireUser } from \"../auth\";\n\n export const saved = Router();\n\n+type SavedRow = {\n+  id: string;\n+  recipe_id: string;\n+  title: string;\n+  saved_at: Date;\n+  private_notes: string | null;\n+  cursor_ts: string;\n+};\n+\n+function decodeCursor(raw: string): { ts: string; id: string } | null {\n+  try {\n+    const parsed = JSON.parse(Buffer.from(raw, \"base64url\").toString(\"utf8\"));\n+    if (typeof parsed?.ts === \"string\" && typeof parsed?.id === \"string\") {\n+      return { ts: parsed.ts, id: parsed.id };\n+    }\n+  } catch {\n+    // fall through\n+  }\n+  return null;\n+}\n+\n+function encodeCursor(row: SavedRow): string {\n+  return Buffer.from(\n+    JSON.stringify({ ts: row.cursor_ts, id: row.id }),\n+  ).toString(\"base64url\");\n+}\n+\n saved.get(\"/api/recipes/saved\", requireUser, async (req, res) => {\n   const userId = req.user!.id;\n-  const limit = Math.min(Number(req.query.limit) || 50, 100);\n-  const offset = Math.max(Number(req.query.offset) || 0, 0);\n-  const { rows } = await db.query(\n-    `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.notes\n-       FROM user_recipes ur JOIN recipes r ON r.id = ur.recipe_id\n-      WHERE ur.user_id = $1\n-      ORDER BY ur.saved_at DESC\n-      LIMIT $2 OFFSET $3`,\n-    [userId, limit, offset],\n-  );\n-  res.json({ items: rows });\n+  const limit = Math.min(Number(req.query.limit) || 50, 100);\n+  const rawCursor =\n+    typeof req.query.cursor === \"string\" ? req.query.cursor : null;\n+  const cursor = rawCursor ? decodeCursor(rawCursor) : null;\n+  if (rawCursor && !cursor) {\n+    return res.status(400).json({ error: \"invalid cursor\" });\n+  }\n+\n+  const params: unknown[] = [userId];\n+  let keyset = \"\";\n+  if (cursor) {\n+    params.push(cursor.ts, cursor.id);\n+    keyset = \"AND (ur.saved_at, ur.id) < ($2::timestamptz, $3)\";\n+  }\n+  params.push(limit + 1);\n+\n+  const { rows } = await db.query<SavedRow>(\n+    `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.private_notes,\n+            ur.saved_at::text AS cursor_ts\n+       FROM user_recipes ur JOIN recipes r ON r.id = ur.recipe_id\n+      WHERE ur.user_id = $1 ${keyset}\n+      ORDER BY ur.saved_at DESC, ur.id DESC\n+      LIMIT $${params.length}`,\n+    params,\n+  );\n+\n+  const hasMore = rows.length > limit;\n+  const pageRows = hasMore ? rows.slice(0, limit) : rows;\n+  const nextCursor = hasMore ? encodeCursor(pageRows[pageRows.length - 1]) : null;\n+  const items = pageRows.map(({ cursor_ts, ...item }) => item);\n+\n+  res.json({ items, nextCursor });\n });\ndiff --git a/server/routes/saved.test.ts b/server/routes/saved.test.ts\nindex 91d0c3e..4b7f2a1 100644\n--- a/server/routes/saved.test.ts\n+++ b/server/routes/saved.test.ts\n@@ -12,9 +12,22 @@ describe(\"GET /api/recipes/saved\", () => {\n-  it(\"pages with offset\", async () => {\n-    const a = await get(\"/api/recipes/saved?limit=2&offset=0\");\n-    const b = await get(\"/api/recipes/saved?limit=2&offset=2\");\n-    expect(a.items.map((i) => i.id)).toEqual([\"r5\", \"r4\"]);\n-    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n+  it(\"pages with cursor\", async () => {\n+    const a = await get(\"/api/recipes/saved?limit=2\");\n+    expect(a.items.map((i) => i.id)).toEqual([\"r5\", \"r4\"]);\n+    const b = await get(`/api/recipes/saved?limit=2&cursor=${a.nextCursor}`);\n+    expect(b.items.map((i) => i.id)).toEqual([\"r3\", \"r2\"]);\n+    const c = await get(`/api/recipes/saved?limit=2&cursor=${b.nextCursor}`);\n+    expect(c.items.map((i) => i.id)).toEqual([\"r1\"]);\n+    expect(c.nextCursor).toBeNull();\n   });\n+\n+  it(\"rejects a malformed cursor\", async () => {\n+    const res = await getRaw(\"/api/recipes/saved?cursor=not-a-cursor\");\n+    expect(res.status).toBe(400);\n+  });\n });",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 28872,
+  "tokOut": 27527,
+  "usd": 0.39072999999999997,
+  "critMs": 144059
+ },
+ "status": "cap"
+}

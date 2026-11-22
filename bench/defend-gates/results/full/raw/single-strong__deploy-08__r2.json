@@ -1,0 +1,83 @@
+{
+ "approach": "single-strong",
+ "case": "deploy-08",
+ "rep": 2,
+ "wallMs": 86043,
+ "verdict": "ATTACKS",
+ "confidence": 0.88,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "Prod runs 48 workers at ~25 msg/s each (~1,200 msg/s) against a 300 msg/s SES limit. SES will throttle heavily. The core loop treats any batch-level error (including Throttling) as a permanent per-recipient failure, with no retry or backoff.",
+   "evidence": "SEND_WORKERS=48 ... SES production account limits (us-east-1): 300 messages/second; `if err != nil { for _, r := range batch.Recipients { failures.Record(...) } ... continue }`"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "Throttled or transient failures are recorded in send_failures, excluded from remaining sends, and shown as 'Not delivered'. Subscribers are permanently dropped from issues. Also, on batch error the batch is never Ack'd or retried, so its state is undefined. The per-entry loop indexes Recipients[i] without a length check, and Ack happens even when entries failed.",
+   "evidence": "`those recipients are excluded from the issue's remaining sends and shown to publishers in the issue report under \"Not delivered\"`"
+  },
+  {
+   "lens": "evidence",
+   "severity": "blocker",
+   "claim": "QA never exercised the production-like condition. Staging used 4 workers, and throttling was simulated off via the sandbox mock because real runs were throttled intermittently. The 'Pass, 0 failures' result is therefore invalid for 48 workers at the prod limit. The '5× faster' claim (14→3 min) is also unsupported: QA measured 11 min.",
+   "evidence": "4 workers were throttled intermittently, so QA ran with SES throttling simulated off via the sandbox mock; `Pass, 0 failures, 11 min`"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "major",
+   "claim": "Smart Send Time is default-on for all publications, including the 40% that are time-sensitive news outlets (breaking news, election results, weather alerts). Holds of up to 18 hours defeat their purpose. Only an opt-out in Settings is offered, with no category-aware default.",
+   "evidence": "4,480 of them (40%) are news or local-news outlets whose issues are time-sensitive; `Enabled by default for all publications ... held for at most 18 hours`"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The prediction is accurate only 71% of the time within ±1h, with no baseline and no evidence of lift. The launch post still promises delivery 'when each reader is most likely to open'. Subscribers with no 90-day history have no defined behavior.",
+   "evidence": "Smart Send Time: predicted hour within ±1h ... 71%"
+  },
+  {
+   "lens": "other",
+   "severity": "major",
+   "claim": "The launch post contradicts the rollout plan. The plan ramps Smart Send from 5% to 100% over 3 weeks, gated on metrics. The post says it is live for every publication today. The config file also sets SMART_SEND_DEFAULT=on, which would enable it for 100% on day one. The post also claims '5× faster' for every issue, which is unsupported.",
+   "evidence": "`ramp SMART_SEND_DEFAULT by publication cohort: 5% (week 1)...` vs `Smart Send Time is live for every publication today`; `SMART_SEND_DEFAULT=on`"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The pipeline goes to 100% of sends at once with no canary. The 'Not delivered' exclusions are not recoverable by rolling back to Sidekiq. The public announcement is irreversible. Rollback of Smart Send by releasing held issues immediately would send an unthrottled burst, which compounds the SES limits.",
+   "evidence": "deploy Monday 09:00 UTC to 100% of sends; `held issues are released immediately`"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "Even at 300 msg/s, a 50k issue takes about 2.8 min, and concurrent publisher issues share one account limit. Smart Send concentrates sends at peak hours. There is no global rate limiter or fairness across publishers, and queue lag alerts only fire at 10 min.",
+   "evidence": "300 messages/second, 25M/day; `On-call pager: queue lag > 10 min`"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Alarm thresholds are inconsistent with SES health limits. The bounce alarm at 4% sits near SES's ~5% review threshold, and the complaint pager at 0.1% is the SES probation threshold, so alerts fire too late. There is no alert on send failures (`send.batch_failed`) or on 'Not delivered' counts. The launch lands during an unproven rollout.",
+   "evidence": "alarms at 4% / 0.08%; On-call pager: ... complaint rate > 0.1%"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Per-subscriber open-behavior profiling (90 days of opens) is introduced and enabled by default, with no mention of consent, retention, or disclosure, and no mention of Apple MPP-inflated opens.",
+   "evidence": "predicts each subscriber's most likely open hour from their last 90 days of opens"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "The send path is hard-coupled to a single provider and region (SES us-east-1). The Sidekiq fallback is kept for only 14 days, so exit cost is high.",
+   "evidence": "SES_REGION=us-east-1 ... keep the Sidekiq sender deployed but idle for 14 days"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3199,
+  "tokOut": 1897,
+  "usd": 0.0192937,
+  "critMs": 16229
+ }
+}

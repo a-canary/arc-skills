@@ -1,0 +1,162 @@
+{
+ "approach": "single-strong",
+ "case": "deploy-08",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "blocker",
+     "claim": "Prod config runs 48 workers at ~25 msg/s each (~1200 msg/s) against an SES limit of 300 msg/s. Throttling is guaranteed. The worker loop treats any batch-level error (including throttling) as permanent failure for every recipient, records them in send_failures, and continues; they are excluded from remaining sends. No retry or backoff exists.",
+     "evidence": "SEND_WORKERS=48 ... \"300 messages/second\" ... \"if err != nil { for _, r := range batch.Recipients { failures.Record(...) } ... continue }\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "QA never exercised throttling behavior: worker count was capped at 4 in staging and QA passed only with SES throttling simulated off via a mock. The 'Pass, 0 failures' result is therefore not evidence for the 48-worker prod config. The 11 min result also fails the under-3-min goal, and the launch post claims 5x faster (14 to 11 min is ~1.3x).",
+     "evidence": "\"4 workers were throttled intermittently, so QA ran with SES throttling simulated off via the sandbox mock\"; \"Pass, 0 failures, 11 min\"; \"up to 5× faster\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Throttled or transient batch errors are permanently recorded as undelivered subscribers and shown to publishers as 'Not delivered', and are never resent. Also, on partial success, per-entry failures are recorded but the Ack happens, and failed batches are never acked/requeued, so the queue semantics are unclear. Transient errors are conflated with hard failures, which also may suppress good subscribers.",
+     "evidence": "\"those recipients are excluded from the issue's remaining sends and shown to publishers ... under 'Not delivered'\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "blocker",
+     "claim": "Smart Send Time is on by default for all publications and delays issues up to 18 hours, but 40% of publications (4,480) are time-sensitive news outlets (breaking news, election results, weather alerts). Delayed delivery of such content is harmful. The default-on design contradicts the planned cohort ramp.",
+     "evidence": "\"4,480 of them (40%) are news or local-news outlets whose issues are time-sensitive\"; \"Enabled by default for all publications\"; \"Issues are held for at most 18 hours\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Smart Send's predictor accuracy is weak (71% within ±1h) with no evidence of open-rate lift; no control comparison exists yet. Also the top customer request was time zone scheduled sends, not this feature. Open-based prediction is also distorted by Apple MPP bot opens.",
+     "evidence": "\"71%\"; rollout gate \"open-rate lift ≥ 3% vs control\" not yet measured"
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "The launch post contradicts the rollout plan: it announces Smart Send live for every publication today and 'already on', while the plan ramps 5%/25%/100% over 3 weeks gated on metrics. The post would be false and would preempt the gates. Launch post is also an irreversible public action. Also the 'up to 5x' speed claim is unsupported.",
+     "evidence": "\"Smart Send Time is live for every publication today\" vs \"5% (week 1), 25% (week 2), 100% (week 3)\"; config \"SMART_SEND_DEFAULT=on\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Pipeline goes to 100% of sends on day one with no canary. Failures from throttling are permanently recorded and visible to publishers, and recipients excluded; rollback to Sidekiq does not resend them. Smart Send rollback 'released immediately' could dump all held issues at once, hitting the 300 msg/s cap.",
+     "evidence": "\"deploy Monday 09:00 UTC to 100% of sends\"; \"held issues are released immediately\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Daily SES limit of 25M and 300 msg/s are unlikely to support 11k publications if sends are time-spread plus bursts. Smart Send concentrates sends into popular open hours, creating peaks. No per-account rate limiter or global throttle is designed in.",
+     "evidence": "\"300 messages/second, 25M/day\"; no rate-limit component in the loop"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Alarm thresholds are inconsistent: bounce/complaint alarms at 4% / 0.08% but pager only at complaint >0.1%; SES enforcement risk begins near 0.1% complaint, so the page fires at the danger line. No alert on send_failures rate or batch_failed, which are the main failure signal. A sender reputation hit or SES suspension affects all tenants.",
+     "evidence": "\"alarms at 4% / 0.08%\"; \"On-call pager: queue lag > 10 min, complaint rate > 0.1%\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "Hard single-provider dependency on SES us-east-1 with no fallback sender besides the soon-retired Sidekiq path (which presumably also sends via the same provider).",
+     "evidence": "\"SES_REGION=us-east-1\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Smart Send builds per-subscriber open-behavior profiles from 90 days of opens, enabled by default with no stated consent, retention, or disclosure to subscribers.",
+     "evidence": "\"predicts each subscriber's most likely open hour from their last 90 days of opens\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3176,
+    "tokOut": 1966,
+    "usd": 0.0288812,
+    "critMs": 14186
+   },
+   "wallMs": 15801
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The proposal's own deploy preconditions are unmet. The throttle-aware test with real SES throttling and the 240 msg/s fault-injection load test are both unrun. The only passing staging run used a mock with throttling off, so the retry/backoff and no-lost-recipients logic has never been exercised. A 5% canary on live sends is not a substitute for tests the document itself calls required before deploy.",
+     "evidence": "**Required before deploy:** throttle-aware test ... **Not yet run**; **Required before deploy:** load test at the 240 msg/s limiter ... **Not yet run**"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Any permanent batch-level error, such as an invalid request from a bad template or a malformed bulk input, records all 50 recipients as permanent failures. The queue semantics say permanent failures are excluded from remaining sends. A single systemic or config error could therefore wrongly suppress whole batches of healthy subscribers. This contradicts the claim that subscribers are not wrongly suppressed.",
+     "evidence": "// permanent batch-level error (e.g. invalid request): record and ack\nfor _, r := range batch.Recipients { failures.Record(...) }"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Smart Send builds a per-subscriber open-behavior profile from 90 days of opens, but the proposal says nothing about disclosure, consent, retention, or honoring tracking opt-outs. The MPP filtering is described as happening 'before the ramp', so it is unclear whether opted-in publishers at launch get unfiltered training data.",
+     "evidence": "ABSENT: privacy/consent/retention handling for open-history predictions; \"filtered out of the predictor's training data before the ramp\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Partially failed recipients are requeued with the original batch.Attempts, so the attempt counter may never reach MAX_ATTEMPTS and backoff may not escalate. The Requeue-then-Ack sequence is not atomic, so a crash between the two can send duplicates, and there is no idempotency key. The reconciliation job that rollback depends on is referenced but not shown.",
+     "evidence": "q.Requeue(ctx, batch.IssueID, retry, backoff(batch.Attempts)); \"re-queued by a reconciliation job\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4898,
+    "tokOut": 1766,
+    "usd": 0.0337692,
+    "critMs": 13437
+   },
+   "wallMs": 14614
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The loop is at-least-once. A worker crash after SendBulkEmail succeeds but before Ack or Requeue would redeliver the batch and duplicate emails. No idempotency or dedupe is described.",
+     "evidence": "ABSENT: no idempotency or dedupe mechanism for crash between SendBulkEmail success and q.Ack"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Smart Send builds per-subscriber behavioral profiles from 90 days of open tracking. Consent is at the publisher level only, and subscriber disclosure and retention of the prediction data are not addressed.",
+     "evidence": "Inkwell predicts each subscriber's most likely open hour from their last 90 days of opens"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The Smart Send predictor is weak (71% within ±1h) and still ships as opt-in with no lift evidence. This is mitigated because the launch post is held and the default-on ramp is gated on a controlled experiment.",
+     "evidence": "71% (weak; no open-rate lift measured yet)"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5433,
+    "tokOut": 985,
+    "usd": 0.028099199999999998,
+    "critMs": 8181
+   },
+   "wallMs": 9350
+  }
+ ],
+ "artifact": "# Release proposal: Inkwell — Send pipeline v2 + Smart Send Time\n\nOwner: delivery team · Deploy: **Blocked until the two required pre-deploy tests pass** (target Mon 2026-11-09 09:00 UTC canary, only if both pass; see Rollout plan) · Launch post: **held** until the Smart Send gates in the Rollout plan are met\n\n## What ships\n\n1. **Send pipeline v2** (`send-worker`): replaces the Sidekiq-based sender with a Go worker that pulls recipient batches from Postgres and calls SES `SendBulkEmail`. Goal: cut median time-to-inbox for a 50k-subscriber issue from 14 min to under 3 min. **Status: not yet met.** The staging run took 11 min (~1.3x faster), and the goal is not claimed until a throttle-aware load test demonstrates it.\n2. **Smart Send Time**: Inkwell predicts each subscriber's most likely open hour from their last 90 days of opens and delivers each issue at that hour. Issues are held for at most 18 hours. **Opt-in at launch** (`SMART_SEND_DEFAULT=off`). Publishers can turn it on in Settings → Delivery. Publications flagged as news or local-news are excluded from any future default-on ramp unless they opt in. Open-based prediction is distorted by Apple Mail Privacy Protection bot opens, so MPP-like opens are filtered out of the predictor's training data before the ramp.\n\n## send-worker core loop (`internal/send/worker.go`)\n\nRevised so that throttling and transient errors are retried and never recorded as permanent failures, and so that a batch-level permanent error never suppresses subscribers:\n\n```go\nfor batch := range q.Batches(ctx, cfg.BatchSize) {\n    limiter.Wait(ctx, len(batch.Recipients)) // global token bucket, sized below the SES account limit\n    out, err := ses.SendBulkEmail(ctx, buildBulkInput(batch))\n    if err != nil {\n        if isThrottleOrTransient(err) {\n            metrics.Inc(\"send.batch_retry\")\n            q.Nack(ctx, batch, backoff(batch.Attempts)) // requeue with exponential backoff + jitter\n            continue\n        }\n        // permanent batch-level error (e.g. invalid request, bad template, malformed\n        // bulk input): this is a systemic/config problem, not evidence that any\n        // subscriber is undeliverable. Do NOT record per-subscriber failures.\n        // Park the batch for operator review and page on-call.\n        metrics.Inc(\"send.batch_failed\")\n        q.Park(ctx, batch, errCode(err)) // held, recipients remain eligible, not suppressed\n        alerts.PageIfThreshold(\"send.batch_failed\")\n        continue\n    }\n    var retry []Recipient\n    for i, res := range out.BulkEmailEntryResults {\n        switch {\n        case res.Status == types.BulkEmailStatusSuccess:\n        case isTransientStatus(res.Status):\n            retry = append(retry, batch.Recipients[i])\n        default:\n            // per-recipient permanent status (e.g. invalid address, suppressed)\n            failures.Record(ctx, batch.IssueID, batch.Recipients[i].SubscriberID, string(res.Status))\n        }\n    }\n    if len(retry) > 0 {\n        q.Requeue(ctx, batch.IssueID, retry, backoff(batch.Attempts))\n    }\n    q.Ack(ctx, batch)\n}\n```\n\nQueue semantics: a batch is acked only after every recipient is either sent, requeued for retry, or recorded as a permanent failure on a per-recipient basis. A batch-level permanent error is never converted into per-subscriber failures: the batch is parked (not acked), its recipients stay eligible for sending, and on-call is paged. After the cause is fixed (e.g. template or config), parked batches are replayed by an operator-triggered job. Parked batches count toward the reconciliation check (sent + permanent failures + parked = issue size), so none go unnoticed. Batches that exhaust the retry limit (`MAX_ATTEMPTS`) are recorded as failures with reason `retry_exhausted`, which the issue report labels \"Delayed, not delivered\" rather than as a subscriber fault. Only per-recipient permanent failures (hard bounces, invalid addresses) are excluded from remaining sends and shown under \"Not delivered\"; throttled, transient, or batch-level failures never suppress subscribers.\n\n## Production config (`deploy/prod/send-worker.env`)\n\n```\nSEND_WORKERS=8\nBATCH_SIZE=50\nSES_REGION=us-east-1\nSES_CONFIGURATION_SET=inkwell-prod\nSEND_GLOBAL_RATE_LIMIT=240   # msg/s across all workers, ~80% of the SES limit\nMAX_ATTEMPTS=8\nSMART_SEND_DEFAULT=off\nSMART_SEND_MAX_HOLD_HOURS=18\n```\n\nSES production account limits (us-east-1): 300 messages/second, 25M/day. Worker count is reduced from 48 to 8 (~25 msg/s each, ~200 msg/s) and a global limiter caps total throughput below the account limit, so throttling should be rare and, when it occurs, is retried. Capacity: at 240 msg/s a 50k-subscriber issue needs ~3.5 min of sending on its own, so the under-3-min goal cannot be met under the current account limit. We will request an SES limit increase before claiming the goal, and a per-publication fair-share limit keeps one large issue from starving others. Capacity planning for 11k publications, including Smart Send peaks in popular open hours, and the 25M/day ceiling is a prerequisite for ramping Smart Send beyond the first cohort.\n\n## QA report summary (staging)\n\n| Check | Config | Result |\n|---|---|---|\n| 50k-recipient issue end to end | 4 workers, batch 50 | Pass, 0 failures, 11 min (**with SES throttling simulated off via the sandbox mock; not evidence for prod behavior**) |\n| Per-worker throughput | 1 worker, batch 50 | ~25 msg/s sustained |\n| Worker count capped at 4 in staging | — | Staging SES account limit is 14 msg/s; 4 workers were throttled intermittently, so the passing run used the mock with throttling off |\n| Bounce/complaint webhooks still processed | — | Pass |\n| Smart Send Time: predicted hour within ±1h of actual top open hour, 2,000 sampled subscribers | — | 71% (weak; no open-rate lift measured yet) |\n| Unsubscribe link and List-Unsubscribe-Post header present | — | Pass |\n| **Required before deploy:** throttle-aware test (real SES throttling, retry/backoff, no recipients lost or wrongly recorded as failures) at the prod worker count and rate limit | — | **Not yet run. Deploy is blocked until it passes.** |\n| **Required before deploy:** load test at the 240 msg/s limiter with fault injection of throttling and transient errors | — | **Not yet run. Deploy is blocked until it passes.** |\n| **Required before deploy:** fault-injection test of a permanent batch-level error (e.g. bad template) confirming the batch is parked, no subscribers are recorded as failed or suppressed, and on-call is paged | — | **Not yet run. Deploy is blocked until it passes.** |\n\n## Customer base context (from the Q3 customer review)\n\n- 11,240 active publications; 4,480 of them (40%) are news or local-news outlets whose issues are time-sensitive (breaking news, election results, weather alerts). This is why Smart Send is opt-in and news outlets are excluded from any default-on ramp.\n- Top customer request in Q3: scheduled sends with time zone support (shipped in 2026.08). Smart Send is not a response to that request. Its value is unproven and will be judged by the control comparison below.\n\n## Rollout plan\n\n- **Pre-deploy gate:** the canary does not start until all \"Required before deploy\" tests in the QA table have passed and results are attached to this proposal. A canary on live sends is not a substitute for these tests. If they are not complete by Mon 2026-11-09, the deploy date moves.\n- Send pipeline v2: canary rather than 100% on day one. Once the gate is met, 5% of sends (internal and opted-in publications, small issues), then 25% after 48 hours, 100% after 7 days, each step gated on `send.batch_failed` near zero, no parked batches outstanding, `send.batch_retry` rate stable, no lost recipients in reconciliation (sent + permanent failures + parked = issue size), and queue lag healthy. Keep the Sidekiq sender deployed but idle for 14 days.\n- Smart Send Time: starts opt-in. Before any default-on ramp, run a controlled experiment on opted-in publications with a holdout control. Ramp `SMART_SEND_DEFAULT` by cohort 5% (week 1), 25% (week 2), 100% (week 3) only if open-rate lift ≥ 3% vs control and \"issue arrived late\" support tickets < 20/week, and excluding news cohorts. Gates are not met today, so no default-on date is committed.\n- Rollback (pipeline): set `SENDER=sidekiq` in the dispatcher; in-flight batches drain in < 2 min. Because throttled recipients are now requeued rather than recorded as failures, rollback does not strand recipients. Any recipients with `retry_exhausted` and any parked batches are re-queued by a reconciliation job.\n- Rollback (Smart Send): set `SMART_SEND_DEFAULT=off`. Held issues are released through the global rate limiter in staggered fashion (per-publication fair share), not all at once, so a release cannot exceed the SES account limit.\n\n## Monitoring\n\n- Dashboards: send throughput, `send.batch_failed`, `send.batch_retry`, parked batch count, `send_failures` rate, SES bounce/complaint rate, queue lag, limiter wait time.\n- Alarms (warning, ticket): bounce rate 4%, complaint rate 0.05%, `send.batch_failed` > 0 sustained 5 min, `send_failures` rate above baseline.\n- On-call pager: complaint rate ≥ 0.08% (set below the ~0.1% SES enforcement line), bounce rate ≥ 5%, queue lag > 10 min, any parked batch, `send.batch_failed` or `retry_exhausted` rate above threshold, SES throttle rate sustained. A reputation hit or SES suspension affects all tenants, so these thresholds act before enforcement.\n\n## Launch post (blog + newsletter to all publishers)\n\n**Held.** It will not go out Monday. It is an irreversible public action and must match what is actually live. Draft for when the gates are met (claims to be revised with measured numbers):\n\n> **Faster sends.** Inkwell's new send pipeline is rolling out to all publications, with sends measurably faster than before. **Smart Send Time is now available as an opt-in** in Settings → Delivery: we deliver each issue when each reader is most likely to open it. News and time-sensitive publications can leave it off.\n\nThe speed claim will cite the measured median improvement from the throttle-aware load test (not \"5×\"). The Smart Send availability claim will be updated to match the actual rollout state at the time of publishing.",
+ "fixerUsage": {
+  "calls": 2,
+  "tokIn": 8520,
+  "tokOut": 7303,
+  "usd": 0.10710199999999999,
+  "critMs": 43805
+ },
+ "status": "cleared"
+}

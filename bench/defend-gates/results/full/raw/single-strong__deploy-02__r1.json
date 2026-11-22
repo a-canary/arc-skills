@@ -1,0 +1,65 @@
+{
+ "approach": "single-strong",
+ "case": "deploy-02",
+ "rep": 1,
+ "wallMs": 103012,
+ "verdict": "ATTACKS",
+ "confidence": 0.93,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "Migration 0148 drops legacy_legs and the converter function in the same window as 0147, before v5.0.0 is deployed and verified. Once dropped, rolling orders-svc back to v4.18.2 fails because 4.x template endpoints read legacy_legs. Rollback is impossible without a data restore, and any templates created after 0147 exist only in legs_json.",
+   "evidence": "\"1. 06:00 ET apply migrations 0147, 0148.\" / \"ALTER TABLE order_templates DROP COLUMN legacy_legs;\" / \"Migrations are forward-only; no down migrations are needed for this release.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "The rollback plan contradicts the schema state. `kubectl rollout undo` to v4.18.2 would leave the old service pointing at a dropped column, so template endpoints 5xx. The agreed 30-minute rollback-ability requirement is not met, and the 15-min target is untested. Migrations also run before the new code, so the 4.x pods running during 06:00-06:10 break immediately.",
+   "evidence": "\"`kubectl rollout undo deploy/orders-svc` to v4.18.2 (target: complete within 15 min...)\" vs. \"read by the 4.x orders-svc template endpoints\""
+  },
+  {
+   "lens": "compliance",
+   "severity": "blocker",
+   "claim": "The launch post claims zero commissions and zero fees on options, but the release notes say there is a $0.50 per-contract fee and that SEC/FINRA TAF regulatory fees apply to sells. This is false and misleading under FINRA Rule 2210 (fair and balanced), and 'No catches, no fine print' compounds it. It is also a public post that cannot be recalled. The Reorder 'rebuy your winners' framing is also promotional with no risk balance.",
+   "evidence": "\"trade stocks, ETFs **and options** with zero commissions and zero fees. No catches, no fine print.\" vs. \"options contract fee lowered to $0.50 per contract\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Migration 0147 sets legs_json NOT NULL after a backfill, but the 4.x service running until 06:10 (and during rolling deploy) keeps inserting templates with only legacy_legs. Those inserts fail on the NOT NULL constraint, or rows are created that miss conversion. Rows written between the UPDATE and the commit can also be missed. The dry run was against a snapshot and did not exercise live writes.",
+   "evidence": "\"ALTER TABLE order_templates ALTER COLUMN legs_json SET NOT NULL;\" / \"Migration 0147 dry run against a prod snapshot (2.9M templates): 41s, 0 conversion errors.\""
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "A single-transaction UPDATE across 2.9M rows, followed by SET NOT NULL, which scans the table, holds locks and creates bloat on a live table. The 41s was measured on a snapshot, not under production load. This risks blocking template reads and writes at the start of the pre-market window.",
+   "evidence": "\"UPDATE order_templates SET legs_json = legacy_legs_to_json(legacy_legs);\" in a single BEGIN/COMMIT"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Mobile fallback is unreliable. Clients are told to hide Reorder if /v5/templates returns 404, but the rollback scenario is the 4.x backend failing with 5xx on templates, not 404. Already-updated 5.0 clients will hit broken endpoints. The mobile rollback also cannot recall installed apps. Rollout monitoring thresholds are not tied to a halt trigger for mobile.",
+   "evidence": "\"5.0 clients fall back to hiding Reorder if `/v5/templates` returns 404.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The rollback timing of 15 min is asserted with no rehearsal. QA covers no rollback test and no test of the 4.x code against the migrated schema. The smoke test is only after the full deploy, using house accounts.",
+   "evidence": "\"target: complete within 15 min, well inside the 30-minute rollback SLO\""
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "One-tap 'Rebuy your winners' reorder encourages repeat trading in a retail context. The release notes mitigate this with the review sheet and slide-to-submit, but the announcement drops those safeguards.",
+   "evidence": "\"Rebuy your winners in one tap with Quick Reorder.\""
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3087,
+  "tokOut": 1608,
+  "usd": 0.0249452,
+  "critMs": 11087
+ }
+}

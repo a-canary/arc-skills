@@ -1,0 +1,89 @@
+{
+ "approach": "triage-routed",
+ "case": "deploy-07",
+ "rep": 2,
+ "wallMs": 277443,
+ "verdict": "ATTACKS",
+ "confidence": 0.88,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "Auto-discovery executes code from any installed package that declares the `tasq-plugin` keyword, with no allowlist, signature, or opt-in. The removal of the explicit `plugins` array moves the trust decision from the user's config to package metadata. Any transitive dependency or typosquat with that keyword runs inside developer machines, git pre-commit hooks, editor integrations, and CI, with access to the environment, including npm and cloud credentials, before any confirmation. The artifact lists this as a migration step, not a security change.",
+   "evidence": "\"Any installed package with the `tasq-plugin` keyword is picked up automatically. No more `plugins: [...]` array\" / \"`plugins` array in config ignored | Auto-discovery replaces it; `tasq-migrate` removes the array and installs nothing new\" / \"Discovery runs before argument parsing so that plugins can register subcommands.\" / ABSENT: any plugin allowlist, signature verification, or opt-in trust mechanism"
+  },
+  {
+   "lens": "performance",
+   "severity": "major",
+   "claim": "Discovery adds a large per-invocation cost to the commands the docs recommend in pre-commit hooks and CI. `lint-staged` goes from 0.38 s to 2.31 s (about 6x) on every commit, and `--version` goes from 0.11 s to 1.94 s. The regression is not acknowledged or listed as a breaking change, and no mitigation such as caching or lazy discovery is described.",
+   "evidence": "\"`tasq lint-staged` (3 staged files) | 0.38 s | 2.31 s\" / \"`tasq --version` | 0.11 s | 1.94 s\" / \"On every invocation (`tasq run`, `tasq lint-staged`, `tasq watch` restarts, `tasq list`)\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The text says discovery is negligible and overall build time improves, but the table contradicts this. The cache-hit build goes from 0.21 s to 2.02 s (about 10x slower), and the cold build improves only from 48.7 s to 46.1 s, which is within normal variance on one machine. The headline benefit of the new cache is largely cancelled for incremental runs.",
+   "evidence": "\"Discovery is a fixed per-invocation cost and becomes negligible relative to real build work, so overall build time improves thanks to the new graph cache.\" alongside \"`tasq run build` (cache hit) | 0.21 s | 2.02 s\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The headline cache claim of under 50 ms is not backed by any measurement. The only cache-hit figure is 2.02 s of wall time on 3.0.0-rc.2, and the text does not say whether 'task time' excludes discovery.",
+   "evidence": "\"repeated `tasq run build` with unchanged inputs completes in under 50 ms of task time.\" vs. \"`tasq run build` (cache hit) | 0.21 s | 2.02 s\""
+  },
+  {
+   "lens": "performance",
+   "severity": "major",
+   "claim": "Discovery reads and JSON-parses every matched package.json serially, with no concurrency, caching, or bound. The glob `**/node_modules/**/package.json` is unbounded, so cost scales with the size of the tree, including nested and workspace layouts, and plugin imports are paid again on every run. The smoke test covers only 15 plugins and no load timing is shown.",
+   "evidence": "\"for await (const pkgJson of glob(\"**/node_modules/**/package.json\", { cwd: root })) {\" / \"const pkg = JSON.parse(await readFile(join(root, pkgJson), \"utf8\"));\" / \"Smoke test of top 15 community plugins under auto-discovery: all load and register subcommands.\""
+  },
+  {
+   "lens": "migration",
+   "severity": "major",
+   "claim": "Yarn PnP projects have no node_modules directory, so the described walk would find no plugins there. The two repos that need manual migration may silently lose their plugins at runtime, and the artifact does not say whether discovery works under PnP at all.",
+   "evidence": "\"2 manual (Yarn PnP projects, documented)\" vs. \"the CLI walks `node_modules` (including nested `node_modules` in workspaces)\""
+  },
+  {
+   "lens": "migration",
+   "severity": "major",
+   "claim": "Plugins that were loaded through the `plugins` array silently stop loading unless their package declares the `tasq-plugin` keyword. The artifact gives no count of existing plugins that lack the keyword and no detection or warning step in migration, and the compatibility check covers only the top 15 plugins.",
+   "evidence": "\"`plugins` array in config ignored | Auto-discovery replaces it\" / \"Smoke test of top 15 community plugins under auto-discovery\""
+  },
+  {
+   "lens": "release",
+   "severity": "major",
+   "claim": "Rollback is not safe as written. Re-pointing `latest` to 2.9.4 leaves users who already ran 3.0.0 on a CLI that may not read their migrated config, since `tasq-migrate` removes the plugins array and CJS support is gone. The rollback also does not remove malicious plugin packages already present in node_modules, and a compromised package reaches users immediately through the `next` tag.",
+   "evidence": "\"re-point `latest` to `2.9.4` (`npm dist-tag add tasq@2.9.4 latest`) and publish a fix as 3.0.1\" / \"`npx tasq-migrate` rewrites config files and `require` calls\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The 7-day soak gates promotion on no P1 issues, but the performance and QA evidence comes from the release candidate 3.0.0-rc.2 on one machine with a warm disk cache. No hostile or malformed node_modules test, no Linux or Windows timings, and no cold-cache figures are provided, so the soak does not test the main risks.",
+   "evidence": "\"reference monorepo: 61 workspaces, 2,430 installed packages, M2 MacBook Air, warm disk cache\" / \"3.0.0-rc.2\" / \"Unit + integration: 1,912 tests pass\""
+  },
+  {
+   "lens": "injection",
+   "severity": "minor",
+   "claim": "`tasq-migrate` rewrites config files and require calls across user repos automatically. No dry-run, diff review, or integrity check is described for those edits.",
+   "evidence": "\"`npx tasq-migrate` rewrites config files and `require` calls; tested on 40 public repos, 38 fully automatic\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The task graph cache has no stated size limit, eviction policy, storage location, or hashing-cost figures, so its growth and cost on large inputs are unknown.",
+   "evidence": "ABSENT: cache size limit, eviction, retention, or hashing-cost measurements. Only \"Task graph caching keyed on input file hashes\" is stated."
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The glob does not say whether it follows symlinks, and workspace packages are usually symlinked rather than installed as real directories. The claim that nested workspace plugins are discovered is therefore not shown.",
+   "evidence": "ABSENT: evidence that `glob(\"**/node_modules/**/package.json\")` finds symlinked workspace packages; the snippet does not set `followSymbolicLinks`."
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 24096,
+  "tokOut": 13314,
+  "usd": 0.00954459,
+  "critMs": 32748
+ }
+}

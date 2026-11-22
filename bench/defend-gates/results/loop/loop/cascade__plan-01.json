@@ -1,0 +1,198 @@
+{
+ "approach": "cascade",
+ "case": "plan-01",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "cost",
+     "severity": "blocker",
+     "claim": "The plan's chosen vendor tier cannot run the design, and the cost cap is violated by any tier that can. Starter allows 5 req/min but chain_poller needs 160 req/min. Growth ($199) allows only 100 req/min and with VPS $60 totals $259, over the $250 cap. Only Pro (unlimited, $499) satisfies the rate, far over cap. The stated $139 is only valid on a tier that cannot work.",
+     "evidence": "\"40 underlyings => 160 requests/min during RTH.\" / \"We stay on Starter. Monthly run cost: Optiq Starter $79 + existing VPS $60 = $139, comfortably inside the $250 cap.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Starter quotes are 15-minute delayed, so intraday triggers (delta, extrinsic value, 4% gap) and mid-minus-1-tick limit pricing would be computed on stale data. The core premise of real-time intraday rolling is unmet by the chosen tier; the plan itself says it needs a 'real-time option chain snapshot'.",
+     "evidence": "\"Starter | $79 | 5 req/min | 15-min delayed\" / \"fetch a real-time option chain snapshot\" / \"We stay on Starter.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "Migration 0042 runs in-place on prod, backfills only 90 days, and drops roll_history in the same transaction. Older roll history (since account inception) is permanently destroyed with no backup or rollback step. The plan also keeps roll_eod.py as the fallback, but nothing says it works without roll_history, so the fallback and the rollback path are likely both broken after the drop.",
+     "evidence": "\"In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.\" / \"older entries are not needed by roll_engine.\" / \"roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The headline +3.8% net APR and the success criterion rest on no backtest, prototype, or spread/fill data; only anecdotal desk notes and an unsourced peer-practice claim. The figure's origin is unexplained.",
+     "evidence": "\"Expected impact: +3.8% net APR vs. EOD rolling (see §2).\" / \"Desk notes ... 'would have been better'.\" / \"standard practice among the option-income funds we follow.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "No slippage or spread analysis supports the claim that intraday rolling avoids wide closing spreads; mid-session spreads and repeated repricing could cost more than the claimed gain. Also the 20 s reprice x3 then cancel behavior has no fill-rate evidence.",
+     "evidence": "ABSENT: spread, slippage, or fill-rate data for \"avoiding the wide closing spreads we see after 15:30\"."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Safeguards are underspecified: where the per-contract/per-account daily counters are stored and whether they survive restarts is unstated. The heartbeat guard stops new intents only; it does not address orders already working at the broker, nor alerting. There is no reconciliation of cancelled/unknown order state.",
+     "evidence": "\"both are hard limits checked before submit, plus a ROLLER_KILL env switch read on every loop.\" / \"roll_engine stops emitting intents when the last successful broker heartbeat is > 60 s old.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Roll trigger/target definitions are ambiguous: gap direction and reference price are unspecified, and the roll target 'same strike +1 expiry, or next strike up if the credit is >= $0.05' does not define what happens when neither yields a net credit.",
+     "evidence": "\"Underlying gaps > 4% through strike within the session.\" / \"next strike up if the credit is >= $0.05.\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "Single-vendor dependency on Optiq Data with no fallback feed or exit plan.",
+     "evidence": "\"Current vendor: Optiq Data.\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Credential handling for vendor and broker keys, and for the new automated order path, is not described.",
+     "evidence": "ABSENT: credential storage, rotation, or scoping."
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The plan is marked 'ready for dispatch' despite internal contradictions in data tier, cost, and migration.",
+     "evidence": "\"Status: ready for dispatch\""
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 8098,
+    "tokOut": 5019,
+    "usd": 0.03528112,
+    "critMs": 25558
+   },
+   "wallMs": 74623
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The polling arithmetic is wrong, and the tier decision rests on it. Polling 40 underlyings every 30 s is 80 req/min with one request per underlying, not 40. With one request per expiry (two expiries) it is 160 req/min, which exceeds Growth's 100 req/min. The plan's claim that Growth is the only viable tier at $259 is therefore unsupported: Pro at $559 or a lower polling rate might be required. This also undermines the §4 cost decision.",
+     "evidence": "'every 30 s during RTH. That is 40 requests/min, or 80 if the vendor needs one request per expiry, which stays under the 100 req/min Growth limit with headroom.'"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "No handling is specified for rate-limit rejections (429s), request budgeting or backoff. This matters because the real request rate may exceed the limit.",
+     "evidence": "ABSENT: rate-limit/429 handling in §3 or §7."
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The 10 s staleness guard is incompatible with 30 s polling. A snapshot is up to 30 s old by the time of the next poll, so the guard will reject quotes for most of each cycle, unless the vendor quote timestamp is always fresh. The 20 s reprice loop has no defined quote source. The plan does not say which quote reprices use, or whether a stale quote blocks them. The result is that intents are mostly blocked, or repricing uses undefined data.",
+     "evidence": "'every 30 s' vs 'ignores any quote older than 10 s'; 'limit at mid minus 1 tick, re-priced every 20 s up to 3 times'"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The week 1 historical replay and spread study depend on intraday bid/ask history for past EOD rolls. chain_poller is new, so no such history exists. The week 1 study would have only days of data, and the replay has no named data source. The go/no-go gate rests on this evidence.",
+     "evidence": "'Historical roll replay (week 1): for past EOD rolls, compute what the trigger would have fired intraday...' vs 'chain_poller (new)'; ABSENT: historical intraday quote source."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Mutual exclusion between roll_eod.py and the v2 engine is unspecified during live rollout, so both could act on the same contract. During paper mode this is safe. The handover (drain in-flight orders, a lock, or per-underlying routing for the 5-then-40 rollout) is not defined.",
+     "evidence": "'ROLLER_V2=true on 5 underlyings, then all 40' with roll_eod.py still the fallback; ABSENT: handover or lock."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The one-roll-per-contract-per-day constraint and the 8-orders-per-account cap leave unspecified whether a roll that was cancelled after 3 reprices may be retried the same day. The cap may also bind on volatile days across 40 underlyings. The failure mode is safe (halt and alert), but intended behavior is undefined.",
+     "evidence": "'unique constraint on (contract, trading_date)'; 'max 8 roll orders per account per day'"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The sign convention of 'mid minus 1 tick' for a net debit/credit combo is ambiguous, as is whether the $0.05 credit test is evaluated at mid or at the limit.",
+     "evidence": "'limit at mid minus 1 tick'; 'next strike up if the credit is >= $0.05'"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Credential handling for broker and vendor keys, and access control for the ROLLER_KILL switch, are not described.",
+     "evidence": "ABSENT: secrets storage and scoping."
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The plan honestly blocks on the $9 cap overage. However, the options to close the gap are unquantified, and the corrected request math may change which tier is needed.",
+     "evidence": "'That is $9 over the agreed $250 cap.'"
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 13581,
+    "tokOut": 9956,
+    "usd": 0.06203572,
+    "critMs": 53548
+   },
+   "wallMs": 146819
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The only viable tier (Growth, $259/mo) exceeds the $250 cap by $9, and any historical quote source adds unbudgeted cost. The plan handles this honestly: it requires an owner decision in week 0 and says the project does not proceed without one, so it is a dispatch precondition rather than a defect.",
+     "evidence": "\"Growth costs $259/mo, which is **$9 over the agreed $250 cap**.\" ... \"If none is approved, the project does not proceed.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A running process cannot see env var changes made after it starts, so \"env switch read on every loop\" does not work as written. A restart with the variable set would work, and the heartbeat check and the Postgres-backed caps remain as other controls. The switch should be a DB flag or file.",
+     "evidence": "\"plus a ROLLER_KILL env switch read on every loop\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Polling (80 req/min) plus the targeted-fetch reserve (20 req/min) uses 100% of the 100 req/min Growth limit, with no headroom for vendor-side counting differences. The \"well within\" justification compares a daily order count to a per-minute budget.",
+     "evidence": "\"leaving at most 20 req/min for targeted quote fetches\" ... \"stays well within it\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The caps of 1 roll per contract and 8 per account per day do not say what happens to triggered positions left unrolled, for example on a large gap day across 40 names. It is unclear whether roll_eod.py still covers them in live mode.",
+     "evidence": "\"max 1 roll per contract per day and max 8 roll orders per account per day\" with no stated fallback behaviour"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The staleness guard compares vendor timestamps to the local clock without mentioning NTP or clock skew handling. The roll-target credit basis (mid, bid or limit) is also undefined.",
+     "evidence": "\"more than 10 s older than the current time\"; \"if the credit is >= $0.05\""
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 13986,
+    "tokOut": 7545,
+    "usd": 0.04975062,
+    "critMs": 41094
+   },
+   "wallMs": 67346
+  }
+ ],
+ "artifact": "# Plan: Auto-Roller v2 — intraday roll decisions\n\nOwner: trading-infra | Build: 4 weeks, 2 engineers | Status: **blocked on the §4 cost decision; not yet ready for dispatch**\n\n## Summary\nReplace the end-of-day roll script (roll_eod.py) with an intraday engine that rolls short calls the moment a roll trigger fires, instead of waiting for the 15:45 ET batch.\nExpected impact: **not yet quantified.** The benefit is a hypothesis (§2) that the spread study, roll replay and paper mode must confirm before any live rollout (§6).\n\n## 1. Roll triggers (unchanged semantics, new timing)\n- Short call delta >= 0.70, or\n- DTE <= 5 and extrinsic value < $0.10, or\n- Underlying gaps > 4% through strike within the session.\nRoll target: same strike +1 expiry, or next strike up if the credit is >= $0.05. No change to contract counts (position sizing is out of scope).\n\n## 2. Rationale (hypothesis, not yet evidenced)\nHypothesis: rolling at the close means we sometimes roll after intraday mean-reversion has already happened, and on high-volatility days the short leg may be cheaper to buy back mid-morning. Desk notes from the last two quarters list several days where a mid-session roll \"would have been better\". These notes are anecdotal and are not a basis for an APR figure. We also have not measured whether closing spreads after 15:30 are actually wider than mid-session spreads, or whether repeated repricing costs more than it saves.\n\n**Data availability:** chain_poller is new, so we hold no intraday bid/ask history today. Any study of past EOD rolls needs a historical intraday option quote source, which has not been identified. The week 0 spike (§6) must name one (vendor historical endpoint, broker API, or a purchased dataset) and confirm that its cost fits the §4 budget. Until then, the evidence below falls into two kinds:\n- **Historical (only if a source is named in week 0):** the replay of past EOD rolls.\n- **Forward-collected (always available):** chain_poller starts collecting in week 1, so the spread study and the paper-mode fill model rest on data from week 1 onward. That is roughly 15 trading days by the end of week 3, which is a small sample. The gate (§6) must state the sample size it relies on.\n\nEvidence required before live rollout (see §6 gates):\n- **Spread study (weeks 1–3, forward-collected):** chain_poller stores bid/ask snapshots for all held contracts from its first day. Compare quoted spread by time of day, especially 15:30–16:00 vs. 10:00–15:00. A preliminary read is possible at the end of week 1, and the final read comes before the gate. If a historical source is named, backfill it to widen the sample.\n- **Historical roll replay (week 1, conditional):** runs only if week 0 names a historical intraday quote source. For past EOD rolls, compute what the trigger would have fired intraday and the estimated cost at mid vs. at the realistic limit, net of spread. The result gives an estimated net benefit with a range, and that range replaces any headline number. If no source is available, this item is dropped and replaced by a **forward replay**: for every trigger that fires during paper mode, compare the simulated intraday roll against what roll_eod.py actually did that day, net of spread.\n- **Paper-mode fill model (weeks 2–3):** record simulated fills and fill rate for the 20 s x 3 reprice policy (§3).\nThe peer-practice claim is dropped, since we have no sourced basis for it.\n\n## 3. Architecture\n- chain_poller (new): fetch real-time option chain snapshots for each held underlying (front expiry + next expiry) on a fixed interval during RTH. The interval is set by the vendor's request model so that the request rate stays within budget:\n  - If one request returns both expiries: 40 underlyings x 2 polls/min (30 s interval) = **80 req/min**.\n  - If the vendor needs one request per expiry: 40 x 2 expiries = 80 requests per cycle, so the interval is **60 s** to hold **80 req/min**. A 30 s interval would be 160 req/min, which exceeds the 100 req/min Growth limit and is not allowed.\n  - Budget: polling uses at most 80 req/min, leaving at most 20 req/min for targeted quote fetches by order_router (below). The poller throttles itself to this cap. Week 0 confirms which request model applies (§6).\n  Each snapshot carries the vendor quote timestamp.\n- **Staleness guard:** roll_engine evaluates triggers only when a snapshot arrives, never against a cached snapshot between polls. At evaluation it ignores any quote whose vendor timestamp is more than 10 s older than the current time, and refuses to emit intents on delayed-tier data. The guard therefore measures vendor/feed latency, not the polling interval, so the 30 s or 60 s cadence does not by itself cause rejections. The week 0 spike measures the vendor's quote-timestamp lag, and if typical lag exceeds 10 s on liquid contracts the threshold or vendor choice is revisited before dispatch.\n- roll_engine (new): consumes snapshots, evaluates §1 triggers, emits RollIntent rows.\n- order_router (existing broker client, extended): turns RollIntent into a single combo order (buy-to-close + sell-to-open) with a limit at mid minus 1 tick, re-priced every 20 s up to 3 times, then cancelled. **Reprice quote source:** at each reprice, order_router fetches a fresh targeted quote for the two legs only, not the polled snapshot, and applies the same 10 s staleness check. If the quote is stale or the fetch fails, that reprice is skipped, the working order is left unchanged, and the attempt counts toward the 3. After the third attempt the order is cancelled. Targeted fetches draw on the 20 req/min reserve above, and at most 8 roll orders per account per day (§7) x 2 legs x 3 reprices stays well within it. These parameters are provisional and tunable pending the paper-mode fill data.\n- Postgres: new tables roll_intents, rolls, roll_orders; positions changes in §5.\n\n## 4. Market data vendor and cost (decision required)\nCurrent vendor: Optiq Data.\n\n| Tier    | Price/mo | Rate limit   | Option quotes   | Monthly total with $60 VPS |\n|---------|----------|--------------|-----------------|----------------------------|\n| Starter | $79      | 5 req/min    | 15-min delayed  | $139 |\n| Growth  | $199     | 100 req/min  | real-time       | $259 |\n| Pro     | $499     | unlimited    | real-time       | $559 |\n\n- Starter is **not viable**: its quotes are 15 minutes delayed, so delta, extrinsic and gap triggers and limit pricing would all run on stale data. Its 5 req/min limit is also far below the polling need.\n- Growth is the only tier under the cap-adjacent range that provides real-time quotes. It works only with the §3 polling budget (80 req/min polling + up to 20 req/min targeted fetches, at a 30 s or 60 s interval depending on the vendor's request model). Polling every 30 s with one request per expiry (160 req/min) would not fit Growth. Growth costs $259/mo, which is **$9 over the agreed $250 cap**.\n- Pro ($559/mo) would remove the rate constraint but is $309 over the cap and is not proposed.\n- This plan does not assume the cap is waived. Before dispatch, the owner must choose one of:\n  1. Approve a cap exception to $259/mo for Growth, plus any cost of a historical quote source named in week 0.\n  2. Reduce other infra spend by at least $9/mo (e.g. VPS) and confirm it, again including any historical data cost.\n  3. Confirm in a week 0 spike that the existing broker API serves real-time option chain quotes at the needed rate (within the §3 budget) at no extra cost, and use it instead of Optiq.\n- If none is approved, the project does not proceed. No work on live intraday triggers starts on delayed data.\n\n## 5. Data model migration (week 1)\nroll_history (JSONB array of every roll since account inception) gains a normalized rolls table. **The column is not dropped in this plan's build window.**\n- Before anything runs on prod: take a full pg_dump, verify it restores to a scratch database, and rehearse migration 0042 on a restored copy of prod.\n- Migration 0042 (additive only) creates rolls and backfills **all** roll_history entries since inception, not just the last 90 days. It runs Monday 08:00 ET (pre-market). Post-checks: per-position entry counts in rolls equal jsonb_array_length(roll_history), with zero mismatches, or the migration is rolled back.\n- roll_history stays in place and keeps being written (dual-write with rolls) throughout rollout, so roll_eod.py (the fallback behind ROLLER_V2=false) keeps working unchanged. Week 1 includes a test confirming roll_eod.py runs end to end against the post-migration schema.\n- Rollback: since the migration is additive, rollback is to set ROLLER_V2=false and drop the rolls table; no data is lost.\n- Dropping roll_history is a separate migration 0043, only after the success criterion in §6 is met and roll_eod.py has been retired or ported to read rolls. It requires a fresh verified backup and is outside this 4-week build.\n\n## 6. Rollout\n- Week 0: resolve the §4 decision. Spike items: (a) confirm the vendor's request model (one request per underlying vs. per expiry) and set the polling interval per §3; (b) measure vendor quote-timestamp lag against the 10 s guard; (c) identify a historical intraday option quote source for the §2 replay, or record that none exists, in which case the forward replay is used.\n- Week 1: migration 0042 (additive), chain_poller with bid/ask snapshot storage (collection starts here), preliminary spread study, historical roll replay (only if a source was named in week 0), roll_engine skeleton.\n- Week 2-3: paper mode (RollIntent written, no orders) alongside roll_eod.py; compare intents vs. EOD decisions daily; record simulated fills and fill rate; run the forward replay and finish the spread study.\n- **Go/no-go gate before week 4:** proceed to live only if the replay evidence (historical if available, otherwise forward) and paper-mode results show a positive estimated net benefit after spread and slippage, and paper fill rate for the reprice policy is acceptable. The gate record must state the number of trading days and triggers it rests on, and a minimum sample size is set along with the thresholds. All thresholds are set and written down at the end of week 1, before paper-mode results are seen. If the sample is below the minimum or the gate fails, stay on roll_eod.py (or extend paper mode and re-run the gate).\n- Week 4: ROLLER_V2=true on 5 underlyings, then all 40, only if the gate passes.\n- Success criterion (evaluated after the build window, over the first 30 live days): realized net APR, after spread, slippage and fees, exceeds the EOD baseline by at least the threshold fixed at the week 1 gate. The earlier +3.8% figure is withdrawn.\n\n## 7. Risks and mitigations\n- Runaway order loop: order_router enforces max 1 roll per contract per day and max 8 roll orders per account per day. Both are hard limits checked before submit, plus a ROLLER_KILL env switch read on every loop. **Counters live in Postgres, not in memory:** roll_orders has a unique constraint on (contract, trading_date) and a per-account daily count, both checked and written in the same transaction as the order insert. They therefore survive restarts and crashes, and a restarted process cannot exceed the limits.\n- Partial fills on combo: combo orders are all-or-none at the broker; a rejected combo leaves the original short call untouched.\n- Broker API outage or kill: if the last successful broker heartbeat is > 60 s old, or ROLLER_KILL is set, roll_engine stops emitting intents. Order_router also attempts to cancel any roll orders still working at the broker as soon as the broker is reachable, and an alert goes to the trading-infra on-call channel on heartbeat loss, kill-switch activation, and any limit hit.\n- Order state reconciliation: on startup and every 60 s, order_router fetches open and recent orders from the broker and reconciles them with roll_orders. Any order in an unknown, cancelled-unconfirmed, or mismatched state halts new submissions for that account and alerts on-call until a human clears it. No new roll for a contract is submitted while its previous order is unresolved.\n- Stale data: the §3 staleness guard blocks intents on quotes older than 10 s at evaluation time (and skips reprices on stale targeted quotes), with an alert if the guard fires continuously for more than 2 minutes during RTH.\n- Rate-limit exhaustion: the poller self-throttles to 80 req/min and order_router targeted fetches are capped at the 20 req/min reserve. If the vendor returns a rate-limit error, roll_engine treats the affected data as stale and alerts, rather than retrying in a tight loop.",
+ "fixerUsage": {
+  "calls": 2,
+  "tokIn": 7798,
+  "tokOut": 10068,
+  "usd": 0.13186399999999998,
+  "critMs": 70176
+ },
+ "status": "cleared"
+}

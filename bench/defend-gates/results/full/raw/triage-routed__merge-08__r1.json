@@ -1,0 +1,83 @@
+{
+ "approach": "triage-routed",
+ "case": "merge-08",
+ "rep": 1,
+ "wallMs": 275390,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "supply-chain",
+   "severity": "blocker",
+   "claim": "The go.mod `replace go.uber.org/zap => ../zap` points zap at a local sibling directory outside the repo. A clean CI checkout will not have it, so the build fails or silently compiles unreviewed local code into the binary distributed to on-call laptops. It also overrides the pinned pseudo-version, so the zap bump the PR claims to ship never takes effect.",
+   "evidence": "+replace go.uber.org/zap => ../zap"
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "printPlan lists the canary as batch 0 and then slices the full `hosts` list instead of the canary-excluded `rest`, so the canary host is printed twice. The plan misstates the real rollout, which is the failure the dry-run exists to prevent.",
+   "evidence": "if o.CanaryHost != \"\" { fmt.Fprintf(w, \"  batch %d (canary): %s\\n\", n, o.CanaryHost) ... }; for i := 0; i < len(hosts); i += per"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "printPlan sizes batches with truncating int(len(hosts)*MaxSurge) over all hosts, while computeBatches uses ceil(len(rest)*MaxSurge) over non-canary hosts. Batch sizes and counts can differ from the real run (e.g. 10 hosts at 0.25 gives 2 in the plan vs 3 in the real run).",
+   "evidence": "per := int(float64(len(hosts)) * o.MaxSurge) — versus size := int(math.Ceil(float64(len(rest)) * o.MaxSurge))"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The dry-run calls api.Hosts before checking DryRun, contradicting the PR's stated guarantee that dry-run exits without touching the orchestrator API.",
+   "evidence": "hosts, err := api.Hosts(ctx, o.Service) ... if o.DryRun { printPlan(w, hosts, o)"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "printPlan duplicates batching logic instead of sharing computeBatches, and the two have already diverged. The plan can therefore differ from the layout that actually executes.",
+   "evidence": "per := int(float64(len(hosts)) * o.MaxSurge) ... vs size := int(math.Ceil(float64(len(rest)) * o.MaxSurge))"
+  },
+  {
+   "lens": "test-coverage",
+   "severity": "major",
+   "claim": "No test is added or changed for printPlan, dry-run, or canary handling, and nothing asserts that the printed plan equals computeBatches output. The divergences above would be caught by one such test.",
+   "evidence": "ABSENT: no *_test.go changes in the diff; only go.mod, internal/rollout/rollout.go, cmd/rollout.go modified"
+  },
+  {
+   "lens": "scope-drift",
+   "severity": "major",
+   "claim": "The undisclosed replace directive changes which zap code is compiled. The PR title and description do not mention it, so reviewers would not infer a dependency-source change.",
+   "evidence": "+\n+replace go.uber.org/zap => ../zap"
+  },
+  {
+   "lens": "supply-chain",
+   "severity": "major",
+   "claim": "The zap pseudo-version is unexplained and go.sum has no corresponding change, so the module hash is not pinned or verified.",
+   "evidence": "-\tgo.uber.org/zap v1.27.0\n+\tgo.uber.org/zap v1.27.1-0.20260914181502-9d3e1c0f7a2b"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "If the canary host is not in the service's host list, the plan prints it as batch 0 without validation, and the real rollout path also does not validate it.",
+   "evidence": "ABSENT: any check that o.CanaryHost is a member of hosts before printPlan or deployBatch runs"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Write errors from fmt.Fprintf in printPlan are discarded, so the function can return nil when the plan was not written.",
+   "evidence": "fmt.Fprintf(w, \"rollout plan: %s -> %s (%d hosts)\\n\", o.Service, o.Version, len(hosts))"
+  },
+  {
+   "lens": "scope-drift",
+   "severity": "minor",
+   "claim": "The zap bump is unrelated to the dry-run feature and is bundled into the same PR, making independent review and revert harder.",
+   "evidence": "Also bumps zap to pick up the JSON encoder fix we upstreamed."
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 22899,
+  "tokOut": 10907,
+  "usd": 0.00992265,
+  "critMs": 19001
+ }
+}

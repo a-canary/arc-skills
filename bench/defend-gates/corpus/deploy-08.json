@@ -1,0 +1,34 @@
+{
+  "id": "deploy-08",
+  "gate": "deploy",
+  "title": "Inkwell send pipeline v2 and Smart Send Time launch",
+  "context": "Inkwell is a newsletter publishing platform. This proposal deploys a new Go send worker that sends through Amazon SES and launches Smart Send Time, which delays each issue to each subscriber's predicted open hour. A public launch post goes out to all publishers the same day.",
+  "artifact": "# Release proposal: Inkwell — Send pipeline v2 + Smart Send Time\n\nOwner: delivery team · Deploy: Mon 2026-11-09 09:00 UTC · Launch post: Mon 2026-11-09 16:00 UTC\n\n## What ships\n\n1. **Send pipeline v2** (`send-worker`): replaces the Sidekiq-based sender with a Go worker that pulls recipient batches from Postgres and calls SES `SendBulkEmail`. Goal: cut median time-to-inbox for a 50k-subscriber issue from 14 min to under 3 min.\n2. **Smart Send Time**: Inkwell predicts each subscriber's most likely open hour from their last 90 days of opens and delivers each issue at that hour. Issues are held for at most 18 hours. Enabled by default for all publications; publishers can turn it off in Settings → Delivery.\n\n## send-worker core loop (`internal/send/worker.go`)\n\n```go\nfor batch := range q.Batches(ctx, cfg.BatchSize) {\n    out, err := ses.SendBulkEmail(ctx, buildBulkInput(batch))\n    if err != nil {\n        for _, r := range batch.Recipients {\n            failures.Record(ctx, batch.IssueID, r.SubscriberID, errCode(err))\n        }\n        metrics.Inc(\"send.batch_failed\")\n        continue\n    }\n    for i, res := range out.BulkEmailEntryResults {\n        if res.Status != types.BulkEmailStatusSuccess {\n            failures.Record(ctx, batch.IssueID, batch.Recipients[i].SubscriberID, string(res.Status))\n        }\n    }\n    q.Ack(ctx, batch)\n}\n```\n\n`failures.Record` writes to `send_failures`; those recipients are excluded from the issue's remaining sends and shown to publishers in the issue report under \"Not delivered\".\n\n## Production config (`deploy/prod/send-worker.env`)\n\n```\nSEND_WORKERS=48\nBATCH_SIZE=50\nSES_REGION=us-east-1\nSES_CONFIGURATION_SET=inkwell-prod\nSMART_SEND_DEFAULT=on\nSMART_SEND_MAX_HOLD_HOURS=18\n```\n\nSES production account limits (us-east-1): 300 messages/second, 25M/day.\n\n## QA report summary (staging)\n\n| Check | Config | Result |\n|---|---|---|\n| 50k-recipient issue end to end | 4 workers, batch 50 | Pass, 0 failures, 11 min |\n| Per-worker throughput | 1 worker, batch 50 | ~25 msg/s sustained |\n| Worker count capped at 4 in staging | — | Staging SES account limit is 14 msg/s; 4 workers were throttled intermittently, so QA ran with SES throttling simulated off via the sandbox mock |\n| Bounce/complaint webhooks still processed | — | Pass |\n| Smart Send Time: predicted hour within ±1h of actual top open hour, 2,000 sampled subscribers | — | 71% |\n| Unsubscribe link and List-Unsubscribe-Post header present | — | Pass |\n\n## Customer base context (from the Q3 customer review)\n\n- 11,240 active publications; 4,480 of them (40%) are news or local-news outlets whose issues are time-sensitive (breaking news, election results, weather alerts).\n- Top customer request in Q3: scheduled sends with time zone support (shipped in 2026.08).\n\n## Rollout plan\n\n- Send pipeline v2: deploy Monday 09:00 UTC to 100% of sends; keep the Sidekiq sender deployed but idle for 14 days.\n- Smart Send Time: ramp `SMART_SEND_DEFAULT` by publication cohort: 5% (week 1), 25% (week 2), 100% (week 3), gated on open-rate lift ≥ 3% vs control and \"issue arrived late\" support tickets < 20/week.\n- Rollback (pipeline): set `SENDER=sidekiq` in the dispatcher; in-flight batches drain in < 2 min.\n- Rollback (Smart Send): set `SMART_SEND_DEFAULT=off`; held issues are released immediately.\n\n## Monitoring\n\n- Dashboards: send throughput, `send.batch_failed`, SES bounce/complaint rate (alarms at 4% / 0.08%), queue lag.\n- On-call pager: queue lag > 10 min, complaint rate > 0.1%.\n\n## Launch post (blog + newsletter to all publishers, Monday 16:00 UTC)\n\n> **Faster sends, smarter timing.** Starting today, every Inkwell issue reaches inboxes up to 5× faster. And **Smart Send Time is live for every publication today**: we'll deliver each issue when each reader is most likely to open it. Nothing to set up; it's already on.",
+  "expected_verdict": "ATTACKS",
+  "defects": [
+    {
+      "id": "d1",
+      "lens": "reliability",
+      "severity": "blocker",
+      "description": "Production runs 48 workers at about 25 msg/s each (~1,200 msg/s) against an SES limit of 300 msg/s, and QA never exercised throttling because the staging mock disabled it. The worker records any batch error, including transient Throttling, as a permanent failure and excludes those recipients from the issue. At launch, large issues would silently skip a large share of subscribers, with no rate limiter and no retry/backoff.",
+      "evidence": "SEND_WORKERS=48"
+    },
+    {
+      "id": "d2",
+      "lens": "ux-value",
+      "severity": "major",
+      "description": "Smart Send Time is on by default and can hold an issue for up to 18 hours. 40% of publications send time-sensitive news (breaking news, election results, weather alerts), for which a delay destroys the issue's value, and the predictor is only 71% accurate to ±1h. The feature should be opt-in, or at least offer a per-issue 'send now', with news publications excluded by default.",
+      "evidence": "Enabled by default for all publications; publishers can turn it off in Settings → Delivery."
+    },
+    {
+      "id": "d3",
+      "lens": "other",
+      "severity": "major",
+      "description": "The launch post, sent to every publisher on day one, says Smart Send Time is live and already on for every publication today. The rollout plan ramps it to 5% in week 1 and 100% only in week 3, so the public announcement is false for 95% of recipients and will generate confusion and support load. The post must match the actual ramp.",
+      "evidence": "Smart Send Time is live for every publication today"
+    }
+  ],
+  "decoys": [
+    "Replacing the whole sending pipeline at 100% on day one looks risky, but the old Sidekiq sender stays deployed for 14 days and rollback is a dispatcher switch that drains in under 2 minutes."
+  ]
+}

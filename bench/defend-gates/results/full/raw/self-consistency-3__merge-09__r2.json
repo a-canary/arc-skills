@@ -1,0 +1,166 @@
+{
+ "approach": "self-consistency-3",
+ "case": "merge-09",
+ "rep": 2,
+ "wallMs": 158173,
+ "verdict": "ATTACKS",
+ "attacks": [
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The verification scheme (canonical string, lowercase hex, seconds-based timestamp, 'v1=' prefix) is asserted as vendor behaviour, but every test signs with the same helper written in this PR. The tests prove self-consistency, not compatibility with PlugCloud's real deliveries.",
+   "evidence": "\"PlugCloud signs every delivery with X-PC-Timestamp and X-PC-Signature: v1=<hex HMAC-SHA256 of \\\"<timestamp>.<raw body>\\\">\" / ABSENT: a captured real PlugCloud delivery or vendor spec fixture with expected signature to validate against."
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The new required secret has no documented rollout or rollback path. If the operator's .env lacks the value or it differs from the vendor's configured secret, every delivery gets 401 and readings are silently dropped, with no stated vendor retry or backfill behaviour.",
+   "evidence": "\"New required env vars are announced in release notes and set by the operator in the compose .env file.\" / ABSENT: deploy ordering, vendor secret-rotation steps, retry/backfill expectations, or an alert on sustained 401s."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The PR says startup fails if the secret is missing or short, but the diff only shows a per-request Depends(get_settings). If Settings is built lazily, a bad config surfaces as failing webhook requests instead of a startup error.",
+   "evidence": "\"startup fails if it is missing or short\" / ABSENT: any eager Settings construction at app startup (the diff only shows Depends(get_settings))."
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The body is read in full and the DB dependency is resolved before authentication, so unauthenticated callers can consume memory and DB resources. The 1 MB cap is enforced only by the reverse proxy, not by the app.",
+   "evidence": "\"body = await request.body()\" with \"db: Database = Depends(get_db)\" / ABSENT: an app-side body size limit or pre-auth rate limit."
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "A captured valid delivery can be replayed for up to 5 minutes. Idempotent upserts limit the impact, but there is no nonce or delivery-ID dedup.",
+   "evidence": "\"rejects deliveries more than 5 minutes old or in the future\" / ABSENT: replay protection beyond the timestamp window."
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "signature.removeprefix(\"v1=\") accepts a bare hex signature with no version prefix and does not handle multiple or future-version signatures, which weakens the format check.",
+   "evidence": "\"signature.removeprefix(\\\"v1=\\\").encode()\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The 32-character minimum checks length only, not entropy, so a weak but long secret such as repeated characters passes validation.",
+   "evidence": "\"if len(v.get_secret_value()) < 32:\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Making plugcloud_secret a required field breaks any Settings(...) construction outside tests/conftest.py. The diff does not show those call sites were checked.",
+   "evidence": "ABSENT: a search for other Settings(...) constructions or fixtures that omit plugcloud_secret."
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "The 5-minute staleness check rejects any legitimately redelivered batch whose X-PC-Timestamp is older than 5 minutes, such as a backlog delivered after a vendor or network outage. The artifact does not establish that the timestamp is the delivery time rather than the original event time, so those readings would be dropped permanently.",
+   "evidence": "\"rejects deliveries more than 5 minutes old or in the future\"; ABSENT: vendor retry/redelivery semantics and whether X-PC-Timestamp is set on each retry"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Clock skew on a self-hosted host (for example a device without NTP or an RTC) makes every delivery fail the tolerance check. The result is silent data loss: the vendor sees 401s, and the operator gets only a warning log with no alerting or metric.",
+   "evidence": "\"returns a bare 401 on any failure\"; ABSENT: alerting, metrics, or clock-sync requirement for the operator"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The signing format (seconds vs milliseconds, the 'v1=' prefix, the 'timestamp.body' input) is asserted but never checked against a real vendor delivery or published test vector. The tests compute signatures with the same helper logic as the implementation, so they only prove self-consistency. If any assumption is wrong, every real delivery is rejected.",
+   "evidence": "\"PlugCloud signs every delivery with X-PC-Timestamp and X-PC-Signature: v1=<hex HMAC-SHA256 of \\\"<timestamp>.<raw body>\\\">\"; ABSENT: vendor fixture or documented test vector"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The claim that startup fails when the secret is missing depends on Settings being built eagerly at app startup, but the route uses Depends(get_settings), which may be lazy. The route test also assumes the app's get_settings is overridden to match the fixture, which is not shown.",
+   "evidence": "\"startup fails if it is missing or short\"; \"Depends(get_settings)\"; ABSENT: app startup code and get_settings override in conftest"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The signature prefix is optional, since removeprefix accepts a bare hex value. Comparison is also case-sensitive, so uppercase hex from the vendor would be rejected. The 32-character check counts length only, not entropy, so a weak secret like 'a' * 32 passes.",
+   "evidence": "\"signature.removeprefix(\\\"v1=\\\")\"; \"if len(v.get_secret_value()) < 32\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The DB dependency is resolved before signature verification, so unauthenticated requests still acquire a database connection. The body is read in full before verification, which is unbounded if the 1 MB proxy cap is bypassed (for example by direct port exposure).",
+   "evidence": "\"db: Database = Depends(get_db)\"; \"body = await request.body()\"; the 1 MB cap is enforced only by the reverse proxy"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The design supports only one secret. Rotating it without downtime is impossible, because there is no overlap window for old and new secrets. Any mismatch between the vendor and the .env file causes a full ingest outage until the two are reconciled.",
+   "evidence": "\"The signing secret is a new required setting (VOLTLOG_PLUGCLOUD_SECRET, min 32 chars)\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A captured valid delivery can be replayed anywhere within the 5-minute window. Because the upsert keys on (device_id, measured_at), a replay of an older batch can overwrite a newer correction for the same readings. The artifact's claim that redelivery is harmless holds only for identical data.",
+   "evidence": "\"a redelivered batch is harmless\"; \"Readings are already upserted by (device_id, measured_at)\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The check depends on PlugCloud's exact signing scheme, but no vendor-produced delivery or known-answer vector is included. The tests sign with the same assumed format they verify, so they would pass even if production encoding, separator, or secret form differs from the vendor's.",
+   "evidence": "ABSENT: captured PlugCloud delivery fixture. Test helper: \"return \"v1=\" + hmac.new(secret, ts.encode() + b\".\" + body, hashlib.sha256).hexdigest()\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "A wrong secret, or server clock drift beyond 5 minutes, makes every vendor delivery return 401. The only signal is a warning log, so readings can be silently dropped with no alert, metric, or post-deploy verification step.",
+   "evidence": "log.warning(\"plugcloud webhook rejected: %s\", exc) ... raise HTTPException(status_code=401, detail=\"invalid signature\") from None; ABSENT: alerting, metric, or rollout check"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The PR text says the endpoint returns a bare 401, but the code returns a JSON detail body. The artifact contradicts itself.",
+   "evidence": "\"returns a bare 401 on any failure\" vs. \"detail=\\\"invalid signature\\\"\""
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "The body is fully read and the DB dependency is resolved before any authentication. The 1 MB cap exists only at the reverse proxy, so direct access to the app port allows unauthenticated large-body reads and an unbounded stream of warning logs.",
+   "evidence": "body = await request.body() ... Depends(get_db); ABSENT: app-level body size limit or rate limit"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "Secret validation checks only character length. It does not check entropy or surrounding whitespace, so a low-entropy 32-character value, or one with a trailing newline from .env, passes startup.",
+   "evidence": "if len(v.get_secret_value()) < 32:"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "There is no nonce or seen-set, so any captured delivery is replayable for the full 300-second window. Because the upsert keys on measured_at, a replayed older batch can overwrite stored values.",
+   "evidence": "abs(current - int(timestamp)) > TOLERANCE_SECONDS"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The route test assumes the client fixture uses the same settings instance that conftest configures with the test secret. The get_settings definition and client fixture wiring are not shown, so the test may use a different secret or the import may fail.",
+   "evidence": "from voltlog.settings import Settings, get_settings; ABSENT: get_settings definition and client fixture override"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "No test covers the new validator (short secret fails startup) or the 422 path for a validly signed but malformed body.",
+   "evidence": "ABSENT: tests for _secret_long_enough and for the invalid-payload 422 branch"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "plugcloud_secret is required with no default, so instances without the new env var fail at startup. This also affects any CLI or migration code that constructs Settings.",
+   "evidence": "plugcloud_secret: SecretStr"
+  }
+ ],
+ "usage": {
+  "calls": 3,
+  "tokIn": 13230,
+  "tokOut": 19936,
+  "usd": 0.01010084,
+  "critMs": 38407
+ }
+}

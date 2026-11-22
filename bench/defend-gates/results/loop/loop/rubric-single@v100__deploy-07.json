@@ -1,0 +1,315 @@
+{
+ "approach": "rubric-single@v100",
+ "case": "deploy-07",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The release claims 'graph cache' makes repeated builds complete in 'under 50 ms of task time', but the benchmark shows cache-hit `tasq run build` at 2.02s, which is nearly 10x slower than 2.9.4's 0.21s. The 50ms claim is unsupported by the provided data and likely refers only to task execution excluding plugin discovery overhead, which is misleading as stated.",
+     "evidence": "\"repeated `tasq run build` with unchanged inputs completes in under 50 ms of task time\" vs table row \"`tasq run build` (cache hit) | 0.21 s | 2.02 s\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "The performance section claims 'overall build time improves thanks to the new graph cache' but the cold full build only improved by 2.6s (48.7→46.1s) while every other command got 5-18x slower due to plugin discovery. The claim of improvement is contradicted by the data for all non-cold-build scenarios.",
+     "evidence": "\"Discovery is a fixed per-invocation cost and becomes negligible relative to real build work, so overall build time improves\" vs all benchmark rows showing 3.0.0-rc.2 slower than 2.9.4 except cold build"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Plugin discovery walks all nested node_modules on every invocation including `tasq --version`, adding ~1.8s overhead to trivial commands. In large monorepos with thousands of packages this could become significantly worse and there is no timeout, cache, or skip mechanism mentioned.",
+     "evidence": "\"On every invocation (`tasq run`, `tasq lint-staged`, `tasq watch` restarts, `tasq list`)\" and \"`tasq --version` | 0.11 s | 1.94 s\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Auto-discovery loads any package with the `tasq-plugin` keyword from node_modules without verification. A typosquat or compromised dependency could register itself as a plugin and execute arbitrary code during discovery, which runs before argument parsing. No signature verification, allowlist, or user confirmation is mentioned.",
+     "evidence": "\"Any installed package with the `tasq-plugin` keyword is picked up automatically\" and \"Discovery runs before argument parsing so that plugins can register subcommands\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Discovery uses `glob(\"**/node_modules/**/package.json\")` which is O(n) in package count and reads/parses every package.json. In very large monorepos (10k+ packages) this could take many seconds or minutes per invocation, making the CLI unusable. No performance scaling data beyond 2,430 packages is provided.",
+     "evidence": "\"glob(\"**/node_modules/**/package.json\", { cwd: root })\" and benchmark only tested on \"2,430 installed packages\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "The `tasq-migrate` tool was tested on only 40 public repos (2 required manual edits) and the top 15 community plugins. With 180k weekly downloads, the user base likely has far more diverse configurations. Migration risk for the long tail is unassessed.",
+     "evidence": "\"tested on 40 public repos, 38 fully automatic, 2 needed manual edits\" and \"Smoke test of top 15 community plugins\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The rollback plan re-points `latest` to 2.9.4 but doesn't address users who already ran `npm install tasq@latest` and got 3.0.0. Their lockfiles will still pin 3.0.0 and they won't automatically roll back.",
+     "evidence": "\"Rollback: if a P1 is found after promotion, re-point `latest` to `2.9.4`\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1686,
+    "tokOut": 896,
+    "usd": 0,
+    "critMs": 50142
+   },
+   "wallMs": 66600
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The proposed migration tool `npx tasq-migrate` is not described anywhere in the artifact — no source, no publish plan, no version, no link. The artifact assumes it exists and is tested on 40 repos, but there is no evidence it is ready for a 180k weekly download user base.",
+     "evidence": "ARTIFACT: 'npx tasq-migrate rewrites config files and require calls; tested on 40 public repos, 38 fully automatic, 2 needed manual edits (documented)'"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The artifact claims the final 3.0.0 discovery design is 'direct dependencies only' and shows a code sketch, but the code sketch still iterates over `directDependencyNames(root)` without showing how it resolves the actual package directory or handles workspaces. The sketch is incomplete and the claim that it 'scales with the number of direct dependencies' is unverified — no benchmark or even a working implementation is shown.",
+     "evidence": "ARTIFACT: 'const dir = resolvePackageDir(root, name);' — function not defined or shown; 'Cost now scales with the number of direct dependencies rather than the total installed package count.' — no evidence provided"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The security note admits 'We do not verify signatures' and relies on direct-dependency filtering to prevent typosquatting. However, the artifact does not address the risk that a malicious direct dependency (which the user explicitly installed) could be a typosquat of a legitimate plugin, or that the `tasq-plugin` keyword could be added to any package by its maintainer, creating a supply chain attack vector. This is a known risk for zero-config plugin systems and is not mitigated.",
+     "evidence": "ARTIFACT: 'Restricting discovery to direct dependencies means a typosquat or compromised transitive package cannot register itself, since a plugin must already be a package the project chose to depend on. We do not verify signatures.'"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The artifact states that `--version` and `--help` do not run discovery in the final design, but the code sketch for `discoverPlugins` does not show how the CLI distinguishes between commands that need discovery and those that don't. The claim is made but the implementation is not shown, leaving the reliability of this optimization unverified.",
+     "evidence": "ARTIFACT: '--version and --help do not run discovery. Discovery runs before argument parsing only for commands that can be extended by plugins.' — no implementation shown"
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "The artifact notes that rc.2 has a 1.8s per-invocation discovery cost, which 'dominates short commands such as git pre-commit hooks and editor integrations, which the docs recommend.' While the final design is intended to fix this, the artifact does not provide any evidence that the final design will actually be fast enough for pre-commit hooks, which typically need to be under 1 second to be acceptable.",
+     "evidence": "ARTIFACT: 'It is negligible for long cold builds but dominates short commands such as git pre-commit hooks and editor integrations, which the docs recommend.'"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The artifact mentions that `tasq-migrate` was tested on 40 public repos, but does not specify whether the maintainers of those repos were notified or gave permission for their repos to be used in testing. This could be a compliance issue if the repos are not open-source or if the maintainers have not agreed to their code being processed by an external tool.",
+     "evidence": "ARTIFACT: 'tasq-migrate on 40 public repos (list in #1840): 38 automatic, 2 manual (Yarn PnP projects, documented).'"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2538,
+    "tokOut": 992,
+    "usd": 0,
+    "critMs": 54708
+   },
+   "wallMs": 114250
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "The plugin discovery change notice is emitted only when the discovered plugin set differs from the previous cached set, so a dependency update that adds the `tasq-plugin` keyword will not be announced to the user if the cache is stale or missing (e.g., `.tasq/plugins.json` deleted, fresh install, or CI runner with no prior cache). The notice is therefore unreliable as a security signal.",
+     "evidence": "\"When the discovered plugin set differs from the previously cached set ... tasq prints the added plugin names to stderr once before loading them.\""
+    },
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "Auto-discovery loads arbitrary code from any direct dependency that declares the `tasq-plugin` keyword, with no signature verification, registry, or trust list. A typosquatted or compromised direct dependency can execute code with the user's privileges on every `tasq` invocation. The proposal acknowledges this risk but ships auto-discovery as the default behavior with only a change notice as mitigation.",
+     "evidence": "\"A package you chose to depend on, including a typosquat you installed by mistake, can load as a plugin if it carries the `tasq-plugin` keyword. Any maintainer can add that keyword in any release, so a dependency update can turn a plain library into an auto-loaded plugin.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The CLI dispatch logic in the `src/cli.ts` sketch has a flaw: for `--help` on a plugin-provided subcommand, `infoOnly` is true but `first` is a plugin command not in `BUILTIN_COMMANDS`, so it falls through to the `else if` branch and runs discovery. However, for `--version` on a plugin command, it also runs discovery, contradicting the stated design that `--version` and `--help` skip discovery. The design expectation is inconsistent with the implementation sketch.",
+     "evidence": "\"if (infoOnly && (!first || BUILTIN_COMMANDS.has(first) || argv.length === 1))\" — for `tasq --version myplugin-command`, `first` is `myplugin-command` (not builtin), `argv.length` is 3, so discovery runs despite `infoOnly` being true."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The plugin discovery cache is keyed on lockfile and package.json hashes, but the cache write happens after all package.json files are read and parsed. If tasq crashes or is interrupted during discovery (e.g., OOM, SIGINT), the cache is never written, and the next invocation re-does the full discovery. There is no mention of atomic cache writes or corruption recovery.",
+     "evidence": "\"const cached = await readCache(root); ... await writeCache(root, found);\" — no atomic write or crash recovery mentioned."
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The proposal claims discovery cost scales with direct dependencies, but the `directDependencyNames` function reads and parses every workspace package.json file. In a monorepo with thousands of workspaces, this becomes expensive regardless of the number of direct dependencies. The 10k+ package benchmark (gate 3) tests installed package count but does not explicitly test workspace count, which is the actual scaling dimension for this design.",
+     "evidence": "\"const manifests = [join(root, \"package.json\"), ...(await workspaceManifests(root))]; for (const file of manifests) { const m = JSON.parse(await readFile(file, \"utf8\")); ... }\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The proposal states `tasq-migrate` was tested on 40 public repos with 38 automatic migrations, but the sample is explicitly acknowledged as small and skewed. Publishing to 180k weekly downloads based on this sample size carries migration risk that is not fully mitigated by the 7-day `next` dist-tag period, especially since pre-commit hooks and CI integrations will break immediately for users who upgrade.",
+     "evidence": "\"This sample is small relative to the user base (about 180k weekly downloads) and skews to public repos, so it does not establish long-tail coverage.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3671,
+    "tokOut": 897,
+    "usd": 0,
+    "critMs": 53063
+   },
+   "wallMs": 110736
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The `--version` check in the CLI sketch uses `argv.includes('--version')`, which means `tasq some-plugin-command --version` (where --version is a plugin flag) would incorrectly short-circuit to `printVersion()` and never load plugins, breaking plugin --version flags.",
+     "evidence": "`const wantsVersion = argv.includes(\"--version\") || argv.includes(\"-v\");` combined with `if (wantsVersion) { await printVersion(); }` — no check that --version is the first/only meaningful argument"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The `--help` check in the CLI sketch uses `argv.includes('--help')`, which means `tasq some-plugin-command --help` would be treated as top-level/builtin help and skip plugin discovery, even though the prose claims plugin subcommand help should trigger discovery.",
+     "evidence": "`const wantsHelp = argv.includes(\"--help\") || argv.includes(\"-h\");` combined with `else if (wantsHelp && (!first || BUILTIN_COMMANDS.has(first)))` — if `first` is a plugin command, it falls through to the `!PLUGIN_EXTENSIBLE_COMMANDS` branch or the discovery branch depending on set membership, but the intent is unclear and likely wrong"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "`resolvePackageDir` uses `createRequire(join(root, \"package.json\"))` which requires the file to exist and be valid JSON; if root package.json is missing or malformed, resolution fails for all packages, not just returning null for missing ones.",
+     "evidence": "`createRequire(join(root, \"package.json\"))` — createRequire throws if the file doesn't exist or isn't valid"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "`directDependencyNames` reads and parses every workspace manifest synchronously in a loop; with 1,000+ workspaces (gate 3 requirement), this could be slow even though it's O(workspace count) rather than O(installed packages). The gate acknowledges it's unmeasured.",
+     "evidence": "`for (const file of manifests) { const m = JSON.parse(await readFile(file, \"utf8\")); ... }` — no parallelism, no benchmark for 1,000+ workspaces"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The approval lockfile (`tasq-plugins.lock.json`) is keyed on package name only, not version or hash, so a compromised new version of an approved package auto-loads without re-approval. This is acknowledged but worth noting as a real risk.",
+     "evidence": "\"Approval is keyed on package name, not version or content.\" (stated in security note)"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The claim that `--help` for plugin subcommands triggers discovery is stated in prose but the CLI sketch's logic is ambiguous about whether plugin command names are in `PLUGIN_EXTENSIBLE_COMMANDS` or `BUILTIN_COMMANDS`, making the actual behavior unclear.",
+     "evidence": "Prose: \"including `--help` on a plugin-provided subcommand\" vs sketch: `else if (wantsHelp && (!first || BUILTIN_COMMANDS.has(first)))` — if plugin command isn't in BUILTIN_COMMANDS, it falls to the next branch which may or may not run discovery depending on PLUGIN_EXTENSIBLE_COMMANDS membership"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 4495,
+    "tokOut": 739,
+    "usd": 0,
+    "critMs": 49292
+   },
+   "wallMs": 61925
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "evidence",
+     "severity": "blocker",
+     "claim": "The release proposal's core claim is that the plugin discovery redesign fixes the performance regression, but the performance table explicitly contains only rc.2 numbers from the old full-node_modules walk design. Gate 1 states the table 'will be replaced,' meaning the final build's performance is entirely unmeasured and unreported. Publishing without this data means the release could still have the same or worse regression, making the release decision based on a design expectation rather than actual measurements.",
+     "evidence": "These are **3.0.0-rc.2 numbers, which use the full-`node_modules` walk** and are a regression. They are kept here to show why the gates above exist. They will be replaced with measurements of the final build."
+    },
+    {
+     "lens": "scale",
+     "severity": "blocker",
+     "claim": "Gate 3 requires a scaling benchmark for 10k+ packages and 1,000+ workspaces, but this is listed as a release gate that must be met before publishing. The artifact itself states 'The claim that discovery cost scales with direct dependencies and workspace manifests is unverified until this is done.' This means the fundamental architectural claim about the redesign's performance characteristics is unproven, yet the release is proceeding. If the O(manifests + deps) claim is wrong, the redesign may not actually solve the problem for large workspaces.",
+     "evidence": "The claim that discovery cost scales with direct dependencies and workspace manifests is unverified until this is done."
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The approval model is keyed only on package name, not version or content hash. The artifact admits 'an approved plugin, or one you approve without review, can still run malicious code, including after a later compromised release of that package.' This means a single approval grants trust to all future versions of a package, including compromised ones. For a tool recommended for git pre-commit hooks (running on every commit) and CI, this is a significant supply-chain risk. The proposal should either use version-pinned approval or content hashing, or at minimum warn users to re-approve after dependency updates.",
+     "evidence": "Approval is keyed on package name, not version or content."
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The `tasq-plugins.lock.json` file is committed to the repository and serves as the trust boundary. However, the artifact does not specify how conflicts are resolved when multiple developers approve different plugins, or what happens when the lock file is out of sync with installed dependencies (e.g., after `npm install` adds a new plugin dependency). Without clear guidance on lock file maintenance, teams could experience confusing behavior where plugins are silently not loaded or require manual intervention on every developer's machine.",
+     "evidence": "ABSENT: No description of lock file conflict resolution, sync behavior with dependency updates, or team workflow for maintaining the approval file."
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "major",
+     "claim": "The requirement to manually approve each discovered plugin via `tasq plugins approve` adds friction to the adoption workflow, especially for teams with many plugins. The artifact notes that discovered-but-unapproved plugins print a warning 'on every invocation where they are present,' which means developers will see repeated warnings until they approve. For a tool with 180k weekly downloads, this approval step could significantly slow down onboarding and create noise in terminal output and CI logs.",
+     "evidence": "Discovered-but-unapproved plugins are never loaded. Instead, tasq prints their names to stderr with the command to approve them, on every invocation where they are present."
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback plan re-points the `latest` dist-tag to 2.9.4, but does not address the migration path for users who have already upgraded to 3.0.0 and used `tasq-migrate` to convert their configs to ESM. If 3.0.0 is rolled back, those users would have ESM configs that are incompatible with 2.9.4 (which required CommonJS `require`). The rollback is not truly reversible for migrated users.",
+     "evidence": "Rollback: if a P1 is found after promotion, re-point `latest` to `2.9.4` (`npm dist-tag add tasq@2.9.4 latest`) and publish a fix as 3.0.1."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The `directDependencyNames` function reads workspace manifests using `mapLimit` with a concurrency of 64, but does not handle the case where a workspace manifest is missing or unreadable. If any workspace's package.json fails to parse, the entire discovery could fail or silently skip that workspace. The artifact mentions that 'a malformed root manifest is reported there as a clear error' but does not specify behavior for workspace manifests.",
+     "evidence": "ABSENT: No error handling description for malformed or missing workspace package.json files in the discovery flow."
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "The `tasq-migrate` tool is being released as a separate package with its own semver version, but the migration guide and documentation will link to it. This creates a coupling between two independently versioned packages. If `tasq-migrate` needs a fix after 3.0.0 is released, it will be published as a new version, but users who followed the original migration guide might be running an outdated version. The artifact should specify how users are directed to the latest `tasq-migrate` version.",
+     "evidence": "The exact version, repository path and README link will be posted in #1840 and the migration guide; this is gate 5."
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The artifact mentions 'License scan: no copyleft dependencies' for the new runtime deps, but does not provide evidence of the scan or link to the results. For an open-source project with 180k weekly downloads, license compliance is important, and the claim should be backed by verifiable evidence.",
+     "evidence": "ABSENT: No link to license scan results or methodology."
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The blog post is titled 'tasq 3: plugins for everyone' but the approval model actually makes plugin adoption more restrictive, not more open. The title may set user expectations that are not met by the actual feature design, potentially causing confusion or disappointment.",
+     "evidence": "Blog: \"tasq 3: plugins for everyone\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5053,
+    "tokOut": 1605,
+    "usd": 0,
+    "critMs": 86323
+   },
+   "wallMs": 121479
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The `mapLimit` worker function uses a shared `next` counter without synchronization; in JavaScript's single-threaded event loop this is safe, but the implementation assumes no async context switching between `next < items.length` check and `next++`, which could theoretically lead to duplicate work if `fn` throws and is retried.",
+     "evidence": "let next = 0; const worker = async () => { while (next < items.length) { const i = next++; out[i] = await fn(items[i]); } };"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "`resolvePackageDir` uses `createRequire(join(root, \"package.json\"))` which could resolve to a package in a parent directory if the package isn't found locally, potentially loading a plugin from outside the workspace.",
+     "evidence": "return dirname(createRequire(join(root, \"package.json\")).resolve(`${name}/package.json`));"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 5835,
+    "tokOut": 224,
+    "usd": 0,
+    "critMs": 84839
+   },
+   "wallMs": 96516
+  }
+ ],
+ "artifact": "# Release proposal: tasq 3.0.0 (npm)\n\nMaintainers: core team · Publish: Thu 2026-11-12 (conditional on the release gates below) · Tracking: #1840 · Blog: \"tasq 3: plugins for everyone\"\n\n## Release gates\n\nThe rc.2 benchmarks below show a startup regression. 3.0.0 will not be published until all of these are met, and the date slips if they are not. The release decision rests on the final-build measurements in gates 1-3, not on the design expectation:\n\n1. Plugin discovery no longer walks all of `node_modules` (see \"How plugin discovery works\"), and the performance table is re-measured on the final build and replaced.\n2. `tasq --version` and `--help` are within 2x of 2.9.4, and cache-hit `tasq run build` is within 2x of 2.9.4, on the reference monorepo.\n3. A scaling benchmark is published in #1840, with results reported honestly. It covers two dimensions: installed package count (10k+ packages) and workspace count (at least 1,000 workspaces, with cold and warm cache). The claim that discovery cost scales with direct dependencies and workspace manifests is unverified until this is done. If the benchmark shows the claim is wrong for large workspaces, 3.0.0 is not published and the discovery design is revisited.\n4. The wider migration testing described under \"QA summary\" is complete, with results posted in #1840.\n5. `tasq-migrate` is published to npm as its own versioned package, with source and README linked from #1840 and the migration guide (see \"tasq-migrate\").\n\n## Highlights\n\n- **Zero-config plugin discovery with one-time approval.** Plugins that are direct dependencies of your project and carry the `tasq-plugin` keyword are discovered automatically. No `plugins: [...]` array is required in `tasq.config.ts`. A discovered plugin loads only after you approve it with `tasq plugins approve`, which records its name and version in a committed `tasq-plugins.lock.json` (see \"How plugin discovery works\").\n- **Task graph caching** keyed on input file hashes. In rc.2 the cache skips task execution on unchanged inputs, but end-to-end `tasq run build` was 2.02 s because of discovery overhead (see Performance). We will publish the end-to-end cache-hit number from the final build, not task time alone.\n- **ESM-only**, Node 20+.\n\n## Breaking changes\n\n| Change | Migration |\n|---|---|\n| Node 18 support dropped | Node 18 is EOL since April 2025; `engines` field enforces `>=20` |\n| CommonJS `require('tasq')` removed | `npx tasq-migrate` rewrites config files and `require` calls (see \"tasq-migrate\"); tested on 40 public repos, 38 fully automatic, 2 needed manual edits (documented) |\n| `plugins` array in config changes meaning | If present, it is an exclusive allowlist: only the listed plugins load (no separate approval step). If absent, direct-dependency auto-discovery applies, and discovered plugins must be approved via `tasq plugins approve` before they load. `tasq-migrate` leaves the array in place |\n| `tasq lint-staged` output format | JSON reporter unchanged; pretty reporter shows grouped output |\n\n## tasq-migrate\n\n`tasq-migrate` is the codemod CLI that handles the ESM move. It rewrites `tasq.config.*` files and `require('tasq')` calls to ESM `import`.\n\n- **Distribution:** published to npm as a separate package, `tasq-migrate`, with its own semver version, before 3.0.0 is promoted. It is run via `npx tasq-migrate`. The exact version, repository path and README link will be posted in #1840 and the migration guide; this is gate 5. Until then it should be treated as a pre-release tool, not as something a 180k-weekly-download user base can rely on.\n- **Safety behavior:** `--dry-run` prints a diff without writing. Unsupported patterns (for example Yarn PnP layouts) produce an explicit error rather than a silent partial rewrite.\n- **Reversibility:** before rewriting, `tasq-migrate` saves each original file as `<name>.tasq2.bak` and records the list in `.tasq-migrate.json`. `npx tasq-migrate --revert` restores them, so a migrated project can return to 2.x (see the rollback step in \"Release and support plan\"). Revert is covered by tests before publish.\n- **Evidence so far:** run on 40 public repos (list in #1840): 38 fully automatic, 2 needed manual edits. This is a small, public-repo-skewed sample (see \"QA summary\"), so it is not evidence of long-tail coverage.\n\n## How plugin discovery works\n\nrc.2 walked every `node_modules` (including nested ones in workspaces) on every invocation and parsed each `package.json`. That is too slow and too permissive, so the final 3.0.0 design is:\n\n- **Direct dependencies only.** Candidates are the packages listed in `dependencies` and `devDependencies` of the root and workspace `package.json` files. Transitive packages are never loaded as plugins. Only candidates whose `keywords` include `tasq-plugin` are considered.\n- **Approval required (default-deny), pinned to version.** A discovered plugin loads only if `tasq-plugins.lock.json` lists its name and its currently installed version matches the approved version. `tasq plugins approve [name...]` adds or updates entries (interactively it lists what will be approved; `--all` approves every pending plugin in one command). A plugin that is discovered but not approved, or whose installed version differs from the approved one, is never loaded. Instead, tasq prints a single summary line to stderr per invocation (names, whether each is new or changed-version, and the command to approve), on every invocation where any are present. Approval state lives in a committed file, not in the cache, so a deleted `.tasq/plugins.json`, a fresh clone, or a CI runner with no prior cache cannot cause an unapproved plugin to load or go unannounced. In CI (`CI=1` or non-TTY), unapproved plugins are skipped and reported, never auto-approved. Default-deny with a visible notice is deliberate: the notice is the control, so it is not suppressible.\n- **Lock file maintenance.**\n  - Format: `tasq-plugins.lock.json` is sorted by name with one entry per line, so concurrent approvals by different developers merge as independent line additions. If a textual conflict occurs, resolve it like any lockfile: keep both sides, then run `tasq plugins check`.\n  - New dependency: after `npm install` adds a plugin dependency, it appears as unapproved on the next run (reported, not loaded) until someone runs `tasq plugins approve` and commits the lock file change. Nothing is silently skipped.\n  - Version update: bumping an approved plugin makes it unapproved (changed-version) until re-approved in a reviewable lock file change. This also covers a later compromised release, which cannot load without a new approval.\n  - Removed dependency: stale entries are ignored at runtime, and `tasq plugins prune` removes them.\n  - CI: `tasq plugins check` exits non-zero if any discovered plugin is unapproved or version-mismatched, or if the lock file is malformed, so drift fails a PR rather than surfacing on developer machines.\n- **Cached result.** The candidate list is cached in `.tasq/plugins.json`, keyed on the lockfile and `package.json` hashes, so unchanged installs skip discovery entirely. The cache is purely a performance optimization and holds no trust state. It is written atomically (write to a temp file in `.tasq/`, then `rename`), and an unreadable, truncated, or mismatched cache is treated as a miss and rebuilt. If tasq is interrupted mid-discovery, nothing is written and the next run simply rediscovers.\n- **Lazy.** `--version` never runs discovery when it appears before the command name (a global flag). After a command name, `--version` and `-v` belong to that command and are passed through unchanged, so a plugin's own `--version` flag keeps working. `--help` does not run discovery for built-in commands or the top-level help. Discovery runs for plugin-extensible built-in commands and for any command name that is not built in, since it may be provided by a plugin. That includes `--help` on a plugin-provided subcommand (see the entry-point sketch below).\n- **Allowlist.** A `plugins` array in config restricts loading to the listed names (exclusive, no approval file needed). `tasq plugins list` shows what is loaded, what is discovered but unapproved, and why. `TASQ_NO_AUTO_PLUGINS=1` disables auto-discovery, and CI guidance recommends the allowlist.\n- **Security note.** Plugins are arbitrary code and run with the user's privileges, like any installed dependency. Two controls apply: discovery is limited to direct dependencies, so a compromised *transitive* package cannot register itself as a plugin; and a plugin must be explicitly approved at a specific version, so a dependency update that adds the `tasq-plugin` keyword to a package, a typosquat installed by mistake, or a new release of an approved plugin does not execute as a plugin until someone approves it in a reviewable change to `tasq-plugins.lock.json`. It does not protect against everything:\n  - An approved plugin, or one you approve without review, can still run malicious code. Approval is keyed on name and version, not on content hash, so a republished or tampered artifact with the same version is not detected by tasq. Rely on your package manager's lockfile integrity checks and npm provenance for that.\n  - Anyone who can modify `tasq-plugins.lock.json` or `tasq.config.*` in your repository can approve plugins. Review those files like any other code.\n  - We do not verify signatures or maintain a plugin registry or trust list.\n  - Mitigations are the approval file, the unapproved-plugin notice, `tasq plugins list`, `tasq plugins check` in CI, the exclusive `plugins` allowlist (recommended for CI and any security-sensitive project), `TASQ_NO_AUTO_PLUGINS=1`, and the existing npm provenance and lockfile practices. These reduce but do not eliminate the risk. The docs and blog post will state this explicitly.\n\n```ts\n// src/plugins/discover.ts (sketch of the final design)\nexport async function discoverPlugins(root: string): Promise<PluginRef[]> {\n  const candidates = (await readCache(root)) ?? (await scanCandidates(root));\n  const approved = await readApprovals(root); // committed tasq-plugins.lock.json: name -> version\n  const isApproved = (c: PluginRef) => approved.get(c.name) === c.version;\n  const loadable = candidates.filter(isApproved);\n  const pending = candidates.filter((c) => !isApproved(c));\n  if (pending.length) reportUnapproved(pending, approved); // one stderr line, every run; never loaded\n  return loadable;\n}\n\nasync function scanCandidates(root: string): Promise<PluginRef[]> {\n  const names = await directDependencyNames(root); // root + workspace package.json\n  const found: PluginRef[] = [];\n  for (const name of names) {\n    const dir = resolvePackageDir(root, name);\n    if (!dir) continue; // declared but not installed\n    const pkg = JSON.parse(await readFile(join(dir, \"package.json\"), \"utf8\"));\n    if (pkg.keywords?.includes(\"tasq-plugin\")) found.push({ name: pkg.name, version: pkg.version, dir });\n  }\n  await writeCacheAtomic(root, found); // temp file + rename; failure is non-fatal\n  return found;\n}\n\n// Union of dependencies + devDependencies across the root and every workspace\n// package.json (workspace globs come from the root package.json / pnpm-workspace.yaml).\n// Manifests are read concurrently with a bounded pool (not one at a time), so\n// 1,000+ workspaces do not serialize on file I/O. Cost is O(workspace manifests +\n// direct dependencies); gate 3 benchmarks both, cold and warm cache.\nasync function directDependencyNames(root: string): Promise<string[]> {\n  const manifests = [join(root, \"package.json\"), ...(await workspaceManifests(root))];\n  const parsed = await mapLimit(manifests, 64, async (file) =>\n    JSON.parse(await readFile(file, \"utf8\")),\n  );\n  const names = new Set<string>();\n  for (const m of parsed) {\n    for (const n of Object.keys({ ...m.dependencies, ...m.devDependencies })) names.add(n);\n  }\n  return [...names];\n}\n\n// Runs fn over items with at most `limit` in flight; preserves input order.\nasync function mapLimit<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>): Promise<R[]> {\n  const out = new Array<R>(items.length);\n  let next = 0;\n  const worker = async () => {\n    while (next < items.length) {\n      const i = next++;\n      out[i] = await fn(items[i]);\n    }\n  };\n  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));\n  return out;\n}\n\n// Resolves a single named package via Node resolution from the declaring\n// workspace upward (so hoisted and nested installs both work). It reads only\n// that package's own package.json and never scans node_modules.\n// Note: createRequire only uses the path to pick a base directory; it does not\n// read or validate the file, so this does not depend on the root package.json\n// being well-formed (directDependencyNames has already parsed it by this point,\n// and a malformed root manifest is reported there as a clear error).\nfunction resolvePackageDir(root: string, name: string): string | null {\n  try {\n    return dirname(createRequire(join(root, \"package.json\")).resolve(`${name}/package.json`));\n  } catch {\n    return null;\n  }\n}\n\n// Cache I/O: any read error, parse error, or key mismatch returns null (miss).\nasync function writeCacheAtomic(root: string, found: PluginRef[]): Promise<void> {\n  try {\n    const tmp = join(root, \".tasq\", `plugins.json.${process.pid}.tmp`);\n    await mkdir(dirname(tmp), { recursive: true });\n    await writeFile(tmp, JSON.stringify({ key: await cacheKey(root), found }));\n    await rename(tmp, join(root, \".tasq\", \"plugins.json\"));\n  } catch {\n    /* cache is optional; ignore */\n  }\n}\n```\n\n```ts\n// src/cli.ts (sketch: how --version/--help skip discovery)\nconst argv = process.argv.slice(2);\nconst firstIdx = argv.findIndex((a) => !a.startsWith(\"-\"));\nconst first = firstIdx === -1 ? undefined : argv[firstIdx];\n// Global flags are only those before the command name; anything after it\n// belongs to the command (including a plugin's own --version/-v).\nconst leading = firstIdx === -1 ? argv : argv.slice(0, firstIdx);\nconst wantsVersion = leading.includes(\"--version\") || leading.includes(\"-v\");\nconst wantsHelp = argv.includes(\"--help\") || argv.includes(\"-h\");\n\n// A command needs plugins if it is plugin-extensible, or if it is not built in\n// (an unknown name may be provided by a plugin, so it can only be resolved\n// after discovery).\nconst needsPlugins =\n  first !== undefined && (PLUGIN_EXTENSIBLE_COMMANDS.has(first) || !BUILTIN_COMMANDS.has(first));\n\nif (wantsVersion) {\n  // Global --version never needs plugins, whatever else is on the command line.\n  await printVersion();\n} else if (wantsHelp && (first === undefined || BUILTIN_COMMANDS.has(first))) {\n  // Top-level help and built-in command help: no discovery.\n  await printHelp(first);\n} else if (!needsPlugins) {\n  await run(argv, []);\n} else {\n  // Plugin-extensible and non-built-in commands, including `--help` for a\n  // plugin subcommand (whose help text lives in the plugin), are the only\n  // paths that pay for discovery.\n  const plugins = await discoverPlugins(root);\n  await run(argv, plugins);\n}\n```\n\nThe cost of discovery is expected to scale with the number of direct dependencies plus the number of workspace manifests, rather than the total installed package count, since it reads only those manifests and packages and caches the result. This is a design expectation, not a measured result: it will be confirmed or corrected by the re-measured final build (gates 1 and 2) and the scaling benchmark covering both installed package count and workspace count (gate 3). `--help` for a plugin-provided subcommand is the one help case that does need discovery, and its latency is covered by the re-measurement.\n\n## Performance (reference monorepo: 61 workspaces, 2,430 installed packages, M2 MacBook Air, warm disk cache)\n\nThese are **3.0.0-rc.2 numbers, which use the full-`node_modules` walk** and are a regression. They are kept here to show why the gates above exist. They will be replaced with measurements of the final build, and publishing is blocked until that replacement is done and meets gate 2.\n\n| Command | 2.9.4 | 3.0.0-rc.2 |\n|---|---|---|\n| `tasq --version` | 0.11 s | 1.94 s |\n| `tasq lint-staged` (3 staged files) | 0.38 s | 2.31 s |\n| `tasq run build` (cache hit) | 0.21 s | 2.02 s |\n| `tasq run build` (cold, full build) | 48.7 s | 46.1 s |\n\nIn rc.2, discovery is a fixed per-invocation cost of roughly 1.8 s. It is negligible for long cold builds but dominates short commands such as git pre-commit hooks and editor integrations, which the docs recommend. We make no claim of overall improvement from the graph cache until the final build is re-measured. Scaling beyond 2,430 installed packages and 61 workspaces has not been measured yet (gate 3).\n\n## Supply chain and licensing\n\n- Published from GitHub Actions with npm provenance (`--provenance`); 2FA required for all maintainers.\n- No `postinstall` scripts in tasq or its dependencies.\n- New runtime deps: `fast-glob` (MIT), `semver` (ISC). License scan: no copyleft dependencies.\n\n## QA summary\n\n- Unit + integration: 1,912 tests pass on Linux/macOS/Windows, Node 20 and 22.\n- `tasq-migrate` on 40 public repos (list in #1840): 38 automatic, 2 manual (Yarn PnP projects, documented). This sample is small relative to the user base (about 180k weekly downloads) and skews to public repos, so it does not establish long-tail coverage.\n- Smoke test of top 15 community plugins under auto-discovery: all load and register subcommands. Retest required against the direct-dependency, approval-required discovery design.\n- Before publish (gate 4): a public call for `tasq-migrate` testing on the rc, covering private/monorepo/Yarn PnP/pnpm/custom-config setups. `tasq-migrate` gets a `--dry-run` that prints a diff, and unsupported patterns produce an explicit error instead of a silent partial rewrite. Failures are triaged in #1840 and documented in the migration guide.\n- Before publish: tests that `tasq-migrate` writes `.tasq2.bak` backups and that `--revert` restores the original files byte-for-byte.\n- Before publish: tests that a global `--version` (before the command name, with any later arguments) and `--help` for top-level and built-in commands do not invoke discovery (asserted in CI by a spy on `discoverPlugins`), including `tasq --version some-plugin-command`.\n- Before publish: tests that `--version`/`-v` after a command name is passed through to that command (`tasq some-plugin-command --version` reaches the plugin and does not print tasq's version), and that `tasq some-plugin-command --help` runs discovery and shows the plugin's help.\n- Before publish: tests that an unapproved plugin never loads and is reported on every run, including with no `.tasq/plugins.json`, a fresh clone, and `CI=1`; that a dependency update adding the `tasq-plugin` keyword yields an unapproved, unloaded plugin; that bumping the version of an approved plugin makes it unapproved (changed-version) until re-approved; and that a corrupt, truncated, or concurrently written `.tasq/plugins.json` is treated as a cache miss and recovered, with no partial file left in place.\n- Before publish: tests for lock file maintenance: two branches approving different plugins merge cleanly as separate lines; `tasq plugins check` fails on an unapproved plugin, a version mismatch, or a malformed lock file; stale entries are ignored at runtime and removed by `tasq plugins prune`.\n\n## Release and support plan\n\n1. Publish `3.0.0` under `next` dist-tag; promote to `latest` after 7 days with no P1 issues. Only users who opt in to `next` can migrate during this window, which limits exposure before promotion. Migration failures reported in #1840 count as P1 if `tasq-migrate` corrupts a config.\n2. `2.x` moves to `latest-2` dist-tag and receives security fixes until 2027-11-12. Announced in the README and blog post.\n3. Rollback: if a P1 is found after promotion, re-point `latest` to `2.9.4` (`npm dist-tag add tasq@2.9.4 latest`) and publish a fix as 3.0.1. Re-pointing the tag does not downgrade projects that already installed 3.0.0 or already ran `tasq-migrate`. The rollback announcement tells those users to pin `tasq@2.9.4` and run `npx tasq-migrate --revert` to restore their original CommonJS configs from the `.tasq2.bak` backups. Both steps are in the migration guide before publish.\n4. Blog post and changelog go live at publish; Discord announcement links the migration guide. The blog post documents the plugin trust model, the approval step and `tasq-plugins.lock.json` (including the team workflow and `tasq plugins check` for CI), its limits (approval is by package name and version, not content, and a new release of an approved plugin must be re-approved), and the `plugins` allowlist.",
+ "fixerUsage": {
+  "calls": 5,
+  "tokIn": 29488,
+  "tokOut": 31892,
+  "usd": 0.436852,
+  "critMs": 186363
+ },
+ "status": "cleared"
+}

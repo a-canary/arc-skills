@@ -1,0 +1,83 @@
+{
+ "approach": "clustered-panel-sc",
+ "case": "merge-02",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "blocker",
+     "claim": "The duplicate-ballot log line writes the voter's email together with the measure and the attempted choice. Logs ship to a third-party host readable by the whole support team, so a resident's identity becomes linkable to their vote outside the tally, breaking the core anonymity promise. The choice is also unnecessary for diagnosing 'already voted' tickets.",
+     "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value,)"
+    },
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "The new results export route has no authentication or admin role check, although the PR says it is admin-only and other admin routes use Depends(require_role(\"admin\")). Any caller who can reach the URL can download tallies for any measure id.",
+     "evidence": "async def export_results(measure_id: int, db: Session = Depends(get_db),): (ABSENT: Depends(require_role(\"admin\")))"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The export does not check that the measure is closed, despite the stated purpose of a tally for closed measures. Live partial counts of open measures can be downloaded during voting, which can distort voting and conflict with election rules on interim results.",
+     "evidence": "measure = db.get(Measure, measure_id)\n    if measure is None:\n        raise HTTPException(404)  (ABSENT: check for closed state / measure.is_open())"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Counts are keyed by whatever type Ballot.choice returns but looked up with Choice enum members. If the types differ, the CSV would silently report 0 for every choice. No test shows the types match, and the PR adds no tests for the route or log line.",
+     "evidence": "counts.get(choice, 0)  (ABSENT: tests in PR diff)"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The measure slug is written unescaped into the Content-Disposition header and the first CSV cell, allowing header problems or spreadsheet formula injection if slugs are not constrained.",
+     "evidence": "f'attachment; filename=\"{measure.slug}-results.csv\"'"
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 15681,
+    "tokOut": 6646,
+    "usd": 0.0361799,
+    "critMs": 32125
+   },
+   "wallMs": 189524
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "measure.slug is written unescaped into a CSV cell and the Content-Disposition header. A slug with leading formula characters, quotes or CR/LF could cause spreadsheet formula injection or a malformed header. Slugs are admin-controlled, so the risk is limited.",
+     "evidence": "writer.writerow([measure.slug, choice.value, counts.get(choice, 0)]) ... f'attachment; filename=\"{measure.slug}-results.csv\"'"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The diff adds no tests for the export counts, the 409 branch, or the log line contents. The enum-keyed count lookup (`counts.get(choice, 0)`) and the `is_open()` gate are unverified.",
+     "evidence": "ABSENT: any test file changes for export_results or the duplicate-ballot log"
+    }
+   ],
+   "usage": {
+    "calls": 5,
+    "tokIn": 16351,
+    "tokOut": 10092,
+    "usd": 0.0412878,
+    "critMs": 20548
+   },
+   "wallMs": 117239
+  }
+ ],
+ "artifact": "PR #231: Results CSV export for closed measures + better duplicate-ballot diagnostics\n\nClerks have asked for a downloadable tally once a measure closes so they can attach it to the council packet.\nAdds GET /measures/{id}/results.csv for admins, returning one row per choice with counts. The export is only available once the measure is closed; requests for open measures are rejected with 409.\nAlso adds a log line when a duplicate ballot is rejected, since support keeps getting \"it says I already voted\" tickets and we have no way to see what happened. The log line records only the measure id and an opaque receipt prefix (no email, user id, or choice), so logs cannot link a resident to their vote.\n\ndiff --git a/app/routes/ballots.py b/app/routes/ballots.py\nindex 4e1b0a7..9c3d2f5 100644\n--- a/app/routes/ballots.py\n+++ b/app/routes/ballots.py\n@@ -1,14 +1,18 @@\n+import csv\n+import io\n import logging\n\n from fastapi import APIRouter, Depends, HTTPException\n+from fastapi.responses import StreamingResponse\n+from sqlalchemy import func\n from sqlalchemy.orm import Session\n\n from app.auth import current_user, require_role\n from app.db import get_db\n-from app.models import Ballot, Measure, Receipt, User\n+from app.models import Ballot, Choice, Measure, Receipt, User\n from app.receipts import voter_receipt\n from app.schemas import BallotIn\n\n logger = logging.getLogger(__name__)\n router = APIRouter()\n@@ -22,26 +26,61 @@ async def cast_ballot(\n     user: User = Depends(current_user),\n     db: Session = Depends(get_db),\n ):\n     measure = db.get(Measure, measure_id)\n     if measure is None or not measure.is_open():\n         raise HTTPException(404, \"measure not open\")\n     receipt = voter_receipt(user.id, measure_id)\n     if db.query(Receipt).filter_by(token=receipt).first():\n+        logger.info(\n+            \"duplicate ballot rejected measure=%s receipt=%s\",\n+            measure_id,\n+            receipt[:8],\n+        )\n         raise HTTPException(409, \"already voted\")\n     db.add(Receipt(token=receipt))\n     db.add(Ballot(measure_id=measure_id, choice=body.choice))\n     db.commit()\n     return {\"ok\": True}\n\n\n @router.post(\"/measures/{measure_id}/close\")\n async def close_measure(\n     measure_id: int,\n     user: User = Depends(require_role(\"admin\")),\n     db: Session = Depends(get_db),\n ):\n     measure = db.get(Measure, measure_id)\n     if measure is None:\n         raise HTTPException(404)\n     measure.close(closed_by=user.id)\n     db.commit()\n     return {\"closed\": True}\n+\n+\n+@router.get(\"/measures/{measure_id}/results.csv\")\n+async def export_results(\n+    measure_id: int,\n+    user: User = Depends(require_role(\"admin\")),\n+    db: Session = Depends(get_db),\n+):\n+    measure = db.get(Measure, measure_id)\n+    if measure is None:\n+        raise HTTPException(404)\n+    if measure.is_open():\n+        raise HTTPException(409, \"results unavailable until measure is closed\")\n+    counts = dict(\n+        db.query(Ballot.choice, func.count(Ballot.id))\n+        .filter(Ballot.measure_id == measure_id)\n+        .group_by(Ballot.choice)\n+        .all()\n+    )\n+    buf = io.StringIO()\n+    writer = csv.writer(buf)\n+    writer.writerow([\"measure\", \"choice\", \"votes\"])\n+    for choice in Choice:\n+        writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])\n+    buf.seek(0)\n+    return StreamingResponse(\n+        buf,\n+        media_type=\"text/csv\",\n+        headers={\n+            \"Content-Disposition\": f'attachment; filename=\"{measure.slug}-results.csv\"'\n+        },\n+    )",
+ "fixerUsage": {
+  "calls": 1,
+  "tokIn": 2524,
+  "tokOut": 1402,
+  "usd": 0.024112,
+  "critMs": 7482
+ },
+ "status": "cleared"
+}

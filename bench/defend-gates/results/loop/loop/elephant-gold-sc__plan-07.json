@@ -1,0 +1,380 @@
+{
+ "approach": "elephant-gold-sc",
+ "case": "plan-07",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "cost",
+     "severity": "blocker",
+     "claim": "Cost math treats a daily token volume as monthly. 38M lines/day x 60 tokens = 2.28B tokens per day, so ~$1,140/day, roughly $34k/month of input at $0.50/1M. That is ~23x the approved $1,500/month budget, and ~$55k/month at peak-day volume. Output cost has the same error (~$210/month, not $7). The fixed prompt overhead is also uncounted.",
+     "evidence": "\"Input: 38M lines x 60 tokens = 2.28B tokens -> ~$1,140\" and \"Estimated total: ~$1,150/month, within the $1,500 budget.\""
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "No spend ceiling, token cap per call, retry limit, budget alarm, or kill switch exists. Spend scales with log volume, which spikes during incidents, so cost is effectively unbounded by design.",
+     "evidence": "ABSENT: any token cap per summary, retry limit, monthly spend alarm, or circuit breaker in sections 2 and 4"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Each summarizer call gets an unbounded 5-minute log slice with no truncation, sampling, or chunking. Average input is ~264k tokens per call and peak is higher, which can exceed model context limits and silently drop errors. Throughput against provider rate limits (TPM/RPM) is also unplanned.",
+     "evidence": "\"every 5 minutes, sends the last 5 minutes of logs per service to the LLM with a fixed prompt\"; ABSENT: per-call token cap, chunking policy, TPM/RPM limits"
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "log-tap forwards every line into a Redis queue with no bounded size, backpressure, or drop policy. If the summarizer lags, the queue grows without bound and could stall the shared Vector pipeline for all 30 services.",
+     "evidence": "\"forwards every application log line to the summarizer queue.\" ABSENT: queue cap, overflow/drop policy, or Vector backpressure behaviour"
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Raw production logs go to a third-party LLM while the only safeguard is redaction of four categories (emails, tokens, cards, IPs), audited for retention policy and not for third-party egress. Names, customer IDs, and free-text PII are unaddressed. The DPA scope, the processing region, and PagerDuty as a second recipient of derived content are not shown to be covered. Once sent, the data cannot be recalled.",
+     "evidence": "\"masks emails, tokens, card numbers and IPs for our log retention policy (audited in Q1)\"; \"data processing addendum signed by Legal (ref DPA-0417)\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Logs contain attacker-influenced strings that can steer LLM output. The output includes 'suspected deploy' and 'affected endpoints' and is auto-posted to PagerDuty incidents, so a crafted log line could mislead responders. The plan has no mitigation. Credential handling for the Corvid and PagerDuty tokens, and access control on log-tap, the queue, and stored summaries, are also unspecified.",
+     "evidence": "\"the PagerDuty incident gets an auto-comment with the latest summaries\"; ABSENT: prompt-injection handling, credential storage/scoping, access control for log-tap and summary storage"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "No failure handling is designed. There are no timeouts, retries, stale-summary marker, or 'unavailable' state, so on-call may read an old summary as current. There are also no metrics or alerts for summary lag, error rate, dropped lines, or spend.",
+     "evidence": "ABSENT: retry/timeout/circuit-breaker design, staleness marker, alerting or metrics for summarizer lag and failure; \"Hardening, dashboards, runbook | 2\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The plan has no feature flag, kill switch, or detach procedure for log-tap. It rolls out directly to all 30 services' pages with no shadow mode, per-service enablement, or way to suppress bad auto-comments.",
+     "evidence": "ABSENT: feature flag, kill switch, staged rollout; \"Launch gate: >= 70% useful, <= 5% misleading.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Staffing ignores the stated 50% on-call/interrupt load. Two engineers full-time for 6 weeks is not 12 effective eng-weeks, and there is no contingency or post-launch ownership. The plan is likely ~2x short on schedule.",
+     "evidence": "\"both platform engineers full-time for 6 weeks (2 x 6 = 12 eng-weeks)\" vs context \"on-call/interrupt work averages 50% of their time\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The goal of a summary 'within seconds of a page' conflicts with a 5-minute batch cadence. The attached summary can be ~5 minutes stale and miss the incident's first minutes. No on-demand generation path is described.",
+     "evidence": "\"within seconds of a page\" vs \"every 5 minutes, sends the last 5 minutes of logs per service to the LLM\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The MTTR target (47 to 30 min) is unsupported. There is no breakdown of where MTTR is spent, no prototype, and the launch gate (graded usefulness on 40 retrospective incidents) does not measure MTTR impact. No live or shadow evaluation exists.",
+     "evidence": "\"Target: median MTTR 47 min -> 30 min within one quarter of launch.\"; ABSENT: MTTR phase breakdown, pilot, or shadow-mode evaluation"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Model version and prompt are not pinned or versioned, and the eval set is a one-off with no refresh or regression process, so provider changes or prompt edits could alter output unchecked.",
+     "evidence": "ABSENT: model version pin, prompt versioning, repeatable regression suite"
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 50872,
+    "tokOut": 29910,
+    "usd": 0.11359,
+    "critMs": 32334
+   },
+   "wallMs": 90369
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "blocker",
+     "claim": "Production log digests and exemplars go to the third-party LLM during shadow mode (weeks 1-6) and replay, but the DPA, zero-retention, processing-region and 500-exemplar Security review are only a gate at the weeks 7-12 milestone. The plan itself says sent data cannot be recalled, so irreversible egress precedes the controls that authorize it.",
+     "evidence": "\"Weeks 1-6: ... Milestone: summaries generated in shadow mode for 3-5 services.\" vs \"Milestone: eval results and the privacy gate.\" (weeks 7-12) and \"Sent data cannot be recalled\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The weeks 1-6 scope (Phase 0 1 + log-tap 2.5 + summarizer 4 + flags 1 = 8.5 eng-weeks) exceeds the ~6 eng-weeks of effective capacity in that window, so the first milestone is infeasible as scheduled.",
+     "evidence": "\"Weeks 1-6: Phase 0, log-tap, summarizer core with caps and spend guard, flags.\" vs \"Schedule at ~1 effective eng-week per calendar week\""
+    },
+    {
+     "lens": "spec-mismatch",
+     "severity": "major",
+     "claim": "The plan is sized at 18 weeks (pilot in weeks 13-18) but is being dispatched as a 6-week build. Approval scope and artifact duration disagree, and the plan itself says time pressure without scope cuts is unsupported.",
+     "evidence": "\"18 weeks in three phases (first milestone at week 6)\" vs context \"dispatched for a 6-week build\"; \"Adding time pressure without cutting scope is not supported\""
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The stated ~$1,085 worst case omits retries on scheduled calls; the retry reserve covers only on-demand. Retries at cap on scheduled calls would push scheduled spend toward ~$1,970, past the $1,500 budget and the $1,300 hard stop, so the 'worst case' is not one.",
+     "evidence": "\"Worst-case total: ~$1,085/month\" vs \"Retry limit: 1 retry with backoff, counted against the budget.\" and \"On-demand + retries reserve: ~$100/month\""
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "On-demand spend scales with page count (up to 8 calls/page, 60/min burst) but has no volume cap and the $100 reserve has no page-rate basis. The claim that cost doesn't rise during incidents holds only for scheduled calls.",
+     "evidence": "\"Cost does not rise on peak-day or incident log spikes, because digests are capped.\" vs \"On-demand + retries reserve: ~$100/month (... ≤8 calls per page\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The ≤60s on-demand target conflicts with 30s per-call timeout plus one backoff retry, and concurrency/per-page deadline for the up-to-8 service fan-out is not specified.",
+     "evidence": "\"The target is ≤60s from page.\" and \"30s per LLM call, 1 retry with backoff\"; ABSENT: concurrency model and per-page deadline"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The $1,300 hard stop opens a breaker requiring human reset, and the plan doesn't say whether on-demand paging calls are blocked, who is alerted, or who resets after hours. Scheduled and on-demand calls also share the Corvid rate budget with no priority/isolation or 429 handling, so the tool can go dark during incidents.",
+     "evidence": "\"Resume requires a human to reset it.\"; \"≤10 calls/min sustained and ≤60 calls/min burst for on-demand\"; ABSENT: priority rule, 429 handling"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Drop-newest overflow discards the most recent WARN lines during spikes, so the digest can under-represent the incident while carrying a fresh timestamp. The Redis 'overflow policy below' is never defined and MAXLEN default trims oldest, contradicting drop-newest; drop counts aren't surfaced to on-call.",
+     "evidence": "\"the Vector sink buffer is bounded with a drop-newest policy\"; \"MAXLEN set, with overflow policy below\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Failure paths are undefined: PagerDuty post failures or rate limits, partial results when some of the 8 services fail, and truncated/invalid JSON at max_tokens=400. The staleness rule also replaces summaries of quiet (skipped) services with 'unavailable' after 15 minutes.",
+     "evidence": "\"The PagerDuty incident gets an auto-comment as soon as it is ready.\"; \"Services with an unchanged or empty digest are skipped.\"; \"Summaries older than 15 minutes are replaced\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Exemplar scrubbing is weak and unmeasured: templating strips only 'most' identifiers, scrubber patterns/recall are unspecified, review is a one-time 500 sample, and exemplars are on by default. No retention period is defined for digests, summaries or exemplars, and customer/sub-processor notice and PagerDuty coverage are unconfirmed.",
+     "evidence": "\"strips most identifiers\"; \"A sampling review of 500 exemplars by Security before launch.\"; ABSENT: retention duration, customer sub-processor review"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Output validation and injection tests are scheduled in weeks 7-12 while LLM summaries from real logs are generated and stored from weeks 1-6. Injection defense relies on delimiters, and free-text fields are only length-limited and posted to PagerDuty.",
+     "evidence": "\"Security: output validation, injection tests, credentials, ACLs | 1\"; \"The prompt wraps the digest in delimiters and instructs the model to ignore any instructions inside it.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Cost and rate limits scale linearly with service count, and the design has no service cap: the $1,300 breaker trips around ~36 services and the ≤10 calls/min assumption is near ceiling. Corvid tier is unconfirmed, and aggregation has no stated cap on tracked signatures in the shared Vector pipeline.",
+     "evidence": "\"≤8,640 scheduled calls/day\"; \"Confirm Corvid account RPM/TPM tier before build (Phase 1 task)\"; ABSENT: signature cardinality limit"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Post-launch operation falls on a two-person team already at ~50% interrupt load, with a large new alert surface and no run effort budgeted beyond the 18-week build.",
+     "evidence": "\"Platform on-call gets its alerts.\"; \"Metrics, alerts, dashboards, runbook | 1.5\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "major",
+     "claim": "Single-vendor dependence with no provider abstraction, fallback or portability work; any Corvid outage or deprecation leaves only 'unavailable'.",
+     "evidence": "ABSENT: provider-agnostic interface or fallback; \"Model: Corvid-mini\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Phase 0 go/no-go is run in parallel with build and has no explicit decision point, and the Corvid rate-limit check is inconsistently placed (Phase 0 vs undefined Phase 1), so build proceeds on unvalidated value and rate assumptions.",
+     "evidence": "\"If it is not, the target is revised before further build.\" vs \"Weeks 1-6: Phase 0, log-tap, summarizer core\"; \"(Phase 1 task)\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Rollback for bad PagerDuty comments relies on deleting them, but it's not established that the comment-only token can delete notes.",
+     "evidence": "\"the runbook describes how to delete an incorrect comment.\" / \"PagerDuty: comment-on-incident only\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 106683,
+    "tokOut": 61992,
+    "usd": 0.1721204,
+    "critMs": 65103
+   },
+   "wallMs": 165257
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "privacy/trust boundary",
+     "severity": "major",
+     "claim": "The Phase 1 milestone puts digests for 3-5 live services into an internal store, but the exemplar scrubber, ACLs and retention approval all land in Phase 2. The 'synthetic/staging only' rule is written for Corvid egress, so it does not constrain what is stored in Phase 1. The digest contract also always includes an exemplar per signature, although exemplars are 'off by default', so what Phase 1 stores is undefined.",
+     "evidence": "\"Milestone at week 6: digests for 3-5 services flowing to an internal store\"; \"Security: output validation, injection tests, credentials, ACLs\" (Phase 2); \"top 25 signatures plus one exemplar each\" vs \"Exemplars are **off by default**\""
+    },
+    {
+     "lens": "correctness/reliability",
+     "severity": "major",
+     "claim": "An empty or unchanged digest is rendered as 'No new WARN+ activity since HH:MM', but the same state results from a dead or detached log-tap or a stalled stream. The gap flag only rides on the next digest and the staleness rule only covers changed digests. On-call can therefore be told nothing is happening while the pipeline is blind. No per-service digest heartbeat or freshness metric is planned.",
+     "evidence": "\"Services with an unchanged or empty digest are skipped, and their summary is marked 'no new WARN+ activity since HH:MM'\"; \"The 15-minute staleness rule applies to services whose digest changed but whose summary could not be refreshed\""
+    },
+    {
+     "lens": "scale/spec",
+     "severity": "major",
+     "claim": "First-seen and trend need state across windows, but only the per-window signature count is bounded, and the queue design trims older digests and keeps only the latest. The plan does not say where cross-window state lives, how it is evicted, or what memory it uses in the shared Vector pipeline. This is core Phase 1 scope.",
+     "evidence": "\"Per signature: count, first-seen, and trend.\"; \"At most 500 tracked signatures per service per window\"; \"the latest digest per service supersedes older ones\""
+    },
+    {
+     "lens": "privacy/egress",
+     "severity": "major",
+     "claim": "The scrubber and fail-closed PII control cover exemplars only. Templated signature text is still sent to Corvid with no detector, and the plan itself says templating is not a privacy control. The statement that only templated digests leave the network is therefore not backed by a control for the signatures. This is irreversible egress, so the control needs to be designed before Phase 2 is approved.",
+     "evidence": "\"This removes many identifiers but is not relied on as a privacy control\"; \"A scrubber on exemplars, run before egress\""
+    },
+    {
+     "lens": "evidence/decision-criteria",
+     "severity": "major",
+     "claim": "The week-1 go/no-go criteria have no numeric thresholds, such as what share of the 47 minutes must be diagnosis. The price of Corvid-mini is also not part of the go/no-go, although the whole cost forecast rests on it. The gate that controls the entire build is therefore subjective.",
+     "evidence": "\"the diagnosis phase is large enough for a 47→30 min improvement to be plausible; Corvid tier supports the rate assumptions\""
+    },
+    {
+     "lens": "schedule",
+     "severity": "minor",
+     "claim": "Phase 1 is planned at 100% of capacity (6 of 6 eng-weeks), and all 2.5 weeks of contingency sit after Phase 3. Any interrupt spike slips the week-6 milestone and the review that decides Phases 2-3.",
+     "evidence": "\"Phase 1 totals 6 eng-weeks, matching capacity.\"; \"Contingency (~15%) | 2.5\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "Build-time LLM calls in Phases 1-2 (synthetic and staging runs, eval and injection tests) have no budget or cap. The raw-log cost framing is also wrong: $1,140 is a daily figure, and the 23x ratio only holds for a month.",
+     "evidence": "ABSENT: build/staging LLM budget; \"~$1,140/day, about 23x the monthly budget\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "A 24h TTL on a continuously appended Redis stream key does not bound per-entry age, and the MAXLEN value is never given. The '≤24h' digest retention claim is therefore unenforced. The 100-pages-times-8-services on-demand cap also leaves no retry headroom despite saying 'retries included'.",
+     "evidence": "\"approximate MAXLEN trimming, 24h TTL\"; \"Redis ≤24h\"; \"800 calls (≈100 pages × 8 services, retries included)\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 158082,
+    "tokOut": 73516,
+    "usd": 0.1983937,
+    "critMs": 72757
+   },
+   "wallMs": 199493
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "spec-mismatch",
+     "severity": "major",
+     "claim": "The Corvid go/no-go tier criterion is internally inconsistent. At the 6k-token input cap, the required 60 calls/min burst is about 360k input TPM, but the gate only requires ≥60k TPM. An account that cannot sustain the on-demand burst would pass the gate.",
+     "evidence": "\"supports ≥10 calls/min sustained and ≥60 calls/min burst for on-demand, with ≥60k input TPM\""
+    },
+    {
+     "lens": "logic",
+     "severity": "major",
+     "claim": "The on-demand path reads a \"live current-window digest\", but the architecture keeps the current window only inside Vector and sends only completed-window digests to Redis. No data path from the summarizer to the in-progress window is defined. This affects the Phase 1 log-tap design, because it would need a flush or read interface.",
+     "evidence": "\"from the live current-window digest\" vs \"Vector holds only the current window\" and \"a bounded Redis stream ... carrying digests only\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "major",
+     "claim": "Production digests start flowing at week 6 into an unnamed internal store. The access restriction, 7-day delete job and signature detector are built during weeks 2-6 and the detector is validated only in Phase 2. Nothing makes those controls live and verified a precondition for the first production write. Retention and fail-closed behaviour could therefore be unproven while real data is stored.",
+     "evidence": "\"These Phase 1 controls (access restriction, 7-day delete job, exemplars disabled) are built in weeks 2-6\" and \"digests for 3-5 services flowing to an internal store\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "The log-tap sink goes into the shared production Vector pipeline in Phase 1. The detach procedure is tested only in the runbook, which lands in Phase 3. No throughput or CPU bound or load test is given for aggregation under WARN+ bursts. The plan also does not say what happens to stored digests and state when the sink is detached.",
+     "evidence": "\"(documented and tested in the runbook)\" with runbook work in Phase 3; \"the aggregation step sees and counts every WARN+ line before any buffering\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The spend counter that drives the $1,300 stop and $1,450 ceiling has no stated source (billed usage vs estimated tokens), no persistence, and no fail-closed behaviour if it is unreadable. The token-counting method behind the caps is also unspecified. LLM spend during build and eval is not budgeted.",
+     "evidence": "\"A running spend counter drives alarms at $750 and $1,100 for the month\""
+    },
+    {
+     "lens": "edge-case",
+     "severity": "minor",
+     "claim": "Evicting the lowest-count signature at the 500 cap discards its first-seen. When the signature reappears it is reported as a new error signature, which could mislead on-call.",
+     "evidence": "\"when the cap is reached the lowest-count entry is evicted first\""
+    },
+    {
+     "lens": "logic",
+     "severity": "minor",
+     "claim": "Several mechanisms are underspecified. Whether a Redis stream's key-level TTL enforces the 24h digest retention is unclear. A 400-token output cap may truncate schemas with multiple 280-char fields and push the LLM path into systematic fallback. The \"15-minute staleness rule\" is referenced but never defined.",
+     "evidence": "\"approximate MAXLEN trimming, 24h TTL\"; \"max_tokens=400\"; \"The 15-minute staleness rule applies to...\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The flat 800-call daily on-demand cap (about 100 pages) is exhausted quickly during an incident storm, with no per-severity priority. Page-storm load on PagerDuty posting is not modelled.",
+     "evidence": "\"a daily cap of 800 calls (≈100 pages × 8 services, retries included)\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 185817,
+    "tokOut": 60973,
+    "usd": 0.2006047,
+    "critMs": 91204
+   },
+   "wallMs": 260211
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Cross-window state eviction drops the lowest-count signature first when the cap is hit. A newly emerging signature starts low and is the most likely to be evicted, which resets its first-seen and can degrade the 'new error signatures' output.",
+     "evidence": "\"when the cap is reached the lowest-count entry is evicted first\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "A Redis TTL applies to the whole stream key, not to individual entries, and no MAXLEN value is given. The 24h per-entry retention and queue bound are underspecified. At ~8.6k digests/day the volume is small, so this is a design fix, not a risk.",
+     "evidence": "\"a bounded Redis stream (approximate MAXLEN trimming, 24h TTL; overflow policy in section 9)\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The paging policy is inconsistent. Section 7 lists only breaker, on-demand failure and scrubber/PII signals as paging, while section 9 makes multi-service pipeline blindness page-level. The >5-service threshold also cannot fire with a 3-5 service pilot.",
+     "evidence": "\"only the breaker/hard-stop, on-demand failure and scrubber/PII-alert signals page Platform on-call\" vs \"page-level if more than 5 services are affected at once\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The first production write to the Phase 1 store is enabled by the Platform lead's flag flip. Security is not a named sign-off, and detector recall is measured only in Phase 2. The risk is mitigated by minimized digests, fail-closed replacement, restricted access and 7-day deletion.",
+     "evidence": "\"The first production write is enabled by a flag that Platform lead flips after reviewing the evidence.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Phase 1 has zero slack, because 6 eng-weeks is exactly the capacity. The contingency is not allocated to Phase 1 despite the note that new scope is absorbed into it. The plan does give a shrink-to-3-services fallback.",
+     "evidence": "\"Phase 1 totals 6 eng-weeks, matching capacity.\" and \"absorbed within the 2.5 eng-weeks and the contingency\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The 10 calls/min sustained scheduled limit allows more calls per day than the modeled 8,640. The $1,300 hard stop and the pace alarm bound the exposure, but the rate limiter does not enforce the modeled ceiling.",
+     "evidence": "\"The design assumes ≤10 calls/min sustained for scheduled calls\" vs \"≤8,640 scheduled calls/day\""
+    }
+   ],
+   "usage": {
+    "calls": 17,
+    "tokIn": 200356,
+    "tokOut": 67422,
+    "usd": 0.2016773,
+    "critMs": 72536
+   },
+   "wallMs": 230426
+  }
+ ],
+ "artifact": "# Triage Copilot: build plan\n\nOwner: Platform | 20 weeks in three phases | **This dispatch authorizes Phase 1 only (weeks 1-6)**; Phases 2 and 3 need re-approval at the Phase 1 review | Start: Monday after approval\n\n## 1. Goal\nGive the on-call engineer a plain-language \"what is going wrong right now\" summary about a minute after a page, instead of spending the first 15-20 minutes grepping logs across 30 services.\n\nTarget (hypothesis, to be validated, not assumed): reduce median MTTR from 47 min toward 30 min within one quarter of launch. Phase 0 (section 7) breaks down where the 47 minutes are spent today, so we can check whether log triage is the dominant phase. Success is judged on shadow-mode and pilot data, not on this number alone.\n\n## 2. How it works\n- log-tap (new): a Vector sink placed after the redaction stage. It does not forward raw lines. A Vector aggregation step reduces each service's logs to a per-window digest:\n  - Only WARN and above.\n  - Variable fields templated into placeholders. This removes many identifiers but is not relied on as a privacy control by itself. Signature text is covered by its own egress detector (section 5).\n  - Per signature: count, first-seen, and trend.\n  - Cross-window state (first-seen and trend): kept in a small per-service state store outside the Vector aggregation step (Redis hash per service), not in Vector memory. Per signature it holds only the signature hash, first-seen timestamp, and the last 6 window counts (30 min of trend). It is limited to the same 500 tracked signatures per service. Entries with no occurrence for 24h are evicted (TTL), and when the cap is reached the lowest-count entry is evicted first. Estimated size is ~100 bytes per signature, so ≤50 KB per service and ≤1.5 MB across 30 services. Vector holds only the current window. If the state store is unavailable, digests are still emitted with first-seen and trend marked \"unknown\" rather than dropped. This state is independent of the digest stream's MAXLEN trimming.\n  - At most 500 tracked signatures per service per window (cardinality cap, bounding aggregation memory in the shared Vector pipeline). Overflow is merged into an \"other\" bucket with its count.\n  - The top 25 signatures plus, where exemplars are enabled for that service (section 5), one exemplar each, truncated to 200 chars. With exemplars off (the default), digests carry signatures, counts, first-seen and trend only.\n  - An explicit \"N signatures omitted\" count, so nothing is dropped silently.\n  - Digests are capped at ~5k tokens.\n  - Every service emits a digest heartbeat each window, even when there is no WARN+ activity (an empty digest with a sequence number and the log-tap's own count of lines seen). The summarizer treats a missing heartbeat as pipeline blindness, not as quiet (section 9).\n  - Partial-window digests for on-demand: the aggregation step also emits an in-progress partial-window digest for each service every 30s (same format and caps, flagged \"partial\", with window start and elapsed time). It is written to a single overwrite-only Redis key per service (TTL 2 min), separate from the digest stream, so it adds no stream volume. This is a Phase 1 log-tap item. The on-demand path reads this key. If the key is missing or older than 60s, the on-demand path uses the last completed-window digest and labels it with its age.\n- Queue: a bounded Redis stream (approximate MAXLEN trimming, 24h TTL; overflow policy in section 9) carrying completed-window digests only. Volume is ~8.6k digests/day, not 38M lines.\n- summarizer (new): every 5 minutes per service, with jitter, it sends the digest to the LLM through a provider-neutral interface with a fixed prompt. Hard limits per call are 6k input tokens (prompt included) and max_tokens=400 output. Services with an unchanged or empty digest and a fresh heartbeat are skipped, and their summary is marked \"no new WARN+ activity since HH:MM\" (section 9). The summarizer stores a structured summary (top errors, new error signatures, affected endpoints, suspected deploy) with a generated-at timestamp. If the LLM is unavailable or returns invalid output, a deterministic non-LLM renderer produces a plain summary directly from the digest (top signatures, counts, trends), labelled \"automated digest, no AI summary\".\n- On page: an on-demand path generates a fresh summary for the paging service and its direct dependencies (from the service catalog, max 8 services) from the latest partial-window digest (above), falling back to the last completed-window digest. Calls run in parallel with a per-page deadline (section 9). The target is ≤60s from page. The PagerDuty incident gets an auto-comment as soon as it is ready. The latest cached 5-minute summaries are attached immediately as a fallback, labelled with their age.\n- Summaries are advisory only. Alert rules, paging, and escalation policies are unchanged.\n\n## 3. Volumes\n- Application logs: 38M lines/day average across 30 services (peak day 61M). ~60 tokens per line, so ~2.28B raw tokens/day. Sending these to the LLM would cost ~$1,140/day, about 23x the monthly budget, which is why we never send raw logs.\n- LLM input is bounded by per-call caps, not by log volume: ≤8,640 scheduled calls/day (30 services × 288 windows) × ≤6k tokens ≈ 51.8M tokens/day.\n- Output: ≤8,640 × 400 = ≤3.46M tokens/day.\n- Rate limits: the average is ~6 calls/min and ~36k input TPM, spread by jitter. The Corvid account RPM/TPM tier is confirmed in Phase 0 (week 1) and is a go/no-go input. The design assumes ≤10 calls/min sustained for scheduled calls and ≤60 calls/min burst for on-demand. At the 6k-token cap, 60 calls/min burst is ~360k input TPM, and 10 calls/min sustained is ~60k input TPM.\n- Model: Corvid-mini, $0.50 per 1M input and $2.00 per 1M output tokens. Per call at cap: ~$0.0038. The prices are confirmed against the current Corvid price sheet and contract in Phase 0 and are a go/no-go input (section 7).\n- Scale limit: enablement is capped at 30 services in configuration. Each added service adds up to ~$36/month (scheduled + retry allowance) and ~0.2 calls/min. Raising the cap requires a cost and rate-limit re-forecast and budget approval.\n\n## 4. Cost (daily figures converted to monthly, 30 days)\n- Scheduled input worst case: 51.8M tokens/day × $0.50/1M = ~$25.9/day → ~$778/month\n- Scheduled output worst case: 3.46M tokens/day × $2.00/1M = ~$6.9/day → ~$207/month\n- Scheduled retry allowance: retries are limited to 1 per call and to a retry budget of 10% of scheduled calls per day. Beyond that, failed calls are not retried. ~$99/month.\n- On-demand: a separate counter and a daily cap of 800 calls (≈100 pages × 8 services, retries included) × ~$0.0038 = ~$3/day → ~$91/month. Beyond the cap, on-demand falls back to cached summaries (labelled) and notifies Platform.\n- Queue + storage: existing Redis and Postgres, negligible\n- Worst-case total: ~$1,175/month (985 + 99 + 91), within the $1,500 budget. Scheduled spend does not rise on peak-day or incident log spikes, because digests are capped. On-demand spend does scale with page count, and it is bounded by its own cap above.\n\nSpend controls (implemented in Phase 1, before any real traffic):\n- Per-call caps: 6k input tokens and 400 output tokens, enforced in code. Oversize digests are trimmed deterministically (fewest-count signatures dropped first, with the omitted count reported).\n- Retry limit: 1 retry with backoff, drawn from the retry budget above.\n- A running spend counter drives alarms at $750 and $1,100 for the month (and on daily pace above $45/day), sent to the Platform channel.\n- Hard stop at $1,300/month: the scheduled-call circuit breaker opens and scheduled calls stop (summaries fall back to the deterministic renderer or \"unavailable\"). On-demand paging calls are not blocked by this stop. They continue within their own daily cap, so total spend stays under ~$1,400. An absolute ceiling at $1,450 stops all calls. The breaker open event pages Platform on-call via PagerDuty. Any Platform on-call engineer may reset it after checking the spend dashboard, which covers after-hours. It also auto-resets at the start of the next month.\n- Kill switch (section 8).\n\n## 5. Privacy\n- Only templated digests leave the network: signatures with placeholders, counts, and truncated exemplars. Raw lines are never sent to the LLM.\n- **No production digest or exemplar is sent to Corvid, in shadow mode, replay, or pilot, until the pre-launch gate below is signed.** Phases 1 and 2 use synthetic and staging digests only for any LLM call.\n- **Phase 1 internal storage of production digests.** Production digests (3-5 services) may be stored internally in Phase 1 only in the minimized form: signatures, counts, first-seen and trend, with **no exemplars** (exemplars are off, so none are generated or stored). They are held in the Redis stream (≤24h), the partial-window Redis keys (TTL 2 min), and the Phase 1 internal store (a dedicated Postgres schema owned by Platform, named in the Phase 1 design), with access restricted to platform service accounts and the Platform engineers, and a 7-day retention enforced by a scheduled delete job. These Phase 1 controls (access restriction, 7-day delete job, exemplars disabled) are built in weeks 2-6 as part of the log-tap work. The Phase 1 signature detector below also runs before storage in Phase 1. The fuller ACL/audit model and the 30-day retention approval land in Phase 2, and no exemplar is stored from production before the Phase 2 scrubber and Security sample review.\n  - **Precondition for the first production write.** No production digest is written to the Phase 1 internal store (or enabled for any service) until all of the following are live and verified in staging, with the evidence recorded in the Phase 1 review pack: (a) the access restriction is applied and tested (a non-platform account is denied); (b) the 7-day delete job has run against staging data and removed expired rows, with a deletion test passing; (c) exemplars are confirmed off (none generated or stored); (d) the signature detector runs before storage and its fail-closed replacement is tested on a seeded set of PII-bearing signatures. Production digests may be written only to the Redis stream and partial keys (≤24h, TTL-bounded) until then. The Phase 1 milestone is met with staging data if this precondition is not met in time. The first production write is enabled by a flag that Platform lead flips after reviewing the evidence.\n- The Vector redaction stage already masks emails, tokens, card numbers and IPs. That audit (Q1) covered the retention policy and not third-party egress, so an extra pass is added:\n  - **Signature detector.** The same PII detectors (customer ID formats, deny-list names, emails, phone numbers, addresses, auth headers) run on templated signature text before storage and before egress, not only on exemplars. A signature that still matches a detector after templating is replaced by a placeholder signature (\"redacted signature\", with its count kept) and the replacement is counted (fail closed). Security reviews a sample of 500 signatures together with the exemplar review before the gate, with the same pass criterion (recall target ≥99% on the labelled sample). The detector is designed and built in Phase 1 (a small item within log-tap work), its fail-closed behaviour is tested in Phase 1 on a seeded set as described in the precondition above, and its recall is validated in Phase 2 on the Security sample, so the control exists before Phase 2 is approved.\n  - A scrubber on exemplars, run before egress, covering customer IDs (tenant and account ID formats), person and company names (matched against a deny-list built from the customer database), and free-text PII patterns (emails, phone numbers, addresses, auth headers). Any exemplar still matching a PII detector after scrubbing is dropped (fail closed), and the drop is counted.\n  - Exemplars are **off by default**. A service is enabled for exemplars only after Security reviews a sample from that service.\n  - A sampling review of 500 exemplars across services by Security before the gate. Pass criterion: no unscrubbed PII in categories the scrubber claims to cover (recall target ≥99% on the labelled sample). Failures feed back into the patterns and the review is repeated.\n  - Ongoing: weekly automated sampling of 50 sent exemplars and 50 sent signatures with a PII-detector scan, alerting Security on any hit.\n- Retention: digests in Redis ≤24h; summaries and exemplars in Postgres 30 days, then deleted by a scheduled job; Corvid zero-retention; PagerDuty comments follow the incident record retention (confirmed in the gate).\n- Pre-launch gate (owner: Platform with Legal and Security) to confirm in writing:\n  - DPA-0417 covers this use, data categories, and the Corvid processing region.\n  - Zero-retention is enabled on the Corvid account, and Corvid's notice period for deprecation or terms changes is documented.\n  - Whether customer contracts require sub-processor notice or review for Corvid, and that any such notice is done.\n  - Content posted to PagerDuty (derived summaries only, no raw lines) is covered by the existing PagerDuty agreement.\n  - The retention periods above are approved.\n- These are launch blockers, not assumptions. Sent data cannot be recalled, which is why the gate comes before the first production egress and the minimization above is applied before egress.\n\n## 6. Security\n- Prompt injection: logs are treated as untrusted data. The prompt wraps the digest in delimiters and instructs the model to ignore any instructions inside it. Delimiters are not the only control (defense in depth below). The model has no tools or network access, and output must be JSON matching a fixed schema.\n- Output validation: \"suspected deploy\" is accepted only if it matches an entry in the deploy-events feed for that service (otherwise null). \"Affected endpoints\" must match routes in the service catalog. Free-text fields are length-limited (≤280 chars), stripped of links, markup and mentions, and rendered as plain text. Quoted error signatures in PagerDuty comments are taken from the digest, not the model's paraphrase.\n- Every PagerDuty comment is labelled \"AI-generated, unverified\" with generated-at time and source window. Injection test cases (crafted log lines) are part of the eval set.\n- Sequencing: output validation, injection tests, credentials and ACLs are built and passing in Phase 2, **before** any production digest reaches the LLM. Until then the summarizer runs only on synthetic and staging digests. Phase 1 internal storage of production digests is covered by the minimal controls in section 5.\n- Credentials: Corvid and PagerDuty tokens live in the existing secrets manager with least-privilege scopes (PagerDuty: comment-on-incident only), and are rotated on the standard schedule. No tokens are stored in config or logs.\n- Access control: log-tap, Redis stream, and summary tables are restricted to the platform service accounts. Summary storage is readable by on-call and Security only. Access is audited.\n\n## 7. Staffing and estimate\nCapacity: both platform engineers are in the weekly on-call rotation and interrupt work averages 50% of their time. Effective capacity is 2 × 0.5 = ~1 eng-week per calendar week. The earlier \"12 eng-weeks in 6 weeks\" assumed full-time availability and does not hold. At this capacity a 6-week dispatch carries ~6 eng-weeks, so this dispatch covers Phase 1 scope only.\n\n| Phase | Work item | Eng-weeks |\n|-------|-----------|-----------|\n| 1 | Phase 0: MTTR phase breakdown of last 40 incidents; Corvid rate-limit tier and price check; PagerDuty note delete/retract capability check; file Legal/Security gate requests | 1 |\n| 1 | log-tap + aggregation/templating (with cardinality cap), partial-window digest key, cross-window state store, heartbeat, signature detector, Phase 1 storage controls (access restriction, 7-day delete job) and their staging verification, bounded queue/backpressure | 2.5 |\n| 1 | Summarizer core: provider-neutral interface, prompt, token caps, spend guard, kill switch, deterministic fallback renderer (synthetic data only) | 2.5 |\n| 2 | Privacy gate engineering: exemplar scrubber, retention jobs, Security exemplar and signature review | 1 |\n| 2 | Security: output validation, injection tests, credentials, ACLs | 1 |\n| 2 | Summarizer remainder: storage, failure paths, 429/priority handling, staleness logic | 2 |\n| 2 | Eval set from last 40 incidents + shadow-mode harness | 2 |\n| 3 | On-demand path (parallel fan-out, per-page deadline) + PagerDuty integration + service catalog | 3 |\n| 3 | Per-service feature flags, staged rollout | 1 |\n| 3 | Metrics, alerts, dashboards, runbook | 1.5 |\n| | Subtotal | 17.5 |\n| | Contingency (~15%) | 2.5 |\n| | Total | 20 |\n\nNote: the Phase 1 log-tap line now includes the partial-window digest key, the state store, heartbeat, signature detector, storage controls and their staging verification. These are absorbed within the 2.5 eng-weeks and the contingency. If they exceed it, the Phase 1 milestone shrinks to 3 services rather than extending the dispatch.\n\nSchedule at ~1 effective eng-week per calendar week:\n- **Week 1 (Phase 0):** the only work in the week. **Go/no-go decision at the end of week 1** (owner: Platform lead with the engineering manager). Criteria, all required:\n  - Diagnosis share: in the last 40 incidents, the median diagnose phase is ≥40% of median MTTR (≥~19 of 47 min), and the median diagnose phase is ≥15 min. Below this, a 47→30 min improvement is not plausible from triage tooling alone.\n  - Corvid tier: the confirmed account tier supports ≥10 calls/min sustained and ≥60 calls/min burst for on-demand, with ≥360k input TPM (60 calls/min × 6k-token cap; this also covers the ~60k TPM needed for 10 calls/min sustained). If the tier is lower, the on-demand burst is re-sized (fewer parallel services or a lower cap) and the plan is revised before further build.\n  - Corvid price: the confirmed contract price is ≤$0.50 per 1M input and ≤$2.00 per 1M output tokens (or the worst-case total in section 4 recomputed at the confirmed price stays ≤$1,300/month).\n  - PagerDuty comment/retract behaviour is confirmed.\n  - Legal/Security requests are filed.\n  \n  No build beyond Phase 0 starts before the decision. On no-go, the target or plan is revised first.\n- **Weeks 2-6 (rest of Phase 1, 5 eng-weeks):** log-tap and summarizer core. Phase 1 totals 6 eng-weeks, matching capacity. Milestone at week 6: digests for 3-5 services flowing to an internal store under the Phase 1 storage controls in section 5 (minimized digests, no exemplars, restricted access, 7-day deletion), but only once the section 5 precondition for the first production write is verified (otherwise the milestone is demonstrated on staging data), and the summarizer core running on synthetic/staging digests with caps, spend guard, kill switch and fallback renderer. **No production egress to Corvid in Phase 1.** Phase 1 review decides whether to approve Phases 2-3.\n- **Weeks 7-12 (Phase 2, 6 eng-weeks):** privacy gate engineering, security, summarizer remainder, eval set and harness. Milestone: the privacy gate (section 5) is signed and security validation and injection tests pass. Only then may production digests be sent to Corvid.\n- **Weeks 13-20 (Phase 3, 8 eng-weeks incl. contingency):** replay and shadow mode start in week 13 and run at least 3 weeks, alongside the on-demand path, flags and runbook work. Pilot posting from week 16 if the quality gate holds, then staged expansion and hardening.\n\nIf an earlier delivery date is required, scope must be cut (e.g., defer the on-demand path or limit to 10 pilot services). Adding time pressure without cutting scope is not supported by the capacity above.\n\nPost-launch ownership: Platform owns Triage Copilot and its on-call runbook. Run effort is budgeted at ~0.2 eng-week per week after launch (reserved out of the ~1 effective eng-week, ahead of new feature work). To limit alert load, only the breaker/hard-stop, on-demand failure and scrubber/PII-alert signals page Platform on-call; the others are tickets or dashboard-only. A review 8 weeks after launch checks actual run load, and if it exceeds the reserve, expansion is frozen until it is addressed. Budget review is monthly with the spend dashboard.\n\n## 8. Rollout and reversibility\n- Feature flags: a global kill switch plus per-service enablement, changeable without a deploy. The kill switch ships with the summarizer core in Phase 1.\n- Detach: log-tap is a separate Vector sink with its own buffer. Disabling it removes the sink and leaves the redaction and retention pipeline untouched (documented and tested in the runbook).\n- Shadow mode first, and only after the privacy gate and security validation: summaries are generated and stored but not posted to PagerDuty. They are graded against real incidents for at least 3 weeks.\n- Pilot: enable posting for 3-5 services (each with an engaged owning team), then expand in waves while the quality gate holds.\n- Bad auto-comments can be suppressed per service or globally via flag. PagerDuty comments are treated as **not deletable** with the comment-only token, and the runbook does not depend on deletion (Phase 0 verifies what the API allows). To correct a bad comment, the system posts a superseding \"RETRACTED: the AI summary posted at HH:MM is incorrect, ignore it\" comment using the same comment-only scope. The token is not widened.\n\n## 9. Reliability\n- Scheduled calls: 30s timeout, 1 retry with backoff drawn from the retry budget.\n- On-demand path: calls for up to 8 services run in parallel with a per-call timeout of 20s. One retry is allowed only if at least 20s remain before the per-page deadline of 45s. At the deadline, the system posts whatever has completed and fills the rest from cached summaries labelled with their age. The comment states \"N of M services updated\". Together with webhook and posting latency this meets the ≤60s target (p95).\n- Rate-limit isolation and priority: on-demand calls have priority. Scheduled calls use a token bucket capped below the account limit (headroom reserved for on-demand), and are paused or delayed while on-demand calls are in flight. On HTTP 429, honor Retry-After with jittered backoff and pause scheduled calls first. 429s are tracked separately and do not count toward breaker failures.\n- Circuit breaker: opens after 5 consecutive non-429 failures, half-open probe every 2 min. The scheduled breaker and spend hard stop are separate from the on-demand path (section 4).\n- Invalid output: truncated or schema-invalid JSON (including cut off at max_tokens=400) is rejected, not repaired or retried on the same input. The deterministic renderer produces the summary instead, and the failure is counted.\n- PagerDuty posting failures: retry with backoff within the deadline, honoring 429. If posting still fails, the summary is stored and shown on the dashboard, a non-paging alert goes to Platform, and the page itself is unaffected.\n- Staleness and pipeline blindness: every summary shows its generated-at time and source window. \"No new WARN+ activity since HH:MM\" is shown only when a heartbeat for the current window was received (section 2) and it reports an empty or unchanged digest. If the heartbeat for a service is missing for more than 2 windows (10 min), because log-tap is dead or detached, the stream has stalled, or the sink is dropping digests, the service shows \"No data: pipeline not reporting since HH:MM\" instead, and is never shown as quiet. A per-service digest freshness metric (age of the last heartbeat) is exported, and an alert fires when it exceeds 10 min (ticket-level for a single service, page-level if more than 5 services are affected at once). The 15-minute staleness rule applies to services whose digest changed but whose summary could not be refreshed: these show \"Summary unavailable (last updated HH:MM)\" plus the deterministic digest rendering. On-call never sees an old summary presented as current.\n- Backpressure and overflow: the aggregation step sees and counts every WARN+ line before any buffering, so counts are not lost to buffer drops. The digest sink buffer is bounded. If it fills, it drops digests (never blocks the shared Vector pipeline), and drops are counted. The Redis stream uses approximate MAXLEN trimming of the oldest entries, which is consistent with the sink because the latest digest per service supersedes older ones (first-seen and trend live in the separate state store, section 2, so trimming does not lose them). After any drop, the next digest carries a gap flag with the affected time range. The summary and PagerDuty comment then show \"digest gap HH:MM-HH:MM, summary may under-represent activity\", so on-call sees drops directly.\n- Provider dependency: the summarizer uses a provider-neutral interface, with a provider-neutral prompt and output schema. If Corvid is down or deprecated, the deterministic renderer keeps a degraded service. A second provider is not built in this plan; evaluating one is a follow-up due 3 months after launch.\n- Metrics and alerts (routing per section 7): summary lag (p95 > 10 min), per-service digest freshness (heartbeat age), LLM error rate, 429 rate, circuit-breaker state, dropped digests/lines and gap flags, queue depth, state-store availability, partial-window key age, spend vs. thresholds in section 4, on-demand latency (>60s) and fan-out partial rate, PagerDuty post failures, and scrubber/signature-detector drops and PII-detector hits.\n\n## 10. Evaluation\nPhase 0 (week 1, with the explicit go/no-go in section 7): for the last 40 incidents, break MTTR into phases (detect/ack, diagnose, mitigate, resolve) from PagerDuty and incident timelines. This confirms whether the diagnosis phase meets the section 7 threshold (median diagnose ≥40% of median MTTR and ≥15 min), and the same decision point checks the Corvid rate-limit tier and price against the section 7 thresholds. If any fails, the target or plan is revised before further build.\n\nReplay (after the privacy gate): for each of the 40 incidents, generate the summary that would have been attached at page time (including the on-demand path) and have the incident commander grade it (useful / partially / misleading). Include adversarial cases with injected instructions in log lines. Launch gate: ≥70% useful, ≤5% misleading, and no injection case altering \"suspected deploy\" or endpoints.\n\nShadow and pilot: during shadow mode, on-call engineers record whether the summary was available, correct, and quicker than their own diagnosis. In the pilot, compare time-to-diagnosis and MTTR for enabled vs. non-enabled services against the Phase 0 baseline. The replay gate is necessary for launch, but MTTR impact is claimed only from pilot data.",
+ "fixerUsage": {
+  "calls": 4,
+  "tokIn": 30190,
+  "tokOut": 42427,
+  "usd": 0.545014,
+  "critMs": 262482
+ },
+ "status": "cleared"
+}

@@ -1,0 +1,125 @@
+{
+ "approach": "cascade",
+ "case": "plan-06",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The consent prompt does not list everything the payload sends. It names command, backend, version and OS/arch, but the payload also carries a persistent install ID and an exit-code class. The prompt also calls the data 'anonymous' although the install ID makes events linkable over time. This breaks the agreed 'explicit consent' constraint, because the user agrees to less than what is sent.",
+     "evidence": "\"Share anonymous usage stats (command name, backend type, kvx version, OS/arch)? [y/N]\" vs Payload: \"exit code class ... and a random install ID generated locally\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The collector receives source IPs on every POST. The plan says it stores only aggregates, but it does not say that IPs are excluded from web/proxy access logs on the VPS. It also does not explain why a persistent install ID is needed if only daily aggregate counts are kept.",
+     "evidence": "ABSENT: IP/access-log handling; \"writing daily aggregate counts only (raw events discarded after aggregation)\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The startup update check contacts GitHub by default for every interactive user, with no consent step. It can be disabled only by an environment variable, not by a config setting or the `kvx telemetry` command. That sits awkwardly with the 'nothing collected without consent' constraint, and users should at least be told about it.",
+     "evidence": "\"Suppressed when stderr is not a TTY, when CI=true, or when KVX_NO_UPDATE_CHECK=1.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The success baseline does not follow from the motivation data. 41% on versions <= v2.6.2 gives 59% on v2.6.3 and later, which is not 'share on the latest minor version'. Download counts also omit Homebrew and apt/dnf mirror traffic.",
+     "evidence": "\"share of downloads on the latest minor version >= 75% (from 59%)\" vs \"41% ... still for versions <= v2.6.2\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "A compromised or MITM'd release listing could serve an older signed, vulnerable release as 'latest'. --version also allows an explicit downgrade. There is no version floor, no warning on downgrade, and no tag-format validation. The signed key cannot be rotated or revoked either.",
+     "evidence": "[--version vX.Y.Z]; \"The minisign public key is compiled into the binary\"; ABSENT: downgrade guard, key rotation"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Atomic rename over the running binary fails on Windows, and the plan does not give a Windows strategy. The sequence for keeping kvx.prev is also not crash-safe.",
+     "evidence": "\"atomic rename over the current binary. The previous binary is kept as kvx.prev\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The 3-week timeline does not hold. The 1-week rc soak comes after week 3's build work, so the release lands around week 4.",
+     "evidence": "\"Week 3: collector service, docs/telemetry.md, release notes, v2.8.0-rc1 for 1 week, then v2.8.0.\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Published aggregate counts have no small-cell suppression, so rare version/OS/backend combinations could expose individual installs.",
+     "evidence": "\"Aggregates are published monthly in the repo under stats/.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "There is no handling for the unauthenticated GitHub API rate limit, and no abuse or validation controls on the collector. Forged POSTs could skew the data used to prioritise backends.",
+     "evidence": "ABSENT: rate-limit/caching handling; collector validation"
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 9866,
+    "tokOut": 11244,
+    "usd": 0.056934019999999995,
+    "critMs": 60173
+   },
+   "wallMs": 102784
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The collector's handling of source IPs and web-server access logs is unspecified. The prompt lists payload fields but a POST inherently exposes the IP. Raw events are discarded, but proxy log retention is not stated.",
+     "evidence": "ABSENT: IP address / access log retention policy for the collector; \"raw events discarded after aggregation\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "There is no key rotation or revocation plan for the compiled-in minisign key. A leaked key could not be answered with a fix that already-installed clients would accept. This risk already exists for releases, but self-update raises the stakes.",
+     "evidence": "\"The minisign public key is compiled into the binary\"; ABSENT: rotation/revocation procedure"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Atomic rename over the running binary behaves differently on Windows, and the plan does not say which platforms self-update supports or tests. The test list does not cover Windows.",
+     "evidence": "\"atomic rename over the current binary\"; ABSENT: Windows behaviour for self-update"
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The collector endpoint has no stated rate limiting, payload size cap, or abuse handling. Forged install IDs could skew the published aggregates or exhaust the donated VPS.",
+     "evidence": "ABSENT: rate limiting / abuse handling for the POST endpoint"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The staleness baseline comes from download counts, which include CI and mirror traffic. It is a rough proxy, though the success measure uses the same instrument. Opt-in bias in backend usage data is also not acknowledged.",
+     "evidence": "\"GitHub release download counts, tallied per asset\"; ABSENT: opt-in bias caveat in stats/"
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 10092,
+    "tokOut": 4518,
+    "usd": 0.04111422000000001,
+    "critMs": 26697
+   },
+   "wallMs": 86690
+  }
+ ],
+ "artifact": "# Plan: kvx self-update + opt-in telemetry\n\nMaintainers: 2 | 3 weeks | Target release: v2.8.0\n\n## 1. Motivation\n- After the v2.6.3 credential-logging fix, 41% of release-asset downloads 60 days later were still for versions <= v2.6.2 (GitHub release download counts, tallied per asset).\n- Issues #812, #845, #903 ask for \"kvx self-update\" (78 combined thumbs-up).\n- Backend prioritisation is currently guesswork: we maintain 3 backends with equal effort and do not know relative use.\n\n## 2. kvx self-update\nCommand: kvx self-update [--check] [--version vX.Y.Z]\n- Queries the GitHub Releases API for the latest non-prerelease tag; --check only prints whether an update exists.\n- Downloads the platform archive and its .minisig signature. The minisign public key is compiled into the binary; the archive is rejected unless the signature verifies. The same key already signs our releases today (documented in SECURITY.md).\n- Writes the new binary to a temp file in the same directory, fsyncs, then atomic rename over the current binary. The previous binary is kept as kvx.prev; kvx self-update --rollback swaps them back.\n- Package-manager installs: if the binary path is under a Homebrew Cellar or is owned by the dpkg/rpm database, self-update refuses and prints the matching brew/apt/dnf command instead, so we never fight the package manager.\n- Startup notice: at most once per 24 h, a single stderr line \"kvx vX.Y.Z available (kvx self-update)\". Suppressed when stderr is not a TTY, when CI=true, or when KVX_NO_UPDATE_CHECK=1. The check is a single HTTPS GET with a 1.5 s timeout run in a goroutine; it never delays the command.\n\n## 3. Telemetry (opt-in)\n- Default is OFF. On first interactive run after upgrade, kvx asks once. The prompt lists every payload field and states that the install ID makes events linkable over time: \"Share usage stats? Sent: command name, backend type, exit code class (ok/user-error/internal-error), kvx version, OS/arch, and a random install ID (events from the same install can be linked together over time; it is not derived from you or your machine). No arguments, keys, values, paths, or hostnames are sent. Details: kvx telemetry status --show-payload [y/N]\". Empty answer = no. The prompt is never shown when stdin is not a TTY or CI=true.\n- The prompt text is generated from the same field list as the payload schema, and a test fails if a payload field is missing from the prompt (see Testing). The word \"anonymous\" is not used anywhere in the prompt or docs; the data is described as pseudonymous.\n- Changeable any time: kvx telemetry on|off|status; KVX_TELEMETRY=0 hard-disables regardless of config. Running kvx telemetry off also deletes the local install ID, and turning telemetry on again generates a new one.\n- Payload (complete list, documented in docs/telemetry.md): command name (e.g. \"diff\"), backend type (\"consul\" | \"etcd\" | \"ssm\"), exit code class (ok/user-error/internal-error), kvx version, GOOS/GOARCH, and a random install ID generated locally (not derived from hostname, user, or MAC). No arguments, keys, values, paths, hostnames, or endpoints are ever sent.\n- kvx telemetry status --show-payload prints the exact JSON that would be sent.\n- Transport: batched, at most one POST per day, fire-and-forget with 2 s timeout; failures are dropped, never retried in the foreground.\n- Collector: a ~150-line Go service on the project's existing donated VPS, writing daily aggregate counts only (raw events discarded after aggregation). Aggregates are published monthly in the repo under stats/.\n\n## 4. Testing\n- Self-update: integration tests against a local fake release server covering valid signature, bad signature, truncated download, non-writable directory, rollback, and the Homebrew/dpkg refusal paths.\n- Telemetry: test that nothing is sent when unset, off, CI=true, KVX_TELEMETRY=0, or non-TTY; golden test that the payload schema matches docs/telemetry.md; consent-prompt test that every payload field (including exit code class and install ID) appears in the prompt text and that the prompt does not contain \"anonymous\".\n\n## 5. Timeline\n- Week 1: self-update (download, verify, atomic replace, rollback) + tests.\n- Week 2: package-manager detection, startup notice, telemetry client + consent flow.\n- Week 3: collector service, docs/telemetry.md, release notes, v2.8.0-rc1 for 1 week, then v2.8.0.\n\n## 6. Out of scope\n- Auto-installing updates without the user running kvx self-update (we only notify).\n- Delta/binary-diff updates; full archives are < 12 MB.\n- Telemetry for kvx running as a Windows service (no TTY to ask consent); it stays off.\n\n## 7. Success measures\n- 60 days after a release, share of downloads on the latest minor version >= 75% (from 59%).\n- Telemetry opt-in rate reported transparently in stats/; no target, since it is the user's choice.",
+ "fixerUsage": {
+  "calls": 1,
+  "tokIn": 2560,
+  "tokOut": 1786,
+  "usd": 0.028096000000000003,
+  "critMs": 10319
+ },
+ "status": "cleared"
+}

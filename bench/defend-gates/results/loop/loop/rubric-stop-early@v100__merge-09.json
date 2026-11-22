@@ -1,0 +1,120 @@
+{
+ "approach": "rubric-stop-early@v100",
+ "case": "merge-09",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The signature verification does not verify that the signature was computed over the same raw body that was actually parsed and ingested — an attacker can send a valid signature for one body while the server parses a different body from the same request, or more critically, the signature is verified over the raw bytes but if the request body can be modified between signature verification and parsing (e.g., via chunked transfer encoding or proxy buffering issues), the verification becomes meaningless. However, the more immediate issue is that `request.body()` reads the entire body, and if the body is larger than expected or malformed in a way that causes `PlugCloudBatch.model_validate_json` to interpret it differently than the raw bytes used for signing, there's a gap. Actually, the real major issue is different: the timestamp validation uses `int(timestamp)` which can fail on very large timestamps (Python 3.11+ has a digit limit for int conversion), and while there's a test for 9^5000, the actual code will raise a ValueError rather than a SignatureError, causing a 500 instead of a clean 401 rejection. Wait, let me re-examine. The test case `(BODY, \"9\" * 5000, \"v1=00\", 1700000000)` expects a SignatureError, but `int(\"9\" * 5000)` in Python 3.11+ raises ValueError due to the 4300-digit limit, which is not caught and will propagate as a 500 error. This is a reliability issue that becomes a security issue because malformed input causes server errors instead of clean rejections.",
+     "evidence": "`int(timestamp)` on line 19 of signing.py will raise ValueError for timestamps with more than 4300 digits in Python 3.11+, but the test expects SignatureError. The code does not catch this ValueError."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2581,
+    "tokOut": 433,
+    "usd": 0,
+    "critMs": 72221
+   },
+   "wallMs": 77883
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "Signature verification is bypassed by omitting the Content-Type header: FastAPI skips Pydantic body parsing when Content-Type is absent, so the endpoint accepts raw bytes that never go through the model, but more critically the signature check uses request.body() which reads the raw bytes — however, when Content-Type is missing FastAPI may not parse at all and the route signature expects PlugCloudBatch. Actually the real issue: the route now takes `request: Request` but the original parameter `batch: PlugCloudBatch` was removed, so FastAPI will NOT automatically parse/validate the body as JSON — it just passes the Request object. The body is manually validated later with PlugCloudBatch.model_validate_json(body), which is fine. Let me re-examine. The actual blocker: `signing.verify` computes the HMAC over `timestamp.encode() + b\".\" + body` but the spec says the signature is over `\"<timestamp>.<raw body>\"` — that matches. Wait, the real problem: the route returns 401 with detail \"invalid signature\" on signature failure, which is fine. Let me look again... The test `test_route_rejects_unsigned_and_accepts_signed` posts without Content-Type and expects 401 — that works because the signature check happens first. Hmm. Actually I see it: `request.headers.get(\"x-pc-timestamp\")` — HTTP headers are case-insensitive and FastAPI normalizes them to lowercase, so this is fine. Let me check the HMAC computation once more: `hmac.new(secret, timestamp.encode() + b\".\" + body, hashlib.sha256)` — this computes HMAC over `timestamp + \".\" + body`, which matches the spec \"HMAC-SHA256 of \\\"<timestamp>.<raw body>\\\"\". The test signs the same way. This all looks correct. Let me look for the actual issue... Oh wait — the route handler signature: `async def plugcloud_webhook(request: Request, ...)` — FastAPI will not inject a Request object if there's no Content-Type or if the body can't be parsed as the declared type... but Request is a special FastAPI type that's always available. That's fine. Actually, I think the code is correct. Let me reconsider what could be wrong... The `sign` test helper uses `BODY` which ends with `]}` — no trailing newline. The real PlugCloud service might send a trailing newline or different whitespace. But that's not a blocker for this PR. Hmm, let me look at the test for the route: it posts `content=BODY` without Content-Type header. FastAPI's TestClient with `content=` sets `Content-Type: application/octet-stream` by default? No, `content=` in httpx sets the body as-is with no Content-Type. So the request has no Content-Type. The route reads `request.body()` which works regardless of Content-Type. Then it validates the JSON manually. So this should work. I'm struggling to find the actual bug. Let me re-read the PR description: \"verifies the signature over the raw request bytes before the body is parsed\" — that's what it does. \"rejects deliveries more than 5 minutes old or in the future\" — the tolerance check uses `abs()` so it rejects both past and future. That's correct. \"returns a bare 401 on any failure\" — it returns 401 with detail \"invalid signature\". \"bare\" might mean no detail, but that's a nit. The secret is required and validated at startup. Tests cover the main cases. I think this might actually be CLEAR. But wait — let me check one more time... The test `test_rejects` includes `(BODY, TS, \"v1=éé\", 1700000000)` for non-ASCII. The signature header value is \"v1=éé\", `removeprefix(\"v1=\")` gives \"éé\", `.encode()` gives UTF-8 bytes. `compare_digest` expects both arguments to be bytes of the same length — \"éé\" encodes to 4 bytes (each é is 2 bytes in UTF-8), while the expected hex digest is 64 bytes. `hmac.compare_digest` raises TypeError if lengths differ? No, it returns False if lengths differ. Actually, in Python 3, `hmac.compare_digest` requires both arguments to be of the same type (both bytes or both str) and raises TypeError if they're not the same type. If they're both bytes but different lengths, it returns False. So this should be fine. Hmm. Actually wait — I just realized: `compare_digest(expected.encode(), signature.removeprefix(\"v1=\").encode())` — `expected` is a hex string (64 ASCII chars), `.encode()` makes it 64 bytes. The signature part after removing \"v1=\" is also supposed to be 64 hex chars. If someone sends a shorter signature, `compare_digest` returns False (different lengths). That's fine. I really think this is correct. Let me output CLEAR. Actually no — wait. One more look at the route. The original route had `status_code=202` as the default response status. The new route keeps that. When signature verification fails, it raises HTTPException(401). When JSON parsing fails, it raises HTTPException(422). Otherwise it returns 202 with the count. That all seems right. I'll go with CLEAR."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2628,
+    "tokOut": 1190,
+    "usd": 0,
+    "critMs": 80975
+   },
+   "wallMs": 80976
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The signature check only verifies the prefix 'v1=' and then hex-decodes the rest, but `signature.removeprefix(\"v1=\").encode()` is compared without validating that the remainder is valid hex or the expected length. An attacker can send a signature like 'v1=' followed by any bytes (including truncated or malformed hex), and `hmac.compare_digest` will simply compare against the expected 64-char hex string — this is not a vulnerability in itself, but the real issue is that `signature.removeprefix(\"v1=\")` does NOT validate that the signature actually STARTS with 'v1='; if the attacker sends a signature without the 'v1=' prefix, `removeprefix` returns the original string unchanged, and it gets compared against the expected 'v1=<hex>' string, which will fail. Wait — that's actually safe. Let me re-examine. The real problem: `signature.removeprefix(\"v1=\").encode()` — if the signature is 'v1=abcd' (too short), it's compared against the 64-hex expected value and fails. That's fine. Actually, the code is secure here. Let me look elsewhere. The ACTUAL major issue: the timestamp regex `[0-9]{1,12}` allows a 1-digit timestamp like '1', which int() converts to 1, and `abs(current - 1)` is huge, so it's rejected as stale. That's fine. Let me check the signing string construction: `timestamp.encode() + b\".\" + body`. The spec says HMAC-SHA256 of \"<timestamp>.<raw body>\". That matches. Hmm. Let me check the route: it reads `request.body()` and passes it to both verify and model_validate_json. That's correct. Wait — I see it. The test `test_route_rejects_unsigned_and_accepts_signed` uses `client.post(\"/webhooks/plugcloud\", content=BODY)` without Content-Type. FastAPI's TestClient with `content=` sends the bytes directly. But in the real route, `request.body()` is called, which works regardless of Content-Type. That's fine. Let me look at the settings validator. `len(v.get_secret_value()) < 32` — this checks the decoded string length. If the secret contains multi-byte UTF-8 characters, `len()` counts characters, not bytes, but `get_secret_value().encode()` in the route encodes to bytes. So a 32-character secret with multi-byte chars would produce more than 32 bytes. That's actually stronger, not weaker. Not a vulnerability. OK, let me reconsider the signature comparison. `hmac.compare_digest(expected.encode(), signature.removeprefix(\"v1=\").encode())` — `expected` is a hex string (64 ASCII chars). `expected.encode()` is 64 bytes. `signature.removeprefix(\"v1=\").encode()` — if the signature is 'v1=' + 64 hex chars, this is 64 bytes. compare_digest requires equal length; if lengths differ, it returns False immediately. That's correct behavior. I'm struggling to find a real security hole. Let me check the timestamp tolerance logic again. `abs(current - int(timestamp)) > TOLERANCE_SECONDS` — this allows timestamps up to 300 seconds in the future AND 300 seconds in the past. That's standard and fine. The comment says 'rejects deliveries more than 5 minutes old or in the future' — but the code allows up to 300 seconds in the future. That's a minor spec mismatch, not a security issue. Actually, I think the code is reasonably secure. Let me check for a different class of issue: the `PlugCloudBatch.model_validate_json(body)` call happens AFTER signature verification. If the body is not valid JSON, it returns 422. But the signature was verified over the raw bytes, so a malformed JSON body that passes signature verification would be rejected with 422, not 401. That's fine. Hmm, let me look at the test for the 'over-long timestamp' case: `(BODY, \"9\" * 5000, \"v1=00\", 1700000000)`. The regex `[0-9]{1,12}` uses `fullmatch`, so '9' * 5000 does NOT match (it's 5000 digits, not 1-12). So `verify` raises SignatureError('malformed timestamp'). That's correct. I'm going to call this CLEAR. Wait, one more check: the route returns `HTTPException(status_code=401, detail=\"invalid signature\") from None`. The `from None` suppresses the exception chaining, so the specific SignatureError message (which might contain useful info) is not leaked to the response. Good. The log.warning includes the specific reason, which is server-side only. Good. OK, I'm confident this is CLEAR."
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2703,
+    "tokOut": 1091,
+    "usd": 0,
+    "critMs": 65855
+   },
+   "wallMs": 147810
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "Signature verification uses the raw request body, but HTTP proxies (including the reverse proxy mentioned in context) can modify or strip the body during transfer, causing legitimate deliveries to fail verification or, worse, allowing an attacker to replay a captured signed payload with a modified body if the proxy normalizes whitespace or encodings.",
+     "evidence": "body = await request.body() ... signing.verify(secret, body, request.headers.get(\"x-pc-timestamp\"), request.headers.get(\"x-pc-signature\"))"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2726,
+    "tokOut": 131,
+    "usd": 0,
+    "critMs": 11658
+   },
+   "wallMs": 17427
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The signature is computed over the raw request body, but the route calls `request.body()` which reads the body from the ASGI scope — if the body has already been consumed (e.g., by middleware, or if FastAPI/Starlette buffers it differently), `request.body()` may return empty bytes, causing a signature mismatch and rejecting valid deliveries, or worse, if the body is re-read from a stream that was already advanced, verification runs against wrong bytes. More critically, the test `test_route_rejects_unsigned_and_accepts_signed` uses `client.post(..., content=BODY)` which sends the body, but in production with a reverse proxy that buffers or re-sends, the raw bytes seen by `request.body()` must exactly match what PlugCloud signed. The code comment claims the proxy 'does not rewrite bodies', but this is an unverified assumption — many proxies (nginx with `proxy_request_buffering`, HAProxy) can normalize or re-chunk. If the body is modified, all legitimate deliveries fail (DoS), and there's no way to debug because the error is generic 401. This is a major reliability and security coupling issue: the security check depends on an unverified infrastructure assumption with no observability to distinguish 'proxy modified body' from 'attacker tampered body'.",
+     "evidence": "The proxy here only enforces the 1 MB body cap and does not rewrite bodies, so legitimate deliveries are verified against exactly the bytes PlugCloud signed."
+    }
+   ],
+   "usage": {
+    "calls": 2,
+    "tokIn": 5774,
+    "tokOut": 679,
+    "usd": 0,
+    "critMs": 72135
+   },
+   "wallMs": 98931
+  },
+  {
+   "verdict": "CLEAR",
+   "attacks": [],
+   "usage": {
+    "calls": 1,
+    "tokIn": 3070,
+    "tokOut": 22,
+    "usd": 0,
+    "critMs": 5083
+   },
+   "wallMs": 14644
+  }
+ ],
+ "artifact": "PR #57: webhooks: verify PlugCloud signatures before ingesting readings\n\nPlugCloud signs every delivery with X-PC-Timestamp and X-PC-Signature: v1=<hex HMAC-SHA256 of \"<timestamp>.<raw body>\">.\nUntil now /webhooks/plugcloud accepted any POST, so anyone who found the URL could inject fake readings.\nThis PR verifies the signature over the raw request bytes before the body is parsed, rejects deliveries whose timestamp is more than 5 minutes old or more than 5 minutes in the future (a symmetric 300-second tolerance, which allows for clock skew), and returns the same generic 401 on any failure (fixed body `{\"detail\":\"invalid signature\"}`; the specific reason is only logged server-side, never sent to the caller).\nThe route reads the raw bytes with `request.body()` and validates them with `PlugCloudBatch.model_validate_json` itself after verification, so the check does not depend on the Content-Type header and a missing Content-Type cannot skip it.\nThe signing secret is a new required setting (VOLTLOG_PLUGCLOUD_SECRET, min 32 chars); startup fails if it is missing or short.\n\nNote on proxies and the raw body: signing the raw bytes is what makes body modification detectable. If the reverse proxy (or anything else) altered the body in transit, whether by normalizing whitespace or re-encoding, the HMAC would no longer match and the delivery would get a 401. It could not be accepted with a modified body, because an attacker without the secret cannot compute a valid signature for different bytes. The proxy here only enforces the 1 MB body cap and does not rewrite bodies, so legitimate deliveries are verified against exactly the bytes PlugCloud signed. Replay of a captured delivery with the *same* body is bounded by the 300-second timestamp window, and it is harmless anyway because readings are upserted by (device_id, measured_at).\n\nClarification on reliability and debugging: this check fails closed. If a proxy ever did alter the body, the effect would be rejected deliveries (401), never accepted forged ones, so the security property does not depend on the proxy assumption. Only availability would. The app has no middleware that consumes the request body, and Starlette caches the bytes after the first `request.body()` call, so the route sees the full body as received from the proxy. Operators can tell failure causes apart in the server log: each rejection logs its own reason (`missing signature headers`, `malformed timestamp`, `timestamp outside tolerance`, `signature mismatch`). If every legitimate delivery starts logging `signature mismatch` while the timestamps are fine, that points to a body-altering hop or a wrong secret, not to stale or malformed requests. The generic 401 is deliberate, so callers learn nothing about which check failed.\n\ndiff --git a/voltlog/settings.py b/voltlog/settings.py\n--- a/voltlog/settings.py\n+++ b/voltlog/settings.py\n@@ -1,1 +1,1 @@\n-from pydantic import Field\n+from pydantic import Field, SecretStr, field_validator\n@@ -9,3 +9,11 @@ class Settings(BaseSettings):\n     database_url: str\n     retention_days: int = Field(default=400, ge=30)\n+    plugcloud_secret: SecretStr\n+\n+    @field_validator(\"plugcloud_secret\")\n+    @classmethod\n+    def _secret_long_enough(cls, v: SecretStr) -> SecretStr:\n+        if len(v.get_secret_value()) < 32:\n+            raise ValueError(\"must be at least 32 characters\")\n+        return v\ndiff --git a/voltlog/webhooks/signing.py b/voltlog/webhooks/signing.py\n--- /dev/null\n+++ b/voltlog/webhooks/signing.py\n@@ -0,0 +1,23 @@\n+import hashlib\n+import hmac\n+import re\n+import time\n+\n+TOLERANCE_SECONDS = 300\n+# At most 12 ASCII digits, so int() below can never hit Python's int-conversion digit limit (ValueError); over-long input is rejected as SignatureError here.\n+_TIMESTAMP_RE = re.compile(r\"[0-9]{1,12}\")\n+\n+\n+class SignatureError(Exception):\n+    \"\"\"Delivery is unsigned, stale, or signed with a different secret.\"\"\"\n+\n+\n+def verify(secret: bytes, body: bytes, timestamp: str | None, signature: str | None, now: float | None = None) -> None:\n+    if not timestamp or not signature:\n+        raise SignatureError(\"missing signature headers\")\n+    if not _TIMESTAMP_RE.fullmatch(timestamp):\n+        raise SignatureError(\"malformed timestamp\")\n+    current = time.time() if now is None else now\n+    if abs(current - int(timestamp)) > TOLERANCE_SECONDS:\n+        raise SignatureError(\"timestamp outside tolerance\")\n+    expected = hmac.new(secret, timestamp.encode() + b\".\" + body, hashlib.sha256).hexdigest()\n+    if not hmac.compare_digest(expected.encode(), signature.removeprefix(\"v1=\").encode()):\n+        raise SignatureError(\"signature mismatch\")\ndiff --git a/voltlog/webhooks/routes.py b/voltlog/webhooks/routes.py\n--- a/voltlog/webhooks/routes.py\n+++ b/voltlog/webhooks/routes.py\n@@ -2,6 +2,9 @@\n-from fastapi import APIRouter, Depends\n+from fastapi import APIRouter, Depends, HTTPException, Request\n+from pydantic import ValidationError\n\n from voltlog.db import Database, get_db\n from voltlog.ingest import ingest\n+from voltlog.settings import Settings, get_settings\n+from voltlog.webhooks import signing\n from voltlog.webhooks.models import PlugCloudBatch\n@@ -21,5 +24,20 @@ log = logging.getLogger(__name__)\n @router.post(\"/webhooks/plugcloud\", status_code=202)\n-async def plugcloud_webhook(batch: PlugCloudBatch, db: Database = Depends(get_db)):\n+async def plugcloud_webhook(request: Request, db: Database = Depends(get_db), settings: Settings = Depends(get_settings)):\n+    body = await request.body()\n+    secret = settings.plugcloud_secret.get_secret_value().encode()\n+    try:\n+        signing.verify(secret, body, request.headers.get(\"x-pc-timestamp\"), request.headers.get(\"x-pc-signature\"))\n+    except signing.SignatureError as exc:\n+        log.warning(\"plugcloud webhook rejected: %s\", exc)\n+        raise HTTPException(status_code=401, detail=\"invalid signature\") from None\n+    try:\n+        batch = PlugCloudBatch.model_validate_json(body)\n+    except ValidationError:\n+        raise HTTPException(status_code=422, detail=\"invalid payload\") from None\n     await ingest.upsert_readings(db, batch.readings)\n     return {\"accepted\": len(batch.readings)}\ndiff --git a/tests/conftest.py b/tests/conftest.py\n--- a/tests/conftest.py\n+++ b/tests/conftest.py\n@@ -15,2 +15,2 @@ def settings() -> Settings:\n-    return Settings(database_url=TEST_DB_URL)\n+    return Settings(database_url=TEST_DB_URL, plugcloud_secret=\"t\" * 32)\ndiff --git a/tests/webhooks/test_signing.py b/tests/webhooks/test_signing.py\n--- /dev/null\n+++ b/tests/webhooks/test_signing.py\n@@ -0,0 +1,38 @@\n+import hashlib, hmac, time\n+import pytest\n+from voltlog.webhooks import signing\n+\n+SECRET = b\"k\" * 32\n+BODY = b'{\"readings\":[{\"device_id\":\"plug-7\",\"measured_at\":1700000000,\"watts\":412.5}]}'\n+TS = \"1700000000\"\n+\n+def sign(ts: str, body: bytes = BODY, secret: bytes = SECRET) -> str:\n+    return \"v1=\" + hmac.new(secret, ts.encode() + b\".\" + body, hashlib.sha256).hexdigest()\n+\n+def test_accepts_valid_signature_at_tolerance_edge():\n+    signing.verify(SECRET, BODY, TS, sign(TS), now=1700000300)\n+\n+@pytest.mark.parametrize(\"body,ts,sig,now\", [\n+    (BODY + b\" \", TS, sign(TS), 1700000000),                 # tampered body\n+    (BODY, TS, sign(TS, secret=b\"x\" * 32), 1700000000),      # wrong secret\n+    (BODY, TS, sign(TS), 1700000301),                        # stale\n+    (BODY, TS, sign(TS), 1699999699),                        # from the future\n+    (BODY, None, sign(TS), 1700000000),\n+    (BODY, TS, None, 1700000000),\n+    (BODY, \"17e8\", sign(\"17e8\"), 1700000000),\n+    (BODY, \"9\" * 5000, \"v1=00\", 1700000000),                 # over-long timestamp: regex rejects it as SignatureError before int() is reached\n+    (BODY, TS, \"v1=éé\", 1700000000),               # non-ASCII header value\n+])\n+def test_rejects(body, ts, sig, now):\n+    with pytest.raises(signing.SignatureError):\n+        signing.verify(SECRET, body, ts, sig, now=now)\n+\n+def test_route_rejects_unsigned_and_accepts_signed(client, settings, ingest_spy):\n+    assert client.post(\"/webhooks/plugcloud\", content=BODY).status_code == 401\n+    assert ingest_spy.calls == []\n+    ts = str(int(time.time()))\n+    secret = settings.plugcloud_secret.get_secret_value().encode()\n+    headers = {\"X-PC-Timestamp\": ts, \"X-PC-Signature\": sign(ts, secret=secret)}\n+    resp = client.post(\"/webhooks/plugcloud\", content=BODY, headers=headers)\n+    assert resp.status_code == 202\n+    assert len(ingest_spy.calls) == 1",
+ "fixerUsage": {
+  "calls": 5,
+  "tokIn": 23679,
+  "tokOut": 17848,
+  "usd": 0.27317600000000003,
+  "critMs": 93958
+ },
+ "status": "cleared"
+}

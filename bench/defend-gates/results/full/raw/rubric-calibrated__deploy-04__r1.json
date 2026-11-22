@@ -1,0 +1,107 @@
+{
+ "approach": "rubric-calibrated",
+ "case": "deploy-04",
+ "rep": 1,
+ "wallMs": 152593,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "Share links embed the owner's project API key as a query parameter and the share page returns it to every viewer as `replayKey`. Anyone who opens a shared link, including via a public HN or X post, obtains the owner's live key, which grants access to the paid `models: [\"*\"]` tier and can be used outside Playground.",
+   "evidence": "url.searchParams.set(\"k\", project.apiKey); ... return { messages: share.messages, model: share.model, replayKey: url.searchParams.get(\"k\") };"
+  },
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "Viewers replay against the owner's project quota, so any public share link lets anonymous users run unlimited pro-tier requests on any model, billed to the owner. This bypasses the free-tier allow-list and the $4k/month budget, and nothing caps it.",
+   "evidence": "// Viewers without an account replay against the owner's project quota."
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "The API key sits in the URL, so it leaks into browser history, Referer headers sent to third-party sites and embeds, proxy and analytics logs, and link-unfurl crawlers. The Open Graph unfurl feature makes this leakage routine.",
+   "evidence": "Share pages are server-rendered with Open Graph tags so links unfurl nicely on Slack/X. ... url.searchParams.set(\"k\", project.apiKey);"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Deleting a share does not revoke the leaked key, since the key belongs to the project and is not rotated. Once a link has leaked, the only remedy is a key rotation that the artifact never describes, and the rollout's only rollback (flag off) does not touch share links.",
+   "evidence": "Shares can be deleted from Playground → History; deleted shares return 404. ... Rollback: `free_signup_open` off stops new signups; existing free keys keep working."
+  },
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "The free-tier rate limit is configured as 20 requests per second with burst 40, but the public changelog promises 20 requests per minute. That is 60x the advertised limit, which breaks the cost model and the free-tier contract. The staging QA passed only because it used a per-minute config, so the tested config is not the one being deployed.",
+   "evidence": "rate_limit: { requests: 20, per: second, burst: 40 } vs. \"Free accounts get **20 requests per minute**\"; \"(staging config used `per: minute`)\""
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The free pool autoscales to 24 H100s at $2.49/h with no cost ceiling, so one scale-out event exceeds the $4k budget several times over. Even the 2-replica floor ($2.49 × 2 × 730h ≈ $3.6k) leaves essentially no margin. No budget alert or hard cap exists; the page fires only at >6 replicas, which is already about $5.4k/month.",
+   "evidence": "max_replicas: 24 ... scale_on: queue_depth > 8 for 60s; \"Alerting: free pool replicas > 6 pages on-call\""
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "Email-only signup with no card and no verification lets one person create many accounts, each with its own 100k tokens/day allowance. The budget math assumes 3,000 DAU, but the enforced limit is per account, so the actual exposure is unbounded by the stated projection.",
+   "evidence": "Sign up with email, no card required. Free accounts get ... **100k tokens per day**"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The capacity claim of '<30% utilization' on two replicas has no load test or measurement behind it. It is a projection from DAU assumptions, and the launch post goes live 15 minutes after the flag flips, so the claim is unvalidated at the moment it matters.",
+   "evidence": "Two H100 replicas serve the projected free load at < 30% utilization; ... Launch post: Wed 17:00 UTC (blog, HN, X)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "There is no load test or staged ramp before the HN/blog spike. Free-tier launch traffic could saturate the pool and trigger scale-out to 24 replicas before on-call can respond to the replica alert.",
+   "evidence": "QA summary (staging): Signup → first free request in < 60s: pass. ... (no load or soak test listed)"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "createShareLink does not verify that the session and project belong to the calling user, so a caller could create a share that embeds a project key they do not own, or share another user's session messages.",
+   "evidence": "export async function createShareLink(session: Session, project: Project): Promise<string> { const share = await db.shares.insert({ sessionId: session.id, projectId: project.id, ... ABSENT: no ownership or authz check"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Shared sessions are stored in full, have no expiry, and are server-rendered with OG tags and no noindex. Personal data a user pastes into a session becomes permanently public and crawlable, and the artifact gives users no warning or retention limit.",
+   "evidence": "messages: session.messages, ... Share pages are server-rendered with Open Graph tags; ABSENT: expiry, noindex, consent prompt"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The rollout has no separate flag for Playground share links, so they cannot be disabled independently of the 16:00 deploy.",
+   "evidence": "Deploy gateway config and playground at 16:00 UTC, flag `free_signup_open` on at 16:45 UTC."
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "minor",
+   "claim": "Free-tier serving depends entirely on one rented on-demand GPU provider with no documented fallback or data residency statement.",
+   "evidence": "serves open-weight models on rented H100 GPUs ... at the GPU provider's on-demand rate of $2.49/h"
+  },
+  {
+   "lens": "compliance",
+   "severity": "minor",
+   "claim": "The artifact does not address the open-weight model license terms or the ToS for publicly shared outputs.",
+   "evidence": "ABSENT: license or ToS review for llama-3.1-8b-instruct and qwen2.5-7b-instruct redistribution via share links"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Shares table has no retention or growth bound, and each row stores the full message history.",
+   "evidence": "db.shares.insert({ ... messages: session.messages ... }) ABSENT: TTL or retention policy"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3152,
+  "tokOut": 4643,
+  "usd": 0.0027563800000000005,
+  "critMs": 22529
+ }
+}

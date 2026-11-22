@@ -1,0 +1,107 @@
+{
+ "approach": "rubric-single",
+ "case": "plan-07",
+ "rep": 2,
+ "wallMs": 99185,
+ "verdict": "ATTACKS",
+ "confidence": 0.85,
+ "attacks": [
+  {
+   "lens": "cost",
+   "severity": "blocker",
+   "claim": "Token math is internally inconsistent with the stated volumes and ignores the 5-minute re-summarization of overlapping data and peak load; the $1,150 estimate is unsupported and the true cost at peak or with prompt overhead is unknown. Input of 2.28B tokens at $0.50/M is $1,140, leaving ~$360 headroom, but the summarizer prompt/system instructions are re-sent on each of 8,640 calls and are not counted.",
+   "evidence": "\"Input: 38M lines x 60 tokens = 2.28B tokens -> ~$1,140\" ; ABSENT: fixed prompt token count, per-call overhead, retries, peak-day (61M lines) cost"
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "At peak volume (61M lines/day) input cost scales to roughly $1,830/month, exceeding the $1,500 budget; no spend cap or sampling fallback is specified.",
+   "evidence": "\"Application logs: 38M lines/day average across 30 services (peak day 61M)\" ; \"Estimated total: ~$1,150/month, within the $1,500 budget.\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Window math is wrong: 30 services x 288 windows/day is 8,640 summaries, but the plan says it sends the last 5 minutes per service every 5 minutes, which is fine, yet 'Output: 8,640 x 400 = 3.5M' is correct; the real inconsistency is the 60-token average line length applied to 38M lines, which implies every line is sent (no sampling), so the per-window input is not bounded and a single noisy service can blow up one call's context window with no truncation rule.",
+   "evidence": "\"every 5 minutes, sends the last 5 minutes of logs per service to the LLM with a fixed prompt\" ; ABSENT: max input tokens per summary call, truncation or sampling policy"
+  },
+  {
+   "lens": "security",
+   "severity": "major",
+   "claim": "Prompt injection: raw application log lines (which can contain attacker-controlled user input, headers, or payloads) are fed to the LLM and the summary feeds the PagerDuty incident comment and 'suspected deploy' field, a trust boundary with no sanitization or output validation described.",
+   "evidence": "\"forwards every application log line to the summarizer queue\" ; ABSENT: input sanitization, output schema validation, treatment of log content as untrusted"
+  },
+  {
+   "lens": "privacy",
+   "severity": "major",
+   "claim": "Redaction is asserted to cover emails, tokens, card numbers and IPs, but application logs commonly carry names, addresses, account IDs, and free-text PII; the plan relies on a Q1 audit of a fixed list and does not verify residual PII before sending to a third-party LLM.",
+   "evidence": "\"already masks emails, tokens, card numbers and IPs for our log retention policy (audited in Q1)\" ; ABSENT: coverage of other PII classes, residual-PII testing on the new egress path"
+  },
+  {
+   "lens": "compliance",
+   "severity": "major",
+   "claim": "Sending production logs to an external LLM vendor is a new cross-border or sub-processor data flow; the DPA covers 'Corvid' but the plan does not confirm data residency, sub-processor list, or whether customer-data-derived content in logs is covered by customer contracts.",
+   "evidence": "\"data processing addendum signed by Legal (ref DPA-0417)\" ; ABSENT: data residency, sub-processor scope, customer contract review"
+  },
+  {
+   "lens": "sovereignty",
+   "severity": "major",
+   "claim": "Single-provider hard dependency on Corvid-mini with no fallback or self-hosted option; the on-call tool degrades entirely if the vendor has an outage, and exit cost is not assessed.",
+   "evidence": "\"Model: Corvid-mini, $0.50 per 1M input tokens, $2.00 per 1M output tokens.\" ; ABSENT: fallback model, exit plan"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Failure modes for the summarizer, queue backlog, PagerDuty comment failures, and stale summaries are unspecified; a stale or missing summary at page time is silently presented as current context to on-call engineers.",
+   "evidence": "ABSENT: timeout/retry policy, backpressure when queue lags, staleness indicator on the PagerDuty comment, alerting on summarizer health"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The MTTR target (47 to 30 min) is asserted with no evidence that summaries reduce MTTR; the launch gate grades usefulness against 40 past incidents graded by the same commander who designed the feature, with no measurement of time-to-mitigation.",
+   "evidence": "\"Target: median MTTR 47 min -> 30 min within one quarter of launch.\" ; \"Launch gate: >= 70% useful, <= 5% misleading.\""
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "Eval set of 40 incidents is small and the 'misleading' threshold of 5% allows about 2 misleading summaries out of 40 with no confidence interval; the replay also cannot reproduce what on-call would have seen in real time.",
+   "evidence": "\"Eval set from last 40 incidents\" ; \"<= 5% misleading\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "Staffing is infeasible given the stated constraint: both engineers are on-call and interrupt work is ~50% of their time, yet the plan assigns both full-time for 6 weeks with no capacity buffer, so the 12 eng-week estimate is optimistic and the project will slip or cause on-call coverage gaps.",
+   "evidence": "\"on-call/interrupt work averages 50% of their time\" ; \"Staffing: both platform engineers full-time for 6 weeks (2 x 6 = 12 eng-weeks).\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "Rollback path is not described; the change adds a tap after the Vector redaction stage, and disabling it or removing the auto-comment is not specified.",
+   "evidence": "ABSENT: rollback or kill-switch procedure for log-tap and PagerDuty integration"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "Summaries are generated every 5 minutes regardless of incident state; the value is only realized at page time, so most compute is spent on non-incident windows.",
+   "evidence": "\"every 5 minutes, sends the last 5 minutes of logs per service to the LLM\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Fan-out of 30 services with per-service calls and no batching or rate-limit handling is not addressed; at peak, request rate and vendor rate limits are unknown.",
+   "evidence": "ABSENT: rate limits, batching, concurrency cap"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Plan states the auto-comment includes direct dependencies from the catalog, but dependency-graph staleness and the consequence of wrong catalog data on the summary scope are not addressed.",
+   "evidence": "\"from the service catalog\""
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 2574,
+  "tokOut": 2431,
+  "usd": 0.0012414199999999998,
+  "critMs": 11445
+ }
+}

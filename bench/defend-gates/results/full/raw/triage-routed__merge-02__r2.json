@@ -1,0 +1,53 @@
+{
+ "approach": "triage-routed",
+ "case": "merge-02",
+ "rep": 2,
+ "wallMs": 227995,
+ "verdict": "ATTACKS",
+ "confidence": 0.97,
+ "attacks": [
+  {
+   "lens": "privacy/anonymity",
+   "severity": "blocker",
+   "claim": "The duplicate-ballot log line writes the voter's email alongside their chosen option and measure id. This links a named resident to their ballot choice outside the tally, breaking the anonymity guarantee, and the logs ship to a third-party host readable by the whole support team, so the exposure cannot be recalled once shipped.",
+   "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value,)"
+  },
+  {
+   "lens": "authz",
+   "severity": "blocker",
+   "claim": "The results export route has no authentication or role check, although the PR describes it as an admin export and the neighbouring close_measure route uses require_role(\"admin\"). Any caller, including unauthenticated ones, can download the tally for any measure id.",
+   "evidence": "@router.get(\"/measures/{measure_id}/results.csv\") async def export_results(measure_id: int, db: Session = Depends(get_db),"
+  },
+  {
+   "lens": "correctness/spec",
+   "severity": "major",
+   "claim": "The export never checks whether the measure is closed, although the title and purpose say it is for closed measures. Interim counts for open measures can be read during voting, which can sway voters or leak partial results and may violate election rules.",
+   "evidence": "measure = db.get(Measure, measure_id) if measure is None: raise HTTPException(404) ... ABSENT: no measure.is_open() or closed-state check before counting"
+  },
+  {
+   "lens": "logic bug",
+   "severity": "major",
+   "claim": "Counts are keyed by whatever the database returns for Ballot.choice, but the lookup uses Choice enum members. If the column returns raw strings, counts.get(choice, 0) returns 0 for every option and the CSV reports zero votes everywhere. The Ballot model is not in the diff, so this cannot be verified from the artifact.",
+   "evidence": "counts = dict(db.query(Ballot.choice, func.count(Ballot.id))... for choice in Choice: writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])"
+  },
+  {
+   "lens": "injection",
+   "severity": "minor",
+   "claim": "The measure slug is written unescaped into CSV cells, where a leading =, +, - or @ can become a spreadsheet formula, and into the quoted Content-Disposition filename, where quotes or newlines can malform the header. Nothing in the diff constrains slug format.",
+   "evidence": "writer.writerow([measure.slug, choice.value, counts.get(choice, 0)]) ... headers={\"Content-Disposition\": f'attachment; filename=\"{measure.slug}-results.csv\"'}"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Per-choice counts have no minimum-cell suppression. For small electorates, a count of 0 or 1 combined with known participation can reveal one resident's choice.",
+   "evidence": "ABSENT: any minimum-count threshold or suppression logic before writing counts to the CSV"
+  }
+ ],
+ "usage": {
+  "calls": 7,
+  "tokIn": 19994,
+  "tokOut": 8859,
+  "usd": 0.00618509,
+  "critMs": 15272
+ }
+}

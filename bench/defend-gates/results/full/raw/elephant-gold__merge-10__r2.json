@@ -1,0 +1,101 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-10",
+ "rep": 2,
+ "wallMs": 332395,
+ "verdict": "CLEAR",
+ "confidence": 0.72,
+ "attacks": [
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "A job that repeatedly crashes its worker is reclaimed after every lease expiry, with no attempts ceiling in this PR. The old startup reset also re-ran crashing jobs on each restart, so this is not a new class of failure, but the loop is unbounded until #215 lands.",
+   "evidence": "\"Expired leases (crashed/shut-down worker, or NULL from the old worker) are reclaimed\" and \"a poison-job attempts cap (#215) are separate changes\""
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The claim predicate (status OR status+locked_until) with ORDER BY created_at, id has no supporting index. At ~20k rows each poll is a scan and sort, which is cheap now but grows with the table.",
+   "evidence": "ABSENT: no CREATE INDEX in db/migrations/0042_thumbnail_job_leases.sql for `WHERE status = 'queued' OR (status = 'running' AND (locked_until IS NULL OR locked_until < now())) ORDER BY created_at, id`"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "On shutdown the worker returns without releasing its claim, so an in-flight job stays 'running' until its lease expires (about 3 minutes). The old startup reset recovered it immediately, so each Recreate deploy now delays the retry. The nil return also hides whether an in-flight job was left behind.",
+   "evidence": "if ctx.Err() != nil {\n\t\t\treturn nil // shutting down: leave the lease to expire so another worker retries the job"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "A transient DB error from Complete, or a cancellation between the ctx.Err() check and Complete, makes Run return an error. Complete is not retried, and the job stays 'running' until its lease expires.",
+   "evidence": "err = w.store.Complete(ctx, job.ID, w.id, statusFor(runErr), errText(runErr))\n\t\tif errors.Is(err, jobs.ErrLeaseLost) {\n\t\t\tw.log.Warn(\"lease lost before completion\", \"job\", job.ID)\n\t\t} else if err != nil {\n\t\t\treturn fmt.Errorf(\"complete job %d: %w\", job.ID, err)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The prose says Complete requires the caller to still hold the lease, but the SQL checks only locked_by and status='running', not locked_until. An expired but unreclaimed lease can still be completed by its original holder. The outcome is harmless, but the description and ErrLeaseLost semantics do not match the code, and this case is untested.",
+   "evidence": "\"Complete requires the caller to still hold the lease.\" vs. \"WHERE id = $1 AND locked_by = $2 AND status = 'running'\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Stale-holder protection depends on w.id being unique per process. The diff does not show how w.id is defined, so if it is static, two workers could pass the locked_by check for each other's jobs once replicas scale out.",
+   "evidence": "ABSENT: definition or source of w.id in internal/worker; job, err := w.store.Claim(ctx, w.id, ...)"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The 'live worker never outlives its lease' invariant depends on render honoring jobCtx promptly and on Claim-to-Complete latency staying inside the 1-minute slack. Neither is tested. If either fails, a second worker can reclaim and render the same job concurrently. The deterministic output key makes this a redundant overwrite, not corruption, but the guarantee is asserted rather than enforced.",
+   "evidence": "\"the job context is cancelled at jobTimeout, so a live worker never outlives its lease\" / \"lease := w.jobTimeout+time.Minute // lease must outlive jobTimeout\""
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The rule that the lease must exceed jobTimeout lives only in a comment at the call site, spanning two packages with no shared constant or Store-side check. The definition of a claimable job also exists only in raw SQL, so future changes such as #215 must find and edit the SQL to stay consistent.",
+   "evidence": "job, err := w.store.Claim(ctx, w.id, w.jobTimeout+time.Minute) // lease must outlive jobTimeout"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "Store.Claim accepts zero or negative lease durations without validation. The new test relies on a negative lease to fake expiry, so misuse would be hard to spot.",
+   "evidence": "func (s *Store) Claim(ctx context.Context, workerID string, lease time.Duration) (Job, error) { ... // lease already expired"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "Lease loss is recorded only as a Warn log, with no metric or counter. Reclaim by another worker, and a claim-reclaim loop from a crashing job, are not visible to alerting.",
+   "evidence": "w.log.Warn(\"lease lost before completion\", \"job\", job.ID)"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "minor",
+   "claim": "The migration is forward-only with no down migration or rollback note. Rollback looks safe, because the old binary ignores the new nullable columns and its ResetRunning recovers any 'running' rows, but this is not documented.",
+   "evidence": "ALTER TABLE thumbnail_jobs ADD COLUMN locked_by text, ADD COLUMN locked_until timestamptz; (ABSENT: down migration or rollback note)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "The test named NeverHandsOutAJobTwice only counts total claims. It does not collect job IDs or assert distinctness, and it does not show that SKIP LOCKED contention occurred with 8 workers and no delay.",
+   "evidence": "claims.Add(1) ... if n := claims.Load(); n != 40 { ... } (ABSENT: distinct-ID check or contention count)"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "Every expired-lease reclaim increments attempts, including reclaims caused by a graceful shutdown or deploy. The counter the planned #215 cap will read is therefore inflated by infrastructure events, which could cause premature failure once the cap exists.",
+   "evidence": "SET status = 'running', locked_by = $1, locked_until = now() + make_interval(secs => $2), attempts = attempts + 1"
+  },
+  {
+   "lens": "ux-value",
+   "severity": "minor",
+   "claim": "The title says the change lets more than one worker run, but replica count stays at 1 and scale-out is deferred. Merging delivers no throughput or latency gain yet, and the title overstates the immediate effect.",
+   "evidence": "\"Replica count stays 1 here; scale-out and a poison-job attempts cap (#215) are separate changes.\""
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 77286,
+  "tokOut": 34865,
+  "usd": 0.020204180000000002,
+  "critMs": 60848
+ }
+}

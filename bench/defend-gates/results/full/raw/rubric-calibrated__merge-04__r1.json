@@ -1,0 +1,59 @@
+{
+ "approach": "rubric-calibrated",
+ "case": "merge-04",
+ "rep": 1,
+ "wallMs": 102034,
+ "verdict": "ATTACKS",
+ "confidence": 0.93,
+ "attacks": [
+  {
+   "lens": "reversibility",
+   "severity": "blocker",
+   "claim": "The up migration adds an empty `private_notes` column and drops `notes` without copying any data. Every existing user-written note is destroyed when the migration runs automatically on merge. The down migration re-adds an empty `notes` column, so the loss cannot be undone from the migration path.",
+   "evidence": "ALTER TABLE user_recipes ADD COLUMN private_notes text; ALTER TABLE user_recipes DROP COLUMN notes;  vs. PR text: \"Pure rename, no data change\""
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "The destructive migration runs automatically on deploy with no backup, snapshot, or dry-run step. Notes are stated to be unrecoverable elsewhere, so there is no recovery path if the drop runs.",
+   "evidence": "ABSENT: no backup or snapshot step. Context says \"notes are user-written free text that users cannot recover elsewhere\" and \"Migrations run automatically on deploy after merge to main.\""
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "During a rolling deploy, old app instances still query `ur.notes` after the migration drops that column, so those requests fail. The PR does not add an expand/contract sequence (add, dual-write, backfill, then drop) to avoid this.",
+   "evidence": "Diff: `SELECT ur.id, ur.recipe_id, r.title, ur.saved_at, ur.private_notes` replaces `ur.notes` in the same release as `DROP COLUMN notes` in 0087_private_notes.up.sql"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The new handler removes LIMIT from SQL and loads every saved row for the user, including free-text notes, into Node memory on each request, then slices in JavaScript. For users with more than 200k saved recipes this is far beyond the 300ms p99 budget and costs heavy memory per request.",
+   "evidence": "`WHERE ur.user_id = $1 ORDER BY ur.saved_at DESC, ur.id DESC`, with `[userId]` as the only parameter; `const page = rows.slice(start, start + limit);`"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "If the cursor row was unsaved between page requests (the exact scenario the PR claims to fix), `findIndex` returns -1, so `start` becomes 0. The client silently receives page one again, producing duplicates and possibly a loop.",
+   "evidence": "`const start = cursor ? rows.findIndex((r) => r.id === cursor) + 1 : 0;`"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR says the client already sends `cursor` from `nextCursor`, but the endpoint's current response has no `nextCursor` field, so the client cannot have been reading it from this endpoint. No client change is in the diff. Removing offset support may break existing clients that page by offset.",
+   "evidence": "Pre-PR handler: `res.json({ items: rows });` vs. PR text: \"The client already sends `cursor` from the previous page's `nextCursor`.\""
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The diff changes only the migration, `saved.ts`, and its test. Other code paths that read or write `user_recipes.notes` are not shown, so any remaining references would fail after the drop.",
+   "evidence": "ABSENT: no grep or list of other `notes` references in the artifact"
+  }
+ ],
+ "usage": {
+  "calls": 1,
+  "tokIn": 3589,
+  "tokOut": 3512,
+  "usd": 0.00227828,
+  "critMs": 17573
+ }
+}

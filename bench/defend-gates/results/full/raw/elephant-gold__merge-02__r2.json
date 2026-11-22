@@ -1,0 +1,89 @@
+{
+ "approach": "elephant-gold",
+ "case": "merge-02",
+ "rep": 2,
+ "wallMs": 166126,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "privacy",
+   "severity": "blocker",
+   "claim": "The new duplicate-ballot log line writes the voter's email together with the chosen option to application logs. Those logs ship to a third-party host readable by the whole support team, creating a permanent record that links a named resident to their vote outside the tally. This breaks the anonymity guarantee and cannot be undone once shipped.",
+   "evidence": "logger.info(\"duplicate ballot rejected measure=%s voter=%s choice=%s\", measure_id, user.email, body.choice.value,)"
+  },
+  {
+   "lens": "authz",
+   "severity": "blocker",
+   "claim": "The results export route has no authentication or role check, although the PR describes it as admin-only and the other admin routes use Depends(require_role(\"admin\")). Anyone who can reach the endpoint can download tallies.",
+   "evidence": "@router.get(\"/measures/{measure_id}/results.csv\") async def export_results( measure_id: int, db: Session = Depends(get_db),):"
+  },
+  {
+   "lens": "spec",
+   "severity": "major",
+   "claim": "The export never checks whether the measure is closed, so it returns live, partial tallies for open measures. The PR says the CSV is for closed measures, and an interim count could be attached to a council packet as if it were final. The disclosure of interim results cannot be taken back.",
+   "evidence": "measure = db.get(Measure, measure_id)\n    if measure is None:\n        raise HTTPException(404)\n    counts = dict("
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "Counts are keyed by whatever type the query returns for Ballot.choice, but the loop looks them up with Choice enum members via counts.get(choice, 0). If the types do not compare equal, every count silently becomes 0 and the CSV reports a wrong tally with no error. The artifact does not show the Choice or Ballot.choice definitions, and the PR adds no test that asserts non-zero counts.",
+   "evidence": "counts = dict(db.query(Ballot.choice, func.count(Ballot.id))...)\n    for choice in Choice:\n        writer.writerow([measure.slug, choice.value, counts.get(choice, 0)])  ABSENT: definition of Choice and the type of Ballot.choice column"
+  },
+  {
+   "lens": "cost",
+   "severity": "major",
+   "claim": "The duplicate-ballot log line fires on every rejected re-submission with no rate limit, sampling, or deduplication. One verified account can loop cast_ballot and generate unbounded log lines, which the third-party host likely bills by ingested volume.",
+   "evidence": "logger.info(\"duplicate ballot rejected ...\") inside cast_ballot, with no rate limit or sampling anywhere in the diff"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The PR adds no tests for the export's access control, its closed-state behavior, its counts, or the new log output. Each of the behavior changes is asserted without evidence.",
+   "evidence": "ABSENT: any test file, fixture, or sample CSV in the diff"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The new async def export runs a synchronous SQLAlchemy query directly on the event loop, which blocks other requests, including ballot casting, under load.",
+   "evidence": "async def export_results(...): ... counts = dict(db.query(Ballot.choice, func.count(Ballot.id))...all() ; ABSENT: run_in_threadpool or a sync def route"
+  },
+  {
+   "lens": "injection",
+   "severity": "minor",
+   "claim": "The measure slug is written unescaped into the CSV cell and the quoted Content-Disposition filename. A slug beginning with = or containing quotes or CR/LF could cause spreadsheet formula execution or header manipulation. Risk is limited because the slug is admin-controlled.",
+   "evidence": "writer.writerow([measure.slug, choice.value, counts.get(choice, 0)]) ... headers={\"Content-Disposition\": f'attachment; filename=\"{measure.slug}-results.csv\"'}"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "The log line calls .value on body.choice. If BallotIn.choice is not an Enum, this raises AttributeError and turns the intended 409 into a 500 on the rejection path.",
+   "evidence": "body.choice.value,\n        )\n        raise HTTPException(409, \"already voted\")"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The duplicate diagnostics only cover the Receipt lookup path. Concurrent submissions from the same voter can both pass the check and then fail at commit, surfacing as an unhandled error rather than the logged 409, and the new log line does not cover that path.",
+   "evidence": "if db.query(Receipt).filter_by(token=receipt).first(): ... db.add(Receipt(token=receipt)) ; ABSENT: IntegrityError handling around db.commit() and any unique constraint on Receipt.token"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "The export runs a GROUP BY over the full Ballot table filtered by measure_id, and the diff adds no index on Ballot.measure_id to keep it fast as ballot count grows.",
+   "evidence": "ABSENT: no index or migration on Ballot.measure_id is included in the diff."
+  },
+  {
+   "lens": "maintainability",
+   "severity": "minor",
+   "claim": "The PR bundles an admin results export and a duplicate-ballot log line under one title, which makes independent review, revert, or bisect harder. The export also lives in the voter-facing ballots router.",
+   "evidence": "TITLE: Measure results CSV export and duplicate-ballot logging"
+  }
+ ],
+ "usage": {
+  "calls": 17,
+  "tokIn": 47348,
+  "tokOut": 21434,
+  "usd": 0.013079480000000001,
+  "critMs": 16763
+ }
+}

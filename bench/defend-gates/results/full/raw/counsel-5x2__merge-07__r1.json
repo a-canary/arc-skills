@@ -1,0 +1,131 @@
+{
+ "approach": "counsel-5x2",
+ "case": "merge-07",
+ "rep": 1,
+ "wallMs": 411752,
+ "verdict": "ATTACKS",
+ "confidence": 0.95,
+ "attacks": [
+  {
+   "lens": "correctness",
+   "severity": "blocker",
+   "claim": "partition_date() switched from UTC to naive local time. Workers run TZ=America/Los_Angeles and the job fires at 01:30 UTC, which is the previous calendar day in Los Angeles, so dt= partitions are off by one against the UTC dt that dashboards read.",
+   "evidence": "-    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n+    return datetime.now().strftime(\"%Y-%m-%d\")"
+  },
+  {
+   "lens": "reliability",
+   "severity": "blocker",
+   "claim": "write_success_marker runs unconditionally after the loop, even when failed > 0. Dashboards read the partition as soon as _SUCCESS appears, so a partial partition is published as complete.",
+   "evidence": "except Exception:\n            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n            failed += 1\n    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+  },
+  {
+   "lens": "security",
+   "severity": "blocker",
+   "claim": "src.stem comes from partner-chosen SFTP filenames and is interpolated into a shell=True command on workers that hold GCS write credentials. Filenames containing shell metacharacters such as $(...), backticks, quotes or ';' would execute on the worker. The artifact shows no validation.",
+   "evidence": "f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\",\n        shell=True,"
+  },
+  {
+   "lens": "reversibility",
+   "severity": "major",
+   "claim": "Object names are deterministic, nothing clears the dt prefix before a rerun, and partitions are written in place with no staging prefix or atomic swap. A rerun that produces fewer chunks leaves stale higher-numbered chunks beside fresh ones, duplicating rows in a partition readers may already have consumed. Failed mid-file runs also leave uploaded chunks in GCS and local chunks in work_dir.",
+   "evidence": "path = out_dir / f\"{src.stem}-{len(chunks):04d}.csv.gz\"  and  for chunk in _write_chunks(src, work_dir):\n                _upload(chunk, partner, dt, src.stem)\n                chunk.unlink()"
+  },
+  {
+   "lens": "scale",
+   "severity": "major",
+   "claim": "The 'streaming' design does not bound local disk. _write_chunks writes every gzip chunk for a source file to work_dir and only returns the list after the whole file is processed, so the full compressed file sits on local disk before any upload starts. An exception mid-parse also leaves the open gzip handle unclosed and the written chunks orphaned, and nothing checks disk space.",
+   "evidence": "chunks: list[Path] = []\n    with src.open(newline=\"\") as fh:  ...  if out:\n            out.close()\n    return chunks"
+  },
+  {
+   "lens": "maintainability",
+   "severity": "major",
+   "claim": "The object layout changed from raw/{partner}/dt=/{stem}.csv.gz to raw/{partner}/dt=/{stem}/{stem}-NNNN.csv.gz, and ingest_partner gained a required work_dir argument. Downstream readers and callers are not shown as updated, and the PR gives no compatibility note, so readers may miss the new data or double-count re-run partitions.",
+   "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\"  and  def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None:"
+  },
+  {
+   "lens": "correctness",
+   "severity": "major",
+   "claim": "'Schema normalisation is unchanged' is not supported. normalise_row now gets csv.DictReader dicts (empty cells are '') instead of pandas rows (empty cells are NaN), which may change output for empty fields. The DictWriter header is frozen from the first normalised row, so a later row with extra keys raises ValueError mid-file and fails the whole file, leaving a partial chunk. The old pandas path handled this without failing.",
+   "evidence": "norm = normalise_row(row)\n            if writer is None:\n                writer = csv.DictWriter(out, fieldnames=list(norm.keys()))\n            writer.writerow(norm)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "Per-file failures are logged and counted but never raised. The task returns normally and Airflow reports success, so a run with missing partner files raises no alert and no non-zero exit.",
+   "evidence": "log.info(\"partner=%s dt=%s ok=%d failed=%d\", partner, dt, ok, failed)"
+  },
+  {
+   "lens": "reliability",
+   "severity": "major",
+   "claim": "The gsutil subprocess has no timeout or retry, and -q suppresses its output. A hung upload can stall the nightly task indefinitely, and a transient failure surfaces only as a generic CalledProcessError that does not name the object.",
+   "evidence": "subprocess.run(f\"gsutil -q -o GSUtil:parallel_composite_upload_threshold=150M cp {local} {dest}\", shell=True, check=True)"
+  },
+  {
+   "lens": "evidence",
+   "severity": "major",
+   "claim": "The OOM fix, the composite-upload speedup and the output parity with the old pandas output are asserted without a benchmark, a memory profile on the 3.1 GB Northwind feed, a staging run, or any test. The PR diff contains no test changes, and the new paths (streaming, TZ change, failure counting, marker-on-failure) are untested.",
+   "evidence": "ABSENT: benchmark or memory measurement for the 3.1 GB feed, parity test between old and new output, test changes in the diff; \"parallel composite uploads are much faster than the client library for multi-GB objects\""
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "A header-only or empty source yields zero chunks and is still counted as ok, and the marker is then written, so an empty drop looks identical to a successful load.",
+   "evidence": "for chunk in _write_chunks(src, work_dir):\n                _upload(chunk, partner, dt, src.stem)\n                chunk.unlink()\n            ok += 1"
+  },
+  {
+   "lens": "correctness",
+   "severity": "minor",
+   "claim": "Source and gzip output files are opened without an explicit encoding, so decoding depends on worker locale. The old pandas read_csv path read UTF-8 by default, so non-ASCII partner data may fail or be mangled.",
+   "evidence": "with src.open(newline=\"\") as fh:  and  out = gzip.open(path, \"wt\", newline=\"\")"
+  },
+  {
+   "lens": "evidence",
+   "severity": "minor",
+   "claim": "CHUNK_ROWS=500_000 may produce chunks well below the 150M composite threshold, in which case the parallel path never fires. No chunk size estimate is given.",
+   "evidence": "CHUNK_ROWS = 500_000  with  -o GSUtil:parallel_composite_upload_threshold=150M"
+  },
+  {
+   "lens": "privacy",
+   "severity": "minor",
+   "claim": "Unuploaded partner CSV chunks, which can contain personal data, stay in work_dir after a failure because unlink runs only after a successful upload. log.exception tracebacks from normalise_row may also include row values.",
+   "evidence": "chunk.unlink() only after _upload; except Exception: log.exception(\"partner=%s file=%s failed\", partner, src.name)"
+  },
+  {
+   "lens": "cost",
+   "severity": "minor",
+   "claim": "Parallel composite uploads create temporary component objects in the raw bucket. No lifecycle rule or cleanup is described, so failed runs can leave storage cost behind.",
+   "evidence": "-o GSUtil:parallel_composite_upload_threshold=150M; ABSENT: lifecycle rule or cleanup for composite components in acme-retail-raw"
+  },
+  {
+   "lens": "scale",
+   "severity": "minor",
+   "claim": "Files are processed serially with no throughput or wall-clock budget against the 01:30 UTC window, and each chunk costs a separate gsutil process spawn. A larger feed could overrun the window with no progress metric.",
+   "evidence": "for src in sorted(drop_dir.glob(\"*.csv\")):  ...  ABSENT: throughput or wall-clock budget"
+  },
+  {
+   "lens": "reliability",
+   "severity": "minor",
+   "claim": "The new runtime dependency on gsutil and on authenticated worker credentials is not checked. A missing binary fails every file and is counted as ordinary per-file failures.",
+   "evidence": "subprocess.run(f\"gsutil ...\", shell=True, check=True)  ABSENT: existence or auth check"
+  },
+  {
+   "lens": "other",
+   "severity": "minor",
+   "claim": "The broad except Exception catches programming errors such as a bad normalise_row signature and counts them as partner data failures, hiding them in the failure count.",
+   "evidence": "except Exception:\n            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n            failed += 1"
+  },
+  {
+   "lens": "security",
+   "severity": "minor",
+   "claim": "Workers hold write credentials for the whole raw bucket rather than raw/{partner}/. This predates the PR and is not introduced by it, but it widens the blast radius of any write-path bug.",
+   "evidence": "Context: workers \"hold GCS write credentials for the whole raw bucket\""
+  }
+ ],
+ "usage": {
+  "calls": 11,
+  "tokIn": 118822,
+  "tokOut": 54406,
+  "usd": 0.049204090000000006,
+  "critMs": 106501
+ }
+}

@@ -1,0 +1,179 @@
+{
+ "approach": "rubric-stop-early@v100",
+ "case": "merge-07",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "security",
+     "severity": "blocker",
+     "claim": "Partner-controlled filenames are interpolated into a shell command executed with shell=True, enabling arbitrary command injection (e.g., a file named `x; rm -rf /; #.csv`).",
+     "evidence": "subprocess.run(f\"gsutil -q ... cp {local} {dest}\", shell=True, check=True)"
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "partition_date() now uses local time (TZ=America/Los_Angeles) instead of UTC, so the dt partition written will not match the UTC date downstream dashboards expect.",
+     "evidence": "return datetime.now().strftime(\"%Y-%m-%d\")"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "write_success_marker is called unconditionally even when some files failed, so downstream consumers will treat a partial ingest as complete.",
+     "evidence": "write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1681,
+    "tokOut": 222,
+    "usd": 0,
+    "critMs": 39629
+   },
+   "wallMs": 61759
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Chunked upload creates subdirectories per source file but the _SUCCESS marker is written at the partition root, so downstream consumers expecting flat files at raw/{partner}/dt={dt}/{stem}.csv.gz will not find them.",
+     "evidence": "dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{src_name}/{local.name}\" and write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1849,
+    "tokOut": 122,
+    "usd": 0,
+    "critMs": 21988
+   },
+   "wallMs": 56355
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Multi-chunk files upload chunk 0 as {stem}-0000.csv.gz while single-chunk files upload as {stem}.csv.gz; downstream consumers reading the partition will either miss the chunked file entirely (expecting the original name) or silently read only the first 500k rows of a larger feed.",
+     "evidence": "path = out_dir / f\"{src.stem}-{len(chunks):04d}.csv.gz\" ... single = out_dir / f\"{src.stem}.csv.gz\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2036,
+    "tokOut": 140,
+    "usd": 0,
+    "critMs": 29101
+   },
+   "wallMs": 65737
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The consumer contract changed: files over 500k rows are now split into multiple objects (e.g., feed-0000.csv.gz, feed-0001.csv.gz) and the original filename no longer exists. The PR author explicitly admits they have not verified that downstream dashboard readers glob the partition prefix rather than looking up objects by original filename. If any reader uses the original filename, it will silently miss or truncate large feeds, and this is a breaking change to the partition layout.",
+     "evidence": "\"I have not verified that the dashboard readers glob the prefix, so please confirm that before merge. If any reader looks up objects by name, it needs updating in this PR or a follow-up.\""
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2206,
+    "tokOut": 177,
+    "usd": 0,
+    "critMs": 46043
+   },
+   "wallMs": 48470
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "partition_date() uses wall-clock time at job start, but a long-running ingest of multi-GB files can cross midnight UTC and write some files to yesterday's partition while the _SUCCESS marker goes to today's partition, splitting one logical partner drop across two dt= partitions and confusing downstream consumers.",
+     "evidence": "def partition_date() -> str:\\n    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 1988,
+    "tokOut": 120,
+    "usd": 0,
+    "critMs": 54077
+   },
+   "wallMs": 87133
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "maintainability",
+     "severity": "blocker",
+     "claim": "The PR changes the `ingest_partner` function signature from `(partner, drop_dir)` to `(partner, drop_dir, work_dir)` but does not update the Airflow task that calls it. The caller is not shown in the diff and is not updated, so the job will fail with a TypeError on the next run.",
+     "evidence": "def ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None: (new 3-arg signature) with no corresponding caller update shown in the diff"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2097,
+    "tokOut": 141,
+    "usd": 0,
+    "critMs": 18303
+   },
+   "wallMs": 18303
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "When work_dir is an explicit caller-supplied path, it is never cleaned up, so the largest compressed file (up to ~3.1 GB) is left on disk after every successful run, causing unbounded disk growth across nightly runs.",
+     "evidence": "`local.unlink()` only removes the file after upload; the work_dir itself is only removed in the `tempfile.TemporaryDirectory()` branch, and callers passing `work_dir` explicitly see no cleanup"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2312,
+    "tokOut": 125,
+    "usd": 0,
+    "critMs": 56542
+   },
+   "wallMs": 71651
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The streaming rewrite changes the normalized output schema when the source CSV has no rows. The old code used pandas' `apply(..., result_type=\"expand\")`, which always produced the full set of columns from `normalise_row` even for an empty DataFrame. The new code only writes a header after the first row is seen (`if writer is None:`), so an empty input file produces a gzip with no header at all. Downstream consumers reading the partition will see a headerless file and likely fail or misparse it. This is a regression for any partner drop that can be empty.",
+     "evidence": "if writer is None:\n                writer = csv.DictWriter(out, fieldnames=list(norm.keys()))\n                writer.writeheader()"
+    }
+   ],
+   "usage": {
+    "calls": 1,
+    "tokIn": 2523,
+    "tokOut": 180,
+    "usd": 0,
+    "critMs": 46534
+   },
+   "wallMs": 46534
+  }
+ ],
+ "artifact": "PR #58: Stream partner feeds instead of loading into pandas; upload with gsutil\n\nThe Northwind feed hit 3.1 GB last week and the ingest task OOM-killed the worker.\nThis rewrites `ingest_partner` to stream rows through the normaliser into a gzip CSV on local disk, then push it with gsutil (parallel composite uploads are much faster than the client library for multi-GB objects).\ngsutil is invoked with an argument list and no shell, so partner-chosen filenames are never interpreted by a shell.\n`partition_date()` stays on UTC, matching the dt=YYYY-MM-DD (UTC) partitions the dashboards read. It is called exactly once per `ingest_partner` call, and that single `dt` value is used for every file upload and for the `_SUCCESS` marker. A run that crosses midnight UTC therefore cannot split a partner's drop across two partitions. (This was also true of the old code. The job starts at 01:30 UTC, so a crossing would need a run of more than 22 hours.)\n**The partition layout and consumer contract are unchanged.** Each source file is still uploaded as exactly one object, `raw/{partner}/dt={dt}/{stem}.csv.gz`, at the same level as the `_SUCCESS` marker, with no splitting and no per-file subdirectories. Streaming alone fixes the OOM, because rows are written incrementally and memory use no longer depends on file size. Splitting large files into chunks would have changed the object names and forced every reader to glob the prefix, and I could not verify that they do. So this PR does not split. gsutil's parallel composite upload still produces a single object under the original name. Any reader that looks up objects by `{stem}.csv.gz` keeps working.\n**The `ingest_partner` call signature is backward compatible.** The new `work_dir` parameter is optional (default `None`). Existing callers that pass `(partner, drop_dir)` keep working unchanged, so the Airflow task needs no edit. When `work_dir` is omitted, a temporary directory is created for the call and removed afterwards. Callers may pass `work_dir` explicitly to put scratch files on a specific volume.\n**Scratch-file cleanup.** The worker needs local disk (in `work_dir`, or the system temp dir by default) for the largest compressed output, one file at a time. Each file's scratch output is deleted in a `finally` block as soon as that file is done, whether it succeeded or failed. This includes a partially written gzip or a failed upload, so nothing is left behind in a caller-supplied `work_dir` after a run. A successful file was already deleted right after upload, so successful runs never accumulated files. The gap was failure paths, which are now covered. A caller-supplied `work_dir` itself is not removed, since the caller owns it. Only the files this call created in it are.\nPer-file failures no longer abort the remaining files for a partner; they are logged and counted. If any file failed, the `_SUCCESS` marker is not written and the task raises at the end, so downstream consumers never see a partial partition as complete.\nSchema normalisation is unchanged (same `normalise_row`).\n\ndiff --git a/pipelines/partner_ingest.py b/pipelines/partner_ingest.py\nindex a17c3e2..f48b0d9 100644\n--- a/pipelines/partner_ingest.py\n+++ b/pipelines/partner_ingest.py\n@@ -1,52 +1,80 @@\n+import csv\n+import gzip\n import logging\n+import subprocess\n+import tempfile\n from datetime import datetime, timezone\n from pathlib import Path\n\n-import pandas as pd\n-from google.cloud import storage\n-\n from pipelines.normalise import normalise_row\n from pipelines.markers import write_success_marker\n\n log = logging.getLogger(__name__)\n BUCKET = \"acme-retail-raw\"\n\n\n def partition_date() -> str:\n     return datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n\n\n-def ingest_partner(partner: str, drop_dir: Path) -> None:\n-    dt = partition_date()\n-    client = storage.Client()\n-    bucket = client.bucket(BUCKET)\n-    for src in sorted(drop_dir.glob(\"*.csv\")):\n-        df = pd.read_csv(src, dtype=str)\n-        df = df.apply(normalise_row, axis=1, result_type=\"expand\")\n-        blob = bucket.blob(f\"raw/{partner}/dt={dt}/{src.stem}.csv.gz\")\n-        blob.upload_from_string(df.to_csv(index=False, compression=\"gzip\"))\n-        log.info(\"uploaded %s rows=%d\", src.name, len(df))\n-    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")\n+def _write_gzip(src: Path, out_dir: Path) -> Path:\n+    # One output file per source file, named {stem}.csv.gz as before.\n+    # Rows are streamed, so memory use is independent of file size.\n+    out_path = out_dir / f\"{src.stem}.csv.gz\"\n+    with src.open(newline=\"\") as fh, gzip.open(out_path, \"wt\", newline=\"\") as out:\n+        reader = csv.DictReader(fh)\n+        writer = None\n+        for row in reader:\n+            norm = normalise_row(row)\n+            if writer is None:\n+                writer = csv.DictWriter(out, fieldnames=list(norm.keys()))\n+                writer.writeheader()\n+            writer.writerow(norm)\n+    return out_path\n+\n+\n+def _upload(local: Path, partner: str, dt: str) -> None:\n+    # Flat layout: objects live directly under the partition prefix, next to\n+    # the _SUCCESS marker, as before.\n+    dest = f\"gs://{BUCKET}/raw/{partner}/dt={dt}/{local.name}\"\n+    # Argument list, no shell: partner-controlled filenames must never be\n+    # interpreted by a shell.\n+    subprocess.run(\n+        [\n+            \"gsutil\",\n+            \"-q\",\n+            \"-o\",\n+            \"GSUtil:parallel_composite_upload_threshold=150M\",\n+            \"cp\",\n+            str(local),\n+            dest,\n+        ],\n+        check=True,\n+    )\n+\n+\n+def ingest_partner(partner: str, drop_dir: Path, work_dir: Path | None = None) -> None:\n+    # work_dir is optional so existing (partner, drop_dir) callers keep working.\n+    if work_dir is None:\n+        with tempfile.TemporaryDirectory() as tmp:\n+            return _ingest_partner(partner, drop_dir, Path(tmp))\n+    return _ingest_partner(partner, drop_dir, work_dir)\n+\n+\n+def _ingest_partner(partner: str, drop_dir: Path, work_dir: Path) -> None:\n+    dt = partition_date()  # computed once: all files and _SUCCESS share this dt, even if the run crosses midnight UTC\n+    ok = failed = 0\n+    for src in sorted(drop_dir.glob(\"*.csv\")):\n+        # Same path _write_gzip produces; known up front so cleanup also\n+        # covers a partially written file when the write itself fails.\n+        local = work_dir / f\"{src.stem}.csv.gz\"\n+        try:\n+            _write_gzip(src, work_dir)\n+            _upload(local, partner, dt)\n+            ok += 1\n+        except Exception:\n+            log.exception(\"partner=%s file=%s failed\", partner, src.name)\n+            failed += 1\n+        finally:\n+            # Always remove the scratch file (success, write failure, or\n+            # upload failure) so a caller-supplied work_dir does not\n+            # accumulate multi-GB leftovers.\n+            local.unlink(missing_ok=True)\n+    log.info(\"partner=%s dt=%s ok=%d failed=%d\", partner, dt, ok, failed)\n+    if failed:\n+        # Do not publish _SUCCESS for a partial partition.\n+        raise RuntimeError(\n+            f\"partner={partner} dt={dt}: {failed} file(s) failed; _SUCCESS not written\"\n+        )\n+    write_success_marker(BUCKET, f\"raw/{partner}/dt={dt}/\")",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 21536,
+  "tokOut": 20306,
+  "usd": 0.289176,
+  "critMs": 117353
+ },
+ "status": "cap"
+}

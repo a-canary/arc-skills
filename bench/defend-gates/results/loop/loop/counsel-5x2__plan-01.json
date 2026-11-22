@@ -1,0 +1,1229 @@
+{
+ "approach": "counsel-5x2",
+ "case": "plan-01",
+ "rounds": [
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "scale",
+     "severity": "blocker",
+     "claim": "The chain_poller design requires 160 req/min (40 underlyings × 15 s polling), which exceeds the committed Starter tier's 5 req/min limit by about 32x and also exceeds Growth's 100 req/min. The poller cannot run as specified on any tier the plan names.",
+     "evidence": "\"Starter | $79 | 5 req/min | 15-min delayed\" and \"40 underlyings => 160 requests/min during RTH\" and \"We stay on Starter.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "blocker",
+     "claim": "Starter quotes are 15-minute delayed, so the delta, extrinsic, and gap triggers would evaluate stale market state. The plan's core premise of rolling intraday on live state is contradicted by its own data source.",
+     "evidence": "\"Starter | $79 | 5 req/min | 15-min delayed\" alongside \"fetch a real-time option chain snapshot\" and \"rolls short calls the moment a roll trigger fires\""
+    },
+    {
+     "lens": "cost",
+     "severity": "blocker",
+     "claim": "The $139 total assumes Starter, which cannot meet the design. The real-time tier that would be needed (Growth at $199, still short of 160 req/min; Pro at $499) pushes the total to $259 or $559 with VPS, breaching the agreed $250 cap.",
+     "evidence": "\"Monthly run cost: Optiq Starter $79 + existing VPS $60 = $139, comfortably inside the $250 cap.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "blocker",
+     "claim": "Migration 0042 runs in place on prod with the backfill and DROP COLUMN of roll_history in one transaction, with no snapshot, dry run, rehearsal, or down-migration. Entries older than 90 days are discarded permanently and no rollback path is stated.",
+     "evidence": "\"Migration 0042 runs in-place against prod Monday 08:00 ET (pre-market).\" and \"In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.\" and \"older entries are not needed by roll_engine.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The +3.8% net APR headline is presented as the expected impact but has no backtest, paper result, or cost model netting spread and slippage. It rests on anecdotal desk notes and an unsourced claim about peer funds, so it should be treated as a hypothesis.",
+     "evidence": "\"Expected impact: +3.8% net APR vs. EOD rolling (see §2).\" and \"Intraday rolling is also standard practice among the option-income funds we follow.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The claim that roll_eod.py remains a working fallback through week 4 is unverified. The plan does not state whether roll_eod.py reads positions.roll_history, which is dropped in week 1. This must be checked before the migration runs.",
+     "evidence": "\"roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path through week 4.\" alongside \"In the same transaction, ALTER TABLE positions DROP COLUMN roll_history.\" (ABSENT: whether roll_eod.py reads roll_history)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The 60 s heartbeat gate covers only the broker. There is no market-data freshness threshold, no HTTP 429 or backoff handling, and no gate on the 20 s re-price loop, so triggers can fire on stale or failed chain snapshots.",
+     "evidence": "\"roll_engine stops emitting intents when the last successful broker heartbeat is > 60 s old.\" ABSENT: chain-snapshot staleness threshold, 429/backoff handling"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Combo-order failure handling is unspecified. If cancel fails or races a fill after three re-prices, the account can be left with a closed call and no new short, or a doubled position. No broker-position reconciliation is described.",
+     "evidence": "\"re-priced every 20 s up to 3 times, then cancelled.\" ABSENT: behaviour on cancel failure or fill race, reconciliation against broker positions"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "ROLLER_KILL is an env var read each loop with no stated fail-safe default on read failure, no owner, and no mechanism for a running process to pick up changes. A kill switch that fails open is an order-loop hazard.",
+     "evidence": "\"plus a ROLLER_KILL env switch read on every loop.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The trigger rules are underspecified. It is unclear whether the 4% gap uses intraday high/low or close, delta at 0.70 has no hysteresis and can cause repeated rolls, and the debit-roll rule and tie-break between triggers are undefined.",
+     "evidence": "\"Underlying gaps > 4% through strike within the session.\" and \"Short call delta >= 0.70\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The loop caps can block rolls the triggers require. One roll per contract per day can stop a needed roll after a cancelled attempt, 8 per account per day can bind on high-volatility days across 40 names, and it is unstated whether re-prices count toward the caps.",
+     "evidence": "\"max 1 roll per contract per day and max 8 roll orders per account per day\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The 30-day live success criterion cannot statistically separate a 3.8% APR delta from noise across about 40 names, and paper mode measures intent agreement rather than P&L, so the gate is not decidable as written.",
+     "evidence": "\"Success criterion: realized net APR over the first 30 live days >= EOD baseline + 3.8%.\" and \"compare intents vs. EOD decisions daily.\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "Two engineers over four weeks must deliver a new poller, a new engine, an order-router extension, a prod migration, paper mode, and a live cutover with no schedule slack, and the plan is marked ready for dispatch despite the contradictions above.",
+     "evidence": "\"Build: 4 weeks, 2 engineers\" and \"Status: ready for dispatch\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "The plan is marked ready for dispatch while its own data-feed, budget, and migration assumptions contradict each other. It should be reopened rather than dispatched.",
+     "evidence": "\"Status: ready for dispatch\" alongside \"Starter | $79 | 5 req/min | 15-min delayed\" and \"160 requests/min\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Chain snapshots stored every 15 s across 40 names and two expiries have no retention or pruning policy, so storage and disk risk grow without bound on a single VPS.",
+     "evidence": "ABSENT: retention or pruning policy for chain snapshots."
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "All option quotes depend on a single vendor with no fallback feed or exit path, so a tier change or outage halts the engine.",
+     "evidence": "\"Current vendor: Optiq Data.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The plan does not check whether Starter delayed quotes may be used for live order decisions under the vendor licence, nor reference a trading-policy or broker-agreement check for automated option orders.",
+     "evidence": "ABSENT: vendor licence/ToS review and automated-trading policy review."
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Storage, rotation, and scoping of Optiq and broker credentials for chain_poller and order_router are not specified.",
+     "evidence": "ABSENT: credential storage, scoping, and rotation for broker and Optiq keys."
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "The rolls and roll_intents tables hold account-level trade history with no retention or access policy.",
+     "evidence": "ABSENT: retention policy for rolls and roll_intents."
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 113291,
+    "tokOut": 39435,
+    "usd": 0.04061239,
+    "critMs": 64298
+   },
+   "wallMs": 68165
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "Growth at $259/month breaches the agreed $250 cap by $9, and none of the three Week 0 options is chosen or shown to be feasible. Option 1 (broker-supplied real-time chains at no cost) is unsourced, and broker order, re-price, and cancel fees are not budgeted against the gap.",
+     "evidence": "\"Growth ... totals **$259/month, which exceeds the agreed $250 cap by $9.**\" ABSENT: recorded owner decision in §4 and any broker fee estimate"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The 45 s freshness window is tight against a 30 s poll. A single missed or 429-delayed poll makes snapshots stale, and more than 5 stale underlyings halts intent emission for all 40 names, so routine rate-limit backoff can stop the engine.",
+     "evidence": "\"ignores any snapshot older than 45 s (by vendor timestamp, not receive time)\" and \"Repeated staleness on more than 5 underlyings halts intent emission and alerts.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "The plan claims the poller 'never exceeds the tier limit', but the only mechanism is reactive 429 backoff with no pre-send limiter. Order-status queries, 5-minute reconciliation calls, and retries share the 20 req/min headroom, and that headroom is not budgeted.",
+     "evidence": "\"This fits Growth's 100 req/min with headroom for retries. It handles HTTP 429 with exponential backoff and jitter and never exceeds the tier limit.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The kill switch treats an unreadable or stale roller_control row as killed and cancels open orders, but no process is defined to write or refresh that row. The same Postgres instance backs the engine, so a brief DB fault could cancel in-flight combos, create 'status unknown' states, and lock contracts. Without a heartbeat writer the engine may self-halt.",
+     "evidence": "\"if the row cannot be read, is missing, or is older than 15 s, the engine treats it as killed ... and open orders are cancelled.\" \"Setting the flag is documented in the runbook.\" ABSENT: writer or heartbeat for roller_control"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "roller_control is the global kill and unlock switch, but it has no write-principal model, role restriction, or audit trail. Anyone with DB write access can halt or re-enable live order submission silently.",
+     "evidence": "\"read from a single Postgres row (`roller_control`), polled every loop\" ABSENT: write permissions, principals, or audit logging"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "A contract locked after unknown order status, partial status, or a position mismatch has no unlock procedure, owner, or timeout. Late fills or a doubled short after the lock have no detection path, so a short call can sit unmanaged through expiry or assignment.",
+     "evidence": "\"the contract is locked from further automated orders, ROLLER_KILL is set for that account, and a human is paged.\" ABSENT: unlock procedure, owner, timeout, or late-fill detection"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback path does not cover in-flight combo orders, needs_review intents, locked contracts, or the dual-written roll_history/rolls state when ROLLER_V2 is flipped. The written down-migration ('drop the new tables') would also destroy rolls rows already written by the live engine.",
+     "evidence": "\"roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path.\" \"a written down-migration (drop the new tables)\" ABSENT: in-flight order handling, export step, or position-ownership rule at flag flip"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "The reconciliation job that keeps roll_history and rolls in sync during dual-write is absent from the §3 architecture and the §6 week-by-week rollout. Its owner, build week, and failure behaviour are undefined, even though it governs the fallback path.",
+     "evidence": "\"a reconciliation job keeps rolls in sync until 0043\" ABSENT: this job in §3 or §6"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The roll-target rule is not implementable. 'Credit' is undefined (net of buy-back, at mid, or at limit), and there is no branch when neither candidate reaches the $0.05 threshold. Combined with the debit-roll rule, a gap or delta trigger has no defined resolution when the only target is a debit.",
+     "evidence": "\"Roll target: same strike +1 expiry, or next strike up if the credit is >= $0.05.\" \"Debit rolls*: the engine never submits a net-debit roll automatically.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Early assignment and ex-dividend exercise are not handled. The delta >= 0.70 trigger selects deep-ITM short calls, which are the most likely to be exercised early, and reconciliation only locks and alerts. No dividend-date input exists.",
+     "evidence": "\"Any mismatch locks the affected contract and alerts.\" ABSENT: assignment-before-roll, early-exercise, or ex-dividend handling"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Paper mode is defined as 'no orders', but it runs through the same extended order_router, and no mechanism blocks broker submission. A misconfigured flag could send live orders during the evaluation period.",
+     "evidence": "\"paper mode (RollIntent written, no orders)\" ABSENT: enforcement that blocks broker submission in paper mode"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The plan says combo orders are all-or-none at the broker, yet §3 handles 'partial' as a status. The all-or-none assumption is unverified, and the partial branch may be dead code or may be needed. This is a verification item, not a design contradiction.",
+     "evidence": "\"combo orders are all-or-none at the broker\" vs \"Status unknown, partial, or position mismatch\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Re-price checks run only every 20 s, so a working combo can remain live after its trigger or freshness basis has lapsed. The plan does not say how the 2-snapshot hysteresis resets across cancel-and-retry.",
+     "evidence": "\"Each re-price re-checks the data freshness gate, the kill switch, and that the trigger still holds\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The extrinsic trigger uses a fixed $0.10 threshold regardless of strike, price, or DTE, so it will behave inconsistently across a 40-name basket.",
+     "evidence": "\"Extrinsic trigger: DTE <= 5 and extrinsic value < $0.10.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "Freshness is judged on vendor timestamps while the loop runs on local time. Clock skew is not measured or bounded, so stale data could pass or fresh data could be rejected.",
+     "evidence": "\"by vendor timestamp, not receive time\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The success criterion cannot be decided as written. 'Material loss' is undefined, the sample-size basis is not given, and an insufficient sample extends the observation period with no time cap.",
+     "evidence": "\"a 90% confidence interval that excludes a material loss\" \"at least 60 paired rolls\" \"extend the observation period rather than decide early\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The paired net-credit comparison rests on simulated spread and slippage fills that the plan never calibrates against real data. Paper mode produces no real fills.",
+     "evidence": "\"simulated net P&L (including modeled spread and slippage)\" ABSENT: fill-model calibration or validation data"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The go/no-go decision depends on paper-mode evidence, but the schedule rule cuts paper-mode reporting first if the build slips. The gate could be decided without the data it requires.",
+     "evidence": "\"If these slip, cut paper-mode reporting before cutting any safety item.\" vs \"End of week 4: go/no-go review on paper results.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Paging, manual handling of blocked intents, and the on-call path have no escalation chain, response time, coverage model, or owner for a single-VPS operation. Blocked deep-ITM rolls can be assigned while they wait.",
+     "evidence": "\"Owner: trading-infra on-call.\" \"a human is paged.\" \"records the blocked intent so required rolls are handled manually\" ABSENT: escalation, SLA, or queue owner"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The 60 s broker-heartbeat halt has no defined probe or interval, so the threshold cannot be implemented or tested as written.",
+     "evidence": "\"when the last successful broker heartbeat is > 60 s old\" (no probe specified)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Submission caps count every attempt, including cancelled and re-priced ones. Routine cancel-and-retry can exhaust the 3-per-contract submission budget and push a legitimate roll to manual handling.",
+     "evidence": "\"at most 3 order submissions per contract per day and 24 per account per day. Hitting any cap blocks automation\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Automated option order submission with re-prices every 20 s has no check against broker automation terms, order-rate policy, algorithmic-trading disclosure, or order-record retention for a family office. Automated use of Optiq real-time quotes is also unreviewed against vendor licence terms.",
+     "evidence": "ABSENT: broker automation terms, order-rate policy, order-record retention, or Optiq licence review"
+    },
+    {
+     "lens": "schedule",
+     "severity": "major",
+     "claim": "Scope is large for two engineers in four weeks. Week 1 carries the migration, poller, and engine skeleton, and Weeks 2-3 carry the safety-critical router, reconciliation, and kill switch. The plan gives no sizing and no contingency if the Week 0 gate slips.",
+     "evidence": "\"Schedule: scope is large for 2 engineers in 4 weeks.\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The Week 0 gate has no decision deadline, so the project can sit blocked while engineers wait.",
+     "evidence": "\"NOT ready for dispatch. Blocked on the data-feed and budget decision in §4.\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Two roll engines and a sync job will coexist behind a flag with no sunset condition, so every future roll change may need to touch two code paths.",
+     "evidence": "\"roll_eod.py stays deployed behind ROLLER_V2=false\" \"until 0043\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "The 2 req/min per underlying load caps the book near 50 held names on Growth. The plan gives no scaling path, and the disk alert is a percentage of an unstated volume size.",
+     "evidence": "\"40 underlyings => 80 req/min.\" \"a disk-usage alert fires at 70% of the volume\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "roll_intents has no retention or growth bound. Only chain_snapshot_log is pruned.",
+     "evidence": "\"Rows are pruned after 14 days by a daily job\" applies to chain_snapshot_log only; ABSENT: roll_intents retention"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Credential storage, rotation, and access scoping for the Optiq and broker clients are not described, although the order path depends on them.",
+     "evidence": "ABSENT: credential storage and access scoping for Optiq and broker clients"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Vendor data feeds a live order path with no sanity bounds (crossed, zero-bid, or implausible quotes).",
+     "evidence": "\"Data freshness gate: roll_engine ignores any snapshot older than 45 s\" with no price-validity check"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "rolls and roll_intents hold account-linked position and trade history with no retention period or access limit. Only chain_snapshot_log has a prune rule.",
+     "evidence": "\"Rows are pruned after 14 days\" applies only to chain_snapshot_log; ABSENT: retention for rolls and roll_intents"
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "All market data depends on one vendor, and Week 0 option 1 would make the broker client the only data source. No second feed or vendor exit plan exists.",
+     "evidence": "\"Current vendor: Optiq Data.\" ABSENT: second data source or exit plan"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The 31k rows/day estimate does not reconcile per-contract snapshot rate with the per-underlying 30 s poll cadence.",
+     "evidence": "\"~40 contracts × 2/min × 6.5 h ≈ 31k rows/day\" vs \"one chain request per held underlying ... every 30 s\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The benefit is an explicitly unmeasured hypothesis. The minimum bar for proceeding is not stated before the four-week build spend, although the paper-mode gate partly addresses this.",
+     "evidence": "\"The benefit of intraday rolling vs. EOD rolling is unmeasured.\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 147333,
+    "tokOut": 76013,
+    "usd": 0.06570979,
+    "critMs": 145059
+   },
+   "wallMs": 154920
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "Growth ($259/mo) breaches the agreed $250 cap, and the only cap-compliant option (broker-supplied chains) is unverified. The decision record is blank, so no funded path is approved to build against.",
+     "evidence": "\"Growth ... totals **$259/month, which exceeds the agreed $250 cap by $9.**\" and \"option chosen: pending\" and \"This is currently **unverified**, and no evidence for it exists.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The $0.05 eligibility test uses mid-based credit, but the order is submitted at mid minus 1 tick. A candidate that passes the test may not fill at the credit the test assumed, so the threshold does not match what the order receives.",
+     "evidence": "\"the net credit of the combo at mid\" and \"with a limit at mid minus 1 tick\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The target rule takes candidate B as soon as it clears $0.05 and never compares B's credit to A's, so a lower-credit B can be chosen over a better A. No tie-break is specified.",
+     "evidence": "\"If its net credit is >= $0.05, choose B. Otherwise evaluate candidate A\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The fault policy is internally inconsistent. A frozen engine issues no re-prices, but working orders are expected to reach their final cancel, which runs through the re-price path. An order can stall at a stale limit with no defined exit.",
+     "evidence": "\"the engine treats it as frozen: no new intents and no re-prices. It does **not** cancel working orders\" and \"Working orders are left to complete or reach their final cancel\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Outcomes of in-flight orders are buffered during a control-store fault with no stated bound or durable store. A crash during the outage loses them, which can leave unknown-status orders unmanaged and create doubled shorts.",
+     "evidence": "\"Outcomes are buffered and written when the DB returns.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The liveness signal comes from a separate heartbeat writer, so it proves that writer and the DB are alive, not that the engine loop is making progress. A wedged engine would keep a fresh heartbeat and never trip the monitor.",
+     "evidence": "\"A separate heartbeat writer process (not the engine) updates a `heartbeat_at` column every 5 s, and an external monitor alerts if the heartbeat stops.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Dual-write appends to the legacy roll_history JSONB in the same transaction as the new rolls row. An append failure blocks recording of a roll that already filled, and the mismatch is caught only by a nightly job, so the new engine is coupled to the legacy column in the critical write path.",
+     "evidence": "\"writes each filled roll to `rolls` and appends it to `roll_history` in the same transaction\" and \"It runs nightly after the EOD batch\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Paper-mode isolation depends on a read-only broker key the artifact does not confirm exists. Without it, paper-mode processes hold order credentials, and protection reduces to a code-level raise plus a daily after-the-fact count.",
+     "evidence": "\"using a read-only API key if the broker supports one, so no code path holds order credentials\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The fill model is described as calibrated, but the historical roll_eod.py fill dataset needed for validation is not shown to exist, and the expected roll frequency per contract is not estimated. The 60-pair floor and 8-week cap therefore cannot be checked for feasibility.",
+     "evidence": "\"(b) The model is validated against real historical roll_eod.py fills\" and \"Sample size: at least 60 paired rolls, as a floor.\" and \"Time cap: ... (week 12)\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The go/no-go criterion is not decidable as written. The loss threshold is a proposed default, and the 90% confidence-interval lower-bound test is stated without a defined sample-size formula.",
+     "evidence": "\"the owner sets a threshold in Week 0 (proposed default: the lower bound of the confidence interval must be above −$0.02 per share\" and \"use the larger of the two\""
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "Broker fees are outside the $250 cap but inside the success criterion. Re-prices, cancels, and up to 24 submissions per account per day are not costed, so the net-of-fees test cannot be evaluated until the fee schedule is known.",
+     "evidence": "\"The engine's re-price and cancel behavior is a possible fee exposure and must be checked against the fee schedule.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Automated submission rules, order-rate limits, and cancel/replace limits are unreviewed, and the only named reviewer is the owner. The 3-re-price design may need rework or may be forbidden by broker terms.",
+     "evidence": "\"Compliance review by the owner: the broker's terms for automated and algorithmic order submission, any order-rate or cancel/replace limits (the plan submits up to 3 re-prices per order)\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "The build is sized at about 7.75 of 8 engineer-weeks with no slack, and Week 0 work sits outside that sizing. Overrun pressure falls on the safety items the plan says cannot be cut.",
+     "evidence": "\"This totals about 7.75, leaving almost no slack.\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "The artifact contradicts itself on whether the build can start. It says the Week 0 gate is required \"before any build starts\" and that the project is blocked, but it also says the build \"may start without\" the Week 0 confirmations. Engineers cannot tell which rule applies.",
+     "evidence": "\"Week 0 gate (before any build starts), the owner must choose one.\" versus \"the build may start without them, but live order submission may not\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "Week 0 has no decision deadline. If it slips, the 4-week clock moves and the \"not feasible, stop\" path is never triggered, so the project can drift open-endedly.",
+     "evidence": "\"If Week 0 slips, the 4-week clock starts later.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The two-snapshot delta hysteresis is not bounded in time. With 30 s polls and a 90 s freshness window, the pair can span up to about 90 s, so the trigger may not reflect a sustained move.",
+     "evidence": "\"short call delta >= 0.70 on 2 consecutive snapshots\" and \"ignores any snapshot older than 90 s\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Polling uses 80 of a 90 req/min client cap, leaving 10 req/min for all retries across 40 names. Any retry storm or added underlying exhausts the budget, and the plan has no growth math beyond 40 names.",
+     "evidence": "\"40 underlyings => 80 req/min against the vendor\" and \"The 10 req/min headroom is reserved for retries.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Rollback step 3 requires running history_sync and confirming a match, but history_sync is defined only as a nightly job, so the rollback check cannot be run on demand as written.",
+     "evidence": "\"(3) run history_sync and confirm rolls and roll_history match\" versus \"It runs nightly after the EOD batch\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "Whether roll_eod.py reads roll_history is checked only in Week 1, after 0042 is built. The 0043 gate rests on a check not yet done, though 0043 itself is outside this build.",
+     "evidence": "\"Verify before week 1 ends whether roll_eod.py reads positions.roll_history\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "roll_eod.py and the engine both write positions.roll_history with no stated locking rule. The ownership rule limits same-contract overlap, but concurrent read-modify-write on a JSONB array is not addressed.",
+     "evidence": "\"roll_eod.py keeps writing roll_history in all modes\" and \"Ownership rule: roll_eod.py skips any contract with an open v2 order\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "Several trigger semantics are still unconfirmed (gap trigger, target rule, dividend source), yet roll_engine trigger logic starts in Week 2. The spec may shift under the engineers during the build.",
+     "evidence": "\"items marked * need owner confirmation in Week 0\" and \"Week 2-3: roll_engine trigger logic with hysteresis, target rule\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "The design is tied to one vendor's rate limits, timestamps, and chain format, and to one broker's order API. Switching either means changing the poller, limiter, freshness gate, and reconciliation together.",
+     "evidence": "\"Current vendor: Optiq Data.\" and \"freshness gate ... by vendor timestamp, not receive time\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "order_log and rolls hold account identifiers and trade history for a family office, and retention and access scope are deferred to an unspecified Week 0 requirement.",
+     "evidence": "\"is retained per the record-retention requirement confirmed in Week 0\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The rationale admits intraday rolling may cost more, and the plan assumes neither outcome. The value question is unresolved until paper-mode paired data exists.",
+     "evidence": "\"Intraday rolling can also cost more through wider midday spreads and more frequent rolling. The plan assumes neither outcome.\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 181190,
+    "tokOut": 53889,
+    "usd": 0.06141919,
+    "critMs": 75344
+   },
+   "wallMs": 120884
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "cost",
+     "severity": "blocker",
+     "claim": "The only rate-limit-compliant vendor tier (Growth) totals $259/month, above the agreed $250 cap, and no cap-compliant path is confirmed: broker-supplied chains are unverified and the $9 VPS savings are unidentified. The build cannot be funded as specified.",
+     "evidence": "\"Growth ... totals **$259/month, which exceeds the agreed $250 cap by $9.**\" and \"This is currently **unverified**, and no evidence for it exists.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The go/no-go verdict depends on historical roll_eod.py fill data whose existence is unconfirmed. If that history is missing or thin, the paper verdict becomes provisional and cannot trigger a full 40-underlying cutover, so the go path may be unreachable on the evidence the plan accepts.",
+     "evidence": "\"If the Week 0 data check shows that this fill history does not exist or is too thin, the validation moves to the first live phase and the paper-mode verdict is treated as provisional\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The sample-size formula uses the normal constant 1.645, but the decision uses a t-based 90% interval. With s estimated from only 20 pairs, the t critical value is larger, so n_req undersizes the sample and the half-width target is missed.",
+     "evidence": "\"n_req = ceil((1.645 · s / 0.02)²)\" versus \"a two-sided 90% confidence interval using the t distribution\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Paired differences are treated as independent, but across ~40 names same-day market moves correlate rolls, so the effective sample is smaller than the pair count and the 90% interval is too narrow.",
+     "evidence": "\"compute the mean paired difference ... and a two-sided 90% confidence interval using the t distribution\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The paired comparison may mix fill bases: the intraday side is simulated from bid/ask while the EOD side may be real roll_eod.py fills, so any gap may reflect model error rather than timing.",
+     "evidence": "\"record what each approach would have done and the simulated net P&L\" alongside real fills used for calibration in §6(b)"
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The expected-dividend amount needed for the early-assignment test has no named source. Without it, 'extrinsic below the expected dividend' cannot be evaluated, so a deep-ITM short could pass the check silently.",
+     "evidence": "\"with extrinsic below the expected dividend, is flagged `assignment_risk`\" and \"The dividend-date source is chosen in Week 0 (§4).\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The 15 s heartbeat liveness window is too tight for a loop that may include 429 backoff. A slow but healthy engine can be marked frozen, which cancels orders at their limit and can create status-unknown states and contract locks.",
+     "evidence": "\"The heartbeat writer advances `heartbeat_at` only while that counter has advanced in the last 15 s\" and \"cancels it at its existing limit, then runs the broker status check\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The frozen-engine exit cancels live orders at the next slot during a DB or control-store fault, when broker status is still unknown to the engine. That is the condition the plan elsewhere treats as a page-worthy status-unknown lock.",
+     "evidence": "\"the router does not re-price but cancels it at its existing limit, then runs the broker status check, which does not depend on Postgres\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The outcome journal freezes the engine when it cannot be written, with no exit path for a live order while the journal is full or the disk is failing.",
+     "evidence": "\"If the journal cannot be written, the engine treats that as a fault of the same kind as a control-store fault and freezes.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The mirror into roll_history lags the rolls commit by up to 15 minutes, and the plan does not say whether roll_eod.py or any other reader consults that column in the window, risking a missing v2_live roll.",
+     "evidence": "\"The mirror into `roll_history` is a separate step after the `rolls` commit\" and \"every 15 minutes in RTH for v2_live rows\""
+    },
+    {
+     "lens": "scale",
+     "severity": "major",
+     "claim": "Retries share the same token bucket as first-attempt polls, so a vendor slowdown lets retries consume the 10 req/min headroom and starve fresh polls, tripping the 25% stale halt on a foreseeable failure.",
+     "evidence": "\"Retries draw from the same bucket and are never sent outside it.\" and \"The 10 req/min headroom is reserved for retries.\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The rollback has no time bound. Its manual steps (wait for working orders, resolve needs_review, clear locks) can stall, leaving a contract unmanaged during a flag flip.",
+     "evidence": "\"(1) set ROLLER_KILL and let working orders finish or cancel, then confirm each by broker status; (2) resolve or explicitly hand off every `needs_review` intent\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The down-migration rule is self-contradictory: it says rolls is never dropped while v2 rows exist, then archives and removes the new tables. The archive-and-remove path is asserted and not shown to be exercised in the rehearsal, which covers only 0042.",
+     "evidence": "\"It never drops `rolls` if any `v2_live` or `v2_paper` rows exist. It first exports `rolls` and `order_log` ... and only then removes the new tables.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The credit definition is confusing and self-contradictory: it states a two-leg formula with opposite tick directions, says that formula is not used, then defines the test as combo mid minus one tick. An engineer could implement the wrong net credit.",
+     "evidence": "\"(sell-to-open mid − 1 tick) − (buy-to-close mid + 1 tick) is not used; the limit is defined once as the combo mid minus 1 tick\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The eligibility test and the $0.05 floor interact undefined: a candidate whose combo mid minus 1 tick falls below $0.05 fails qualification, but the text does not say whether the initial limit may sit below the floor or the candidate is skipped.",
+     "evidence": "\"A candidate qualifies if its net credit (as defined above) is >= $0.05.\" and \"if re-pricing would go below it, the order is cancelled.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The delta trigger does not say whether both consecutive snapshots must be fresh; a stale snapshot could break or reset the hysteresis count.",
+     "evidence": "\"short call delta >= 0.70 on 2 consecutive snapshots\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The schedule contradicts the statistics: go/no-go is set for end of Week 4, but the 60-pair floor and the 8-week time cap imply paper data running to week 12, with no path given for that gap.",
+     "evidence": "\"End of week 4: go/no-go review on paper results.\" and \"not reached by 8 weeks after the end of the build (week 12)\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Paper-mode isolation depends on a broker read-only key whose existence is unknown. If there is none, the fallback relies on an egress filter and credential separation that are described but not specified, and the zero-submission test runs in CI, not against the deployed paper process.",
+     "evidence": "\"An integration test asserts zero broker submissions in paper mode.\" and \"(confirmed or ruled out in Week 0)\""
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "Broker fee exposure is unbounded until Week 0 records the fee schedule. The worst-case daily fee has no ceiling, and the 'lowered caps' fallback has no number.",
+     "evidence": "\"The caps in §7 are lowered if the worst case is unacceptable to the owner.\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Live submission with up to 3 re-prices per order and the Optiq licence for automated real-time quote use are unreviewed. The compliance review has no deadline or named reviewer, and if cancel/replace is limited the fill model must be rerun, which the plan does not require before go.",
+     "evidence": "\"Live cutover is blocked until that review is recorded as complete.\" and \"the sizing and fill model (§6) are updated before live\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "Week 1 is overloaded: migration 0042 with rehearsal, history_sync, chain_poller, and the full control store total roughly 3 engineer-weeks against about 2 engineer-weeks of Week 1 capacity.",
+     "evidence": "\"Week 1: migration 0042 (after rehearsal), history_sync, chain_poller with limiter/429/backoff and freshness gating, roller_control with its heartbeat writer, engine progress signal, outcome journal, roles, and audit (§7), roll_engine skeleton.\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "The schedule commits about 7.5 of 8 engineer-weeks with about 0.5 slack, and the cut order removes reporting that the go decision requires, so the cut order conflicts with the gate.",
+     "evidence": "\"This totals about 7.5, leaving about 0.5 of slack. That is thin.\" and \"Paper-mode data capture and the paired-comparison calculation are required for the go/no-go and are **not** cut.\""
+    },
+    {
+     "lens": "ux-value",
+     "severity": "major",
+     "claim": "The stated mission is steady income with capped drawdown, but the success criterion measures only net credit per roll. A go decision can pass while drawdown risk rises.",
+     "evidence": "\"compare paired roll events ... on net credit captured per roll after spread, slippage, and broker fees.\""
+    },
+    {
+     "lens": "other",
+     "severity": "major",
+     "claim": "The decision record is blank, with no owner, handoff date, or option chosen, so the 10-business-day clock has not started and the plan cannot cross plan→build.",
+     "evidence": "\"Decision record: _(owner, handoff date, decision date, option chosen: pending)_\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 226746,
+    "tokOut": 59568,
+    "usd": 0.07336989000000001,
+    "critMs": 82649
+   },
+   "wallMs": 92477
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "cost",
+     "severity": "blocker",
+     "claim": "The plan is at the plan→build gate, but its own precondition is unmet. The only fully specified real-time vendor tier (Growth, $259/mo) breaches the agreed $250 cap, the funding choice is unrecorded, and the fee ceiling, compliance reviewer and handoff date are blank. Crossing now would commit two engineers for four weeks against an unresolved hard-constraint breach.",
+     "evidence": "\"Growth meets the rate limit (80 of 100 req/min) and is real-time, but totals **$259/month, which exceeds the agreed $250 cap by $9.**\" / \"The build does not start until the decision record in §4 is filled in.\""
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "The only in-cap path (broker-supplied real-time chains) is unverified, and no evidence for it exists. The cost position therefore rests on an unconfirmed assumption.",
+     "evidence": "\"This is currently **unverified**, and no evidence for it exists.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The drawdown guardrail compares a per-share cumulative decline to a per-contract dollar limit in one unfinished sentence, so the go criterion cannot be evaluated as written.",
+     "evidence": "\"the worst cumulative peak-to-trough decline of the daily mean difference is not larger than 20 × the loss threshold per contract... in dollars: $40 per contract\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "Eligibility is tested on the credit at the initial limit, but re-prices step the limit down toward $0.05. The plan does not say the credit floor is re-checked on each re-price, so a filled roll can have a net credit below the threshold that qualified it.",
+     "evidence": "\"The re-price ladder (§3) lowers the limit step by step but never below $0.05\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "On a broker outage the engine stops re-pricing, but working orders are not cancelled. An order left at a stale limit can fill after the broker returns, and the plan does not address that exposure.",
+     "evidence": "\"order_router stops re-pricing, when the last successful broker heartbeat is > 60 s old.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "Reconciliation runs every 5 minutes in RTH (every minute for locked contracts) and does not gate new submissions. A missed fill or doubled short can persist for minutes while further intents and re-prices go out on the same contract. Caps limit the damage but do not close the gap.",
+     "evidence": "\"every 5 minutes in RTH (every 1 minute for locked contracts)\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "No ongoing backup or restore is defined for rolls (the stated system of record), order_log, or the durable outcome journal. The only backup is a one-time pg_dump before migration 0042, and everything runs on one VPS.",
+     "evidence": "ABSENT: ongoing backup and restore procedure for rolls, order_log and the outcome journal; the only snapshot described is \"take a verified pg_dump/snapshot\" before 0042."
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The 'Ask/bid' validation is missing. Freshness is judged only on the vendor-asserted timestamp, with no sanity bounds on bid, ask, delta, or last. A corrupt or replayed snapshot with a current timestamp passes the gate and can drive an intent.",
+     "evidence": "\"roll_engine ignores any snapshot older than 90 s (3 poll intervals, by vendor timestamp, not receive time)\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The router design (three re-prices plus cancel) and the paper fill model are built before the broker's automated-submission and cancel/replace terms are known. A prohibition would force a redesign and invalidate paper evidence. The compliance review is not due until end of Week 2, and Optiq's licence review is not scheduled with a deadline.",
+     "evidence": "\"if cancel/replace is limited or prohibited, the order_router falls back to a single submission at the limit with one timed cancel and no re-prices\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "About 7.5 of 8 engineer-weeks are committed across roughly a dozen new components, and the plan has only about 0.5 week of slack. The plan admits this is thin, and the schedule depends on unverified broker and vendor facts.",
+     "evidence": "\"This totals about 7.5, leaving about 0.5 of slack. That is thin.\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The plan does not compare intraday rolling against a lower-complexity alternative (for example a fixed mid-session batch or an earlier EOD time). The benefit is an unmeasured hypothesis, so the build cost is justified only against the status quo.",
+     "evidence": "ABSENT: comparison against a mid-session batch run or earlier fixed roll time; the rationale is \"desk notes\" and \"anecdotal\" evidence only."
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The tick size used by 'combo mid minus 1 tick' is never defined per instrument, so the limit and the $0.05 floor cannot be computed exactly as written.",
+     "evidence": "\"The limit price is the combo mid minus 1 tick, defined once and used everywhere\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The sample-size rule does not fully specify the iteration. t(0.95, d−1) changes with d while s_d is fixed from the first 10 days, and d < 2 is undefined.",
+     "evidence": "\"The required number of days n_req is the smallest d such that t(0.95, d−1) · s_d / √d <= 0.02 (iterate on d; for d = 10, t = 1.833)\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The sample is recomputed once at 10 days from early data, and the week-4 interim review shows paper results before go/no-go. There is no multiplicity or peeking control, so the 'thresholds not changed after results' rule is hard to enforce in practice.",
+     "evidence": "\"End of week 4: interim review of paper results and build completeness\""
+    },
+    {
+     "lens": "cost",
+     "severity": "minor",
+     "claim": "The submission-cap formula is undefined when the ceiling is below one per-submission fee (the floor is zero). The per-contract cap is 'scaled to match' without a formula.",
+     "evidence": "\"account cap = floor(ceiling ÷ worst-case fee per submission including 3 re-prices and the cancel), and the per-contract cap scaled to match\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Roller_admin authentication is unspecified. The plan names who holds DB credentials but not how a human is authenticated before changing the kill switch or unlocking contracts.",
+     "evidence": "\"DB credentials for roller_admin are limited to the named on-call and owner.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The 30 s progress window is close to the worst-case path (20 s re-price slot plus broker latency and a cancel/status round-trip), so a slow but healthy loop could be marked frozen mid-order.",
+     "evidence": "\"The window is 30 s, not tighter, so a slow but healthy loop is not marked frozen\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The owner alone sets the loss threshold, guardrails, funding choice and go call. The second reviewer covers compliance only, not the statistical verdict.",
+     "evidence": "\"the owner plus a second reviewer who is not on the build team (the family office's compliance contact or outside counsel)\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 255825,
+    "tokOut": 61917,
+    "usd": 0.08036019,
+    "critMs": 158509
+   },
+   "wallMs": 170223
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "cost",
+     "severity": "blocker",
+     "claim": "The plan-to-build gate cannot cross. Growth totals $259/month, over the agreed $250 cap, and the only in-cap path (broker-supplied chains) is unverified. The §4 funding decision record is blank, and the artifact states the build does not start until it is filled in.",
+     "evidence": "\"totals **$259/month, which exceeds the agreed $250 cap by $9.**\" ... \"NOT ready for dispatch. Blocked on the data-feed and budget decision in §4.\""
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "Fee exposure and backup storage are uncosted, yet they set the submission caps and count against the same $250 cap. The daily fee ceiling, the worst-case fee per submission, and the backup storage cost are all unfilled.",
+     "evidence": "\"backup storage monthly cost\" (decision record, blank); \"account cap = floor(ceiling ÷ worst-case fee per submission including 3 re-prices and the cancel)\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "Committed sizing is about 7.9 of 8 engineer-weeks, which breaches the plan's own rule that the build does not start with less than 1.0 engineer-week of slack. Weeks 1 and 2 are also loaded above 2.0 and rely on Week 4 to absorb the overrun.",
+     "evidence": "\"This totals about 7.9, leaving about 0.1 of slack. That is too thin to start on.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The plan does not say whether assignment_risk suppresses automatic roll submission. A deep-ITM short can meet the delta trigger while also being flagged, and the only stated consequence is paging when the intent is needs_review or blocked.",
+     "evidence": "\"If its intent is `needs_review` or blocked, the human is paged immediately, not queued. ... The engine does not attempt automated assignment handling.\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The bounded exit for a frozen engine depends on a re-price slot that the frozen engine may not drive. The plan does not name the process that owns that timer. For a wedged engine, which the plan only alerts on, working orders can stay at a stale limit.",
+     "evidence": "\"at its next scheduled re-price slot (at most 20 s away) the router does not re-price but cancels it at its existing limit\" ... \"a wedged engine ... The external monitor alerts\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "The second compliance reviewer is unnamed and the decision record is blank, so the required independence cannot be verified at handoff.",
+     "evidence": "\"named in the decision record at handoff\" ... \"compliance second reviewer; ... (pending)\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "Paper-mode isolation rests on an unconfirmed fact. If the broker has no read-only key, the fallback (separate OS user, no order credentials, deny-listed firewall or proxy) is described but not designed or assigned.",
+     "evidence": "\"If the broker has no read-only key, the paper process runs as a separate service (own OS user and environment file) ... a host firewall or forward proxy on the VPS\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "The production down-migration gate verifies the archive by row count only. A corrupted export with matching counts would pass before the live tables are dropped. The rehearsal checks seeded rows, but the production check does not.",
+     "evidence": "\"verifies row counts match, and only then removes the live new tables\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Postgres, the journal, the engine, the poller, and the heartbeat share one VPS with no failover. The 4-hour restore target is long for live options positions, though the RPO and rehearsal are recorded.",
+     "evidence": "\"everything runs on one VPS and `rolls` is the system of record\" ... \"a restore within 4 hours\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "minor",
+     "claim": "roll_eod.py consumer grep is recorded as a Week 1 task with an empty result. The reader fix is a Week 2 precondition, so the result is still unverified at gate time, though the artifact sequences it.",
+     "evidence": "\"Verify before week 1 ends whether roll_eod.py reads positions.roll_history ... Record the result here.\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Order_router's submission gate requires reconciliation to have matched, but reconciliation is scheduled to start in Week 3 and finish in Week 4. The router cannot be tested end to end until its gate exists, which is a sequencing risk.",
+     "evidence": "\"finish reconciliation\" (Week 4) vs. \"a new submission or re-price ... is allowed only if (a) the post-outcome reconciliation ... has completed and matched\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "If roll_eod.py fill history is absent or thin, the paper verdict is provisional and the fill model is uncalibrated until the first live phase. The artifact caps the provisional authority at 5 underlyings, which bounds exposure.",
+     "evidence": "\"the paper-mode verdict is treated as provisional. This is deliberate: a provisional paper go can authorize only the 5-underlying live phase\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "Market data comes from one vendor and execution from one broker, with no named alternate or exit path. Switching would touch the poller, limiter, and freshness design.",
+     "evidence": "\"Current vendor: Optiq Data.\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Poll load is sized to 40 names, leaving 90 of 100 req/min. Growth beyond about 40 names needs a re-plan or tier change, which the plan does not budget.",
+     "evidence": "\"40 underlyings => 80 req/min against the vendor.\" ... \"(90 total, below Growth's 100)\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "minor",
+     "claim": "Two systems of record (roll_history and rolls) persist with no retirement date for roll_eod.py or migration 0043, so the dual-write and reader-repointing burden outlasts the build.",
+     "evidence": "\"roll_eod.py keeps writing roll_history in all modes, and history_sync reconciles the two until 0043.\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "Off-VPS backups of positions and order records have no stated encryption or access policy. roller_admin credentials have no stated rotation or MFA.",
+     "evidence": "\"continuous WAL archiving to storage off the VPS (separate provider or account)\" ... \"DB credentials for roller_admin are limited to the named on-call and owner.\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The sample-size rule is ambiguous. s_d is defined over the first 10 days but used as a function of d in the iteration, and the single recompute is not fully specified.",
+     "evidence": "\"let s_d be the standard deviation of daily mean differences over the first 10 trading days with pairs\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The 30 s staleness window is only six writer intervals. Under DB load, a delayed heartbeat writer could mark a healthy engine as frozen.",
+     "evidence": "\"heartbeat_at is older than 30 s, the engine treats it as frozen\""
+    },
+    {
+     "lens": "ui",
+     "severity": "minor",
+     "claim": "No operator view is specified for the needs_review queue or locked-contract state, though both have 30-minute review obligations.",
+     "evidence": "ABSENT: operator interface for needs_review intents or locked contracts."
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "Immediate paging on every assignment_risk flag and locked contract, with a 15-minute acknowledgement window, could cause frequent interruptions across a 40-name book.",
+     "evidence": "\"Intents flagged `assignment_risk`, and locked contracts, page immediately instead of waiting in the queue.\""
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The 10-business-day decision deadline runs from a handoff date that is blank, so the stop-by-default trigger cannot be computed until handoff is recorded.",
+     "evidence": "\"Deadline: the owner records the choice within 10 business days of plan handoff (handoff date recorded below).\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 269653,
+    "tokOut": 75922,
+    "usd": 0.09012829,
+    "critMs": 114836
+   },
+   "wallMs": 126600
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "cost",
+     "severity": "blocker",
+     "claim": "The plan-to-build gate cannot be crossed: the §4 decision record is blank, no funding option is chosen, and the only in-cap path (broker-supplied chains) is unverified. Growth is over the agreed $250 cap, so crossing now would commit spend the owner has not approved.",
+     "evidence": "\"Decision record (intentionally blank until the owner completes it; ... option chosen: pending; compliance second reviewer and independence confirmation; daily fee ceiling; backup storage monthly cost\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "major",
+     "claim": "The bounded-exit bound is wrong. Freeze detection waits for the 30 s heartbeat to go stale, and the cancel then waits for the next 20 s slot, so worst case from fault onset is about 50 s, not 20 s.",
+     "evidence": "\"at its next scheduled re-price slot (at most 20 s away)\" vs \"The window is 30 s, not tighter\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "assignment_risk fails open for a dividend name whose source returns no ex-date record at all. The fail-toward-flagging rule applies only when an ex-date in the window exists but its amount is missing, so an early-assignment exposure can pass silently.",
+     "evidence": "\"If the source returns no amount for a name with an ex-dividend date in the window, the amount is treated as unknown and the contract is flagged\""
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Router design and build start before the broker's cancel/replace and automated-submission terms are known. If the answer restricts re-pricing, the zero-re-price fallback changes the fill model after the build has been designed, and the re-run cost is not in the sizing.",
+     "evidence": "\"If stage (a) is not recorded by the end of Week 1, router work proceeds with the ladder set to zero re-prices (the conservative design)\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The go verdict can rest on an unvalidated fill model. If historical roll_eod fills are too thin, validation moves to live, and a provisional paper go can still authorize the 5-underlying live phase before the model is checked.",
+     "evidence": "\"a provisional paper go can authorize only the 5-underlying live phase, never a full 40-underlying cutover\""
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "Sizing totals about 7.9 of 8 engineer-weeks with 0.1 slack, while the title and week plan say 4 weeks. The plan itself says this schedule is too thin to start on and expects a 5-week build, so the four-week schedule is not a valid commitment.",
+     "evidence": "\"This totals about 7.9, leaving about 0.1 of slack. That is too thin to start on\""
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "Broker fee schedule, worst-case daily fee, and the daily fee ceiling are all blank. The 24-submissions-per-day cap and the per-roll fee accounting in the go metric are derived from these inputs, so neither has a basis yet.",
+     "evidence": "\"account cap = floor(ceiling ÷ worst-case fee per submission including 3 re-prices and the cancel)\""
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The paper-isolation fallback is a security control with no named owner in the record, and its design, egress rule, and allow-list are not derived yet. It is folded into the 1.5-engineer-week router estimate, so it can slip without being visible.",
+     "evidence": "\"a trading-infra engineer is named in the Week 0 record as owner of this item, delivered in Week 3 with the paper guard (inside the 1.5 router sizing in §6)\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Rollback depends on the on-call manually handing every needs_review intent and locked contract to a named person within 30 minutes in RTH. No drill is required before live cutover, so the human step is untested when it matters.",
+     "evidence": "\"resolve or explicitly hand off every `needs_review` intent and locked contract to manual handling, each to a named person, within 30 minutes in RTH\""
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "During dual-write, roll_history can lag by up to 15 minutes, and the consumer grep result is unrecorded. Migration 0043 has no owner or date, so the legacy mirror and its double-roll risk have no defined end.",
+     "evidence": "\"Because the mirror can lag (up to the 15-minute history_sync interval in the worst case), any reader of `roll_history` must not trust it for same-day v2 rolls\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The eligibility test is stated two ways: as net credit at combo mid, and as the limit at combo mid minus one tick. The text says they use the same price, but the wording is inconsistent for a safety threshold.",
+     "evidence": "\"A candidate qualifies if its net credit (as defined above) is >= $0.05\" vs \"A candidate qualifies only if its limit (combo mid − 1 tick) is >= $0.05\""
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The $0.05 eligibility threshold is pre-fee, but the go metric is after fees. A roll that qualifies can therefore net negative after fees, and eligibility does not account for that.",
+     "evidence": "\"Because the eligibility threshold equals the floor, any filled roll has a net credit of at least $0.05\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The 30 s heartbeat freeze window equals the 30 s poll cadence, so a single slow loop or DB call could mark the engine frozen during normal operation. The design mitigates this, but it needs paper-mode tuning evidence.",
+     "evidence": "\"The window is 30 s, not tighter, so a slow but healthy loop is not marked frozen\""
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "If the outcome journal cannot be written, the outcome is held only in memory. A crash then loses that outcome, and restart reconciliation can recover only through a position mismatch, not the order result itself.",
+     "evidence": "\"The outcome is held in memory; because it cannot be made durable, the affected contracts are locked\""
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The sample-size rule is underspecified. t depends on d, the iteration on d is not defined beyond 'iterate', and s_d is frozen from the first 10 correlated days, which can understate the required sample.",
+     "evidence": "\"iterate on d; for d = 10, t = 1.833\""
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "Poll plus retry traffic uses 90 of 100 req/min on Growth, leaving 10 req/min of headroom. Adding names or shortening the interval breaks the budget, and no degradation path is documented.",
+     "evidence": "\"a retry bucket of 10 req/min (90 total, below Growth's 100)\""
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Account identifiers, positions, and full roll history are copied off-VPS to a second provider with no encryption, key ownership, or access requirement stated.",
+     "evidence": "\"Postgres is backed up nightly by a full pg_dump plus continuous WAL archiving to storage off the VPS (separate provider or account)\""
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "minor",
+     "claim": "All option quotes depend on Optiq, and the only alternative (broker chains) is unverified. No exit path or switching cost is described if Optiq changes licence or rate terms.",
+     "evidence": "\"Current vendor: Optiq Data.\""
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "roller_admin can change kill and unlock contracts, but its restriction is described only as policy. No technical enforcement (per-operator credentials, MFA, CLI authentication) is specified.",
+     "evidence": "\"DB credentials for roller_admin are limited to the named on-call and owner.\""
+    },
+    {
+     "lens": "ux-efficiency",
+     "severity": "minor",
+     "claim": "On-call timers are unaligned (15-minute ack, 30-minute queue review, 30-minute lock escalation, 60-second outage check), which is hard to follow under pressure.",
+     "evidence": "\"A page must be acknowledged within 15 minutes\""
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 281362,
+    "tokOut": 44038,
+    "usd": 0.07652809000000002,
+    "critMs": 79322
+   },
+   "wallMs": 83100
+  },
+  {
+   "verdict": "ATTACKS",
+   "attacks": [
+    {
+     "lens": "other",
+     "severity": "blocker",
+     "claim": "The plan cannot cross plan→build. The funding choice, daily fee ceiling, backup storage cost, named compliance second reviewer and independence confirmation, build length, and paper-isolation fallback owner are all unfilled, and §4 says no build starts until the record is complete.",
+     "evidence": "Decision record (intentionally blank until the owner completes it; ... option chosen: pending; compliance second reviewer and independence confirmation; daily fee ceiling; backup storage monthly cost; paper-isolation fallback owner; build length (4 or 5 weeks); ...)"
+    },
+    {
+     "lens": "cost",
+     "severity": "major",
+     "claim": "No option known to meet the $250 cap is verified. Growth is $259 before the backup storage cost is added, and the only in-cap path (broker-supplied chains) is unverified. The fee ceiling and the 8/24 submission caps are provisional.",
+     "evidence": "Growth ... totals **$259/month, which exceeds the agreed $250 cap by $9.** ... The 8 and 24 caps in §7 are provisional defaults until those inputs exist"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "'Net credit' has two meanings. The eligibility floor and the 'at least $0.05 net credit' guarantee use combo mid minus one tick, which excludes fees. The success criterion includes fees, so a filled roll can clear the floor and still net below $0.05 after fees.",
+     "evidence": "Because the eligibility threshold equals the floor, any filled roll has a net credit of at least $0.05 ... Fees for the intraday side include every order attempt for that roll"
+    },
+    {
+     "lens": "correctness",
+     "severity": "major",
+     "claim": "The tick size used by 'combo mid minus 1 tick' is never defined. For options near the $0.10 extrinsic trigger, one tick may consume most or all of the credit, so eligibility and the limit price are undefined in that range.",
+     "evidence": "The limit price is the combo mid minus 1 tick, defined once and used everywhere. ABSENT: tick size by price band"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "The schedule commits about 7.9 of 8 engineer-weeks, leaving about 0.1 slack. The plan's own rule requires at least 1.0 slack before the build starts, and the Week 3 'rest of trigger logic' line is unquantified, so the ledger does not reconcile cleanly.",
+     "evidence": "This totals about 7.9, leaving about 0.1 of slack. That is too thin to start on ... Week 3 (about 2.0): rest of roll_engine trigger logic"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The engine is sized and funded before the cheaper 11:30 batch alternative is tested, although the plan says the batch should be preferred if most of the benefit comes from timing. The batch comparison runs only after most of the build is spent, so a cheap test that could change the design is sequenced last.",
+     "evidence": "If most of the benefit comes from rolling earlier in the day, the cheaper batch change should be preferred over a continuously running engine (see §6 decision rule)"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "Sample feasibility is unknown. No rolls-per-contract-per-month estimate exists, so the 60-pair and 20-day floors and the n_req iteration may not be reachable within the 12-week cap, which makes no-go for insufficient evidence the likely default.",
+     "evidence": "ABSENT: rolls-per-contract-per-month estimate; ... If the 60-pair and 20-day floors (or the first estimate of n_req) cannot be reached within the time cap, the owner decides in Week 0"
+    },
+    {
+     "lens": "evidence",
+     "severity": "major",
+     "claim": "The go rule requires a positive mean and a lower bound above −$0.02 per share. A lower bound slightly below zero can still pass, so the rule permits a plausibly negative effect and relies on the guardrails for protection. It should be tightened or justified before it is frozen.",
+     "evidence": "Go requires the mean to be positive and the lower bound of the interval to be above the loss threshold."
+    },
+    {
+     "lens": "sovereignty",
+     "severity": "major",
+     "claim": "All chain and trigger data comes from one vendor, Optiq. Its licence for automated use is unresolved, the design is sized to Growth's 100 req/min ceiling, and there is no second data source or exit plan if the licence is refused or the tier changes.",
+     "evidence": "Also review Optiq's licence terms for automated use of real-time quotes. ABSENT: second data source or exit plan if the licence is refused"
+    },
+    {
+     "lens": "reversibility",
+     "severity": "major",
+     "claim": "Dual-write has no hard end. The 0043 owner and date are blank, and the 30-day rule can be extended by a recorded reason with no maximum, so two sources of truth can persist indefinitely.",
+     "evidence": "the owner either schedules 0043 or records a dated extension with the reason"
+    },
+    {
+     "lens": "maintainability",
+     "severity": "major",
+     "claim": "Steady-state operational burden is not budgeted. The design adds a supervisor process, a heartbeat writer, a durable journal, three DB roles, nftables egress rules, and off-VPS WAL archiving. §6 sizes only build effort, and the page-volume and on-call load are unestimated for two engineers.",
+     "evidence": "a separate heartbeat writer process ... ABSENT: steady-state ops hours, on-call staffing, or page-volume estimate"
+    },
+    {
+     "lens": "security",
+     "severity": "major",
+     "claim": "The roller_admin unlock path is the only control over locked contracts, but credential storage, rotation, and CLI authentication are unspecified, so the guarantee that only named people can unlock depends on an undefined secret practice.",
+     "evidence": "DB credentials for roller_admin are limited to the named on-call and owner. ABSENT: credential storage, rotation, CLI authentication method"
+    },
+    {
+     "lens": "compliance",
+     "severity": "major",
+     "claim": "Week 1 builds chain_poller on Optiq real-time quotes, but the licence answer is due at the end of Week 1. Build spend is at risk if the licence bars automated use, because the poller is built before the answer.",
+     "evidence": "chain_poller with limiter/429/backoff, freshness gating, and sanity validation (1.2) ... answered and recorded by the end of Week 1 of the build"
+    },
+    {
+     "lens": "compliance",
+     "severity": "minor",
+     "claim": "The second reviewer's independence is confirmed only by the owner. The review scope omits the family office's own investment-policy and fiduciary constraints on automated options trading.",
+     "evidence": "Scope: the broker's terms for automated and algorithmic order submission, any order-rate or cancel/replace limits, disclosure requirements, and order-record retention"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "A healthy but slow loop can be marked frozen after 30 s and have working orders cancelled. The loop has per-call timeouts but no stated total loop time bound, and the progress counter is published only at loop end.",
+     "evidence": "The window is 30 s, not tighter, so a slow but healthy loop is not marked frozen ... ABSENT: maximum total loop duration"
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "The 50 s bounded-exit guarantee depends on order_supervisor being alive. If the supervisor also fails, the cancel falls back to on-call manual action, so the bound is conditional on the supervisor.",
+     "evidence": "If the supervisor itself stops, the external monitor (§7) alerts on its own heartbeat and the broker-outage rule's on-call manual check of v2-tagged open orders applies."
+    },
+    {
+     "lens": "reliability",
+     "severity": "minor",
+     "claim": "Write-before-submit ordering for roll_intents and order_log is not stated explicitly. Start-up reconciliation covers a crash between submit and log, but the ordering rule should be written down.",
+     "evidence": "order_router ... turns RollIntent into a single combo order ... ABSENT: write-before-submit ordering"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The delta trigger's two-consecutive-snapshot hysteresis does not say whether a rejected or failed snapshot resets the consecutive count.",
+     "evidence": "Delta trigger: short call delta >= 0.70 on 2 consecutive snapshots"
+    },
+    {
+     "lens": "correctness",
+     "severity": "minor",
+     "claim": "The gap trigger's 4% test is gated on confirmation. The behaviour when the sanity gate delays confirmation by one poll is undefined. The gap trigger is also deferred out of the initial build.",
+     "evidence": "a gap-trigger evaluation requires such confirmation"
+    },
+    {
+     "lens": "evidence",
+     "severity": "minor",
+     "claim": "The go rule uses a two-sided 90% interval combined with an alternative-arm check and several guardrails, with no multiplicity adjustment, which raises the false-go rate.",
+     "evidence": "compute the mean of the daily mean differences and a two-sided 90% confidence interval"
+    },
+    {
+     "lens": "ux-value",
+     "severity": "minor",
+     "claim": "The drawdown guardrails track a running sum of paired intraday-minus-EOD differences, not account-level drawdown, so the capped-drawdown mission is only partly measured.",
+     "evidence": "the worst cumulative peak-to-trough decline of the running sum of daily mean differences (per share)"
+    },
+    {
+     "lens": "privacy",
+     "severity": "minor",
+     "claim": "Order logs and off-VPS backups hold account identifiers and trading records. The backup provider is unnamed and the order_log retention period is unset.",
+     "evidence": "off the VPS (separate provider or account) ... retained per the record-retention requirement confirmed in Week 0"
+    },
+    {
+     "lens": "security",
+     "severity": "minor",
+     "claim": "The paper-isolation egress rule is verified only before paper start and after deploys. A config change between deploys is not caught, and the fallback owner is not yet recorded.",
+     "evidence": "before paper mode starts, and after every deploy ... ABSENT: named paper-isolation fallback owner in decision record"
+    },
+    {
+     "lens": "scale",
+     "severity": "minor",
+     "claim": "If option 1 shares one budget between vendor and broker calls, there is no reserved headroom or throttling priority, and growth past 40 names has no designed path.",
+     "evidence": "If Week 0 option 1 is chosen (broker-supplied chains), vendor and broker calls share one budget and one limiter."
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "The 4-week week table reads like a committed schedule, while §6 expects a 5-week build. The layout could be used as the dispatch baseline.",
+     "evidence": "the expected outcome is a 5-week build; the 4-week week plan below is the layout if the re-estimate permits it"
+    },
+    {
+     "lens": "other",
+     "severity": "minor",
+     "claim": "If the Week 0 deadline lapses, the default is silent project stop. The owner should be notified explicitly before that outcome takes effect.",
+     "evidence": "or no choice is recorded by the deadline, intraday rolling is treated as not feasible under the current constraints, the project stops"
+    }
+   ],
+   "usage": {
+    "calls": 11,
+    "tokIn": 301763,
+    "tokOut": 67777,
+    "usd": 0.09247779000000002,
+    "critMs": 125680
+   },
+   "wallMs": 142078
+  }
+ ],
+ "artifact": "# Plan: Auto-Roller v2 — intraday roll decisions\n\nOwner: trading-infra | Build: 4 weeks if the engineers' Week 0 re-estimate shows at least 1.0 engineer-week of slack, otherwise 5 weeks (expected, see §6); 2 engineers; build length is recorded in the §4 decision record (after the Week 0 funding gate in §4) | Status: **NOT ready for dispatch. Blocked on the data-feed and budget decision in §4. The build does not start until the decision record in §4 is filled in.** The plan is deliberately held at this gate. It is not handed to the two engineers, and no build time is committed, until the record is complete. The blocked state is the intended output of this plan. The cap decision belongs to the owner, and the plan authors cannot make it for them.\n\n## Summary\nReplace the end-of-day roll script (roll_eod.py) with an intraday engine that rolls short calls shortly after a roll trigger fires, instead of waiting for the 15:45 ET batch.\nExpected impact: **hypothesis, not a forecast.** The benefit of intraday rolling vs. EOD rolling is unmeasured. The earlier +3.8% net APR figure had no backtest or cost model behind it and has been removed. The plan measures the effect in paper mode (§6) before any live cutover. The paper comparison also includes a lower-complexity alternative, a fixed mid-session batch roll, so the build cost is justified against that option and not only against the status quo.\n\n## 1. Roll triggers (semantics pinned down; items marked * need owner confirmation by the end of Week 1, before roll_engine trigger work starts in Week 2; see §4)\n- Delta trigger: short call delta >= 0.70 on 2 consecutive snapshots (hysteresis against single-tick noise).\n- Extrinsic trigger: DTE <= 5 and extrinsic value < $0.10.\n- Gap trigger*: the underlying's last price (not intraday high/low) is above the strike and more than 4% above the prior close, evaluated on a fresh snapshot. **Not in the initial 4-week build** (see §6 sizing); it is built only if the Week 2 checkpoint shows at least 1.0 engineer-week of slack.\n- Priority if several fire at once: delta > gap > extrinsic. One RollIntent per contract.\n- Credit definition: for a candidate roll, the combo mid is (sell-to-open mid) − (buy-to-close mid), per share. The limit price is the combo mid minus 1 tick, defined once and used everywhere: it is the price the order_router submits (§3) and the net credit tested for eligibility, computed on a fresh snapshot. The eligibility threshold and the submitted order therefore use the same price. No separate per-leg tick adjustment is applied.\n- Floor interaction: the $0.05 floor applies to the limit at every step, not only the first. A candidate qualifies only if its limit (combo mid − 1 tick) is >= $0.05. A candidate whose limit would be below $0.05 is skipped as non-qualifying, so the initial limit is never below the floor. The re-price ladder (§3) lowers the limit step by step but never below $0.05, and the router re-checks this on every re-price. If the next re-price would go below it, the order is cancelled. Because the eligibility threshold equals the floor, any filled roll has a net credit of at least $0.05, the same threshold that qualified it.\n- Roll target*: evaluate both candidate B (next strike up, +1 expiry) and candidate A (same strike, +1 expiry) on the same fresh snapshot. A candidate qualifies if its net credit (as defined above) is >= $0.05. Among qualifying candidates, choose the one with the higher net credit; on a tie, choose B. If neither qualifies, there is no eligible target. The owner confirms this preference (credit-maximizing, tie to B) in Week 0/Week 1.\n- No eligible target, or only a net debit available*: the engine never submits a net-debit roll automatically. It records the intent as `needs_review` and alerts a human via the queue and escalation path in §7. This applies to all triggers, including gap and delta.\n- Early-assignment risk*: a short call that is deep ITM and has an ex-dividend date within the next trading day, with extrinsic below the expected dividend, is flagged `assignment_risk`. The ex-dividend date and the expected dividend amount (last declared amount, or the most recent regular amount if none is declared) come from the single source chosen in Week 0 (§4). If the source returns no amount for a name with an ex-dividend date in the window, the amount is treated as unknown and the contract is flagged `assignment_risk` (fail toward flagging, never toward passing the check silently). The same rule covers a missing ex-date record: if the source returns no record at all, errors, or returns data older than a configured age (default 3 trading days) for a name that has paid a dividend in the prior 12 months (from the positions/dividend history held locally), the ex-date is treated as unknown and a deep-ITM short call on that name is flagged `assignment_risk`. Only a name with no dividend in the prior 12 months and a successful lookup passes without a flag. **`assignment_risk` suppresses automatic submission:** the flag is evaluated before any order is built, regardless of which trigger fired (including delta). A flagged contract's intent is recorded as `needs_review`, no order is submitted, and the human is paged immediately, not queued. The human decides whether and how to roll. The engine does not attempt automated assignment handling.\n- No change to contract counts (position sizing is out of scope).\n\n## 2. Rationale (hypothesis to be tested)\nRolling at the close may mean we roll after intraday mean-reversion has already happened. On high-volatility days the short leg may be cheapest to buy back mid-morning, and closing spreads after 15:30 may be wide. Evidence so far is anecdotal: desk notes from the last two quarters list several days where a mid-session roll \"would have been better\". We have no backtest, no slippage or spread cost model, and no sourced data on peer practice. The first deliverable in paper mode is therefore a simulated net-P&L comparison, with spread and slippage modeled, of intraday vs. EOD decisions, and also vs. a simpler alternative: the same triggers and target rule evaluated in one fixed mid-session batch (11:30 ET) with the same fill model. If most of the benefit comes from rolling earlier in the day, the cheaper batch change should be preferred over a continuously running engine (see §6 decision rule). Intraday rolling can also cost more through wider midday spreads and more frequent rolling. The plan assumes neither outcome.\n\n## 3. Architecture\n- chain_poller (new): one chain request per held underlying (front + next expiry in one call) every 30 s during RTH, 40 underlyings => 80 req/min against the vendor. Client-side token-bucket limiters gate every vendor call. Two buckets are used: a poll bucket of 80 req/min for first-attempt polls and a separate retry bucket of 10 req/min (90 total, below Growth's 100). Retries draw only from the retry bucket and can never take tokens from the poll bucket, so a vendor slowdown cannot starve fresh polls. A retry is attempted at most once per underlying per poll cycle and only if the snapshot would still be inside the freshness window. When a bucket is empty the poller skips or delays that call, and does not send and wait for a 429. HTTP 429 still triggers exponential backoff with jitter as a second line of defense. Only the latest snapshot per underlying is kept in memory. Persistence is described in §5.\n  - Order-status queries and reconciliation calls go to the broker API, not the vendor, so they do not use the vendor budget. The broker API's own rate limit is confirmed in Week 0 and given its own limiter. If Week 0 option 1 is chosen (broker-supplied chains), vendor and broker calls share one budget and one limiter.\n- Data freshness and sanity gate: roll_engine ignores any snapshot older than 90 s (3 poll intervals, by vendor timestamp, not receive time), so one missed or delayed poll does not make a name stale. A fresh timestamp alone is not trusted. Before a snapshot is used, chain_poller also validates its contents. Any failure marks that underlying's snapshot as failed, which is treated like a stale one (it never triggers a roll, and the failure is logged and counted):\n  - vendor timestamps must strictly advance per underlying (a repeated or older timestamp is rejected, and a payload byte-identical to the previous one with a newer timestamp is flagged);\n  - per option: bid >= 0, ask >= bid, ask-to-bid spread no wider than a configured bound (default: 50% of mid), delta within [0, 1], last > 0, extrinsic consistent with price and strike (not negative beyond rounding);\n  - underlying last within a configured band of the previous accepted snapshot and of the prior close (default 15%) unless a second consecutive snapshot confirms the move; a gap-trigger evaluation requires such confirmation;\n  - the delta trigger's two-snapshot hysteresis uses two distinct, valid vendor timestamps.\n  An individual stale or failed snapshot only skips that underlying. If more than 25% of underlyings (more than 10 of 40) stay stale or failed for 2 consecutive minutes, the engine halts intent emission and alerts. A single 429 burst on a few names does not halt it.\n- roll_engine (new): consumes fresh, validated snapshots, evaluates §1 triggers, emits RollIntent rows. The engine loop never blocks on vendor I/O (polling and 429 backoff live in chain_poller), and DB and broker calls in the loop have timeouts, so backoff cannot stall the loop's progress signal (§7).\n- order_router (existing broker client, extended): turns RollIntent into a single combo order (buy-to-close + sell-to-open) with a limit at combo mid minus 1 tick (the same price used for the §1 credit test), tagged with a client order tag identifying v2. It re-prices every 20 s up to 3 times, then cancels. Each re-price re-checks the data freshness and sanity gate, the kill switch, that the trigger still holds, and that the new limit is still >= $0.05; if any check fails, the order is cancelled and not re-priced. The one exception is a control-store fault: there the order is not re-priced, and it is cancelled at its next scheduled re-price slot, followed by the broker status check. The worst case from fault onset is about 50 s: up to 30 s to detect the frozen state (the heartbeat window in §7) plus up to 20 s to the next slot. See the kill switch in §7. The ladder is configurable down to zero re-prices (single submission and one timed cancel), because the broker's cancel/replace terms are confirmed before router work starts (§4).\n  - **Order supervisor (owner of the re-price and cancel timers):** the per-order re-price and cancel slots are driven by `order_supervisor`, a separate process from roll_engine, not by the engine loop. It holds the working-order list (rebuilt at start-up from the broker's open orders and the journal), runs the 20 s slot timers, and performs the cancel and broker status check. A wedged or dead engine therefore cannot stall the bounded exit. The supervisor reads `roller_control` and the engine progress signal itself, treats a stale engine heartbeat as the §7 frozen state, and cancels each working order at its next slot. If the supervisor itself stops, the external monitor (§7) alerts on its own heartbeat and the broker-outage rule's on-call manual check of v2-tagged open orders applies. Its work is inside the order_router sizing in §6.\n  - Reconciliation gate on submissions: a new submission or re-price for a contract is allowed only if (a) the post-outcome reconciliation for that contract's previous order has completed and matched, (b) the contract is not locked, and (c) the account's last successful reconciliation is no more than 5 minutes old. If a reconciliation is overdue or failed, the router does not submit or re-price (working orders take the bounded exit in §7), and a human is alerted.\n  - Paper-mode submission guard: a single submit function checks the deployment mode first and raises in paper mode. The paper deployment is isolated from order credentials. If the broker offers a read-only API key (confirmed or ruled out in Week 0), the paper broker client uses it. If the broker has no read-only key, the paper process runs as a separate service (own OS user and environment file) whose environment holds no order-capable credentials for order endpoints, and a host firewall or forward proxy on the VPS, applied to that service's user, denies the broker's order-submission endpoints (allow-list of read-only endpoints only). **Design and assignment of the no-read-only-key fallback:** a trading-infra engineer is named in the Week 0 record as owner of this item, delivered in Week 3 with the paper guard (inside the 1.5 router sizing in §6, where it is tracked as its own line of about 0.3). The design is a dedicated `roller_paper` OS user and systemd unit with its own env file; an egress rule matched on that user's UID (nftables owner match, or a local forward proxy that only that user may use) that permits only the broker's read-only endpoint allow-list and drops everything else to the broker host; and the allow-list is derived from the broker's API documentation and reviewed by the second pair of eyes before use. The code-level raise is a third layer, not the only one. Isolation is verified against the deployed paper service, not only in CI: before paper mode starts, and after every deploy, a check run from the deployed service's user and environment confirms that a request to a deny-listed order endpoint is blocked and that no order-capable credential is present. An integration test also asserts zero broker submissions in paper mode. A daily check counts v2-tagged orders in broker order history and alerts if the count is non-zero. Paper mode does not start until the deployed-service check passes.\n- Order failure handling: after the final cancel, or any cancel error or timeout, the router does not assume the order is dead. It queries the broker for order status and positions. Outcomes:\n  - Order filled: record the roll.\n  - Order confirmed cancelled: leave the position untouched.\n  - Status unknown, partial, or position mismatch (no short, or doubled short): the contract is locked from further automated orders, ROLLER_KILL is set for that account, and a human is paged. Unlock and late-fill handling are in §7.\n- Reconciliation: a broker-position reconciliation runs at start-up, after every roll order outcome, and every 5 minutes in RTH (every 1 minute for locked contracts). It compares broker short-call positions to the positions table. Any mismatch locks the affected contract and alerts. Submissions and re-prices are gated on reconciliation freshness, as described under order_router above, so a missed fill or doubled short cannot coexist with further orders on the same contract. A short call that has disappeared together with a matching reduction in underlying shares is recorded as an `assignment` event and alerted, and no automated order follows. At start-up, reconciliation also replays the durable outcome journal (§7) before the engine resumes.\n- history_sync (new job): keeps `rolls` and `positions.roll_history` in sync during dual-write (§5). `rolls` is the system of record; `roll_history` is a legacy mirror. Owner: trading-infra. Built in Week 2 (before any live dual-write), after migration 0042 from Week 1. It runs after the EOD batch each night and also every 15 minutes in RTH for v2_live rows, and compares per-position roll counts and contents. A `v2_live` roll present in `rolls` but missing from `roll_history` is appended to `roll_history` by the job (the one permitted repair, one direction only, `rolls` to `roll_history`, and it alerts). Any other mismatch alerts and is not auto-repaired. An open unexplained mismatch blocks the go decision and any ROLLER_V2 flip until resolved. If the job itself fails to run, that alerts too.\n- Postgres: new tables roll_intents, rolls, order_log, chain_snapshot_log, roller_control, and roller_control_audit (see §5 and §7). order_log records every order submission, re-price, cancel, and status response, and is retained per the record-retention requirement confirmed in Week 0.\n\n## 4. Market data vendor, budget, and Week 0 decision gate\nCurrent vendor: Optiq Data.\n\n| Tier    | Price/mo | Rate limit   | Option quotes   | + VPS $60 |\n|---------|----------|--------------|-----------------|-----------|\n| Starter | $79      | 5 req/min    | 15-min delayed  | $139      |\n| Growth  | $199     | 100 req/min  | real-time       | $259      |\n| Pro     | $499     | unlimited    | real-time       | $559      |\n\nFindings:\n- Starter cannot support this design. Its 5 req/min limit is about 16x below the 80 req/min needed, and 15-minute-delayed quotes would make every trigger evaluate stale state. Staying on Starter is **rejected**.\n- Growth meets the rate limit (80 of 100 req/min) and is real-time, but totals **$259/month, which exceeds the agreed $250 cap by $9.** Pro ($559) is far over the cap.\n- The cost position is therefore **undetermined, not assumed**: the only in-cap path (option 1 below) is unverified, and the plan makes no claim that it will work. Verifying it is the first Week 0 action (see option 1).\n- The $250 cap covers data and infra spend. That includes the off-VPS backup storage in §5, whose monthly cost is recorded in the decision record and counts against the cap. The backup cost is not known until Week 0, so it is added to every option's arithmetic below, not assumed to be zero. Broker commissions and order fees are trading costs, not part of the cap. They are included in the net-credit model and success criterion (§6). The Week 0 gate must record the broker's per-contract, per-order, per-cancel, and per-replace fees, so the model uses real numbers. The engine's re-price and cancel behavior is a possible fee exposure. From the recorded fee schedule, Week 0 also computes the worst-case daily fee at the submission caps (24 submissions per account per day, §7) and the expected fee per roll including re-prices and cancelled attempts, and records both here. The owner also records a **hard daily fee ceiling** in the decision record. If the worst case exceeds the ceiling, the §7 submission caps are lowered to the largest values that fit: account cap = floor(ceiling ÷ worst-case fee per submission including 3 re-prices and the cancel), and the per-contract cap scaled to match. At runtime the engine freezes (no new submissions) once the day's accrued order fees reach the ceiling and alerts. Live order submission is blocked until the ceiling is recorded. These figures (fee schedule, worst-case daily fee, ceiling, backup storage cost) are owner and broker inputs that do not exist yet. The plan therefore leaves them as required blank fields with a defined blocking effect, and does not invent values. The 8 and 24 caps in §7 are provisional defaults until those inputs exist and the caps are recomputed from them; nothing that depends on them (live submission, the live-phase fee accounting) can run before then, and paper mode does not need them.\n\n**Week 0 funding gate (blocks build start), the owner must choose one. No choice has been made yet. This is intentional: the cap decision belongs to the owner, and this plan does not assume an outcome. The unresolved $9 gap is the reason the plan is marked blocked, not an oversight; this section is where the choice is recorded:**\n1. Confirm whether the existing broker API client provides real-time option chains at no extra cost. This is currently **unverified**, and no evidence for it exists. It is the first Week 0 action: the owner asks the broker for a written answer (real-time chains, rate limit, cost) within 3 business days of handoff, so the other options are not pursued blind. If it is confirmed, use it (no vendor spend, stays under cap once backup storage cost is included); or\n2. Find at least $9/month of VPS or infra savings plus the recorded backup storage monthly cost, so Growth fits under $250; or\n3. Explicitly approve a cap exception for Growth ($259 plus the recorded backup storage cost).\n\n**Deadline: the owner records the choice within 10 business days of plan handoff (handoff date recorded below).** If none is acceptable, or no choice is recorded by the deadline, intraday rolling is treated as not feasible under the current constraints, the project stops, and roll_eod.py remains the production path. It can be reopened only by a new plan. The 4-week build clock starts on the date the decision is recorded.\n\n**Other Week 0 items, and what each one blocks** (results recorded here):\n- By end of Week 1, before roll_engine trigger work starts in Week 2: confirm the items marked * in §1 (target rule, early-assignment criteria; gap trigger if it is being built) and choose the single source for ex-dividend dates and expected dividend amounts (existing broker client or vendor). If an item is still unconfirmed at the start of Week 2, the engineers build to the defaults written in §1, and any later change is a recorded change request that adjusts the schedule.\n- Blocking live order submission (not build start; the build of migration, poller, control store, and router may proceed): compliance review (below, in full), broker fees, the daily fee ceiling, and API rate limit, on-call roster and escalation chain (§7), the backup and restore setup (§5), the paper-isolation question (read-only key exists or not, §3, with a named owner for the fallback), and a passed rollback drill (§7).\n- Compliance review: the owner plus a second reviewer who is not on the build team (the family office's compliance contact or outside counsel). **The second reviewer is named in the decision record at handoff, together with the owner's confirmation that they are not on the build team and have no role in the build.** The review does not start, and the handoff is not complete, until that name and confirmation are entered. Scope: the broker's terms for automated and algorithmic order submission, any order-rate or cancel/replace limits (the plan submits up to 3 re-prices per order), disclosure requirements, and order-record retention. Get the broker's answer in writing where possible. Also review Optiq's licence terms for automated use of real-time quotes. The review starts at handoff, in parallel with the funding decision. **Deadline, two stages:** (a) the broker's cancel/replace and automated-submission terms, and Optiq's licence terms for automated use, are answered and recorded by the end of Week 1 of the build, before order_router work starts in Week 3 and before any paper-mode capture, so a restriction changes the router design and the paper fill model before evidence is collected rather than invalidating it; (b) the full review is recorded complete by the end of Week 2. Live cutover stays blocked until (b) is recorded. **Contingency:** if cancel/replace is limited or prohibited, the order_router falls back to a single submission at the limit with one timed cancel and no re-prices, and the sizing and fill model (§6) are updated, and the paper comparison is re-run with that single-submission fill model before any go decision. The re-run is a replay of the stored chain_snapshot_log with the ladder length set to zero (the fill model is parameterized by ladder length), not a new capture, so its cost sits inside the 1.0 paper-comparison item in §6. A go requires that re-run to pass. If stage (a) is not recorded by the end of Week 1, router work proceeds with the ladder set to zero re-prices (the conservative design) and paper capture does not start until it is recorded.\n- Historical data check for §6: confirm that real roll_eod.py fills exist and can be extracted (from roll_history and broker order history), and estimate rolls per contract per month from them (see §6).\n- Engineers re-estimate §6 sizing at Week 0 and report the revised total. If the re-estimate leaves less than 1.0 engineer-week of slack, the owner records in the decision record either a 5-week build (10 engineer-weeks) or a descoped plan. The build does not start on a plan with less than 1.0 of slack. The current estimate (§6) is below that threshold, so a 5-week build or descoping is the expected outcome, and the owner is asked to plan for it.\n\nDecision record (intentionally blank until the owner completes it; the plan-to-build transition is gated on this record, and the handoff date and compliance second reviewer are entered at handoff). The blank record is the gate working as designed, not a defect to fix in this plan: no spend is committed and no build starts until the owner fills it in. _(owner, handoff date, decision date, option chosen: pending; compliance second reviewer and independence confirmation; daily fee ceiling; backup storage monthly cost; paper-isolation fallback owner; build length (4 or 5 weeks); migration 0043 owner and target date (§5); loss-threshold and drawdown-guardrail overrides, if any)_\n\n## 5. Data model migration\nGoal: replace positions.roll_history (JSONB array of every roll since account inception) with a normalized rolls table, **without destroying data or the fallback.**\n- Migration 0042 (additive only): create rolls, order_log, chain_snapshot_log, roller_control, and roller_control_audit, and backfill **all** roll_history entries (full history, not just 90 days) into rolls. roll_history is **not** dropped. Rows in rolls carry a `source` column (`backfill`, `eod`, `v2_paper`, `v2_live`).\n- Before running on prod: take a verified pg_dump/snapshot, rehearse 0042 on a restored copy of prod, and compare row counts and per-position roll counts between roll_history and rolls. The rehearsal also exercises the down-migration, including the archive path: seed the restored copy with synthetic `v2_paper` and `v2_live` rows, run the down-migration, and verify the archive tables and pg_dump file contain every seeded row. Run prod only after the rehearsal passes, outside RTH, with a written and tested down-migration.\n  - Down-migration rule: it never deletes v2 data without a verified archive. If any `v2_live` or `v2_paper` rows exist, it first exports `rolls` and `order_log` to an archive (renamed `*_archive` tables plus a pg_dump file) and then verifies the archive by content, not by row count alone: (i) row counts match; (ii) a content checksum of each source table (hash over all rows in primary-key order, every column) equals the same checksum computed on the `*_archive` table; and (iii) the pg_dump file is restored into a scratch schema (or checked with `pg_restore` into a temporary database) and the same checksum is computed there and must match. Only if all three pass does it remove the live new tables. If any check fails it stops and leaves everything in place. The production run uses the same checks as the rehearsal. The archive is never dropped by the migration. The roll_history column is untouched, so nothing in the live fallback depends on the removed tables.\n- Ongoing backup and restore (the one-time pre-0042 dump is not enough, since everything runs on one VPS and `rolls` is the system of record): from the first day v2 writes data, (a) Postgres is backed up nightly by a full pg_dump plus continuous WAL archiving to storage off the VPS (separate provider or account), giving point-in-time recovery to within minutes; (b) the durable outcome journal (§7) is copied off the VPS at least every 5 minutes during RTH and after each outcome batch; (c) backups are retained 30 days; (d) a restore is rehearsed onto a clean host before live order submission and then monthly, verifying `rolls`, `order_log` and journal row counts against production; (e) an alert fires if a backup or WAL/journal copy is older than 24 hours or fails. Recovery targets are recorded in the runbook: at most 15 minutes of data loss and a restore within 4 hours, and after any restore the §3 reconciliation against broker positions and order history runs before the engine resumes. Storage cost is recorded in the §4 decision record and counts against the $250 cap. This is a Week 2 task, built with the control store (§6), and blocks live order submission.\n- Verify before week 1 ends whether roll_eod.py reads positions.roll_history (and any other consumer; grep the codebase and DB views). Record the result here: _(pending, due end of Week 1; owner: trading-infra engineer named in the decision record)_. Because the column stays in place, the fallback is safe either way.\n- Dual-write: while ROLLER_V2 is live, the engine writes each filled roll to `rolls` only, in its own transaction; `rolls` is the system of record and the engine's critical path does not touch the legacy column. The mirror into `roll_history` is a separate step after the `rolls` commit: it is attempted immediately, retried on failure, and alerts if it cannot complete. It never blocks or rolls back the recording of a filled roll. history_sync (§3) repairs any missing `v2_live` mirror entry. roll_eod.py keeps writing roll_history in all modes, and history_sync reconciles the two until 0043. Because the mirror can lag (up to the 15-minute history_sync interval in the worst case), any reader of `roll_history` must not trust it for same-day v2 rolls: roll_eod.py, and every other consumer found by the grep above, must treat any contract with a `v2_live` roll in `rolls` for the current trading day as already rolled (check `rolls` directly) or be repointed to `rolls`. This is a Week 2 task and a precondition for live dual-write.\n- Migration 0043 (destructive, separate): `ALTER TABLE positions DROP COLUMN roll_history`. It runs only after roll_eod.py is retired or confirmed not to use the column, after a successful live ramp, with a fresh snapshot taken beforehand. It is not part of this 4-week build. **Ownership and end date for dual-write:** the plan owner names the 0043 owner and a target date in the decision record. Dual-write is not open-ended: no later than 30 days after the full 40-underlying cutover, the owner either schedules 0043 or records a dated extension with the reason, and every consumer from the grep above must be repointed to `rolls` before that date.\n- roll_eod.py stays deployed behind ROLLER_V2=false as the fallback path. The rollback procedure is in §7.\n- Snapshot retention: chain_snapshot_log stores only trigger-relevant fields (underlying, contract, timestamp, last, bid/ask, delta, extrinsic) for contracts with open short calls, not full chains. Rows are pruned after 14 days by a daily job, and a disk-usage alert fires at 70% of the volume. Estimated volume (~40 contracts × 2/min × 6.5 h ≈ 31k rows/day) is small, but the policy bounds it regardless. Paper-mode comparison results (§6) are stored in their own table and are not pruned, so the evidence outlives the snapshots.\n\n## 6. Rollout\nSizing (rough estimates, engineer-weeks; capacity is 8): migration 0042 plus rehearsal 0.6; history_sync 0.4; chain_poller with limiter, backoff, freshness gating, and snapshot sanity validation 1.2; roll_engine delta and extrinsic triggers, target rule, and hysteresis 1.0 (the gap trigger, about 0.5, is excluded unless slack allows); order_router extension with order_supervisor, failure handling, reconciliation gate, and paper guard (including the no-read-only-key isolation fallback, about 0.3 of the 1.5, tracked as its own line at each checkpoint) 1.5; reconciliation 1.0; roller_control, heartbeat writer, engine progress signal, durable outcome journal, roles, audit, and off-VPS backup/restore 1.2; paper-mode capture and paired comparison reporting, including the mid-session batch arm, 1.0. This totals about 7.9, leaving about 0.1 of slack. That is too thin to start on, and the plan states this openly instead of hiding it. The §4 Week 0 rule therefore applies: the owner records a 5-week build or a descoped plan before the build starts unless the engineers' Week 0 re-estimate shows at least 1.0 of slack. The plan does not pre-decide between those options, and the expected outcome is a 5-week build; the 4-week week plan below is the layout if the re-estimate permits it, and is rebalanced across 5 weeks otherwise. Week 0 work (owner decisions, compliance review, data extraction) is outside the 4-week clock and the 8 engineer-weeks, except for the engineers' Week 0 re-estimate. Checkpoint at the end of Week 2: if the remaining work exceeds remaining capacity, the owner is told immediately and the go/no-go date moves. Safety items are not cut to fit. The weekly loads below are rough and front-loaded; weeks 1 and 2 run slightly above 2.0 and are offset in Week 4. If a 5-week build is recorded, the Week 1 and 2 overload is rebalanced across the extra week at the Week 0 re-estimate.\n- Week 0: funding gate and the other items in §4. If Week 0 slips, the 4-week clock starts later and the deadline in §4 still applies. The build is not compressed to make up the time.\n- Week 1 (about 2.2): migration 0042 (after rehearsal, 0.6), chain_poller with limiter/429/backoff, freshness gating, and sanity validation (1.2), roll_engine skeleton (about 0.4). The * confirmations in §1 and the compliance stage (a) answers (broker cancel/replace terms, Optiq licence) are due by the end of this week.\n- Week 2 (about 2.2): history_sync and the roll_history reader fix (§5) (0.4), roller_control with its heartbeat writer, engine progress signal, outcome journal, roles, audit, and off-VPS backup/restore (§5, §7) (1.2), start of roll_engine trigger logic (about 0.6). The full compliance review is due by the end of this week (§4).\n- Week 3 (about 2.0): rest of roll_engine trigger logic with hysteresis, target rule, and debit/no-target handling; order_router extension with order_supervisor, failure handling, reconciliation gate, and the paper guard (1.5); start of reconciliation including locked-contract monitoring.\n- Week 4 (about 1.5 planned, 0.5 slack): finish reconciliation, paper-mode capture and paired-comparison reporting (1.0).\n- From Week 3, as soon as the poller and the delta/extrinsic triggers work, and once compliance stage (a) is recorded: paper mode (RollIntent written, no orders) alongside roll_eod.py, continuing through the evidence window below (up to week 12). Each day, record what each approach (intraday, EOD, and the 11:30 ET mid-session batch) would have done and the simulated net P&L (including modeled spread and slippage) for each. Intent agreement alone is not an acceptance measure.\n- End of week 4: interim review of paper results and build completeness; this is a checkpoint, not the go/no-go. The go/no-go review is held when the required sample (below) is reached, and no later than week 12. **Live cutover is a separate phase after a \"go\"**: ROLLER_V2=true on 5 underlyings, then all 40, with the roll_eod.py fallback still available. A rollback drill (§7) must have passed before the 5-underlying step. The build is scoped so cutover is not squeezed into the 4 weeks.\n- Success criterion (decidable version): over the paper period and then the first live period, compare paired roll events (same contract, intraday decision vs. EOD decision) on net credit captured per roll after spread, slippage, and broker fees. Fees for the intraday side include every order attempt for that roll: re-prices, cancels, and cancelled attempts that did not fill, charged to the roll that triggered them, using the fee schedule recorded in Week 0.\n  - Same fill basis on both sides: in paper mode, both sides of every pair are simulated with the same fill model (same ladder, spread, slippage, and fees), applied to the intraday decision snapshot and to the EOD decision snapshot respectively. Real roll_eod.py fills are used only for calibration in the fill-model bullet below, never as the EOD side of a pair, so any difference reflects timing, not model error. In the live phase the intraday side is real fills; each live pair is also reported with the intraday side modeled so the real-versus-modeled gap is separated from the timing effect.\n  - Loss threshold: **fixed at −$0.02 per share (−$2 per contract) per roll** unless the owner records a different value in Week 0, before any paper data is collected. It is not changed after results are seen.\n  - Unit of analysis is the trading day, because same-day market moves correlate rolls across the ~40 names and per-pair independence cannot be assumed. For each trading day with at least one pair, compute the equal-weight mean of that day's paired differences (intraday minus EOD).\n  - Decision rule: compute the mean of the daily mean differences and a two-sided 90% confidence interval using the t distribution with (number of days − 1) degrees of freedom. Go requires the mean to be positive and the lower bound of the interval to be above the loss threshold.\n  - Alternative-arm check: the same daily-difference method is applied to intraday minus the 11:30 ET mid-session batch. If the lower bound of that interval is not above 0, intraday does not demonstrably beat the simpler batch, and the recommendation to the owner is to adopt the mid-session batch (a change to roll_eod.py scheduling) instead of cutting over the intraday engine; the owner decides and records the reason. A \"go\" for live intraday cutover requires this check to show a lower bound above 0, or an owner-recorded decision, with reasons, to proceed anyway.\n  - Sample size: let s_d be the standard deviation of daily mean differences over the first 10 trading days with pairs. The required number of days n_req is the smallest d such that t(0.95, d−1) · s_d / √d <= 0.02 (iterate on d; for d = 10, t = 1.833), so the interval's half-width is at most about $0.02 per share. The sample needed is the larger of n_req days and the floors of 60 pairs and 20 trading days. The sample is recomputed once when 10 such days exist, and then frozen.\n  - Drawdown guardrails (the mission is capped drawdown, so net credit alone is not enough). All amounts are per share unless stated; one contract is 100 shares. A go also requires that, over the same sample, (i) the 5th percentile of per-roll paired differences is not below −$0.15 per share, and the worst cumulative peak-to-trough decline of the running sum of daily mean differences (per share) is not larger than $0.40 per share, which is 20 × the −$0.02 loss threshold, equal to $40 per contract; and (ii) the count of `assignment_risk` flags plus `assignment` events on the intraday path is not higher than the EOD counterfactual path. If the owner overrides the loss threshold, the cumulative limit is recomputed as 20 × the new per-share threshold, in the same per-share units. The owner may record different values in Week 0, before any paper data is collected; they are not changed after results are seen. Failing a guardrail is a no-go even if the mean passes.\n  - Feasibility check (Week 0): from the historical roll data (§4), estimate rolls per contract per month and the expected pairs and distinct trading days per week across 40 names. If the 60-pair and 20-day floors (or the first estimate of n_req) cannot be reached within the time cap, the owner decides in Week 0 whether to extend the cap or stop; this is not discovered at week 12.\n  - Time cap: if the required sample is not reached by 8 weeks after the end of the build (week 12), the decision is **no-go for insufficient evidence**, and roll_eod.py remains production. The project is not extended open-endedly.\n  - A fixed APR delta over 30 days is not used as a gate, because it cannot be separated from noise across ~40 names.\n- Fill-model calibration: paper mode produces no real fills, so the simulated fills are calibrated, not assumed. (a) Fills are modeled from the bid/ask in chain_snapshot_log using the same limit-and-re-price ladder as the router. (b) The model is validated against real historical roll_eod.py fills, comparing modeled vs. actual credit per roll, and the residual error is reported. If the Week 0 data check shows that this fill history does not exist or is too thin, the validation moves to the first live phase and the paper-mode verdict is treated as provisional. This is deliberate: a provisional paper go can authorize only the 5-underlying live phase, never a full 40-underlying cutover, so the go path stays reachable and the 40-underlying step is gated on live-phase validation in (d). The 5-underlying phase is the validation vehicle itself: its exposure is bounded by the 5-name scope, the §7 caps, and the daily fee ceiling, and a provisional go requires the owner to record that it is provisional before that phase starts. (c) The result must hold under a conservative case (e.g., crossing the full half-spread). (d) In the first live phase (5 underlyings), modeled vs. actual fills are compared and the model is recalibrated before expanding to all 40. A verdict that holds only under the central model is not a go.\n\n## 7. Risks and mitigations\n- Runaway order loop: hard limits checked before every submit, plus the kill switch below.\n  - Caps count **filled rolls**: at most 1 filled roll per contract per day and 8 filled rolls per account per day (configurable). Re-prices of the same order are not new orders and do not count. A cancelled or unfilled attempt does not consume the filled-roll cap.\n  - Separate submission caps bound attempts: at most 3 order submissions per contract per day and 24 per account per day (subject to the fee check and daily fee ceiling in §4; these values are provisional until recomputed from the Week 0 fee inputs). Hitting any cap blocks automation, alerts a human, and records the blocked intent so required rolls are handled manually rather than silently dropped.\n- Kill switch (ROLLER_KILL): read from a single Postgres row (`roller_control`), polled every loop (<= 5 s) so a running process picks up changes without restart. The env var is only the start-up default.\n  - Writers: the `kill` flag is written only by the on-call runbook CLI. The engine does not write the row. A separate heartbeat writer process (not the engine) updates `heartbeat_at` every 5 s. **Liveness reflects engine progress, not just the writer:** the engine publishes a progress counter and last-completed-loop timestamp to a local file (or unix socket) at the end of every loop. The heartbeat writer advances `heartbeat_at` only while that counter has advanced in the last 30 s; if the engine loop is wedged, `heartbeat_at` goes stale. The window is 30 s, not tighter, so a slow but healthy loop is not marked frozen; vendor 429 backoff cannot stall the loop because polling is separate (§3). The external monitor alerts if `heartbeat_at` stops advancing, which covers a dead writer, a dead DB, and a wedged engine. The cancel of working orders in that situation does not wait for a human: it is driven by `order_supervisor` (§3), which is a separate process from the engine.\n  - **Fail-safe default:** if the row cannot be read, is missing, or `heartbeat_at` is older than 30 s, the engine treats it as frozen: no new intents and no re-prices. Working orders are not cancelled blind at the moment of the fault, because that could create \"status unknown\" states and contract locks during a brief DB blip. Instead, each working order has a bounded exit, executed by `order_supervisor` and not by the possibly wedged engine: at its next scheduled re-price slot after the frozen state is detected the supervisor does not re-price but cancels it at its existing limit, then runs the broker status check, which does not depend on Postgres. The bound from fault onset is about 50 s in the worst case: up to 30 s for the heartbeat to go stale plus up to 20 s to the next slot (a failed or missing control-store read is detected directly and does not wait for the 30 s window). The supervisor determines the frozen state itself, from its own read of `roller_control`, the stale `heartbeat_at`, or the engine progress signal, so a wedged engine is covered as well as a DB fault. The cancel and the status check are broker calls, so the order's outcome is learned from the broker even while Postgres is down; a contract is locked only if that status check itself fails or returns unknown/partial/mismatch, per §3. The outcome is written to the durable journal below. So a frozen or wedged engine cannot leave an order stalled at a stale limit beyond that bound. If the fault clears before that slot, normal operation resumes. An explicit `kill = true` cancels open orders immediately, followed by the status check.\n  - **Durable outcome journal:** order outcomes during a control-store or DB fault are written first to an append-only, fsync'd local journal file on the VPS (copied off-VPS per §5), then to Postgres when it returns. The journal is bounded (size cap and age cap, alert at 50%). If the journal cannot be written, the engine freezes: no new intents and no re-prices, same as a control-store fault. Working orders still get the bounded exit (cancel at the next slot, then the broker status check), since those are broker calls that need neither Postgres nor the journal. The outcome is held in memory; because it cannot be made durable, the affected contracts are locked, ROLLER_KILL is treated as set, and a human is paged immediately. On process start-up, the journal is replayed and reconciled against broker status and positions (§3) before the engine resumes, so a crash during an outage cannot lose an in-flight order's outcome. Any order of unknown status after replay is handled under the \"status unknown\" rule in §3.\n  - Write access and audit: the engine and the heartbeat writer connect with separate roles. The engine role has SELECT only on roller_control, and the heartbeat role can update only `heartbeat_at`. Only a named `roller_admin` role, used by the runbook CLI, can change `kill` or unlock contracts. Every change writes an append-only row to `roller_control_audit` (who, when, old/new value, reason) via a trigger, and a change alerts the on-call channel. DB credentials for roller_admin are limited to the named on-call and owner.\n- Locked contracts: owner is trading-infra on-call. Unlock procedure: verify the broker position and open-order state by hand, reconcile positions and rolls, then unlock through the runbook CLI with a reason, which is audited. While locked, reconciliation runs every 1 minute and watches for late fills or a doubled short, and any change pages immediately. Timeout: a lock unresolved after 30 minutes in RTH, or any lock on a contract with DTE <= 1 or `assignment_risk`, escalates to the owner. A locked contract is never left unmanaged through expiry. The on-call manages it manually.\n- Rollback / flipping ROLLER_V2 to false: (1) set ROLLER_KILL (the engine is then inert) and let working orders finish or cancel, then confirm each by broker status; any order still working 60 s after the kill is cancelled by the on-call and checked by broker status; (2) resolve or explicitly hand off every `needs_review` intent and locked contract to manual handling, each to a named person, within 30 minutes in RTH, otherwise the page escalates per the escalation rule below; (3) run history_sync and confirm rolls and roll_history match; (4) only then flip the flag. While steps 1-3 are in progress the engine is inert and every open contract is managed manually by the on-call, so no contract is unmanaged during the window; the flag is not flipped until every contract has a named manual owner or is confirmed handled. Ownership rule: roll_eod.py skips any contract with an open v2 order, a lock, or an unresolved `needs_review` intent, so one contract is never owned by both paths. Rolls already written by the live engine are preserved (see the down-migration rule in §5).\n  - **Rollback drill (required before live cutover):** before the 5-underlying step, the on-call roster runs steps 1-4 end to end against the paper deployment with seeded `needs_review` intents, a seeded locked contract, and a simulated working order, during RTH hours if possible. The drill is timed against the 15-minute acknowledgement and 30-minute handoff limits, each seeded item must end with a named person, and the result is recorded in the runbook. Any missed limit or gap is fixed and the drill is repeated. The drill is repeated whenever the on-call roster changes materially, and live cutover (and the §4 live-submission gate) stays blocked until a drill has passed.\n- Escalation and manual queue: the on-call roster (primary and secondary, with coverage for RTH 09:30–16:00 ET) is named in Week 0. A page must be acknowledged within 15 minutes, otherwise it escalates to the secondary and then the owner. `needs_review` and blocked intents form a queue owned by trading-infra on-call, reviewed within 30 minutes in RTH. Intents flagged `assignment_risk`, and locked contracts, page immediately instead of waiting in the queue. An external uptime monitor outside the VPS alerts if the VPS, the engine heartbeat, or the order_supervisor heartbeat goes down.\n- Partial fills on combo: combo orders are all-or-none at the broker; a rejected combo leaves the original short call untouched. Cancel failures and fill races are covered by the status check and reconciliation in §3.\n- Stale or failed market data: freshness and sanity gating, the client-side limiters, and 429 backoff in §3.\n- Broker API outage: roll_engine stops emitting intents, and order_router stops re-pricing, when the last successful broker heartbeat is > 60 s old. Working orders are not left at a stale limit across the outage. When the heartbeat goes stale the router attempts to cancel every working v2 order (retrying with backoff), and any order whose cancel cannot be confirmed is treated as status unknown. When the broker returns, before any new submission or re-price, the router queries order status and positions for every contract that had a working order. A late fill is recorded as a roll, a confirmed cancel leaves the position untouched, and unknown, partial, or mismatched states lock the contract and page a human per §3. On-call also checks broker open orders by hand for v2-tagged orders after any outage longer than 60 s.\n- Compliance: automated order submission, cancel/replace limits, and use of vendor real-time quotes are reviewed in Week 0 (§4) by the owner and an independent second reviewer, named at handoff. The broker's cancel/replace and automated-submission terms and Optiq's licence terms are due by the end of Week 1 of the build, before router work and paper capture; the full review is due by the end of Week 2. Live cutover is blocked until that review is recorded as complete.\n- Schedule: scope is large for 2 engineers in 4 weeks, with roughly 7.9 of 8 engineer-weeks committed (§6) and the gap trigger deferred to make room. That is too thin to start on, so the Week 0 rule in §4 requires at least 1.0 of slack (by extending to 5 weeks or descoping) before the build starts. Live cutover is explicitly outside the 4 weeks, and the build order puts the safety items (freshness and sanity validation, reconciliation, kill switch, outcome journal, backups) ahead of reporting polish. Paper-mode data capture and the paired-comparison calculation are required for the go/no-go and are **not** cut; the cut order below applies only to dashboards and presentation polish, which are separate from that required calculation. If the build slips, cut in this order: reporting dashboards and polish, then the gap trigger* if it was added after the Week 2 checkpoint. If that is still not enough, the go/no-go date moves rather than being decided without the data. No safety item is cut.",
+ "fixerUsage": {
+  "calls": 7,
+  "tokIn": 86087,
+  "tokOut": 106675,
+  "usd": 1.41107,
+  "critMs": 628410
+ },
+ "status": "cap"
+}
